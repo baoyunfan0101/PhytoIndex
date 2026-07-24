@@ -169,8 +169,6 @@ pub fn delete_taxon(database: &Database, taxon_id: i64) -> CoreResult<TaxonomyAc
             "taxon {taxon_id} cannot be deleted because it has child taxa"
         )));
     }
-    let photo_ids = mapped_photo_ids_for_taxon(&transaction, taxon_id)?;
-    mapping::queue_photo_ids(&transaction, &photo_ids, "taxonomy")?;
     let mut session = start_taxonomy_session(&transaction)?;
     transaction.execute("DELETE FROM taxa WHERE taxon_id = ?", [taxon_id])?;
     let changeset_blob = finish_taxonomy_session(&mut session)?;
@@ -247,22 +245,6 @@ fn ensure_taxon_exists(transaction: &Transaction<'_>, taxon_id: i64) -> CoreResu
         return Err(CoreError::NotFound(format!("taxon {taxon_id}")));
     }
     Ok(())
-}
-
-fn mapped_photo_ids_for_taxon(
-    transaction: &Transaction<'_>,
-    taxon_id: i64,
-) -> CoreResult<Vec<i64>> {
-    let mut statement = transaction.prepare(
-        r#"
-        SELECT photo_id
-        FROM photo_taxon_mapping
-        WHERE taxon_id = ?
-        ORDER BY photo_id
-        "#,
-    )?;
-    let rows = statement.query_map([taxon_id], |row| row.get::<_, i64>(0))?;
-    Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }
 
 fn load_name_is_accepted(
@@ -368,9 +350,7 @@ fn authorize_custom_sql(transaction: &Transaction<'_>, sql: &str) -> CoreResult<
             "custom sql cannot access taxonomy search index tables directly".into(),
         ));
     }
-    transaction.authorizer(Some(custom_sql_authorizer));
     let authorize_result = prepare_custom_sql_batch(transaction, sql);
-    transaction.authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
     authorize_result?;
     Ok(())
 }
@@ -384,6 +364,7 @@ fn prepare_custom_sql_batch(connection: &rusqlite::Connection, sql: &str) -> Cor
             .map_err(|error| CoreError::InvalidArgument(format!("invalid sql: {error}")))?;
         let mut statement = ptr::null_mut();
         let mut next_sql = ptr::null();
+        connection.authorizer(Some(custom_sql_authorizer()));
         let code = unsafe {
             ffi::sqlite3_prepare_v2(
                 database,
@@ -393,6 +374,7 @@ fn prepare_custom_sql_batch(connection: &rusqlite::Connection, sql: &str) -> Cor
                 &mut next_sql,
             )
         };
+        connection.authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
         if !statement.is_null() {
             unsafe {
                 ffi::sqlite3_finalize(statement);
@@ -501,50 +483,99 @@ fn quote_identifier(value: &str) -> String {
     format!("\"{}\"", value.replace('"', "\"\""))
 }
 
-fn custom_sql_authorizer(context: AuthContext<'_>) -> Authorization {
-    match context.action {
-        AuthAction::Select | AuthAction::Recursive => Authorization::Allow,
-        AuthAction::Function { function_name } => {
-            if function_name.eq_ignore_ascii_case("load_extension") {
-                Authorization::Deny
-            } else {
-                Authorization::Allow
+#[derive(Default)]
+struct CustomSqlAuthorizer {
+    deletes_taxa: bool,
+}
+
+fn custom_sql_authorizer() -> impl for<'a> FnMut(AuthContext<'a>) -> Authorization + Send + 'static
+{
+    let mut authorizer = CustomSqlAuthorizer::default();
+    move |context| authorizer.authorize(context)
+}
+
+impl CustomSqlAuthorizer {
+    fn authorize(&mut self, context: AuthContext<'_>) -> Authorization {
+        match context.action {
+            AuthAction::Select | AuthAction::Recursive => Authorization::Allow,
+            AuthAction::Function { function_name } => {
+                if function_name.eq_ignore_ascii_case("load_extension") {
+                    Authorization::Deny
+                } else {
+                    Authorization::Allow
+                }
             }
-        }
-        AuthAction::Pragma { pragma_name, .. } => {
-            if pragma_name.eq_ignore_ascii_case("data_version") {
-                Authorization::Allow
-            } else {
-                Authorization::Deny
+            AuthAction::Pragma { pragma_name, .. } => {
+                if pragma_name.eq_ignore_ascii_case("data_version") {
+                    Authorization::Allow
+                } else {
+                    Authorization::Deny
+                }
             }
-        }
-        AuthAction::Read { table_name, .. } => {
-            if is_allowed_custom_sql_read(context.database_name, table_name) {
-                Authorization::Allow
-            } else {
-                Authorization::Deny
+            AuthAction::Read { table_name, .. } => {
+                if is_allowed_custom_sql_read(
+                    self.deletes_taxa,
+                    context.database_name,
+                    context.accessor,
+                    table_name,
+                ) {
+                    Authorization::Allow
+                } else {
+                    Authorization::Deny
+                }
             }
-        }
-        AuthAction::Insert { table_name }
-        | AuthAction::Update { table_name, .. }
-        | AuthAction::Delete { table_name } => {
-            if is_allowed_custom_sql_write(context.accessor, table_name) {
-                Authorization::Allow
-            } else {
-                Authorization::Deny
+            AuthAction::Insert { table_name }
+            | AuthAction::Update { table_name, .. }
+            | AuthAction::Delete { table_name } => {
+                if context.accessor.is_none() && table_name == "taxa" {
+                    self.deletes_taxa = true;
+                }
+                if is_allowed_custom_sql_write(self.deletes_taxa, context.accessor, table_name) {
+                    Authorization::Allow
+                } else {
+                    Authorization::Deny
+                }
             }
+            _ => Authorization::Deny,
         }
-        _ => Authorization::Deny,
     }
 }
 
-fn is_allowed_custom_sql_read(database_name: Option<&str>, table_name: &str) -> bool {
+fn is_allowed_custom_sql_read(
+    deletes_taxa: bool,
+    database_name: Option<&str>,
+    accessor: Option<&str>,
+    table_name: &str,
+) -> bool {
     is_taxonomy_session_table(table_name)
         || table_name.starts_with("taxon_names_fts")
         || (database_name == Some("temp") && table_name == "input")
+        || (accessor == Some("taxa_bd_photo_mapping")
+            && matches!(
+                table_name,
+                "photo_mapping_queue" | "photo_taxon_mapping" | "photos"
+            ))
+        || is_taxa_delete_foreign_key_access(deletes_taxa, accessor, table_name)
 }
 
-fn is_allowed_custom_sql_write(accessor: Option<&str>, table_name: &str) -> bool {
+fn is_allowed_custom_sql_write(
+    deletes_taxa: bool,
+    accessor: Option<&str>,
+    table_name: &str,
+) -> bool {
     is_taxonomy_session_table(table_name)
         || (accessor.is_some() && table_name.starts_with("taxon_names_fts"))
+        || (accessor == Some("taxa_bd_photo_mapping")
+            && matches!(table_name, "photo_mapping_queue" | "photo_taxon_mapping"))
+        || is_taxa_delete_foreign_key_access(deletes_taxa, accessor, table_name)
+}
+
+fn is_taxa_delete_foreign_key_access(
+    deletes_taxa: bool,
+    accessor: Option<&str>,
+    table_name: &str,
+) -> bool {
+    deletes_taxa
+        && accessor.is_none()
+        && matches!(table_name, "photo_taxon_mapping" | "photo_taxon_usage")
 }

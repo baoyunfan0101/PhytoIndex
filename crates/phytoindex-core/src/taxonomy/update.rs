@@ -2106,6 +2106,42 @@ mod tests {
         }
     }
 
+    fn seed_mapped_photo(database: &Database, taxon_id: i64, filename: &str) -> i64 {
+        let connection = database.connect().unwrap();
+        connection
+            .execute(
+                r#"
+                INSERT INTO photo_directories (
+                    parent_directory_id, name, relative_path
+                ) VALUES (NULL, '', '')
+                "#,
+                [],
+            )
+            .unwrap();
+        let directory_id = connection.last_insert_rowid();
+        connection
+            .execute(
+                r#"
+                INSERT INTO photos (
+                    directory_id, filename, file_size, modified_at_ns
+                ) VALUES (?, ?, 1, 1)
+                "#,
+                params![directory_id, filename],
+            )
+            .unwrap();
+        let photo_id = connection.last_insert_rowid();
+        connection
+            .execute(
+                r#"
+                INSERT INTO photo_taxon_mapping (photo_id, taxon_id, status)
+                VALUES (?, ?, 'matched')
+                "#,
+                params![photo_id, taxon_id],
+            )
+            .unwrap();
+        photo_id
+    }
+
     #[test]
     fn creates_a_species_and_derives_its_genus() {
         let (_directory, database) = database();
@@ -2544,6 +2580,105 @@ mod tests {
     }
 
     #[test]
+    fn delete_taxon_queues_mapped_photos_once_via_trigger() {
+        let (_directory, database) = database();
+        seed_lineage(&database);
+        let result = apply_rows(
+            &database,
+            &[species_row()],
+            TaxonUpdateOptions {
+                allow_new_taxa: true,
+                ..TaxonUpdateOptions::default()
+            },
+        )
+        .unwrap();
+        let taxon_id = result.rows[0].target.as_ref().unwrap().taxon_id;
+        let photo_id = seed_mapped_photo(&database, taxon_id, "mapped.jpg");
+        let connection = database.connect().unwrap();
+        connection
+            .execute(
+                "CREATE TABLE queue_audit (event TEXT NOT NULL, photo_id INTEGER NOT NULL)",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                r#"
+                CREATE TRIGGER audit_photo_mapping_queue_insert
+                AFTER INSERT ON photo_mapping_queue BEGIN
+                    INSERT INTO queue_audit (event, photo_id) VALUES ('insert', new.photo_id);
+                END
+                "#,
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                r#"
+                CREATE TRIGGER audit_photo_mapping_queue_update
+                AFTER UPDATE ON photo_mapping_queue BEGIN
+                    INSERT INTO queue_audit (event, photo_id) VALUES ('update', new.photo_id);
+                END
+                "#,
+                [],
+            )
+            .unwrap();
+        drop(connection);
+
+        delete_taxon(&database, taxon_id).unwrap();
+
+        assert_eq!(queued_photo_ids(&database), vec![photo_id]);
+        let connection = database.connect().unwrap();
+        let mut statement = connection
+            .prepare("SELECT event, photo_id FROM queue_audit ORDER BY rowid")
+            .unwrap();
+        let events = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(events, vec![("insert".to_string(), photo_id)]);
+    }
+
+    #[test]
+    fn custom_sql_delete_taxon_allows_photo_mapping_trigger_writes() {
+        let (_directory, database) = database();
+        seed_lineage(&database);
+        let result = apply_rows(
+            &database,
+            &[species_row()],
+            TaxonUpdateOptions {
+                allow_new_taxa: true,
+                ..TaxonUpdateOptions::default()
+            },
+        )
+        .unwrap();
+        let taxon_id = result.rows[0].target.as_ref().unwrap().taxon_id;
+        let photo_id = seed_mapped_photo(&database, taxon_id, "custom-delete.jpg");
+
+        execute_custom_taxonomy_sql(
+            &database,
+            &format!("DELETE FROM taxa WHERE taxon_id = {taxon_id}"),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(queued_photo_ids(&database), vec![photo_id]);
+        assert!(get_taxon_detail(&database, taxon_id).unwrap().is_none());
+        let connection = database.connect().unwrap();
+        let mapping = connection
+            .query_row(
+                "SELECT taxon_id, status FROM photo_taxon_mapping WHERE photo_id = ?",
+                [photo_id],
+                |row| Ok((row.get::<_, Option<i64>>(0)?, row.get::<_, String>(1)?)),
+            )
+            .unwrap();
+        assert_eq!(mapping, (None, "stale".to_string()));
+    }
+
+    #[test]
     fn executes_custom_sql_and_records_a_batch() {
         let (_directory, database) = database();
         let ids = seed_lineage(&database);
@@ -2793,6 +2928,22 @@ mod tests {
         assert!(error.to_string().contains("not authorized"));
 
         let error = execute_custom_taxonomy_sql(&database, "DROP TABLE taxa", None).unwrap_err();
+        assert!(error.to_string().contains("not authorized"));
+
+        let error = execute_custom_taxonomy_sql(
+            &database,
+            "UPDATE photo_taxon_mapping SET status = 'stale'",
+            None,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("not authorized"));
+
+        let error = execute_custom_taxonomy_sql(
+            &database,
+            "INSERT INTO photo_mapping_queue (photo_id, reason) VALUES (1, 'taxonomy')",
+            None,
+        )
+        .unwrap_err();
         assert!(error.to_string().contains("not authorized"));
     }
 
