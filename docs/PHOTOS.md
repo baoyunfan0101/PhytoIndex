@@ -1,129 +1,202 @@
 # Photos Backend API
 
-This document describes the public backend surface of the single-root photo
-library. Filesystem operations are exposed by `phytoindex_core::photos`.
-Taxonomy matching and taxon-based photo browsing are exposed by
-`phytoindex_core::mapping`.
+This document describes the public backend contract for the photo library.
+It covers:
 
-The backend indexes one open photo root at a time. Stored paths are relative to
-that root. All Rust functions return `CoreResult<T>`. Serialized fields and enum
-values use `snake_case`.
+- `phytoindex_core::photos`: library, directory, file, metadata, thumbnail,
+  refresh, and rename APIs.
+- `phytoindex_core::mapping`: photo-to-taxon matching and taxon-based photo
+  browsing APIs.
+- Desktop Tauri commands, operation events, and media URLs that expose those
+  core APIs.
 
-## Storage behavior
+Database tables and other internal storage details are not part of this
+contract.
 
-| Table | Purpose |
+The Rust surfaces are imported from:
+
+```rust
+use phytoindex_core::mapping::*;
+use phytoindex_core::photos::*;
+```
+
+Shared taxonomy types such as `TaxonRank`, `TaxonomyNameKind`,
+`TaxonDisplayNames`, and `TaxonSummary` are defined in the
+[taxonomy backend API](TAXONOMY.md).
+
+## General conventions
+
+- The backend has one open photo library root at a time.
+- Paths returned in photo and directory models are relative to that root unless
+  a field explicitly says it is absolute.
+- Rust APIs return `CoreResult<T>`.
+- Tauri commands return the documented value or a string error.
+- Serialized field names and enum values use `snake_case`.
+- IDs are signed 64-bit integers.
+
+### Cursor pages
+
+Photo list APIs return:
+
+```rust
+pub struct PhotoPage<T> {
+    pub items: Vec<T>,
+    pub next_cursor: Option<String>,
+}
+```
+
+| Field | Description |
 | --- | --- |
-| `photo_library` | Stores the one currently open root path. |
-| `photo_directories` | Stores the indexed Finder-like directory hierarchy. |
-| `photos` | Stores narrow filesystem facts used for browsing and change detection. |
-| `photo_metadata` | Stores lazily extracted EXIF data and image dimensions. |
-| `photo_taxon_mapping` | Stores the current selected taxon and resolved status. |
-| `photo_taxon_usage` | Stores sparse direct and subtree photo counts for taxon browsing. |
-| `photo_mapping_queue` | Stores photos waiting for knowledge-base matching. |
+| `items` | Items in the current page. |
+| `next_cursor` | Opaque cursor for the next page, or `null` when this is the actual last page. |
 
-The queue is durable. A process restart does not lose photos waiting to be
-matched. The `processing` API status is derived from queued photo IDs; it is not
-a timestamp, taxonomy revision, processed-taxonomy revision, or `entry_revision`.
+The cursor has the same external behavior as a taxonomy cursor:
 
-For ID batches of at most 500 items, the mapping layer uses ordinary SQLite
-placeholders. Larger batches are loaded into temporary tables and joined from
-SQL. This applies to photo and directory removal, mapping loads, and queue
-cleanup, so a large cached subtree does not exceed SQLite parameter limits.
+- Omit it for the first page.
+- Pass `next_cursor` unchanged to request the next page.
+- Do not parse, edit, or persist assumptions about its contents.
+- A cursor is bound to its endpoint and request scope. Reusing it with another
+  directory, taxon, option set, or mapping status is invalid.
+- `limit` is clamped to `1..=500`.
+- Desktop commands use a default limit of `50`.
 
-## Photos models
+## Public photo types
 
 ### `PhotoLibrary`
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `root_path` | `String` | Canonical absolute path of the open root. |
-| `root_directory_id` | `i64` | ID of the root `PhotoDirectory` node. |
-
-The library model does not count the entire photos table. Use
-`get_photo_count` only when that count is needed.
+| `root_path` | `String` | Canonical absolute path of the open photo root. |
+| `root_directory_id` | `i64` | ID used to browse the root directory. |
 
 ### `PhotoDirectory`
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `directory_id` | `i64` | Stable database ID. |
-| `parent_directory_id` | `Option<i64>` | Parent ID, or `null` for the root. |
+| `directory_id` | `i64` | Directory ID. |
+| `parent_directory_id` | `Option<i64>` | Parent directory ID, or `null` for the root. |
 | `name` | `String` | Immediate directory name. The root name is empty. |
-| `relative_path` | `String` | Slash-separated path under the root. The root path is empty. |
+| `relative_path` | `String` | Slash-separated path relative to the open root. The root path is empty. |
 
 ### `Photo`
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `photo_id` | `i64` | Stable database ID. |
-| `directory_id` | `i64` | Directory containing the real file. |
-| `relative_path` | `String` | Complete file path relative to the open root. |
-| `filename` | `String` | Real filesystem filename. |
+| `photo_id` | `i64` | Photo ID. |
+| `directory_id` | `i64` | ID of the containing directory. |
+| `relative_path` | `String` | File path relative to the open root. |
+| `filename` | `String` | Current real filesystem filename. |
 | `file_size` | `i64` | File size in bytes. |
 | `modified_at_ns` | `i64` | Filesystem modification time in nanoseconds since the Unix epoch. |
-| `thumbnail_path` | `Option<String>` | Cached thumbnail path, if generated. |
-
-`modified_at_ns` is a filesystem fact used for change detection. The backend
-does not store scan, parse, or mapping timestamps.
+| `thumbnail_path` | `Option<String>` | Cached thumbnail path when one is available. |
 
 ### `PhotoMetadata`
 
-Contains `photo_id`, `captured_at`, `camera`, `width`, `height`, `longitude`,
-`latitude`, and `exif_json`. Metadata is read from `photo_metadata` when cached
-and extracted from the real file on the first request otherwise. Directory
-refresh does not read EXIF.
-
-### `PhotoPage<T>`
-
 | Field | Type | Description |
 | --- | --- | --- |
-| `items` | `Vec<T>` | Items in the current page. |
-| `next_cursor` | `Option<String>` | Opaque next-page cursor, or `null` on the actual last page. |
+| `photo_id` | `i64` | Photo ID. |
+| `captured_at` | `Option<String>` | Capture time read from image metadata. |
+| `camera` | `Option<String>` | Camera make and model when available. |
+| `width` | `Option<i64>` | Image width in pixels. |
+| `height` | `Option<i64>` | Image height in pixels. |
+| `longitude` | `Option<f64>` | GPS longitude when available. |
+| `latitude` | `Option<f64>` | GPS latitude when available. |
+| `exif_json` | `Option<String>` | Additional EXIF values encoded as JSON. |
 
-This is the photos equivalent of `TaxonomyPage<T>` and has the same serialized
-shape and pagination rules. Limits are clamped to `1..=500`; desktop list
-commands default to 50. Cursors are URL-safe opaque tokens bound to one
-endpoint and scope. Reusing a cursor with another directory, taxon, option set,
-or mapping status returns an invalid-cursor error.
-
-All page queries read at most `limit + 1` items to determine whether another
-page exists.
+Missing image metadata is returned as `null`; it is not an error.
 
 ### `PhotoDirectoryItem`
 
-This tagged enum is serialized with `kind`:
+This is a tagged enum using the serialized field `kind`.
 
-| `kind` | Field | Meaning |
+| `kind` | Payload | Description |
 | --- | --- | --- |
 | `directory` | `directory: PhotoDirectory` | Immediate child directory. |
-| `photo` | `photo: Photo` | Photo directly in the requested directory. |
+| `photo` | `photo: Photo` | Photo directly contained in the requested directory. |
 
-The virtual list returns all child directories before photos. Each section has
-stable keyset order by display name and database ID.
+Directory browse pages form one virtual list: all child directories are
+returned before photos.
 
 ### `DirectoryEntryCounts`
 
-Contains `directory_count` and `file_count` for the immediate entries of one
-directory. Counts are separate from paginated browsing and are computed only
-when explicitly requested.
+| Field | Type | Description |
+| --- | --- | --- |
+| `directory_count` | `i64` | Number of immediate child directories. |
+| `file_count` | `i64` | Number of immediate photos. |
 
 ### `PhotoSyncResult`
 
-Contains `directory_id`, `inserted`, `unchanged`, `updated`, `deleted`,
-`directories_inserted`, and `directories_deleted`.
+| Field | Type | Description |
+| --- | --- | --- |
+| `directory_id` | `i64` | Refreshed directory ID. |
+| `inserted` | `usize` | Newly indexed photos. |
+| `unchanged` | `usize` | Existing photos whose indexed file facts did not change. |
+| `updated` | `usize` | Existing photos whose indexed file facts changed. |
+| `deleted` | `usize` | Immediate photos no longer present in the refreshed directory. |
+| `directories_inserted` | `usize` | Newly indexed immediate child directories. |
+| `directories_deleted` | `usize` | Immediate child directories removed; each removal also removes its indexed subtree. |
 
-## Photos Rust API
+## `phytoindex_core::photos`
 
-### Library and directory browsing
+Every function below takes `database: &Database`. The parameter is omitted
+from the parameter descriptions because it always identifies the current
+application database.
+
+### Library and directory APIs
+
+#### `open_library`
 
 ```rust
-pub fn open_library(database: &Database, root: &str) -> CoreResult<PhotoLibrary>
-pub fn get_library(database: &Database) -> CoreResult<Option<PhotoLibrary>>
+pub fn open_library(
+    database: &Database,
+    root: &str,
+) -> CoreResult<PhotoLibrary>
+```
+
+| Parameter | Description |
+| --- | --- |
+| `root` | Existing directory to open as the photo library root. It is canonicalized before use. |
+
+Returns the active `PhotoLibrary`. Opening a different root replaces the
+previous photo index and mappings; taxonomy data is not replaced.
+
+#### `get_library`
+
+```rust
+pub fn get_library(
+    database: &Database,
+) -> CoreResult<Option<PhotoLibrary>>
+```
+
+Returns the active library, or `None` when no photo root is open.
+
+#### `get_photo_count`
+
+```rust
 pub fn get_photo_count(database: &Database) -> CoreResult<i64>
+```
+
+Returns the number of indexed photos in the active library.
+
+#### `get_directory_counts`
+
+```rust
 pub fn get_directory_counts(
     database: &Database,
     directory_id: i64,
 ) -> CoreResult<DirectoryEntryCounts>
+```
+
+| Parameter | Description |
+| --- | --- |
+| `directory_id` | Directory whose immediate entries are counted. |
+
+Returns separate child-directory and photo counts. A missing directory is an
+error.
+
+#### `browse_directory`
+
+```rust
 pub fn browse_directory(
     database: &Database,
     directory_id: i64,
@@ -132,13 +205,16 @@ pub fn browse_directory(
 ) -> CoreResult<PhotoPage<PhotoDirectoryItem>>
 ```
 
-`open_library` canonicalizes `root`. Opening a different root clears the old
-photo index, mappings, and usage counts, but preserves taxonomy data.
+| Parameter | Description |
+| --- | --- |
+| `directory_id` | Directory whose immediate child directories and photos are listed. |
+| `cursor` | `None` for the first page, otherwise the previous page's `next_cursor`. |
+| `limit` | Requested maximum number of virtual-list items. |
 
-`browse_directory` reads only SQLite. It does not scan the filesystem, count
-entries, or extract metadata.
+Returns child directories followed by photos in a single cursor page. It does
+not refresh the filesystem or count all entries.
 
-### Directory refresh
+#### `refresh_directory`
 
 ```rust
 pub fn refresh_directory(
@@ -147,44 +223,96 @@ pub fn refresh_directory(
 ) -> CoreResult<PhotoSyncResult>
 ```
 
-Refresh scans only the immediate entries of `directory_id`. Child directories
-are indexed as nodes but are not recursively scanned. The scan is not sorted;
-browse order is provided by indexed SQLite queries.
+| Parameter | Description |
+| --- | --- |
+| `directory_id` | Directory to compare with the real filesystem. |
 
-New or changed photos are committed to `photos` and placed in
-`photo_mapping_queue`. Their mapping reads as `processing` until
-`process_pending_photo_matches` handles them. Removed photos and directory
-subtrees synchronously remove their mappings and update sparse usage counts.
-Unchanged photos cause no database or mapping writes.
+Returns the changes found among the directory's immediate entries. Child
+directories are indexed but are not recursively scanned. New or changed photos
+become `processing` until taxon matching completes.
 
-The desktop `refresh_photo_directory` command starts refresh and matching in a
-background operation and returns immediately with an operation descriptor.
+### Photo read APIs
 
-### Photo reads
+#### `get_photo`
 
 ```rust
-pub fn get_photo(database: &Database, photo_id: i64) -> CoreResult<Option<Photo>>
+pub fn get_photo(
+    database: &Database,
+    photo_id: i64,
+) -> CoreResult<Option<Photo>>
+```
+
+Returns the indexed photo, or `None` when the ID does not exist.
+
+#### `list_photos`
+
+```rust
 pub fn list_photos(database: &Database) -> CoreResult<Vec<Photo>>
-pub fn photo_file_path(database: &Database, photo_id: i64) -> CoreResult<PathBuf>
-pub fn get_photo_metadata(database: &Database, photo_id: i64) -> CoreResult<PhotoMetadata>
+```
+
+Returns every indexed photo ordered by `photo_id`. Interactive views should use
+the cursor-based directory, taxon, or mapping-status APIs instead.
+
+#### `photo_file_path`
+
+```rust
+pub fn photo_file_path(
+    database: &Database,
+    photo_id: i64,
+) -> CoreResult<PathBuf>
+```
+
+Returns the validated absolute path of the real photo file. A missing database
+record, missing file, or path outside the open root is an error.
+
+#### `get_photo_metadata`
+
+```rust
+pub fn get_photo_metadata(
+    database: &Database,
+    photo_id: i64,
+) -> CoreResult<PhotoMetadata>
+```
+
+Returns image and EXIF metadata for the photo. Optional values are `None` when
+the source file does not provide them.
+
+#### `get_or_create_thumbnail`
+
+```rust
 pub fn get_or_create_thumbnail(
     database: &Database,
     photo_id: i64,
     thumbnail_root: &Path,
 ) -> CoreResult<PathBuf>
+```
+
+| Parameter | Description |
+| --- | --- |
+| `photo_id` | Source photo ID. |
+| `thumbnail_root` | Directory in which cached thumbnails are stored. |
+
+Returns the absolute path of an existing or newly generated thumbnail.
+
+#### `rebase_thumbnail_paths`
+
+```rust
 pub fn rebase_thumbnail_paths(
     database: &Database,
     thumbnail_root: &Path,
 ) -> CoreResult<usize>
 ```
 
-`list_photos` is intended for administrative and rebuild work. Interactive
-views should use paginated directory or taxon browsing.
+| Parameter | Description |
+| --- | --- |
+| `thumbnail_root` | Current thumbnail cache directory. |
 
-All real-file paths are resolved under the canonical root. Absolute paths,
-parent traversal, and root escapes are rejected.
+Returns the number of cached thumbnail paths updated to files found under the
+provided directory.
 
-### Manual and taxonomy-based rename
+### Rename APIs
+
+#### `rename_photo`
 
 ```rust
 pub fn rename_photo(
@@ -192,171 +320,282 @@ pub fn rename_photo(
     photo_id: i64,
     new_filename: &str,
 ) -> CoreResult<Photo>
+```
+
+| Parameter | Description |
+| --- | --- |
+| `photo_id` | Photo to rename. |
+| `new_filename` | Complete new filename, including a supported image extension. It must not contain path components. |
+
+Renames the real file, updates the indexed `Photo`, and immediately rematches
+the new filename. Returns the updated `Photo`. A conflicting destination or an
+invalid filename is an error.
+
+#### `rename_photo_from_taxon`
+
+```rust
 pub fn rename_photo_from_taxon(
     database: &Database,
     photo_id: i64,
 ) -> CoreResult<Photo>
+```
+
+Renames one real file to:
+
+```text
+{accepted scientific name}.{original extension}
+```
+
+The photo must have a current `matched` mapping and the selected taxon must
+have an accepted scientific name. Returns the updated `Photo`.
+
+#### `rename_photos_from_taxa`
+
+```rust
 pub fn rename_photos_from_taxa(
     database: &Database,
     photo_ids: &[i64],
 ) -> CoreResult<Vec<Photo>>
 ```
 
-`rename_photo` changes the real file and updates the database and mapping in
-one serialized workflow. `new_filename` must be a supported image filename
-without directory components. Existing destinations are rejected. Case-only
-renames use the same temporary-path helper in the forward and rollback paths.
-If both the database update and filesystem rollback fail, a runtime consistency
-error reports both failures.
+| Parameter | Description |
+| --- | --- |
+| `photo_ids` | Photos to rename, processed in input order. |
 
-The taxonomy-based functions require every photo to have `matched` status and
-an accepted scientific name. A logically `processing` photo cannot be renamed
-from taxonomy even if its previous stored row was matched. The current
-placeholder format is:
+Returns each updated `Photo` in input order. Processing stops at the first
+error; earlier successful renames remain applied.
 
-```text
-{accepted scientific name}.{original extension}
-```
-
-The final configurable filename format is intentionally deferred.
-`rename_photos_from_taxa` processes IDs in input order. A later collision or
-error does not undo earlier successful renames.
-
-## Mapping models
+## Public mapping types
 
 ### `PhotoTaxonStatus`
 
-| Value | Meaning |
+| Value | Description |
 | --- | --- |
-| `processing` | The photo is queued for knowledge-base matching. |
-| `unmatched` | Taxonomy search returned no candidates. |
-| `ambiguous` | One or more candidates await user selection. |
-| `matched` | A current candidate taxon has been selected. |
-| `stale` | A previously referenced taxon no longer exists. |
+| `processing` | The photo is waiting for background knowledge-base matching. |
+| `unmatched` | Matching found no candidate taxon. |
+| `ambiguous` | Matching found one or more candidates and no taxon has been selected. |
+| `matched` | A candidate taxon has been selected. |
+| `stale` | The previously selected taxon is no longer valid. |
 
-There is no `resolved_by` field. Background rematching preserves a selected
-taxon while it remains among the current candidates. Otherwise it clears the
-selection and returns the photo to `ambiguous` or `unmatched`.
+There is no `resolved_by` field. A selected taxon remains selected after
+rematching only while it is still a current candidate.
 
 ### `PhotoTaxonMapping`
 
-Contains `photo_id`, optional `taxon_id`, and `status`. `taxon_id` is present
-only for `matched`, except that a synthesized `processing` response may retain
-the previously selected ID while revalidation is pending.
+| Field | Type | Description |
+| --- | --- | --- |
+| `photo_id` | `i64` | Photo ID. |
+| `taxon_id` | `Option<i64>` | Selected taxon ID when available. |
+| `status` | `PhotoTaxonStatus` | Current logical mapping status. |
 
-### Candidate and match models
+A `processing` response may retain the previously selected `taxon_id` while
+that selection is being revalidated.
 
-`PhotoTaxonMatch` contains:
+### `PhotoMatchedName`
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `mapping` | `PhotoTaxonMapping` | Current stored or synthesized state. |
-| `candidates` | `Vec<PhotoTaxonCandidate>` | Current taxonomy search results. |
+| `name_id` | `i64` | Matched taxonomy name ID. |
+| `name_kind` | `TaxonomyNameKind` | Scientific, English, or Chinese name kind. |
+| `name` | `String` | Taxonomy name text that matched. |
+| `is_accepted` | `bool` | Whether the matched name is currently accepted. |
 
-Each `PhotoTaxonCandidate` contains:
+### `PhotoTaxonCandidate`
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `summary` | `TaxonSummary` | Candidate taxon and breadcrumb. |
-| `matched_names` | `Vec<PhotoMatchedName>` | Names that matched the taxonomy search. |
+| `summary` | `TaxonSummary` | Candidate taxon, accepted display names, and breadcrumb. |
+| `matched_names` | `Vec<PhotoMatchedName>` | Taxonomy names responsible for this candidate. |
 | `accepted_names` | `TaxonDisplayNames` | Current accepted scientific, English, and Chinese names. |
 
-`PhotoMatchedName` contains `name_id`, `name_kind`, `name`, and `is_accepted`.
-Accepted names are read from taxonomy when returned; they are not duplicated in
-the mapping table.
-
-### Taxon browsing models
-
-`PhotoTaxonUsage` contains `taxon_id`, `rank`, accepted `names`,
-`direct_photo_count`, and `subtree_photo_count`.
-
-`PhotoTaxonNode` contains an optional current `taxon` and the current node's
-`subtree_photo_count`. A root request uses `taxon_id = null`. Child taxa are
-not embedded; use `browse_photo_taxon`.
-
-`PhotoTaxonItem` is tagged with `kind`. `taxon` contains
-`taxon: PhotoTaxonUsage`; `photo` contains `photo: Photo`. Child taxa precede
-photos in the same virtual page.
-
-`PhotoMappingListStatus` accepts `matched`, `unmatched`, `ambiguous`,
-`processing`, `stale`, and `unmapped`. `unmapped` means no mapping row and no
-pending queue entry. A queued photo belongs to `processing`, even when it has
-an older stored mapping status.
-
-`PhotoMappingListItem` contains `photo` and
-`mapping: Option<PhotoTaxonMapping>`. `mapping` is `null` only for `unmapped`.
-
-`MappingMetadata` contains `mapped_photo_count`, `unmatched_photo_count`,
-`ambiguous_photo_count`, `processing_photo_count`, and `mapping_taxa_count`.
-
-`PhotoMappingRunResult` contains:
+### `PhotoTaxonMatch`
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `processed` | `usize` | Photos evaluated in this run. |
-| `changed` | `usize` | Mapping rows whose selected taxon or status changed. |
-| `pending` | `i64` | Remaining queued photos. |
+| `mapping` | `PhotoTaxonMapping` | Current stored or synthesized mapping state. |
+| `candidates` | `Vec<PhotoTaxonCandidate>` | Current candidates for the photo filename. |
 
-## Matching logic and API
+### `PhotoTaxonUsage`
 
-### Match extraction and taxonomy search
+| Field | Type | Description |
+| --- | --- | --- |
+| `taxon_id` | `i64` | Taxon ID. |
+| `rank` | `TaxonRank` | Taxonomic rank. |
+| `names` | `TaxonDisplayNames` | Current accepted display names. |
+| `direct_photo_count` | `i64` | Photos mapped directly to this taxon. |
+| `subtree_photo_count` | `i64` | Photos mapped to this taxon or any descendant. |
 
-The configurable filename parser is reserved but not implemented yet. The
-current extractor removes only the final extension and uses the entire
-remaining filename as the taxonomy query.
+### `PhotoTaxonNode`
 
-No punctuation, symbols, or other non-alphanumeric name characters are
-discarded or replaced. The extracted text is passed to the same taxonomy
-search implementation used by `taxonomy::search_taxa`, including its exact,
-full-name prefix, word-prefix, middle, and trigram-plus-edit-distance fuzzy
-tiers. Matching queries the indexed taxonomy tables; it never builds an
-in-memory matcher from all taxon names.
+| Field | Type | Description |
+| --- | --- | --- |
+| `taxon` | `Option<PhotoTaxonUsage>` | Selected taxon, or `null` for the virtual root. |
+| `subtree_photo_count` | `i64` | Matched photos under this node. |
 
-### Match reads, processing, and selection
+Children and photos are not embedded. Request them with
+`browse_photo_taxon`.
+
+### `PhotoTaxonItem`
+
+This is a tagged enum using the serialized field `kind`.
+
+| `kind` | Payload | Description |
+| --- | --- | --- |
+| `taxon` | `taxon: PhotoTaxonUsage` | Immediate child taxon. |
+| `photo` | `photo: Photo` | Matched photo in the requested photo section. |
+
+Taxon browse pages form one virtual list: all immediate child taxa are returned
+before photos.
+
+### `PhotoMappingListStatus`
+
+Accepted values are:
+
+- `matched`
+- `unmatched`
+- `ambiguous`
+- `processing`
+- `stale`
+- `unmapped`
+
+`unmapped` means the photo has neither a current mapping nor pending matching
+work. A photo waiting for matching belongs to `processing`, regardless of its
+previous stored status.
+
+### `PhotoMappingListItem`
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `photo` | `Photo` | Photo in the requested logical status. |
+| `mapping` | `Option<PhotoTaxonMapping>` | Mapping state, or `null` for `unmapped`. |
+
+### `MappingMetadata`
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `mapped_photo_count` | `i64` | Number of stored `matched` mappings. |
+| `unmatched_photo_count` | `i64` | Number of stored `unmatched` mappings. |
+| `ambiguous_photo_count` | `i64` | Number of stored `ambiguous` mappings. |
+| `processing_photo_count` | `i64` | Number of photos waiting for matching. |
+| `mapping_taxa_count` | `i64` | Number of non-empty taxon nodes in the photo taxonomy view. |
+
+Stored-status counts can overlap `processing_photo_count` while an existing
+mapping is being revalidated. Use `list_photos_by_mapping_status` when mutually
+exclusive logical status membership is required.
+
+### `PhotoMappingRunResult`
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `processed` | `usize` | Photos evaluated by this run. |
+| `changed` | `usize` | Mapping states changed by this run. |
+| `pending` | `i64` | Photos still waiting for matching. |
+
+### `MappingSyncResult`
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `processed` | `usize` | Photos evaluated by the rebuild. |
+| `mapped` | `usize` | Photos ending in `matched`. |
+| `unmapped` | `usize` | Photos ending in `unmatched`. |
+| `ambiguous` | `usize` | Photos ending in `ambiguous`. |
+| `unmapped_photos` | `Vec<Photo>` | Photos ending in `unmatched`. |
+| `orphan_mappings_deleted` | `usize` | Obsolete mapping rows removed by the operation. |
+
+## `phytoindex_core::mapping`
+
+Every function below takes `database: &Database`.
+
+### Mapping state and matching
+
+#### `get_metadata`
 
 ```rust
 pub fn get_metadata(database: &Database) -> CoreResult<MappingMetadata>
+```
+
+Returns aggregate mapping counts.
+
+#### `get_photo_mapping`
+
+```rust
 pub fn get_photo_mapping(
     database: &Database,
     photo_id: i64,
 ) -> CoreResult<Option<PhotoTaxonMapping>>
+```
+
+Returns the photo's current logical mapping, including synthesized
+`processing`, or `None` when the photo has no mapping state or does not exist.
+
+#### `get_photo_taxon_match`
+
+```rust
 pub fn get_photo_taxon_match(
     database: &Database,
     photo_id: i64,
 ) -> CoreResult<PhotoTaxonMatch>
-pub fn process_pending_photo_matches(
-    database: &Database,
-    progress: &mut MappingProgressCallback<'_>,
-) -> CoreResult<PhotoMappingRunResult>
+```
+
+| Parameter | Description |
+| --- | --- |
+| `photo_id` | Photo whose current mapping and candidates are requested. |
+
+Returns the current mapping and freshly evaluated candidates. A missing photo
+is an error.
+
+The current filename extractor removes only the final extension. It does not
+replace punctuation or other valid name characters. Candidate lookup reuses
+taxonomy search order: exact, full-name prefix, word prefix, middle, then
+trigram candidates with edit distance.
+
+#### `select_photo_taxon`
+
+```rust
 pub fn select_photo_taxon(
     database: &Database,
     photo_id: i64,
     taxon_id: i64,
 ) -> CoreResult<PhotoTaxonMapping>
-pub fn rebuild_mapping(database: &Database) -> CoreResult<MappingSyncResult>
 ```
 
-`get_photo_taxon_match` returns current candidates without selecting one.
-`select_photo_taxon` accepts only a taxon in those current candidates and
-updates mapping and sparse usage in one transaction.
+| Parameter | Description |
+| --- | --- |
+| `photo_id` | Photo whose mapping is being resolved. |
+| `taxon_id` | Taxon selected from the photo's current candidates. |
 
-`process_pending_photo_matches` works in batches of 200 and consumes only queued
-photo IDs. Photo refresh queues new or changed photos. Taxonomy updates use only
-affected taxon IDs to queue photos already mapped to those taxa; the matcher then
-reuses the normal taxonomy search for those photos and writes only changed
-mapping rows. Photos that were previously unmapped but become matchable after a
-taxonomy update are intentionally left for manual rematching from the unfinished
-mapping UI.
+Returns a `matched` mapping. Selecting a taxon that is not a current candidate
+is an error.
 
-Custom SQL and taxonomy rollback parse their SQLite changesets to obtain the
-affected taxon IDs. They queue only photos currently mapped to those taxa,
-rather than refreshing every mapped taxon.
+#### `process_pending_photo_matches`
 
-Deleting a selected taxon changes its mapping rows to `stale` before the
-taxonomy row is removed. Those photos are queued for rematching without blocking
-the taxonomy delete.
+```rust
+pub fn process_pending_photo_matches(
+    database: &Database,
+    progress: &mut MappingProgressCallback<'_>,
+) -> CoreResult<PhotoMappingRunResult>
+```
 
-### Sparse taxonomy browsing
+| Parameter | Description |
+| --- | --- |
+| `progress` | Callback receiving `(processed, total, message)` updates. |
+
+Processes photos waiting for filename matching and returns the run summary.
+
+#### `rebuild_mapping`
+
+```rust
+pub fn rebuild_mapping(
+    database: &Database,
+) -> CoreResult<MappingSyncResult>
+```
+
+Re-evaluates every indexed photo and replaces existing mapping results. Returns
+the complete rebuild summary.
+
+### Taxon-based browsing
+
+#### `get_photo_taxon_node`
 
 ```rust
 pub fn get_photo_taxon_node(
@@ -364,6 +603,19 @@ pub fn get_photo_taxon_node(
     taxon_id: Option<i64>,
     show_empty: bool,
 ) -> CoreResult<PhotoTaxonNode>
+```
+
+| Parameter | Description |
+| --- | --- |
+| `taxon_id` | Taxon to inspect, or `None` for the virtual root. |
+| `show_empty` | Whether a taxon with no matched photos is considered visible. |
+
+Returns the requested node and its subtree photo count. With
+`show_empty = false`, requesting an empty taxon returns not found.
+
+#### `browse_photo_taxon`
+
+```rust
 pub fn browse_photo_taxon(
     database: &Database,
     taxon_id: Option<i64>,
@@ -372,6 +624,23 @@ pub fn browse_photo_taxon(
     cursor: Option<&str>,
     limit: usize,
 ) -> CoreResult<PhotoPage<PhotoTaxonItem>>
+```
+
+| Parameter | Description |
+| --- | --- |
+| `taxon_id` | Parent taxon to browse, or `None` for the virtual root. |
+| `show_empty` | Include immediate child taxa whose subtree has no matched photos. |
+| `include_descendants` | Include photos mapped to descendant taxa as well as directly to the selected taxon. |
+| `cursor` | `None` for the first page, otherwise the previous page's `next_cursor`. |
+| `limit` | Requested maximum number of virtual-list items. |
+
+Returns immediate child taxa followed by matched photos in one cursor page.
+`include_descendants` affects the photo section only; taxon items are always
+immediate children.
+
+#### `list_photos_by_mapping_status`
+
+```rust
 pub fn list_photos_by_mapping_status(
     database: &Database,
     status: PhotoMappingListStatus,
@@ -380,49 +649,120 @@ pub fn list_photos_by_mapping_status(
 ) -> CoreResult<PhotoPage<PhotoMappingListItem>>
 ```
 
-For taxon browsing, `show_empty = false` returns only child nodes with
-`photo_taxon_usage.subtree_photo_count > 0`. Taxonomy branches without matched
-photos are therefore absent. Set `show_empty = true` to include zero-count
-children.
+| Parameter | Description |
+| --- | --- |
+| `status` | Logical status to list. |
+| `cursor` | `None` for the first page, otherwise the previous page's `next_cursor`. |
+| `limit` | Requested maximum number of photos. |
 
-When mappings change, all changed taxon IDs are loaded as recursive CTE seeds.
-Their overlapping ancestor deltas are aggregated before batched usage updates,
-avoiding one lineage query per taxon.
+Returns photos in the requested logical status ordered by `photo_id`.
 
-`include_descendants = true` includes direct mappings on the selected taxon and
-all descendants in the photo section. Child taxa still contain only immediate
-children.
+### Taxon suggestions
 
-The mapping-status endpoint uses `photo_id` keyset order. Its logical status
-rules match `get_photo_mapping`, including the synthesized `processing` state.
+#### `suggest`
 
-## Desktop commands
+```rust
+pub fn suggest(
+    database: &Database,
+    query: &str,
+    mode: &str,
+    limit: usize,
+) -> CoreResult<Vec<Taxon>>
+```
+
+| Parameter | Description |
+| --- | --- |
+| `query` | Text passed to taxonomy search. |
+| `mode` | Use `binomial` to retain only results matched by a scientific name; other values keep all name kinds. |
+| `limit` | Maximum requested taxonomy search results. |
+
+Returns compact `Taxon` suggestions. Each item contains `taxon_id`, `rank`,
+preferred display `name`, optional `parent_id`, and optional scientific
+`binomial_name`.
+
+## Desktop interface
+
+The desktop adapter supplies the current database and converts core errors to
+strings. Parameter names below are the camel-case keys used in JavaScript
+`invoke` payloads. Returned object fields remain `snake_case`.
+
+### Tauri commands
 
 | Command | Parameters | Return |
 | --- | --- | --- |
 | `get_photo_library` | none | `PhotoLibrary \| null` |
 | `get_photo_library_count` | none | `i64` |
-| `open_photo_library` | `root` | `PhotoLibrary` |
-| `browse_photo_directory` | `directory_id`, optional `cursor`, optional `limit` | `PhotoPage<PhotoDirectoryItem>` |
-| `get_photo_directory_counts` | `directory_id` | `DirectoryEntryCounts` |
-| `refresh_photo_directory` | `directory_id` | Background operation descriptor |
-| `start_photo_mapping` | none | Background operation descriptor |
-| `rename_photo` | `photo_id`, `new_filename` | `Photo` |
-| `rename_photo_from_taxon` | `photo_id` | `Photo` |
-| `rename_photos_from_taxa` | `photo_ids` | `Vec<Photo>` |
-| `get_photo` | `photo_id` | `Photo` |
-| `get_photo_metadata` | `photo_id` | `PhotoMetadata` |
+| `open_photo_library` | `root: string` | `PhotoLibrary` |
+| `browse_photo_directory` | `directoryId: number`, optional `cursor: string`, optional `limit: number` | `PhotoPage<PhotoDirectoryItem>` |
+| `get_photo_directory_counts` | `directoryId: number` | `DirectoryEntryCounts` |
+| `refresh_photo_directory` | `directoryId: number` | `{ operation: OperationState }` |
+| `start_photo_mapping` | none | `{ operation: OperationState }` |
+| `rename_photo` | `photoId: number`, `newFilename: string` | `Photo` |
+| `rename_photo_from_taxon` | `photoId: number` | `Photo` |
+| `rename_photos_from_taxa` | `photoIds: number[]` | `Photo[]` |
+| `get_all_photos` | none | `Photo[]` |
+| `get_photo` | `photoId: number` | `Photo` |
+| `get_photo_availability` | `photoId: number` | `{ available: boolean, error: string \| null }` |
+| `get_photo_metadata` | `photoId: number` | `PhotoMetadata` |
 | `get_mapping_metadata` | none | `MappingMetadata` |
-| `get_photo_taxon_match` | `photo_id` | `PhotoTaxonMatch` |
-| `select_photo_taxon` | `photo_id`, `taxon_id` | `PhotoTaxonMapping` |
-| `get_photo_taxon_node` | optional `taxon_id`, optional `show_empty` | `PhotoTaxonNode` |
-| `browse_photo_taxon` | optional `taxon_id`, optional `show_empty`, optional `include_descendants`, optional `cursor`, optional `limit` | `PhotoPage<PhotoTaxonItem>` |
-| `list_photos_by_mapping_status` | `status`, optional `cursor`, optional `limit` | `PhotoPage<PhotoMappingListItem>` |
+| `get_photo_taxon_match` | `photoId: number` | `PhotoTaxonMatch` |
+| `select_photo_taxon` | `photoId: number`, `taxonId: number` | `PhotoTaxonMapping` |
+| `get_photo_taxon_node` | optional `taxonId: number`, optional `showEmpty: boolean` | `PhotoTaxonNode` |
+| `browse_photo_taxon` | optional `taxonId: number`, optional `showEmpty: boolean`, optional `includeDescendants: boolean`, optional `cursor: string`, optional `limit: number` | `PhotoPage<PhotoTaxonItem>` |
+| `list_photos_by_mapping_status` | `status: PhotoMappingListStatus`, optional `cursor: string`, optional `limit: number` | `PhotoPage<PhotoMappingListItem>` |
+| `suggest_mapping_taxa` | `query: string`, `mode: string` | `Taxon[]` |
+| `get_operations_status` | none | `Record<string, OperationState>` |
 
-`refresh_photo_directory`, `start_photo_mapping`, `start_taxa_update`, and
-`start_taxa_rebuild` return after scheduling work. Progress and final results
-are available through `get_operations_status`. Taxonomy update and rebuild
-operations run pending photo matching after the taxonomy transaction finishes.
+Desktop defaults:
 
-The adapter uses 50 as the default for all cursor pages. Taxon browsing defaults
-to hiding empty branches and including descendant photos.
+- `browse_photo_directory.limit = 50`
+- `browse_photo_taxon.limit = 50`
+- `browse_photo_taxon.show_empty = false`
+- `browse_photo_taxon.include_descendants = true`
+- `list_photos_by_mapping_status.limit = 50`
+- `suggest_mapping_taxa` requests at most 10 taxonomy results
+
+`refresh_photo_directory` and `start_photo_mapping` schedule background work
+and return immediately. Their `OperationState` has:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `module` | `string` | Operation owner, such as `photos` or `mapping`. |
+| `task_id` | `string \| null` | Unique task ID. |
+| `operation` | `string \| null` | Operation name. |
+| `running` | `boolean` | Whether work is still running. |
+| `started_at` | `string \| null` | Start time. |
+| `finished_at` | `string \| null` | Completion time. |
+| `message` | `string` | Current phase or result message. |
+| `processed` | `number` | Completed work units. |
+| `total` | `number \| null` | Total work units when known. |
+| `result` | `unknown \| null` | Successful operation result. |
+| `error` | `string \| null` | Failure message. |
+
+On success:
+
+- `refresh_photo_directory` stores
+  `{ refresh: PhotoSyncResult, mapping: PhotoMappingRunResult }` in `result`.
+- `start_photo_mapping` stores `PhotoMappingRunResult` in `result`.
+
+Progress is emitted through the Tauri event:
+
+```text
+operation-progress
+```
+
+The event payload is the latest `OperationState`.
+
+### Media URLs
+
+The desktop custom protocol exposes photo bytes without returning filesystem
+paths to the frontend. Pass the resource path and the `phytoindex` protocol to
+Tauri's `convertFileSrc`; the final URL syntax is platform-dependent.
+
+| Resource path | Return |
+| --- | --- |
+| `photo/{photo_id}` | Original photo bytes. |
+| `thumbnail/{photo_id}` | Existing or newly generated thumbnail bytes. |
+
+A successful response includes the detected content type. An invalid ID,
+missing file, or unknown resource returns an HTTP error response.
