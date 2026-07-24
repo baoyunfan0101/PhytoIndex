@@ -10,6 +10,7 @@ use phytoindex_core::models::{
     DirectoryEntryCounts, MappingMetadata, OperationsStatus, Photo, PhotoDirectoryItem,
     PhotoLibrary, PhotoMetadata, PhotoPage, TaxaMetadata, Taxon,
 };
+use phytoindex_core::photos::{PhotoOperation, PhotoOperationBatch};
 use phytoindex_core::taxonomy::{
     DeleteTaxonNameInput, TaxonChild, TaxonDetailNode, TaxonSearchResult, TaxonUpdateInput,
     TaxonUpdateOptions, TaxonomyActionResult, TaxonomyCustomSqlResult, TaxonomyCustomSqlTempTable,
@@ -114,6 +115,47 @@ pub fn rename_photos_from_taxa(
     photo_ids: Vec<i64>,
 ) -> CommandResult<Vec<Photo>> {
     photos::rename_photos_from_taxa(&state.database, &photo_ids).map_err(error)
+}
+
+#[tauri::command]
+pub fn list_photo_operation_batches(
+    state: State<'_, AppState>,
+    cursor: Option<String>,
+    limit: Option<usize>,
+) -> CommandResult<PhotoPage<PhotoOperationBatch>> {
+    photos::list_photo_operation_batches(&state.database, cursor.as_deref(), limit.unwrap_or(50))
+        .map_err(error)
+}
+
+#[tauri::command]
+pub fn list_photo_operations(
+    state: State<'_, AppState>,
+    cursor: Option<String>,
+    limit: Option<usize>,
+) -> CommandResult<PhotoPage<PhotoOperation>> {
+    photos::list_photo_operations(&state.database, cursor.as_deref(), limit.unwrap_or(50))
+        .map_err(error)
+}
+
+#[tauri::command]
+pub fn list_photo_operations_for_batch(
+    state: State<'_, AppState>,
+    batch_id: i64,
+    cursor: Option<String>,
+    limit: Option<usize>,
+) -> CommandResult<PhotoPage<PhotoOperation>> {
+    photos::list_photo_operations_for_batch(
+        &state.database,
+        batch_id,
+        cursor.as_deref(),
+        limit.unwrap_or(50),
+    )
+    .map_err(error)
+}
+
+#[tauri::command]
+pub fn revert_photo_operation(state: State<'_, AppState>, operation_id: i64) -> CommandResult<()> {
+    photos::revert_photo_operation(&state.database, operation_id).map_err(error)
 }
 
 #[tauri::command]

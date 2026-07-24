@@ -32,6 +32,83 @@ pub type ProgressCallback<'a> = dyn FnMut(u64, Option<u64>, &str) + Send + 'a;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+pub enum PhotoOperationSource {
+    ManualRename,
+    TaxonRename,
+    TaxonBatchRename,
+}
+
+impl PhotoOperationSource {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::ManualRename => "manual_rename",
+            Self::TaxonRename => "taxon_rename",
+            Self::TaxonBatchRename => "taxon_batch_rename",
+        }
+    }
+
+    fn from_str(value: &str) -> CoreResult<Self> {
+        match value {
+            "manual_rename" => Ok(Self::ManualRename),
+            "taxon_rename" => Ok(Self::TaxonRename),
+            "taxon_batch_rename" => Ok(Self::TaxonBatchRename),
+            _ => Err(CoreError::InvalidArgument(format!(
+                "invalid photo operation source: {value}"
+            ))),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PhotoOperationStatus {
+    Applied,
+    Reverted,
+}
+
+impl PhotoOperationStatus {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Applied => "applied",
+            Self::Reverted => "reverted",
+        }
+    }
+
+    fn from_str(value: &str) -> CoreResult<Self> {
+        match value {
+            "applied" => Ok(Self::Applied),
+            "reverted" => Ok(Self::Reverted),
+            _ => Err(CoreError::InvalidArgument(format!(
+                "invalid photo operation status: {value}"
+            ))),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PhotoOperationBatch {
+    pub batch_id: i64,
+    pub source: PhotoOperationSource,
+    pub root_path: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PhotoOperation {
+    pub operation_id: i64,
+    pub batch_id: i64,
+    pub row_number: usize,
+    pub status: PhotoOperationStatus,
+    pub photo_id: i64,
+    pub directory_relative_path: String,
+    pub old_filename: String,
+    pub new_filename: String,
+    pub applied_at: String,
+    pub reverted_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum PhotoPageSection {
     Containers,
     Photos,
@@ -57,6 +134,18 @@ pub(crate) enum PhotoCursor {
     MappingStatus {
         status: String,
         photo_id: i64,
+    },
+    OperationBatches {
+        created_at: String,
+        batch_id: i64,
+    },
+    Operations {
+        operation_id: i64,
+    },
+    BatchOperations {
+        batch_id: i64,
+        row_number: usize,
+        operation_id: i64,
     },
 }
 
@@ -426,6 +515,61 @@ pub fn rename_photo(database: &Database, photo_id: i64, new_filename: &str) -> C
     let _guard = PHOTO_WRITE_LOCK
         .lock()
         .map_err(|_| CoreError::InvalidArgument("photo workspace lock is poisoned".into()))?;
+    let mut batch_id = None;
+    rename_photo_locked(
+        database,
+        photo_id,
+        new_filename,
+        PhotoOperationSource::ManualRename,
+        1,
+        &mut batch_id,
+    )
+}
+
+pub fn rename_photo_from_taxon(database: &Database, photo_id: i64) -> CoreResult<Photo> {
+    let _guard = PHOTO_WRITE_LOCK
+        .lock()
+        .map_err(|_| CoreError::InvalidArgument("photo workspace lock is poisoned".into()))?;
+    let new_filename = taxon_filename(database, photo_id)?;
+    let mut batch_id = None;
+    rename_photo_locked(
+        database,
+        photo_id,
+        &new_filename,
+        PhotoOperationSource::TaxonRename,
+        1,
+        &mut batch_id,
+    )
+}
+
+pub fn rename_photos_from_taxa(database: &Database, photo_ids: &[i64]) -> CoreResult<Vec<Photo>> {
+    let _guard = PHOTO_WRITE_LOCK
+        .lock()
+        .map_err(|_| CoreError::InvalidArgument("photo workspace lock is poisoned".into()))?;
+    let mut batch_id = None;
+    let mut photos = Vec::with_capacity(photo_ids.len());
+    for (index, photo_id) in photo_ids.iter().copied().enumerate() {
+        let new_filename = taxon_filename(database, photo_id)?;
+        photos.push(rename_photo_locked(
+            database,
+            photo_id,
+            &new_filename,
+            PhotoOperationSource::TaxonBatchRename,
+            index + 1,
+            &mut batch_id,
+        )?);
+    }
+    Ok(photos)
+}
+
+fn rename_photo_locked(
+    database: &Database,
+    photo_id: i64,
+    new_filename: &str,
+    operation_source: PhotoOperationSource,
+    row_number: usize,
+    batch_id: &mut Option<i64>,
+) -> CoreResult<Photo> {
     let new_filename = validate_filename(new_filename)?;
     let old_photo = get_photo(database, photo_id)?
         .ok_or_else(|| CoreError::NotFound(format!("photo {photo_id}")))?;
@@ -437,13 +581,17 @@ pub fn rename_photo(database: &Database, photo_id: i64, new_filename: &str) -> C
     let directory = load_directory(&connection, old_photo.directory_id)?.ok_or_else(|| {
         CoreError::NotFound(format!("photo directory {}", old_photo.directory_id))
     })?;
+    let root_path = root
+        .to_str()
+        .ok_or_else(|| CoreError::InvalidArgument("photo root is not valid UTF-8".into()))?;
     let directory_path = safe_directory_path(&root, &directory.relative_path)?;
     let source = directory_path.join(&old_photo.filename);
     let destination = directory_path.join(&new_filename);
     let temporary = directory_path.join(format!(".vividarium-rename-{photo_id}.tmp"));
     rename_file(&source, &destination, &temporary)?;
 
-    let result = (|| {
+    let existing_batch_id = *batch_id;
+    let result = (|| -> CoreResult<(Photo, i64)> {
         let mut connection = database.connect()?;
         let transaction = connection.transaction()?;
         transaction.execute(
@@ -455,6 +603,19 @@ pub fn rename_photo(database: &Database, photo_id: i64, new_filename: &str) -> C
             "DELETE FROM photo_mapping_queue WHERE photo_id = ?",
             [photo_id],
         )?;
+        let current_batch_id = match existing_batch_id {
+            Some(batch_id) => batch_id,
+            None => insert_photo_operation_batch(&transaction, operation_source, root_path)?,
+        };
+        insert_photo_operation(
+            &transaction,
+            current_batch_id,
+            row_number,
+            photo_id,
+            &directory.relative_path,
+            &old_photo.filename,
+            &new_filename,
+        )?;
         let photo = transaction
             .query_row(
                 &photo_select("WHERE photos.photo_id = ?"),
@@ -464,10 +625,13 @@ pub fn rename_photo(database: &Database, photo_id: i64, new_filename: &str) -> C
             .optional()?
             .ok_or_else(|| CoreError::NotFound(format!("photo {photo_id}")))?;
         transaction.commit()?;
-        Ok(photo)
+        Ok((photo, current_batch_id))
     })();
     match result {
-        Ok(photo) => Ok(photo),
+        Ok((photo, current_batch_id)) => {
+            *batch_id = Some(current_batch_id);
+            Ok(photo)
+        }
         Err(error) => match rename_file(&destination, &source, &temporary) {
             Ok(()) => Err(error),
             Err(rollback_error) => Err(CoreError::Consistency(format!(
@@ -477,7 +641,7 @@ pub fn rename_photo(database: &Database, photo_id: i64, new_filename: &str) -> C
     }
 }
 
-pub fn rename_photo_from_taxon(database: &Database, photo_id: i64) -> CoreResult<Photo> {
+fn taxon_filename(database: &Database, photo_id: i64) -> CoreResult<String> {
     let photo = get_photo(database, photo_id)?
         .ok_or_else(|| CoreError::NotFound(format!("photo {photo_id}")))?;
     let connection = database.connect()?;
@@ -510,18 +674,444 @@ pub fn rename_photo_from_taxon(database: &Database, photo_id: i64) -> CoreResult
         .extension()
         .and_then(|value| value.to_str())
         .ok_or_else(|| CoreError::InvalidArgument("photo filename has no extension".into()))?;
-    rename_photo(
-        database,
-        photo_id,
-        &format!("{scientific_name}.{extension}"),
-    )
+    Ok(format!("{scientific_name}.{extension}"))
 }
 
-pub fn rename_photos_from_taxa(database: &Database, photo_ids: &[i64]) -> CoreResult<Vec<Photo>> {
-    photo_ids
-        .iter()
-        .map(|photo_id| rename_photo_from_taxon(database, *photo_id))
-        .collect()
+fn insert_photo_operation_batch(
+    transaction: &Transaction<'_>,
+    source: PhotoOperationSource,
+    root_path: &str,
+) -> CoreResult<i64> {
+    transaction.execute(
+        r#"
+        INSERT INTO photo_operation_batches (source, root_path)
+        VALUES (?, ?)
+        "#,
+        params![source.as_str(), root_path],
+    )?;
+    Ok(transaction.last_insert_rowid())
+}
+
+fn insert_photo_operation(
+    transaction: &Transaction<'_>,
+    batch_id: i64,
+    row_number: usize,
+    photo_id: i64,
+    directory_relative_path: &str,
+    old_filename: &str,
+    new_filename: &str,
+) -> CoreResult<i64> {
+    transaction.execute(
+        r#"
+        INSERT INTO photo_operations (
+            batch_id, row_number, status, photo_id,
+            directory_relative_path, old_filename, new_filename
+        ) VALUES (?, ?, 'applied', ?, ?, ?, ?)
+        "#,
+        params![
+            batch_id,
+            row_number as i64,
+            photo_id,
+            directory_relative_path,
+            old_filename,
+            new_filename
+        ],
+    )?;
+    Ok(transaction.last_insert_rowid())
+}
+
+pub fn list_photo_operation_batches(
+    database: &Database,
+    cursor: Option<&str>,
+    limit: usize,
+) -> CoreResult<PhotoPage<PhotoOperationBatch>> {
+    let connection = database.connect()?;
+    let batch_cursor = match decode_photo_cursor(cursor)? {
+        None => None,
+        Some(PhotoCursor::OperationBatches {
+            created_at,
+            batch_id,
+        }) => Some((created_at, batch_id)),
+        Some(_) => return Err(invalid_photo_cursor()),
+    };
+    let limit = photo_page_limit(limit);
+    let fetch_limit = limit + 1;
+    let mut items = if let Some((created_at, batch_id)) = batch_cursor {
+        let mut statement = connection.prepare(
+            r#"
+            SELECT batch_id, source, root_path, created_at
+            FROM photo_operation_batches
+            WHERE (created_at, batch_id) < (?1, ?2)
+            ORDER BY created_at DESC, batch_id DESC
+            LIMIT ?3
+            "#,
+        )?;
+        let rows = statement.query_map(
+            params![created_at, batch_id, fetch_limit as i64],
+            photo_operation_batch_row,
+        )?;
+        rows.map(photo_operation_batch_from_row)
+            .collect::<CoreResult<Vec<_>>>()?
+    } else {
+        let mut statement = connection.prepare(
+            r#"
+            SELECT batch_id, source, root_path, created_at
+            FROM photo_operation_batches
+            ORDER BY created_at DESC, batch_id DESC
+            LIMIT ?1
+            "#,
+        )?;
+        let rows = statement.query_map([fetch_limit as i64], photo_operation_batch_row)?;
+        rows.map(photo_operation_batch_from_row)
+            .collect::<CoreResult<Vec<_>>>()?
+    };
+    let next_cursor = if items.len() > limit {
+        items.truncate(limit);
+        items
+            .last()
+            .map(|batch| {
+                encode_photo_cursor(&PhotoCursor::OperationBatches {
+                    created_at: batch.created_at.clone(),
+                    batch_id: batch.batch_id,
+                })
+            })
+            .transpose()?
+    } else {
+        None
+    };
+    Ok(PhotoPage { items, next_cursor })
+}
+
+pub fn list_photo_operations(
+    database: &Database,
+    cursor: Option<&str>,
+    limit: usize,
+) -> CoreResult<PhotoPage<PhotoOperation>> {
+    let connection = database.connect()?;
+    let operation_cursor = match decode_photo_cursor(cursor)? {
+        None => None,
+        Some(PhotoCursor::Operations { operation_id }) => Some(operation_id),
+        Some(_) => return Err(invalid_photo_cursor()),
+    };
+    let limit = photo_page_limit(limit);
+    let fetch_limit = limit + 1;
+    let mut items = if let Some(operation_id) = operation_cursor {
+        let mut statement = connection.prepare(
+            r#"
+            SELECT operation_id, batch_id, row_number, status, photo_id,
+                   directory_relative_path, old_filename, new_filename,
+                   applied_at, reverted_at
+            FROM photo_operations
+            WHERE operation_id < ?1
+            ORDER BY operation_id DESC
+            LIMIT ?2
+            "#,
+        )?;
+        let rows = statement.query_map(
+            params![operation_id, fetch_limit as i64],
+            photo_operation_row,
+        )?;
+        rows.map(photo_operation_from_row)
+            .collect::<CoreResult<Vec<_>>>()?
+    } else {
+        let mut statement = connection.prepare(
+            r#"
+            SELECT operation_id, batch_id, row_number, status, photo_id,
+                   directory_relative_path, old_filename, new_filename,
+                   applied_at, reverted_at
+            FROM photo_operations
+            ORDER BY operation_id DESC
+            LIMIT ?1
+            "#,
+        )?;
+        let rows = statement.query_map([fetch_limit as i64], photo_operation_row)?;
+        rows.map(photo_operation_from_row)
+            .collect::<CoreResult<Vec<_>>>()?
+    };
+    let next_cursor = if items.len() > limit {
+        items.truncate(limit);
+        items
+            .last()
+            .map(|operation| {
+                encode_photo_cursor(&PhotoCursor::Operations {
+                    operation_id: operation.operation_id,
+                })
+            })
+            .transpose()?
+    } else {
+        None
+    };
+    Ok(PhotoPage { items, next_cursor })
+}
+
+pub fn list_photo_operations_for_batch(
+    database: &Database,
+    batch_id: i64,
+    cursor: Option<&str>,
+    limit: usize,
+) -> CoreResult<PhotoPage<PhotoOperation>> {
+    let connection = database.connect()?;
+    let operation_cursor = match decode_photo_cursor(cursor)? {
+        None => None,
+        Some(PhotoCursor::BatchOperations {
+            batch_id: cursor_batch_id,
+            row_number,
+            operation_id,
+        }) if cursor_batch_id == batch_id => Some((row_number, operation_id)),
+        Some(_) => return Err(invalid_photo_cursor()),
+    };
+    let limit = photo_page_limit(limit);
+    let fetch_limit = limit + 1;
+    let mut items = if let Some((row_number, operation_id)) = operation_cursor {
+        let mut statement = connection.prepare(
+            r#"
+            SELECT operation_id, batch_id, row_number, status, photo_id,
+                   directory_relative_path, old_filename, new_filename,
+                   applied_at, reverted_at
+            FROM photo_operations
+            WHERE batch_id = ?1 AND (row_number, operation_id) > (?2, ?3)
+            ORDER BY row_number, operation_id
+            LIMIT ?4
+            "#,
+        )?;
+        let rows = statement.query_map(
+            params![
+                batch_id,
+                row_number as i64,
+                operation_id,
+                fetch_limit as i64
+            ],
+            photo_operation_row,
+        )?;
+        rows.map(photo_operation_from_row)
+            .collect::<CoreResult<Vec<_>>>()?
+    } else {
+        let mut statement = connection.prepare(
+            r#"
+            SELECT operation_id, batch_id, row_number, status, photo_id,
+                   directory_relative_path, old_filename, new_filename,
+                   applied_at, reverted_at
+            FROM photo_operations
+            WHERE batch_id = ?1
+            ORDER BY row_number, operation_id
+            LIMIT ?2
+            "#,
+        )?;
+        let rows =
+            statement.query_map(params![batch_id, fetch_limit as i64], photo_operation_row)?;
+        rows.map(photo_operation_from_row)
+            .collect::<CoreResult<Vec<_>>>()?
+    };
+    let next_cursor = if items.len() > limit {
+        items.truncate(limit);
+        items
+            .last()
+            .map(|operation| {
+                encode_photo_cursor(&PhotoCursor::BatchOperations {
+                    batch_id,
+                    row_number: operation.row_number,
+                    operation_id: operation.operation_id,
+                })
+            })
+            .transpose()?
+    } else {
+        None
+    };
+    Ok(PhotoPage { items, next_cursor })
+}
+
+pub fn revert_photo_operation(database: &Database, operation_id: i64) -> CoreResult<()> {
+    let _guard = PHOTO_WRITE_LOCK
+        .lock()
+        .map_err(|_| CoreError::InvalidArgument("photo workspace lock is poisoned".into()))?;
+    let connection = database.connect()?;
+    let (
+        status,
+        photo_id,
+        directory_relative_path,
+        old_filename,
+        new_filename,
+        logged_root_path,
+    ): (String, i64, String, String, String, String) = connection
+        .query_row(
+            r#"
+            SELECT photo_operations.status, photo_operations.photo_id,
+                   photo_operations.directory_relative_path,
+                   photo_operations.old_filename, photo_operations.new_filename,
+                   photo_operation_batches.root_path
+            FROM photo_operations
+            JOIN photo_operation_batches USING (batch_id)
+            WHERE photo_operations.operation_id = ?
+            "#,
+            [operation_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            },
+        )
+        .optional()?
+        .ok_or_else(|| CoreError::NotFound(format!("photo operation {operation_id}")))?;
+    let status = PhotoOperationStatus::from_str(&status)?;
+    if status != PhotoOperationStatus::Applied {
+        return Err(CoreError::InvalidArgument(format!(
+            "photo operation {operation_id} is already {}",
+            status.as_str()
+        )));
+    }
+    let root = library_root(&connection)?;
+    if root.to_str() != Some(logged_root_path.as_str()) {
+        return Err(CoreError::InvalidArgument(format!(
+            "photo operation {operation_id} belongs to another photo library"
+        )));
+    }
+    let photo = get_photo(database, photo_id)?
+        .ok_or_else(|| CoreError::NotFound(format!("photo {photo_id}")))?;
+    if photo.filename != new_filename {
+        return Err(CoreError::InvalidArgument(format!(
+            "photo {photo_id} filename is '{}', expected '{}'",
+            photo.filename, new_filename
+        )));
+    }
+    let directory = load_directory(&connection, photo.directory_id)?
+        .ok_or_else(|| CoreError::NotFound(format!("photo directory {}", photo.directory_id)))?;
+    if directory.relative_path != directory_relative_path {
+        return Err(CoreError::InvalidArgument(format!(
+            "photo {photo_id} is no longer in the recorded directory"
+        )));
+    }
+    let directory_path = safe_directory_path(&root, &directory_relative_path)?;
+    let source = directory_path.join(&new_filename);
+    let destination = directory_path.join(&old_filename);
+    let temporary = directory_path.join(format!(".vividarium-revert-{operation_id}.tmp"));
+    rename_file(&source, &destination, &temporary)?;
+
+    let result = (|| -> CoreResult<()> {
+        let mut connection = database.connect()?;
+        let transaction = connection.transaction()?;
+        let updated = transaction.execute(
+            r#"
+            UPDATE photos
+            SET filename = ?
+            WHERE photo_id = ? AND directory_id = ? AND filename = ?
+            "#,
+            params![old_filename, photo_id, photo.directory_id, new_filename],
+        )?;
+        if updated != 1 {
+            return Err(CoreError::InvalidArgument(format!(
+                "photo {photo_id} no longer matches operation {operation_id}"
+            )));
+        }
+        mapping::remap_photo_ids(&transaction, &[photo_id])?;
+        transaction.execute(
+            "DELETE FROM photo_mapping_queue WHERE photo_id = ?",
+            [photo_id],
+        )?;
+        let updated = transaction.execute(
+            r#"
+            UPDATE photo_operations
+            SET status = 'reverted', reverted_at = CURRENT_TIMESTAMP
+            WHERE operation_id = ? AND status = 'applied'
+            "#,
+            [operation_id],
+        )?;
+        if updated != 1 {
+            return Err(CoreError::InvalidArgument(format!(
+                "photo operation {operation_id} is no longer applied"
+            )));
+        }
+        transaction.commit()?;
+        Ok(())
+    })();
+    match result {
+        Ok(()) => Ok(()),
+        Err(error) => match rename_file(&destination, &source, &temporary) {
+            Ok(()) => Err(error),
+            Err(rollback_error) => Err(CoreError::Consistency(format!(
+                "photo operation revert failed: {error}; filesystem rollback failed: {rollback_error}"
+            ))),
+        },
+    }
+}
+
+fn photo_operation_batch_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<(i64, String, String, String)> {
+    Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+}
+
+fn photo_operation_batch_from_row(
+    row: rusqlite::Result<(i64, String, String, String)>,
+) -> CoreResult<PhotoOperationBatch> {
+    let (batch_id, source, root_path, created_at) = row?;
+    Ok(PhotoOperationBatch {
+        batch_id,
+        source: PhotoOperationSource::from_str(&source)?,
+        root_path,
+        created_at,
+    })
+}
+
+type PhotoOperationRow = (
+    i64,
+    i64,
+    i64,
+    String,
+    i64,
+    String,
+    String,
+    String,
+    String,
+    Option<String>,
+);
+
+fn photo_operation_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PhotoOperationRow> {
+    Ok((
+        row.get(0)?,
+        row.get(1)?,
+        row.get(2)?,
+        row.get(3)?,
+        row.get(4)?,
+        row.get(5)?,
+        row.get(6)?,
+        row.get(7)?,
+        row.get(8)?,
+        row.get(9)?,
+    ))
+}
+
+fn photo_operation_from_row(
+    row: rusqlite::Result<PhotoOperationRow>,
+) -> CoreResult<PhotoOperation> {
+    let (
+        operation_id,
+        batch_id,
+        row_number,
+        status,
+        photo_id,
+        directory_relative_path,
+        old_filename,
+        new_filename,
+        applied_at,
+        reverted_at,
+    ) = row?;
+    Ok(PhotoOperation {
+        operation_id,
+        batch_id,
+        row_number: row_number as usize,
+        status: PhotoOperationStatus::from_str(&status)?,
+        photo_id,
+        directory_relative_path,
+        old_filename,
+        new_filename,
+        applied_at,
+        reverted_at,
+    })
 }
 
 fn rename_file(source: &Path, destination: &Path, temporary: &Path) -> CoreResult<()> {
@@ -1123,6 +1713,180 @@ mod tests {
     }
 
     #[test]
+    fn records_and_reverts_photo_rename_operations() {
+        let data = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("before.jpg"), b"photo").unwrap();
+        let database = Database::open(data.path().join("vividarium.db")).unwrap();
+        let library = open_library(&database, root.path().to_str().unwrap()).unwrap();
+        refresh_directory(&database, library.root_directory_id).unwrap();
+        let photo = list_photos(&database).unwrap().remove(0);
+
+        rename_photo(&database, photo.photo_id, "after.jpg").unwrap();
+
+        let batches = list_photo_operation_batches(&database, None, 10)
+            .unwrap()
+            .items;
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].source, PhotoOperationSource::ManualRename);
+        assert_eq!(
+            batches[0].root_path,
+            root.path().canonicalize().unwrap().to_str().unwrap()
+        );
+        let operations = list_photo_operations_for_batch(&database, batches[0].batch_id, None, 10)
+            .unwrap()
+            .items;
+        assert_eq!(operations.len(), 1);
+        assert_eq!(operations[0].row_number, 1);
+        assert_eq!(operations[0].photo_id, photo.photo_id);
+        assert_eq!(operations[0].directory_relative_path, "");
+        assert_eq!(operations[0].old_filename, "before.jpg");
+        assert_eq!(operations[0].new_filename, "after.jpg");
+        assert_eq!(operations[0].status, PhotoOperationStatus::Applied);
+
+        revert_photo_operation(&database, operations[0].operation_id).unwrap();
+
+        assert!(root.path().join("before.jpg").is_file());
+        assert!(!root.path().join("after.jpg").exists());
+        assert_eq!(
+            get_photo(&database, photo.photo_id)
+                .unwrap()
+                .unwrap()
+                .filename,
+            "before.jpg"
+        );
+        let operation = list_photo_operations(&database, None, 10)
+            .unwrap()
+            .items
+            .remove(0);
+        assert_eq!(operation.status, PhotoOperationStatus::Reverted);
+        assert!(operation.reverted_at.is_some());
+        let error = revert_photo_operation(&database, operation.operation_id).unwrap_err();
+        assert!(error.to_string().contains("already reverted"));
+    }
+
+    #[test]
+    fn revert_requires_the_current_renamed_filename() {
+        let data = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("first.jpg"), b"photo").unwrap();
+        let database = Database::open(data.path().join("vividarium.db")).unwrap();
+        let library = open_library(&database, root.path().to_str().unwrap()).unwrap();
+        refresh_directory(&database, library.root_directory_id).unwrap();
+        let photo = list_photos(&database).unwrap().remove(0);
+        rename_photo(&database, photo.photo_id, "second.jpg").unwrap();
+        let first_operation_id =
+            list_photo_operations(&database, None, 10).unwrap().items[0].operation_id;
+        rename_photo(&database, photo.photo_id, "third.jpg").unwrap();
+        let second_operation_id =
+            list_photo_operations(&database, None, 10).unwrap().items[0].operation_id;
+        let newest_operation = list_photo_operations(&database, None, 1).unwrap();
+        assert_eq!(newest_operation.items[0].operation_id, second_operation_id);
+        assert!(newest_operation.next_cursor.is_some());
+        let older_operation =
+            list_photo_operations(&database, newest_operation.next_cursor.as_deref(), 1).unwrap();
+        assert_eq!(older_operation.items[0].operation_id, first_operation_id);
+        assert_eq!(older_operation.next_cursor, None);
+        let newest_batch = list_photo_operation_batches(&database, None, 1).unwrap();
+        assert!(newest_batch.next_cursor.is_some());
+        let older_batch =
+            list_photo_operation_batches(&database, newest_batch.next_cursor.as_deref(), 1)
+                .unwrap();
+        assert_eq!(older_batch.items.len(), 1);
+        assert_eq!(older_batch.next_cursor, None);
+
+        let error = revert_photo_operation(&database, first_operation_id).unwrap_err();
+        assert!(error.to_string().contains("expected 'second.jpg'"));
+        assert!(root.path().join("third.jpg").is_file());
+
+        revert_photo_operation(&database, second_operation_id).unwrap();
+        assert!(root.path().join("second.jpg").is_file());
+        revert_photo_operation(&database, first_operation_id).unwrap();
+        assert!(root.path().join("first.jpg").is_file());
+    }
+
+    #[test]
+    fn groups_taxon_batch_renames_and_pages_their_operations() {
+        let data = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("first.jpg"), b"first").unwrap();
+        fs::write(root.path().join("second.png"), b"second").unwrap();
+        let database = Database::open(data.path().join("vividarium.db")).unwrap();
+        let library = open_library(&database, root.path().to_str().unwrap()).unwrap();
+        refresh_directory(&database, library.root_directory_id).unwrap();
+        let photos = list_photos(&database).unwrap();
+        let connection = database.connect().unwrap();
+        connection
+            .execute("INSERT INTO taxa (rank) VALUES (5)", [])
+            .unwrap();
+        let taxon_id = connection.last_insert_rowid();
+        connection
+            .execute(
+                r#"
+                INSERT INTO taxon_names (taxon_id, name_kind, name, is_accepted)
+                VALUES (?, 1, 'Canis lupus', 1)
+                "#,
+                [taxon_id],
+            )
+            .unwrap();
+        for photo in &photos {
+            connection
+                .execute(
+                    r#"
+                    INSERT INTO photo_taxon_mapping (photo_id, taxon_id, status)
+                    VALUES (?, ?, 'matched')
+                    ON CONFLICT(photo_id) DO UPDATE
+                    SET taxon_id = excluded.taxon_id, status = 'matched'
+                    "#,
+                    params![photo.photo_id, taxon_id],
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "DELETE FROM photo_mapping_queue WHERE photo_id = ?",
+                    [photo.photo_id],
+                )
+                .unwrap();
+        }
+        drop(connection);
+        let photo_ids = photos
+            .iter()
+            .map(|photo| photo.photo_id)
+            .collect::<Vec<_>>();
+
+        let renamed = rename_photos_from_taxa(&database, &photo_ids).unwrap();
+
+        let mut renamed_filenames = renamed
+            .iter()
+            .map(|photo| photo.filename.as_str())
+            .collect::<Vec<_>>();
+        renamed_filenames.sort_unstable();
+        assert_eq!(renamed_filenames, ["Canis lupus.jpg", "Canis lupus.png"]);
+        let batch = list_photo_operation_batches(&database, None, 10)
+            .unwrap()
+            .items
+            .remove(0);
+        assert_eq!(batch.source, PhotoOperationSource::TaxonBatchRename);
+        let first = list_photo_operations_for_batch(&database, batch.batch_id, None, 1).unwrap();
+        assert_eq!(first.items.len(), 1);
+        assert_eq!(first.items[0].row_number, 1);
+        assert!(first.next_cursor.is_some());
+        let second = list_photo_operations_for_batch(
+            &database,
+            batch.batch_id,
+            first.next_cursor.as_deref(),
+            1,
+        )
+        .unwrap();
+        assert_eq!(second.items.len(), 1);
+        assert_eq!(second.items[0].row_number, 2);
+        assert_eq!(second.next_cursor, None);
+        let error =
+            list_photo_operation_batches(&database, first.next_cursor.as_deref(), 1).unwrap_err();
+        assert!(error.to_string().contains("invalid photo cursor"));
+    }
+
+    #[test]
     fn renames_a_matched_photo_with_its_accepted_scientific_name() {
         let data = tempfile::tempdir().unwrap();
         let root = tempfile::tempdir().unwrap();
@@ -1204,6 +1968,54 @@ mod tests {
             !root
                 .path()
                 .join(format!(".vividarium-rename-{}.tmp", photo.photo_id))
+                .exists()
+        );
+    }
+
+    #[test]
+    fn restores_case_only_revert_when_the_database_update_fails() {
+        let data = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("ABC.jpg"), b"photo").unwrap();
+        let database = Database::open(data.path().join("vividarium.db")).unwrap();
+        let library = open_library(&database, root.path().to_str().unwrap()).unwrap();
+        refresh_directory(&database, library.root_directory_id).unwrap();
+        let photo = list_photos(&database).unwrap().remove(0);
+        rename_photo(&database, photo.photo_id, "abc.jpg").unwrap();
+        let operation_id = list_photo_operations(&database, None, 1).unwrap().items[0].operation_id;
+        let connection = database.connect().unwrap();
+        connection
+            .execute_batch(
+                r#"
+                CREATE TRIGGER reject_photo_revert
+                BEFORE UPDATE OF filename ON photos
+                WHEN new.filename = 'ABC.jpg' BEGIN
+                    SELECT RAISE(ABORT, 'forced photo revert failure');
+                END;
+                "#,
+            )
+            .unwrap();
+
+        let error = revert_photo_operation(&database, operation_id).unwrap_err();
+
+        assert!(error.to_string().contains("forced photo revert failure"));
+        assert_eq!(
+            get_photo(&database, photo.photo_id)
+                .unwrap()
+                .unwrap()
+                .filename,
+            "abc.jpg"
+        );
+        let filenames = fs::read_dir(root.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect::<Vec<_>>();
+        assert!(filenames.contains(&"abc.jpg".to_string()));
+        assert!(!filenames.contains(&"ABC.jpg".to_string()));
+        assert!(
+            !root
+                .path()
+                .join(format!(".vividarium-revert-{operation_id}.tmp"))
                 .exists()
         );
     }

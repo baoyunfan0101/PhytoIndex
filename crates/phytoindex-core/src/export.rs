@@ -14,6 +14,8 @@ const ALLOWED_TABLES: &[&str] = &[
     "photo_metadata",
     "photo_taxon_mapping",
     "photo_taxon_usage",
+    "photo_operation_batches",
+    "photo_operations",
     "taxa",
     "scientific",
     "english",

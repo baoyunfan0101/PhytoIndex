@@ -195,6 +195,32 @@ CREATE TABLE IF NOT EXISTS photo_mapping_queue (
     FOREIGN KEY (photo_id) REFERENCES photos(photo_id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS photo_operation_batches (
+    batch_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source TEXT NOT NULL,
+    root_path TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (source IN ('manual_rename', 'taxon_rename', 'taxon_batch_rename'))
+);
+
+CREATE TABLE IF NOT EXISTS photo_operations (
+    operation_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_id INTEGER NOT NULL,
+    row_number INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    photo_id INTEGER NOT NULL,
+    directory_relative_path TEXT NOT NULL,
+    old_filename TEXT NOT NULL,
+    new_filename TEXT NOT NULL,
+    applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    reverted_at TEXT,
+    UNIQUE (batch_id, row_number),
+    CHECK (status IN ('applied', 'reverted')),
+    CHECK (row_number > 0),
+    CHECK (old_filename <> new_filename),
+    FOREIGN KEY (batch_id) REFERENCES photo_operation_batches(batch_id) ON DELETE RESTRICT
+);
+
 DROP TABLE IF EXISTS photo_mapping_state;
 DROP TRIGGER IF EXISTS taxa_photo_mapping_bd;
 
@@ -322,6 +348,10 @@ CREATE INDEX IF NOT EXISTS idx_photo_taxon_usage_subtree
     ON photo_taxon_usage(subtree_photo_count, taxon_id);
 CREATE INDEX IF NOT EXISTS idx_photo_mapping_queue_reason
     ON photo_mapping_queue(reason, photo_id);
+CREATE INDEX IF NOT EXISTS idx_photo_operations_batch_page
+    ON photo_operations(batch_id, row_number, operation_id);
+CREATE INDEX IF NOT EXISTS idx_photo_operation_batches_created
+    ON photo_operation_batches(created_at DESC, batch_id DESC);
 
 DROP VIEW IF EXISTS taxa_display;
 CREATE VIEW IF NOT EXISTS taxa_display AS
@@ -395,6 +425,8 @@ mod tests {
             "photo_taxon_mapping",
             "photo_taxon_usage",
             "photo_mapping_queue",
+            "photo_operation_batches",
+            "photo_operations",
             "taxa",
             "taxon_names",
             "taxon_names_fts",
@@ -468,6 +500,27 @@ mod tests {
                 "row_number",
                 "status",
                 "changeset_blob",
+                "applied_at",
+                "reverted_at",
+            ]
+        );
+        let batch_columns = table_columns(&connection, "photo_operation_batches");
+        assert_eq!(
+            batch_columns,
+            ["batch_id", "source", "root_path", "created_at"]
+        );
+        let operation_columns = table_columns(&connection, "photo_operations");
+        assert_eq!(
+            operation_columns,
+            [
+                "operation_id",
+                "batch_id",
+                "row_number",
+                "status",
+                "photo_id",
+                "directory_relative_path",
+                "old_filename",
+                "new_filename",
                 "applied_at",
                 "reverted_at",
             ]
