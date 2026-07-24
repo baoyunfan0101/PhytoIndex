@@ -37,8 +37,6 @@ pub fn run() {
             commands::get_photo,
             commands::get_photo_metadata,
             commands::get_photo_availability,
-            commands::get_taxa_metadata,
-            commands::save_knowledge_base_path,
             commands::search_taxa,
             commands::get_taxon_detail_node,
             commands::list_taxon_children,
@@ -57,8 +55,6 @@ pub fn run() {
             commands::list_photos_by_mapping_status,
             commands::suggest_mapping_taxa,
             commands::get_operations_status,
-            commands::start_taxa_update,
-            commands::start_taxa_rebuild,
             commands::export_table,
         ])
         .run(tauri::generate_context!())

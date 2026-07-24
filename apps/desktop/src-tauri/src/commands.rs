@@ -1,14 +1,12 @@
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use chrono::{DateTime, Local};
 use phytoindex_core::mapping::{
     PhotoMappingListItem, PhotoMappingListStatus, PhotoTaxonItem, PhotoTaxonMapping,
     PhotoTaxonMatch, PhotoTaxonNode,
 };
 use phytoindex_core::models::{
     DirectoryEntryCounts, MappingMetadata, OperationsStatus, Photo, PhotoDirectoryItem,
-    PhotoLibrary, PhotoMetadata, PhotoPage, TaxaMetadata, Taxon,
+    PhotoLibrary, PhotoMetadata, PhotoPage,
 };
 use phytoindex_core::photos::{PhotoOperation, PhotoOperationBatch, PhotoRenameBatchResult};
 use phytoindex_core::taxonomy::{
@@ -16,7 +14,7 @@ use phytoindex_core::taxonomy::{
     TaxonUpdateOptions, TaxonomyActionResult, TaxonomyCustomSqlResult, TaxonomyCustomSqlTempTable,
     TaxonomyOperation, TaxonomyOperationBatch, TaxonomyPage, TaxonomyUpdateActionResult,
 };
-use phytoindex_core::{export, mapping, photos, taxa, taxonomy};
+use phytoindex_core::{export, mapping, photos, taxonomy};
 use serde_json::{Value, json};
 use tauri::{AppHandle, State};
 
@@ -184,19 +182,6 @@ pub fn get_photo_metadata(
     photo_id: i64,
 ) -> CommandResult<PhotoMetadata> {
     photos::get_photo_metadata(&state.database, photo_id).map_err(error)
-}
-
-#[tauri::command]
-pub fn get_taxa_metadata(state: State<'_, AppState>) -> CommandResult<TaxaMetadata> {
-    taxa::get_metadata(&state.database).map_err(error)
-}
-
-#[tauri::command]
-pub fn save_knowledge_base_path(
-    state: State<'_, AppState>,
-    knowledge_base_path: Option<String>,
-) -> CommandResult<TaxaMetadata> {
-    taxa::save_knowledge_base_path(&state.database, knowledge_base_path.as_deref()).map_err(error)
 }
 
 #[tauri::command]
@@ -388,33 +373,13 @@ pub fn suggest_mapping_taxa(
     state: State<'_, AppState>,
     query: String,
     mode: String,
-) -> CommandResult<Vec<Taxon>> {
+) -> CommandResult<Vec<TaxonSearchResult>> {
     mapping::suggest(&state.database, &query, &mode, 10).map_err(error)
 }
 
 #[tauri::command]
 pub fn get_operations_status(state: State<'_, AppState>) -> OperationsStatus {
     state.operations.status()
-}
-
-#[tauri::command]
-pub fn start_taxa_update(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    knowledge_base_path: Option<String>,
-    force: bool,
-) -> CommandResult<Value> {
-    start_taxa_operation(app, &state, knowledge_base_path, force, false)
-}
-
-#[tauri::command]
-pub fn start_taxa_rebuild(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    knowledge_base_path: Option<String>,
-    force: bool,
-) -> CommandResult<Value> {
-    start_taxa_operation(app, &state, knowledge_base_path, force, true)
 }
 
 #[tauri::command]
@@ -426,64 +391,6 @@ pub fn export_table(
     let exported = export::export_table(&state.database, &table_name, Path::new(&output_path))
         .map_err(error)?;
     Ok(json!({ "exported": exported, "output_path": output_path }))
-}
-
-fn start_taxa_operation(
-    app: AppHandle,
-    state: &AppState,
-    knowledge_base_path: Option<String>,
-    force: bool,
-    rebuild: bool,
-) -> CommandResult<Value> {
-    if !force && taxa_input_unchanged(state, knowledge_base_path.as_deref())? {
-        return Ok(confirmation(
-            "knowledge_base_unchanged",
-            "The selected knowledge-base file appears unchanged. Are you sure you want to continue this update/rebuild anyway?",
-        ));
-    }
-    let database = state.database.clone();
-    let operation_name = if rebuild { "rebuild" } else { "update" };
-    let operation = state
-        .operations
-        .start(app, "taxa", operation_name, move |progress| {
-            let result = if rebuild {
-                taxa::rebuild_taxa(&database, knowledge_base_path.as_deref(), progress)
-            } else {
-                taxa::update_taxa(&database, knowledge_base_path.as_deref(), progress)
-            }
-            .map_err(error)?;
-            let mapping =
-                mapping::process_pending_photo_matches(&database, progress).map_err(error)?;
-            Ok(json!({ "taxonomy": result, "mapping": mapping }))
-        })?;
-    Ok(json!({ "operation": operation }))
-}
-
-fn taxa_input_unchanged(state: &AppState, selected: Option<&str>) -> CommandResult<bool> {
-    let metadata = taxa::get_metadata(&state.database).map_err(error)?;
-    let selected = selected
-        .map(PathBuf::from)
-        .or_else(|| metadata.knowledge_base_path.as_deref().map(PathBuf::from));
-    let Some(path) = selected else {
-        return Ok(false);
-    };
-    let file = match fs::metadata(&path) {
-        Ok(file) => file,
-        Err(_) => return Ok(false),
-    };
-    let modified: DateTime<Local> = file.modified().map_err(error)?.into();
-    Ok(metadata.knowledge_base_path.as_deref() == path.to_str()
-        && metadata.knowledge_base_size == Some(file.len() as i64)
-        && metadata.knowledge_base_modified_at.as_deref()
-            == Some(modified.format("%Y-%m-%d %H:%M:%S").to_string().as_str()))
-}
-
-fn confirmation(reason: &str, message: &str) -> Value {
-    json!({
-        "needs_confirmation": true,
-        "reason": reason,
-        "message": message,
-    })
 }
 
 fn error(error: impl ToString) -> String {

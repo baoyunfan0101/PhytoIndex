@@ -17,13 +17,10 @@ const ALLOWED_TABLES: &[&str] = &[
     "photo_operation_batches",
     "photo_operations",
     "taxa",
-    "scientific",
-    "english",
-    "chinese",
+    "taxon_names",
     "taxon_identifiers",
     "taxonomy_operation_batches",
     "taxonomy_operations",
-    "taxa_metadata",
 ];
 
 pub fn export_table(database: &Database, table_name: &str, output: &Path) -> CoreResult<usize> {

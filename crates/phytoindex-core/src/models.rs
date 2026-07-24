@@ -68,24 +68,6 @@ pub struct DirectoryEntryCounts {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct Taxon {
-    pub taxon_id: i64,
-    pub rank: String,
-    pub name: String,
-    pub parent_id: Option<i64>,
-    pub binomial_name: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct TaxaMetadata {
-    pub knowledge_base_path: Option<String>,
-    pub knowledge_base_size: Option<i64>,
-    pub knowledge_base_modified_at: Option<String>,
-    pub last_synced_at: Option<String>,
-    pub taxa_count: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MappingMetadata {
     pub mapped_photo_count: i64,
     pub unmatched_photo_count: i64,
@@ -112,13 +94,6 @@ pub struct OperationState {
 pub type OperationsStatus = BTreeMap<String, OperationState>;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ConfirmationResponse {
-    pub needs_confirmation: bool,
-    pub reason: String,
-    pub message: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProgressUpdate {
     pub module: String,
     pub task_id: String,
@@ -136,17 +111,6 @@ pub struct PhotoSyncResult {
     pub deleted: usize,
     pub directories_inserted: usize,
     pub directories_deleted: usize,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TaxaSyncResult {
-    pub knowledge_base_path: String,
-    pub knowledge_base_size: i64,
-    pub knowledge_base_modified_at: String,
-    pub sheet: String,
-    pub rows_read: usize,
-    pub taxa_changed: usize,
-    pub total_taxa: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

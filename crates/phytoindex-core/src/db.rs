@@ -5,7 +5,7 @@ use std::time::Duration;
 use rusqlite::{Connection, Row};
 
 use crate::error::{CoreError, CoreResult};
-use crate::models::{Photo, Taxon};
+use crate::models::Photo;
 
 const SCHEMA_VERSION: i64 = 2;
 
@@ -312,13 +312,6 @@ CREATE TABLE IF NOT EXISTS taxonomy_operations (
     FOREIGN KEY (batch_id) REFERENCES taxonomy_operation_batches(batch_id) ON DELETE RESTRICT
 );
 
-CREATE TABLE IF NOT EXISTS taxa_metadata (
-    knowledge_base_path TEXT,
-    knowledge_base_size INTEGER,
-    knowledge_base_modified_at TEXT,
-    last_synced_at TEXT
-);
-
 CREATE UNIQUE INDEX IF NOT EXISTS idx_taxon_names_one_accepted
     ON taxon_names(taxon_id, name_kind) WHERE is_accepted = 1;
 CREATE INDEX IF NOT EXISTS idx_taxa_parent ON taxa(parent_taxon_id);
@@ -354,29 +347,7 @@ CREATE INDEX IF NOT EXISTS idx_photo_operation_batches_created
     ON photo_operation_batches(created_at DESC, batch_id DESC);
 
 DROP VIEW IF EXISTS taxa_display;
-CREATE VIEW IF NOT EXISTS taxa_display AS
-SELECT
-    taxa.taxon_id,
-    CASE taxa.rank
-        WHEN 1 THEN 'kingdom'
-        WHEN 2 THEN 'order'
-        WHEN 3 THEN 'family'
-        WHEN 4 THEN 'genus'
-        WHEN 5 THEN 'species'
-    END AS rank,
-    COALESCE(
-        (SELECT name FROM taxon_names
-         WHERE taxon_names.taxon_id = taxa.taxon_id AND name_kind = 3 AND is_accepted = 1),
-        (SELECT name FROM taxon_names
-         WHERE taxon_names.taxon_id = taxa.taxon_id AND name_kind = 2 AND is_accepted = 1),
-        (SELECT name FROM taxon_names
-         WHERE taxon_names.taxon_id = taxa.taxon_id AND name_kind = 1 AND is_accepted = 1),
-        ''
-    ) AS name,
-    taxa.parent_taxon_id AS parent_id,
-    (SELECT name FROM taxon_names
-     WHERE taxon_names.taxon_id = taxa.taxon_id AND name_kind = 1 AND is_accepted = 1) AS binomial_name
-FROM taxa;
+DROP TABLE IF EXISTS taxa_metadata;
 
 PRAGMA user_version = 2;
 "#;
@@ -390,16 +361,6 @@ pub(crate) fn photo_from_row(row: &Row<'_>) -> rusqlite::Result<Photo> {
         file_size: row.get("file_size")?,
         modified_at_ns: row.get("modified_at_ns")?,
         thumbnail_path: row.get("thumbnail_path")?,
-    })
-}
-
-pub(crate) fn taxon_from_row(row: &Row<'_>) -> rusqlite::Result<Taxon> {
-    Ok(Taxon {
-        taxon_id: row.get("taxon_id")?,
-        rank: row.get("rank")?,
-        name: row.get("name")?,
-        parent_id: row.get("parent_id")?,
-        binomial_name: row.get("binomial_name")?,
     })
 }
 
@@ -442,6 +403,16 @@ mod tests {
                 )
                 .unwrap();
             assert!(exists, "missing table {table}");
+        }
+        for legacy_object in ["taxa_metadata", "taxa_display"] {
+            let exists: bool = connection
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name = ?)",
+                    [legacy_object],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(!exists, "unexpected legacy object {legacy_object}");
         }
         let triggers = connection
             .prepare(
@@ -525,6 +496,37 @@ mod tests {
                 "reverted_at",
             ]
         );
+    }
+
+    #[test]
+    fn removes_legacy_taxonomy_objects_on_reopen() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("vividarium.db");
+        let database = Database::open(&path).unwrap();
+        let connection = database.connect().unwrap();
+        connection
+            .execute_batch(
+                r#"
+                CREATE TABLE taxa_metadata (knowledge_base_path TEXT);
+                CREATE VIEW taxa_display AS SELECT taxon_id FROM taxa;
+                "#,
+            )
+            .unwrap();
+        drop(connection);
+        drop(database);
+
+        let database = Database::open(path).unwrap();
+        let connection = database.connect().unwrap();
+        for legacy_object in ["taxa_metadata", "taxa_display"] {
+            let exists: bool = connection
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name = ?)",
+                    [legacy_object],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(!exists, "unexpected legacy object {legacy_object}");
+        }
     }
 
     #[test]

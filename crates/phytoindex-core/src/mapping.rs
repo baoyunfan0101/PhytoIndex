@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::db::Database;
 use crate::error::{CoreError, CoreResult};
-use crate::models::{MappingMetadata, MappingSyncResult, Photo, PhotoPage, Taxon};
+use crate::models::{MappingMetadata, MappingSyncResult, Photo, PhotoPage};
 use crate::photos::{
     self, PhotoCursor, PhotoPageSection, decode_photo_cursor, encode_photo_cursor,
     invalid_photo_cursor, photo_page_limit,
@@ -598,9 +598,9 @@ pub fn suggest(
     query: &str,
     mode: &str,
     limit: usize,
-) -> CoreResult<Vec<Taxon>> {
+) -> CoreResult<Vec<TaxonSearchResult>> {
     let results = search_taxa(database, query, limit)?;
-    let values = results
+    Ok(results
         .into_iter()
         .filter(|result| {
             mode != "binomial"
@@ -609,21 +609,7 @@ pub fn suggest(
                     .iter()
                     .any(|value| value.name_kind == TaxonomyNameKind::Scientific)
         })
-        .map(|result| Taxon {
-            taxon_id: result.summary.taxon_id,
-            rank: format!("{:?}", result.summary.rank).to_ascii_lowercase(),
-            name: result
-                .summary
-                .names
-                .chinese
-                .or(result.summary.names.english)
-                .or(result.summary.names.scientific.clone())
-                .unwrap_or_default(),
-            parent_id: result.summary.breadcrumb.last().map(|value| value.taxon_id),
-            binomial_name: result.summary.names.scientific,
-        })
-        .collect();
-    Ok(values)
+        .collect())
 }
 
 pub fn rebuild_mapping(database: &Database) -> CoreResult<MappingSyncResult> {

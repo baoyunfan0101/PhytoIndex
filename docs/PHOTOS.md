@@ -820,7 +820,7 @@ pub fn suggest(
     query: &str,
     mode: &str,
     limit: usize,
-) -> CoreResult<Vec<Taxon>>
+) -> CoreResult<Vec<TaxonSearchResult>>
 ```
 
 | Parameter | Description |
@@ -829,9 +829,8 @@ pub fn suggest(
 | `mode` | Use `binomial` to retain only results matched by a scientific name; other values keep all name kinds. |
 | `limit` | Maximum requested taxonomy search results. |
 
-Returns compact `Taxon` suggestions. Each item contains `taxon_id`, `rank`,
-preferred display `name`, optional `parent_id`, and optional scientific
-`binomial_name`.
+Returns the same `TaxonSearchResult` model as taxonomy search, including the
+taxon summary and the names that matched the query.
 
 ## Desktop interface
 
@@ -867,7 +866,7 @@ strings. Parameter names below are the camel-case keys used in JavaScript
 | `get_photo_taxon_node` | optional `taxonId: number`, optional `showEmpty: boolean` | `PhotoTaxonNode` |
 | `browse_photo_taxon` | optional `taxonId: number`, optional `showEmpty: boolean`, optional `includeDescendants: boolean`, optional `cursor: string`, optional `limit: number` | `PhotoPage<PhotoTaxonItem>` |
 | `list_photos_by_mapping_status` | `status: PhotoMappingListStatus`, optional `cursor: string`, optional `limit: number` | `PhotoPage<PhotoMappingListItem>` |
-| `suggest_mapping_taxa` | `query: string`, `mode: string` | `Taxon[]` |
+| `suggest_mapping_taxa` | `query: string`, `mode: string` | `TaxonSearchResult[]` |
 | `get_operations_status` | none | `Record<string, OperationState>` |
 
 Desktop defaults:
