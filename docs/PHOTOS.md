@@ -136,6 +136,32 @@ returned before photos.
 | `directories_inserted` | `usize` | Newly indexed immediate child directories. |
 | `directories_deleted` | `usize` | Immediate child directories removed; each removal also removes its indexed subtree. |
 
+### `PhotoRenameRowStatus`
+
+| Value | Description |
+| --- | --- |
+| `applied` | The real file and database record were renamed and an operation was logged. |
+| `no_change` | The requested filename already matched the current filename. |
+| `failed` | This input row failed; its `message` describes the error. |
+
+### `PhotoRenameRowOutcome`
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `row_number` | `usize` | One-based position in the input `photo_ids`. |
+| `photo_id` | `i64` | Requested photo ID. |
+| `operation_id` | `Option<i64>` | Logged operation ID for an `applied` row; otherwise `null`. |
+| `status` | `PhotoRenameRowStatus` | Per-row result. |
+| `message` | `String` | Short result or error description. |
+| `photo` | `Option<Photo>` | Current photo for `applied` and `no_change`; `null` for `failed`. |
+
+### `PhotoRenameBatchResult`
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `batch_id` | `Option<i64>` | Shared batch ID when at least one row was applied; otherwise `null`. |
+| `rows` | `Vec<PhotoRenameRowOutcome>` | One outcome for every input ID, in input order. |
+
 ### `PhotoOperationSource`
 
 | Value | Description |
@@ -400,15 +426,18 @@ have an accepted scientific name. Returns the updated `Photo`.
 pub fn rename_photos_from_taxa(
     database: &Database,
     photo_ids: &[i64],
-) -> CoreResult<Vec<Photo>>
+) -> CoreResult<PhotoRenameBatchResult>
 ```
 
 | Parameter | Description |
 | --- | --- |
 | `photo_ids` | Photos to rename, processed in input order. |
 
-Returns each updated `Photo` in input order. Processing stops at the first
-error; earlier successful renames remain applied.
+Returns one outcome for every input ID. A row failure does not stop later rows;
+successful earlier and later renames remain applied. All changing rows share
+the returned `batch_id`. If every row fails or needs no change, `batch_id` is
+`None`. Database, cancellation, or runtime consistency failures abort the call
+as a top-level error.
 
 ### Rename history APIs
 
@@ -823,7 +852,7 @@ strings. Parameter names below are the camel-case keys used in JavaScript
 | `start_photo_mapping` | none | `{ operation: OperationState }` |
 | `rename_photo` | `photoId: number`, `newFilename: string` | `Photo` |
 | `rename_photo_from_taxon` | `photoId: number` | `Photo` |
-| `rename_photos_from_taxa` | `photoIds: number[]` | `Photo[]` |
+| `rename_photos_from_taxa` | `photoIds: number[]` | `PhotoRenameBatchResult` |
 | `list_photo_operation_batches` | optional `cursor: string`, optional `limit: number` | `PhotoPage<PhotoOperationBatch>` |
 | `list_photo_operations` | optional `cursor: string`, optional `limit: number` | `PhotoPage<PhotoOperation>` |
 | `list_photo_operations_for_batch` | `batchId: number`, optional `cursor: string`, optional `limit: number` | `PhotoPage<PhotoOperation>` |

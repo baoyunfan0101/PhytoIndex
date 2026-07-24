@@ -10,7 +10,7 @@ use phytoindex_core::models::{
     DirectoryEntryCounts, MappingMetadata, OperationsStatus, Photo, PhotoDirectoryItem,
     PhotoLibrary, PhotoMetadata, PhotoPage, TaxaMetadata, Taxon,
 };
-use phytoindex_core::photos::{PhotoOperation, PhotoOperationBatch};
+use phytoindex_core::photos::{PhotoOperation, PhotoOperationBatch, PhotoRenameBatchResult};
 use phytoindex_core::taxonomy::{
     DeleteTaxonNameInput, TaxonChild, TaxonDetailNode, TaxonSearchResult, TaxonUpdateInput,
     TaxonUpdateOptions, TaxonomyActionResult, TaxonomyCustomSqlResult, TaxonomyCustomSqlTempTable,
@@ -113,7 +113,7 @@ pub fn rename_photo_from_taxon(state: State<'_, AppState>, photo_id: i64) -> Com
 pub fn rename_photos_from_taxa(
     state: State<'_, AppState>,
     photo_ids: Vec<i64>,
-) -> CommandResult<Vec<Photo>> {
+) -> CommandResult<PhotoRenameBatchResult> {
     photos::rename_photos_from_taxa(&state.database, &photo_ids).map_err(error)
 }
 
