@@ -10,10 +10,10 @@ pub enum CoreError {
     Csv(#[from] csv::Error),
     #[error("image error: {0}")]
     Image(#[from] image::ImageError),
-    #[error("workbook error: {0}")]
-    Workbook(String),
     #[error("invalid argument: {0}")]
     InvalidArgument(String),
+    #[error("consistency error: {0}")]
+    Consistency(String),
     #[error("path is outside its configured root: {0}")]
     UnsafePath(PathBuf),
     #[error("resource not found: {0}")]

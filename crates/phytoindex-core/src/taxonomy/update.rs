@@ -1,8 +1,15 @@
+use std::collections::BTreeSet;
 use std::io::Cursor;
 
+use rusqlite::fallible_streaming_iterator::FallibleStreamingIterator;
 use rusqlite::hooks::Action;
-use rusqlite::session::{ConflictAction, ConflictType, Session, invert_strm};
-use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
+use rusqlite::session::{
+    ChangesetItem, ChangesetIter, ConflictAction, ConflictType, Session, invert_strm,
+};
+use rusqlite::types::ValueRef;
+use rusqlite::{
+    Connection, OptionalExtension, Transaction, TransactionBehavior, params, params_from_iter,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -10,6 +17,7 @@ use super::page::{
     TaxonomyCursor, TaxonomyPage, decode_cursor, encode_cursor, invalid_cursor, page_limit,
 };
 use super::view::{TaxonSummary, load_taxon_summaries, load_taxon_summary};
+use crate::mapping;
 use crate::{CoreError, CoreResult, Database};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -315,6 +323,18 @@ pub fn apply_rows(
             &TaxonomyBatchContext::BatchUpdate { options },
         )?;
         outcomes.push(outcome);
+    }
+    let mut affected_taxon_ids = BTreeSet::new();
+    for outcome in &outcomes {
+        if outcome.status != TaxonRowStatus::Applied {
+            continue;
+        }
+        if let Some(target) = &outcome.target {
+            affected_taxon_ids.insert(target.taxon_id);
+        }
+    }
+    if !affected_taxon_ids.is_empty() {
+        mapping::refresh_after_taxonomy_changes(database, affected_taxon_ids)?;
     }
     Ok(TaxonBatchResult {
         batch_id,
@@ -693,6 +713,7 @@ pub fn revert_taxonomy_operation(database: &Database, operation_id: i64) -> Core
             status.as_str()
         )));
     }
+    let affected_taxon_ids = affected_taxon_ids_from_changeset(&transaction, &changeset_blob)?;
     let mut inverted = Vec::new();
     invert_strm(&mut Cursor::new(changeset_blob), &mut inverted)?;
     transaction.apply_strm(
@@ -718,6 +739,7 @@ pub fn revert_taxonomy_operation(database: &Database, operation_id: i64) -> Core
         [operation_id],
     )?;
     transaction.commit()?;
+    mapping::refresh_after_taxonomy_changes(database, affected_taxon_ids)?;
     Ok(())
 }
 
@@ -1621,6 +1643,98 @@ pub(super) fn finish_taxonomy_session(session: &mut Session<'_>) -> CoreResult<V
     Ok(changeset_blob)
 }
 
+pub(super) fn affected_taxon_ids_from_changeset(
+    connection: &Connection,
+    changeset_blob: &[u8],
+) -> CoreResult<BTreeSet<i64>> {
+    let mut input = Cursor::new(changeset_blob);
+    let input: &mut dyn std::io::Read = &mut input;
+    let mut changes = ChangesetIter::start_strm(&input)?;
+    let mut taxon_ids = BTreeSet::new();
+    let mut taxon_name_ids = BTreeSet::new();
+    while let Some(item) = changes.next()? {
+        let operation = item.op()?;
+        match operation.table_name() {
+            "taxa" => {
+                collect_changeset_integers(item, operation.code(), 0, &mut taxon_ids)?;
+            }
+            "taxon_names" => {
+                if !collect_changeset_integers(item, operation.code(), 1, &mut taxon_ids)? {
+                    collect_changeset_integers(item, operation.code(), 0, &mut taxon_name_ids)?;
+                }
+            }
+            "taxon_identifiers" => {
+                collect_changeset_integers(item, operation.code(), 0, &mut taxon_ids)?;
+            }
+            table => {
+                return Err(CoreError::Consistency(format!(
+                    "unexpected taxonomy changeset table: {table}"
+                )));
+            }
+        }
+    }
+    drop(changes);
+    let taxon_name_ids = taxon_name_ids.into_iter().collect::<Vec<_>>();
+    for chunk in taxon_name_ids.chunks(500) {
+        let placeholders = std::iter::repeat_n("?", chunk.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let mut statement = connection.prepare(&format!(
+            "SELECT DISTINCT taxon_id FROM taxon_names WHERE name_id IN ({placeholders})"
+        ))?;
+        let rows =
+            statement.query_map(params_from_iter(chunk.iter()), |row| row.get::<_, i64>(0))?;
+        for taxon_id in rows {
+            taxon_ids.insert(taxon_id?);
+        }
+    }
+    Ok(taxon_ids)
+}
+
+fn collect_changeset_integers(
+    item: &ChangesetItem,
+    action: Action,
+    column: usize,
+    values: &mut BTreeSet<i64>,
+) -> CoreResult<bool> {
+    let mut found = false;
+    match action {
+        Action::SQLITE_INSERT => {
+            found |= collect_changeset_integer(item.new_value(column), values)?;
+        }
+        Action::SQLITE_DELETE => {
+            found |= collect_changeset_integer(item.old_value(column), values)?;
+        }
+        Action::SQLITE_UPDATE => {
+            found |= collect_changeset_integer(item.old_value(column), values)?;
+            found |= collect_changeset_integer(item.new_value(column), values)?;
+        }
+        _ => {
+            return Err(CoreError::Consistency(format!(
+                "unexpected taxonomy changeset action: {action:?}"
+            )));
+        }
+    }
+    Ok(found)
+}
+
+fn collect_changeset_integer(
+    value: rusqlite::Result<ValueRef<'_>>,
+    values: &mut BTreeSet<i64>,
+) -> CoreResult<bool> {
+    match value {
+        Ok(ValueRef::Integer(value)) => {
+            values.insert(value);
+            Ok(true)
+        }
+        Err(rusqlite::Error::InvalidColumnIndex(_)) => Ok(false),
+        Err(error) => Err(error.into()),
+        Ok(_) => Err(CoreError::Consistency(
+            "taxonomy changeset identifier is not an integer".into(),
+        )),
+    }
+}
+
 fn ensure_taxon_exists_in_connection(connection: &Connection, taxon_id: i64) -> CoreResult<()> {
     let exists: bool = connection.query_row(
         "SELECT EXISTS(SELECT 1 FROM taxa WHERE taxon_id = ?)",
@@ -1935,6 +2049,18 @@ mod tests {
         (directory, database)
     }
 
+    fn queued_photo_ids(database: &Database) -> Vec<i64> {
+        let connection = database.connect().unwrap();
+        let mut statement = connection
+            .prepare("SELECT photo_id FROM photo_mapping_queue ORDER BY photo_id")
+            .unwrap();
+        statement
+            .query_map([], |row| row.get::<_, i64>(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+    }
+
     fn seed_lineage(database: &Database) -> [i64; 4] {
         let mut connection = database.connect().unwrap();
         let transaction = connection.transaction().unwrap();
@@ -1978,6 +2104,42 @@ mod tests {
             species: Some(name.into()),
             ..TaxonInputRow::default()
         }
+    }
+
+    fn seed_mapped_photo(database: &Database, taxon_id: i64, filename: &str) -> i64 {
+        let connection = database.connect().unwrap();
+        connection
+            .execute(
+                r#"
+                INSERT INTO photo_directories (
+                    parent_directory_id, name, relative_path
+                ) VALUES (NULL, '', '')
+                "#,
+                [],
+            )
+            .unwrap();
+        let directory_id = connection.last_insert_rowid();
+        connection
+            .execute(
+                r#"
+                INSERT INTO photos (
+                    directory_id, filename, file_size, modified_at_ns
+                ) VALUES (?, ?, 1, 1)
+                "#,
+                params![directory_id, filename],
+            )
+            .unwrap();
+        let photo_id = connection.last_insert_rowid();
+        connection
+            .execute(
+                r#"
+                INSERT INTO photo_taxon_mapping (photo_id, taxon_id, status)
+                VALUES (?, ?, 'matched')
+                "#,
+                params![photo_id, taxon_id],
+            )
+            .unwrap();
+        photo_id
     }
 
     #[test]
@@ -2418,6 +2580,105 @@ mod tests {
     }
 
     #[test]
+    fn delete_taxon_queues_mapped_photos_once_via_trigger() {
+        let (_directory, database) = database();
+        seed_lineage(&database);
+        let result = apply_rows(
+            &database,
+            &[species_row()],
+            TaxonUpdateOptions {
+                allow_new_taxa: true,
+                ..TaxonUpdateOptions::default()
+            },
+        )
+        .unwrap();
+        let taxon_id = result.rows[0].target.as_ref().unwrap().taxon_id;
+        let photo_id = seed_mapped_photo(&database, taxon_id, "mapped.jpg");
+        let connection = database.connect().unwrap();
+        connection
+            .execute(
+                "CREATE TABLE queue_audit (event TEXT NOT NULL, photo_id INTEGER NOT NULL)",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                r#"
+                CREATE TRIGGER audit_photo_mapping_queue_insert
+                AFTER INSERT ON photo_mapping_queue BEGIN
+                    INSERT INTO queue_audit (event, photo_id) VALUES ('insert', new.photo_id);
+                END
+                "#,
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                r#"
+                CREATE TRIGGER audit_photo_mapping_queue_update
+                AFTER UPDATE ON photo_mapping_queue BEGIN
+                    INSERT INTO queue_audit (event, photo_id) VALUES ('update', new.photo_id);
+                END
+                "#,
+                [],
+            )
+            .unwrap();
+        drop(connection);
+
+        delete_taxon(&database, taxon_id).unwrap();
+
+        assert_eq!(queued_photo_ids(&database), vec![photo_id]);
+        let connection = database.connect().unwrap();
+        let mut statement = connection
+            .prepare("SELECT event, photo_id FROM queue_audit ORDER BY rowid")
+            .unwrap();
+        let events = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(events, vec![("insert".to_string(), photo_id)]);
+    }
+
+    #[test]
+    fn custom_sql_delete_taxon_allows_photo_mapping_trigger_writes() {
+        let (_directory, database) = database();
+        seed_lineage(&database);
+        let result = apply_rows(
+            &database,
+            &[species_row()],
+            TaxonUpdateOptions {
+                allow_new_taxa: true,
+                ..TaxonUpdateOptions::default()
+            },
+        )
+        .unwrap();
+        let taxon_id = result.rows[0].target.as_ref().unwrap().taxon_id;
+        let photo_id = seed_mapped_photo(&database, taxon_id, "custom-delete.jpg");
+
+        execute_custom_taxonomy_sql(
+            &database,
+            &format!("DELETE FROM taxa WHERE taxon_id = {taxon_id}"),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(queued_photo_ids(&database), vec![photo_id]);
+        assert!(get_taxon_detail(&database, taxon_id).unwrap().is_none());
+        let connection = database.connect().unwrap();
+        let mapping = connection
+            .query_row(
+                "SELECT taxon_id, status FROM photo_taxon_mapping WHERE photo_id = ?",
+                [photo_id],
+                |row| Ok((row.get::<_, Option<i64>>(0)?, row.get::<_, String>(1)?)),
+            )
+            .unwrap();
+        assert_eq!(mapping, (None, "stale".to_string()));
+    }
+
+    #[test]
     fn executes_custom_sql_and_records_a_batch() {
         let (_directory, database) = database();
         let ids = seed_lineage(&database);
@@ -2455,6 +2716,110 @@ mod tests {
             deserialize_json::<TaxonomyBatchContext>(&context_json, "context").unwrap(),
             TaxonomyBatchContext::CustomSql { input: None }
         );
+    }
+
+    #[test]
+    fn custom_sql_and_revert_queue_only_changeset_taxa() {
+        let (_directory, database) = database();
+        let connection = database.connect().unwrap();
+        connection
+            .execute("INSERT INTO taxa (rank) VALUES (1)", [])
+            .unwrap();
+        let first_taxon_id = connection.last_insert_rowid();
+        connection
+            .execute(
+                r#"
+                INSERT INTO taxon_names (taxon_id, name_kind, name, is_accepted)
+                VALUES (?, 1, 'First kingdom', 1)
+                "#,
+                [first_taxon_id],
+            )
+            .unwrap();
+        connection
+            .execute("INSERT INTO taxa (rank) VALUES (1)", [])
+            .unwrap();
+        let second_taxon_id = connection.last_insert_rowid();
+        connection
+            .execute(
+                r#"
+                INSERT INTO taxon_names (taxon_id, name_kind, name, is_accepted)
+                VALUES (?, 1, 'Second kingdom', 1)
+                "#,
+                [second_taxon_id],
+            )
+            .unwrap();
+        connection
+            .execute(
+                r#"
+                INSERT INTO photo_directories (
+                    parent_directory_id, name, relative_path
+                ) VALUES (NULL, '', '')
+                "#,
+                [],
+            )
+            .unwrap();
+        let directory_id = connection.last_insert_rowid();
+        connection
+            .execute(
+                r#"
+                INSERT INTO photos (
+                    directory_id, filename, file_size, modified_at_ns
+                ) VALUES (?, 'first.jpg', 1, 1)
+                "#,
+                [directory_id],
+            )
+            .unwrap();
+        let first_photo_id = connection.last_insert_rowid();
+        connection
+            .execute(
+                r#"
+                INSERT INTO photos (
+                    directory_id, filename, file_size, modified_at_ns
+                ) VALUES (?, 'second.jpg', 1, 1)
+                "#,
+                [directory_id],
+            )
+            .unwrap();
+        let second_photo_id = connection.last_insert_rowid();
+        connection
+            .execute(
+                r#"
+                INSERT INTO photo_taxon_mapping (photo_id, taxon_id, status)
+                VALUES (?, ?, 'matched')
+                "#,
+                params![first_photo_id, first_taxon_id],
+            )
+            .unwrap();
+        connection
+            .execute(
+                r#"
+                INSERT INTO photo_taxon_mapping (photo_id, taxon_id, status)
+                VALUES (?, ?, 'matched')
+                "#,
+                params![second_photo_id, second_taxon_id],
+            )
+            .unwrap();
+        drop(connection);
+
+        let result = execute_custom_taxonomy_sql(
+            &database,
+            &format!(
+                "UPDATE taxon_names SET authority_year = '2026' WHERE taxon_id = {first_taxon_id}"
+            ),
+            None,
+        )
+        .unwrap();
+        assert_eq!(queued_photo_ids(&database), vec![first_photo_id]);
+        let connection = database.connect().unwrap();
+        connection
+            .execute("DELETE FROM photo_mapping_queue", [])
+            .unwrap();
+        drop(connection);
+
+        revert_taxonomy_operation(&database, result.operation_id.unwrap()).unwrap();
+
+        assert_eq!(queued_photo_ids(&database), vec![first_photo_id]);
+        assert_ne!(first_photo_id, second_photo_id);
     }
 
     #[test]
@@ -2554,12 +2919,31 @@ mod tests {
     #[test]
     fn restricts_custom_sql_to_taxonomy_tables() {
         let (_directory, database) = database();
-        let error =
-            execute_custom_taxonomy_sql(&database, "UPDATE photos SET status = 'ready'", None)
-                .unwrap_err();
+        let error = execute_custom_taxonomy_sql(
+            &database,
+            "UPDATE photos SET filename = 'blocked.jpg'",
+            None,
+        )
+        .unwrap_err();
         assert!(error.to_string().contains("not authorized"));
 
         let error = execute_custom_taxonomy_sql(&database, "DROP TABLE taxa", None).unwrap_err();
+        assert!(error.to_string().contains("not authorized"));
+
+        let error = execute_custom_taxonomy_sql(
+            &database,
+            "UPDATE photo_taxon_mapping SET status = 'stale'",
+            None,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("not authorized"));
+
+        let error = execute_custom_taxonomy_sql(
+            &database,
+            "INSERT INTO photo_mapping_queue (photo_id, reason) VALUES (1, 'taxonomy')",
+            None,
+        )
+        .unwrap_err();
         assert!(error.to_string().contains("not authorized"));
     }
 
