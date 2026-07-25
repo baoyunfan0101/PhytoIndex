@@ -376,7 +376,26 @@ fn process_row(
     let target_rank = normalized.target_rank;
     let match_result = if let Some(taxon_id) = row.selected_taxon_id {
         match load_taxon_summary(transaction, taxon_id)? {
-            Some(summary) if summary.rank == target_rank => MatchResult::One(summary),
+            Some(summary) if summary.rank == target_rank => {
+                let Some(existing_type) =
+                    existing_scientific_name_type(transaction, taxon_id, &normalized.target_name)?
+                else {
+                    return Ok(failed_outcome(
+                        row_number,
+                        TaxonRowStatus::Invalid,
+                        "selected taxon does not contain the target scientific name",
+                    ));
+                };
+                MatchResult::One(
+                    summary,
+                    MatchedName {
+                        input_index: 0,
+                        name: normalized.target_name.clone(),
+                        authority_year: normalized.authority_year.clone(),
+                        existing_type,
+                    },
+                )
+            }
             Some(_) => {
                 return Ok(failed_outcome(
                     row_number,
@@ -407,7 +426,9 @@ fn process_row(
             changes: Vec::new(),
         }),
         MatchResult::None => create_taxon(transaction, row_number, &normalized),
-        MatchResult::One(summary) => update_existing(transaction, row_number, &normalized, summary),
+        MatchResult::One(summary, matched_name) => {
+            update_existing(transaction, row_number, &normalized, summary, &matched_name)
+        }
     }
 }
 
@@ -529,6 +550,7 @@ fn update_existing(
     row_number: usize,
     input: &NormalizedInput,
     summary: TaxonSummary,
+    matched_name: &MatchedName,
 ) -> CoreResult<TaxonRowOutcome> {
     let taxon_id = summary.taxon_id;
     let mut changes = Vec::new();
@@ -539,20 +561,30 @@ fn update_existing(
         input.geological_range.as_deref(),
         &mut changes,
     )?;
-    if let Some(target_name_type) =
-        existing_scientific_name_type(transaction, taxon_id, &input.target_name)?
-    {
-        update_name_fields(
+    update_name_fields(
+        transaction,
+        taxon_id,
+        matched_name.existing_type,
+        &matched_name.name,
+        matched_name.authority_year.as_deref(),
+        input.source.as_deref(),
+        &mut changes,
+    )?;
+    for (index, name) in input.scientific_names().into_iter().enumerate() {
+        if index == matched_name.input_index {
+            continue;
+        }
+        add_or_supplement_name(
             transaction,
             taxon_id,
-            target_name_type,
-            &input.target_name,
-            input.authority_year.as_deref(),
+            TaxonomyNameType::Synonym,
+            &name.name,
+            name.authority_year.as_deref(),
             input.source.as_deref(),
             &mut changes,
         )?;
     }
-    apply_additional_names(transaction, taxon_id, input, &mut changes)?;
+    apply_localized_input_names(transaction, taxon_id, input, &mut changes)?;
     supplement_path_sources(transaction, input, &summary, &mut changes)?;
     let operation_types = classify_changes(&changes);
     let target = load_taxon_summary(transaction, taxon_id)?;
@@ -625,6 +657,15 @@ fn apply_additional_names(
             changes,
         )?;
     }
+    apply_localized_input_names(transaction, taxon_id, input, changes)
+}
+
+fn apply_localized_input_names(
+    transaction: &Transaction<'_>,
+    taxon_id: i64,
+    input: &NormalizedInput,
+    changes: &mut Vec<TaxonChange>,
+) -> CoreResult<()> {
     apply_localized_names(
         transaction,
         taxon_id,
@@ -906,27 +947,30 @@ fn existing_scientific_name_type(
 }
 
 fn find_target(transaction: &Transaction<'_>, input: &NormalizedInput) -> CoreResult<MatchResult> {
-    let candidates = find_scientific_candidates(
-        transaction,
-        input.target_rank,
-        &input.target_name,
-        input,
-        input.target_rank,
-    )?;
-    if !candidates.is_empty() {
-        return Ok(match candidates.as_slice() {
-            [one] => MatchResult::One(one.clone()),
-            _ => MatchResult::Many(candidates),
-        });
-    }
-    for synonym in &input.synonyms {
-        let candidates =
-            find_name_candidates(transaction, input.target_rank, &synonym.name, input)?;
-        if !candidates.is_empty() {
-            return Ok(match candidates.as_slice() {
-                [one] => MatchResult::One(one.clone()),
-                _ => MatchResult::Many(candidates),
-            });
+    for (input_index, input_name) in input.scientific_names().into_iter().enumerate() {
+        for existing_type in [TaxonomyNameType::SciName, TaxonomyNameType::Synonym] {
+            let candidates = find_candidates_by_type(
+                transaction,
+                input.target_rank,
+                &input_name.name,
+                existing_type,
+                input,
+                input.target_rank,
+            )?;
+            if !candidates.is_empty() {
+                return Ok(match candidates.as_slice() {
+                    [one] => MatchResult::One(
+                        one.clone(),
+                        MatchedName {
+                            input_index,
+                            name: input_name.name,
+                            authority_year: input_name.authority_year,
+                            existing_type,
+                        },
+                    ),
+                    _ => MatchResult::Many(candidates),
+                });
+            }
         }
     }
     Ok(MatchResult::None)
@@ -943,61 +987,34 @@ fn find_scientific_candidates(
         transaction,
         rank,
         name,
-        Some(TaxonomyNameType::SciName),
+        TaxonomyNameType::SciName,
         input,
         lineage_limit,
     )
-}
-
-fn find_name_candidates(
-    transaction: &Transaction<'_>,
-    rank: TaxonRank,
-    name: &str,
-    input: &NormalizedInput,
-) -> CoreResult<Vec<TaxonSummary>> {
-    find_candidates_by_type(transaction, rank, name, None, input, rank)
 }
 
 fn find_candidates_by_type(
     transaction: &Transaction<'_>,
     rank: TaxonRank,
     name: &str,
-    name_type: Option<TaxonomyNameType>,
+    name_type: TaxonomyNameType,
     input: &NormalizedInput,
     lineage_limit: TaxonRank,
 ) -> CoreResult<Vec<TaxonSummary>> {
-    let mut statement = if name_type.is_some() {
-        transaction.prepare(
-            r#"
-            SELECT DISTINCT taxa.taxon_id
-            FROM taxa JOIN taxon_names USING (taxon_id)
-            WHERE taxa.rank = ? AND taxon_names.name = ? COLLATE BINARY
-              AND taxon_names.name_type = ?
-            ORDER BY taxa.taxon_id
-            "#,
-        )?
-    } else {
-        transaction.prepare(
-            r#"
-            SELECT DISTINCT taxa.taxon_id
-            FROM taxa JOIN taxon_names USING (taxon_id)
-            WHERE taxa.rank = ? AND taxon_names.name = ? COLLATE BINARY
-              AND taxon_names.name_type IN ('sci_name', 'synonym')
-            ORDER BY taxa.taxon_id
-            "#,
-        )?
-    };
-    let ids = if let Some(name_type) = name_type {
-        statement
-            .query_map(params![rank.code(), name, name_type.as_str()], |row| {
-                row.get::<_, i64>(0)
-            })?
-            .collect::<Result<Vec<_>, _>>()?
-    } else {
-        statement
-            .query_map(params![rank.code(), name], |row| row.get::<_, i64>(0))?
-            .collect::<Result<Vec<_>, _>>()?
-    };
+    let mut statement = transaction.prepare(
+        r#"
+        SELECT DISTINCT taxa.taxon_id
+        FROM taxa JOIN taxon_names USING (taxon_id)
+        WHERE taxa.rank = ? AND taxon_names.name = ? COLLATE BINARY
+          AND taxon_names.name_type = ?
+        ORDER BY taxa.taxon_id
+        "#,
+    )?;
+    let ids = statement
+        .query_map(params![rank.code(), name, name_type.as_str()], |row| {
+            row.get::<_, i64>(0)
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
     let mut filtered = Vec::new();
     for taxon_id in ids {
         let mut matches = true;
@@ -1044,14 +1061,22 @@ fn lineage_has_scientific_name(
 
 enum MatchResult {
     None,
-    One(TaxonSummary),
+    One(TaxonSummary, MatchedName),
     Many(Vec<TaxonSummary>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct ParsedSynonym {
     name: String,
     authority_year: Option<String>,
+}
+
+#[derive(Debug)]
+struct MatchedName {
+    input_index: usize,
+    name: String,
+    authority_year: Option<String>,
+    existing_type: TaxonomyNameType,
 }
 
 #[derive(Debug)]
@@ -1097,14 +1122,16 @@ impl NormalizedInput {
             }
         }
         let target_name = path[target_index].clone().unwrap_or_default();
+        let mut seen_scientific_names = HashSet::from([target_name.clone()]);
         let synonyms = unique_names(&row.synonyms)
             .into_iter()
             .filter_map(|raw| {
                 let parts = split_scientific_name_authority(&raw);
-                (!parts.name.is_empty()).then_some(ParsedSynonym {
-                    name: parts.name,
-                    authority_year: normalize_text(parts.authority_year.as_deref()),
-                })
+                (!parts.name.is_empty() && seen_scientific_names.insert(parts.name.clone()))
+                    .then_some(ParsedSynonym {
+                        name: parts.name,
+                        authority_year: normalize_text(parts.authority_year.as_deref()),
+                    })
             })
             .collect();
         let zh_names = combined_names(row.zh_name.as_deref(), &row.zh_alias);
@@ -1126,6 +1153,15 @@ impl NormalizedInput {
         self.target_rank
             .parent()
             .and_then(|rank| self.path[rank.index()].as_deref())
+    }
+
+    fn scientific_names(&self) -> Vec<ParsedSynonym> {
+        std::iter::once(ParsedSynonym {
+            name: self.target_name.clone(),
+            authority_year: self.authority_year.clone(),
+        })
+        .chain(self.synonyms.iter().cloned())
+        .collect()
     }
 }
 
@@ -1915,5 +1951,167 @@ mod tests {
             )
             .unwrap();
         assert_eq!(source, "catalog");
+    }
+
+    #[test]
+    fn matched_synonym_receives_its_authority_and_other_names_become_synonyms() {
+        let (_directory, database) = database();
+        apply_rows(
+            &database,
+            &[TaxonInputRow {
+                kingdom: Some("Accepted name".into()),
+                synonyms: vec!["Matched synonym".into()],
+                ..TaxonInputRow::default()
+            }],
+        )
+        .unwrap();
+
+        let result = apply_rows(
+            &database,
+            &[TaxonInputRow {
+                kingdom: Some("Proposed name".into()),
+                authority_year: Some("Proposed authority".into()),
+                synonyms: vec![
+                    "Matched synonym Matched authority".into(),
+                    "Other synonym Other authority".into(),
+                ],
+                ..TaxonInputRow::default()
+            }],
+        )
+        .unwrap();
+
+        assert_eq!(
+            result.rows[0].operation_types,
+            vec![TaxonRowStatus::Supplement, TaxonRowStatus::NewName]
+        );
+        let connection = database.connect().unwrap();
+        let names = connection
+            .prepare(
+                r#"
+                SELECT name_type, name, authority_year
+                FROM taxon_names
+                ORDER BY name_id
+                "#,
+            )
+            .unwrap()
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                ))
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(
+            names,
+            vec![
+                ("sci_name".into(), "Accepted name".into(), None),
+                (
+                    "synonym".into(),
+                    "Matched synonym".into(),
+                    Some("Matched authority".into())
+                ),
+                (
+                    "synonym".into(),
+                    "Proposed name".into(),
+                    Some("Proposed authority".into())
+                ),
+                (
+                    "synonym".into(),
+                    "Other synonym".into(),
+                    Some("Other authority".into())
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn input_priority_precedes_database_name_type_priority() {
+        let (_directory, database) = database();
+        apply_rows(
+            &database,
+            &[
+                TaxonInputRow {
+                    kingdom: Some("First taxon".into()),
+                    synonyms: vec!["First input".into()],
+                    ..TaxonInputRow::default()
+                },
+                TaxonInputRow {
+                    kingdom: Some("Second input".into()),
+                    ..TaxonInputRow::default()
+                },
+            ],
+        )
+        .unwrap();
+
+        let result = apply_rows(
+            &database,
+            &[TaxonInputRow {
+                kingdom: Some("No match".into()),
+                synonyms: vec!["First input".into(), "Second input".into()],
+                geological_range: Some("selected".into()),
+                ..TaxonInputRow::default()
+            }],
+        )
+        .unwrap();
+        assert_eq!(
+            result.rows[0]
+                .target
+                .as_ref()
+                .and_then(|target| target.names.sci_name.as_deref()),
+            Some("First taxon")
+        );
+    }
+
+    #[test]
+    fn existing_sci_name_precedes_existing_synonym_for_one_input_name() {
+        let (_directory, database) = database();
+        apply_rows(
+            &database,
+            &[
+                TaxonInputRow {
+                    kingdom: Some("Shared".into()),
+                    ..TaxonInputRow::default()
+                },
+                TaxonInputRow {
+                    kingdom: Some("Other".into()),
+                    ..TaxonInputRow::default()
+                },
+            ],
+        )
+        .unwrap();
+        apply_rows(
+            &database,
+            &[TaxonInputRow {
+                kingdom: Some("Other".into()),
+                synonyms: vec!["Shared".into()],
+                ..TaxonInputRow::default()
+            }],
+        )
+        .unwrap();
+
+        let preview = preview_rows(
+            &database,
+            &[TaxonInputRow {
+                kingdom: Some("Shared".into()),
+                geological_range: Some("selected".into()),
+                ..TaxonInputRow::default()
+            }],
+        )
+        .unwrap();
+        assert_eq!(
+            preview.rows[0]
+                .target
+                .as_ref()
+                .and_then(|target| target.names.sci_name.as_deref()),
+            Some("Shared")
+        );
+        assert!(
+            !preview.rows[0]
+                .operation_types
+                .contains(&TaxonRowStatus::MultipleCandidates)
+        );
     }
 }

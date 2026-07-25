@@ -70,9 +70,20 @@ The deepest supplied rank is the target. Higher supplied ranks narrow its
 lineage. A new non-kingdom taxon requires its immediate parent scientific
 name. A missing genus may be derived from the first word of a species name.
 
-Matching tries the target scientific name first, then supplied synonyms in
-input order. The first synonym that produces matches ends matching; later
-synonyms are not considered.
+Matching uses two priority levels. Input names are tried as the target
+scientific name, first synonym, second synonym, and so on. For each input
+name, existing `sci_name` records are tried before existing `synonym`
+records. The first input-name/database-type pair that produces matches ends
+matching; lower-priority pairs are not considered.
+
+Each input scientific name carries its own authority text. The target
+scientific name uses the row's `authority_year`; each synonym uses the
+authority text parsed from that synonym string. When a taxon matches, the
+matched existing name receives the authority text paired with the matching
+input name, either as a supplement or overwrite. Every other input scientific
+name, including the target scientific name when a synonym matched, is then
+processed in input priority order as a `synonym`. Existing accepted names are
+never switched by this process.
 
 Formatted updates have no options. New taxa, new names, supplements, and
 overwrites are enabled. The only forbidden formatted action is switching an
