@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "PhytoIndex",
+  "productName": "Vividarium",
   "version": "../package.json",
   "identifier": "io.github.baoyunfan0101.phytoindex",
   "build": {
@@ -13,11 +13,11 @@
     "windows": [
       {
         "label": "main",
-        "title": "PhytoIndex",
-        "width": 1280,
-        "height": 800,
-        "minWidth": 900,
-        "minHeight": 600,
+        "title": "Vividarium",
+        "width": 1040,
+        "height": 680,
+        "minWidth": 760,
+        "minHeight": 500,
         "resizable": true,
         "fullscreen": false
       }

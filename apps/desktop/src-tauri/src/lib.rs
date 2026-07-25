@@ -105,5 +105,5 @@ pub fn run() {
             commands::get_operations_status,
         ])
         .run(tauri::generate_context!())
-        .expect("error while running PhytoIndex");
+        .expect("error while running Vividarium");
 }

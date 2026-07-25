@@ -1,49 +1,114 @@
-import { lazy, Suspense, useState } from "react";
-import { Database, Folder, GitBranch, Map, TreePine } from "lucide-react";
-import { NavButton } from "./components/NavButton";
-import { AdminPanel } from "./features/admin/AdminPanel";
-import { PhotosExplorer } from "./features/photos/PhotosExplorer";
-import { TaxonomyExplorer } from "./features/taxonomy/TaxonomyExplorer";
-import { readStorage, writeStorage } from "./lib/storage";
+import { useCallback, useState } from "react";
+import {
+  ArrowRightLeft,
+  Database,
+  FileImage,
+  Settings,
+} from "lucide-react";
+import appIconUrl from "../src-tauri/icons/icon.png";
+import { MappingView } from "./v3/MappingView";
+import { PhotosView } from "./v3/PhotosView";
+import { SettingsView } from "./v3/SettingsView";
+import { TaxonomyView } from "./v3/TaxonomyView";
+import type { IconComponent } from "./v3/components";
 
-type View = "photos" | "taxonomy" | "map" | "admin";
-const APP_VIEW_KEY = "phytoindex.app.view";
-const MapPage = lazy(() => import("./features/map/MapPage").then((module) => ({ default: module.MapPage })));
+type Module = "photos" | "mapping" | "taxonomy" | "settings";
+
+const modules: Array<{
+  id: Exclude<Module, "settings">;
+  label: string;
+  icon: IconComponent;
+}> = [
+  { id: "photos", label: "Photos", icon: FileImage },
+  { id: "mapping", label: "Mapping", icon: ArrowRightLeft },
+  { id: "taxonomy", label: "Taxonomy", icon: Database },
+];
+
+const settingsModule = {
+  id: "settings" as const,
+  label: "Settings",
+  icon: Settings,
+};
 
 export function App() {
-  const [view, setView] = useState<View>(() => readStorage<View>(APP_VIEW_KEY, "photos"));
-  const [, setMessage] = useState("Ready");
+  const [module, setModule] = useState<Module>("photos");
+  const [status, setStatus] = useState({
+    message: "Ready",
+    busy: false,
+  });
 
-  function switchView(nextView: View) {
-    setView(nextView);
-    writeStorage(APP_VIEW_KEY, nextView);
+  const handleStatus = useCallback((message: string, busy = false) => {
+    setStatus({ message, busy });
+  }, []);
+
+  function switchModule(nextModule: Module) {
+    setModule(nextModule);
+    setStatus({ message: "Ready", busy: false });
   }
 
   return (
-    <div className="shell">
-      <header className="app-header">
-        <div className="brand">
-          <TreePine size={22} />
-          <span>PhytoIndex</span>
+    <div className="desktop-shell">
+      <aside className="activity-bar">
+        <div className="brand-button" title="Vividarium">
+          <img className="mark" src={appIconUrl} alt="Vividarium" />
         </div>
-        <nav>
-          <NavButton active={view === "photos"} icon={<Folder size={18} />} label="Photos" onClick={() => switchView("photos")} />
-          <NavButton active={view === "taxonomy"} icon={<GitBranch size={18} />} label="Taxonomy" onClick={() => switchView("taxonomy")} />
-          <NavButton active={view === "map"} icon={<Map size={18} />} label="Map" onClick={() => switchView("map")} />
-          <NavButton active={view === "admin"} icon={<Database size={18} />} label="Admin" onClick={() => switchView("admin")} />
-        </nav>
-      </header>
-
-      <main className="workspace">
-        {view === "photos" && <PhotosExplorer setMessage={setMessage} />}
-        {view === "taxonomy" && <TaxonomyExplorer setMessage={setMessage} />}
-        {view === "map" && (
-          <Suspense fallback={<div className="panel empty">Loading map</div>}>
-            <MapPage />
-          </Suspense>
-        )}
-        {view === "admin" && <AdminPanel setMessage={setMessage} />}
-      </main>
+        <div className="activity-group">
+          {modules.map(({ id, label, icon }) => (
+            <ActivityButton
+              key={id}
+              active={module === id}
+              icon={icon}
+              label={label}
+              onClick={() => switchModule(id)}
+            />
+          ))}
+        </div>
+        <div className="activity-spacer" />
+        <ActivityButton
+          active={module === settingsModule.id}
+          icon={settingsModule.icon}
+          label={settingsModule.label}
+          onClick={() => switchModule(settingsModule.id)}
+        />
+      </aside>
+      <div className="desktop-main">
+        <div className="desktop-content">
+          {module === "photos" && <PhotosView onStatus={handleStatus} />}
+          {module === "mapping" && <MappingView onStatus={handleStatus} />}
+          {module === "taxonomy" && <TaxonomyView onStatus={handleStatus} />}
+          {module === "settings" && <SettingsView onStatus={handleStatus} />}
+        </div>
+        <footer className="status-bar">
+          <span className={status.busy ? "status-dot busy" : "status-dot"} />
+          <span>{status.message}</span>
+          <span className="status-module">{module}</span>
+        </footer>
+      </div>
     </div>
+  );
+}
+
+function ActivityButton({
+  active,
+  icon: Icon,
+  label,
+  onClick,
+}: {
+  active: boolean;
+  icon: IconComponent;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      className={`activity-button${active ? " active" : ""}`}
+      type="button"
+      onClick={onClick}
+      aria-label={label}
+      title={label}
+    >
+      <Icon size={18} strokeWidth={1.8} />
+      <span>{label}</span>
+    </button>
   );
 }
