@@ -7,14 +7,14 @@ use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
 use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params, params_from_iter};
 use serde::{Deserialize, Serialize};
 
-use super::update::{
+use super::formatted::{
     affected_taxon_ids_from_changeset, is_taxonomy_session_table, start_taxonomy_session,
     validate_taxonomy,
 };
 use super::view::load_taxon_summary;
 use super::{
-    TaxonInputRow, TaxonRank, TaxonRowStatus, TaxonomyCustomSqlTempTable, TaxonomyNameType,
-    TaxonomyOperationResult, apply_rows, preview_rows,
+    TaxonInputRow, TaxonRank, TaxonRowStatus, TaxonomyNameType, TaxonomyOperationResult,
+    apply_rows, preview_rows,
 };
 use crate::mapping;
 use crate::{CoreError, CoreResult, Database};
@@ -47,6 +47,12 @@ pub struct PromoteTaxonNameInput {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TaxonomyCustomSqlResult {
     pub changeset_size: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TaxonomyCustomSqlTempTable {
+    pub columns: Vec<String>,
+    pub rows: Vec<Vec<String>>,
 }
 
 pub fn update_taxon(

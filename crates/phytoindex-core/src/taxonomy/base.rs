@@ -4,7 +4,7 @@ use std::path::Path;
 use rusqlite::{Connection, OpenFlags, OptionalExtension, Transaction, params};
 use serde::{Deserialize, Serialize};
 
-use super::update::validate_taxonomy;
+use super::formatted::validate_taxonomy;
 use crate::db::LOCAL_TAXON_ID_FLOOR;
 use crate::{CoreError, CoreResult, Database};
 

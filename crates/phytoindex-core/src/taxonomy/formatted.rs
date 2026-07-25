@@ -1,3 +1,5 @@
+//! Formatted taxonomy input, preview, apply, operation history, and rollback.
+
 use std::collections::{BTreeSet, HashSet};
 use std::io::Cursor;
 
@@ -228,12 +230,6 @@ pub struct TaxonomyPreviewResult {
     pub delimiter: String,
     pub encoding: String,
     pub rows: Vec<TaxonRowOutcome>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct TaxonomyCustomSqlTempTable {
-    pub columns: Vec<String>,
-    pub rows: Vec<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
