@@ -66,9 +66,10 @@ parser separates a scientific name from its authority text at the first of:
 `split_scientific_name_authority` is a standalone public function so this
 rule can be changed independently.
 
-The deepest supplied rank is the target. Higher supplied ranks narrow its
-lineage. A new non-kingdom taxon requires its immediate parent scientific
-name. A missing genus may be derived from the first word of a species name.
+The deepest supplied rank is the target. Any supplied higher ranks narrow its
+lineage; they do not need to form a continuous path from kingdom. A new
+non-kingdom taxon requires only its immediate parent scientific name. A
+missing genus may be derived from the first word of a species name.
 
 Matching uses two priority levels. Input names are tried as the target
 scientific name, first synonym, second synonym, and so on. For each input

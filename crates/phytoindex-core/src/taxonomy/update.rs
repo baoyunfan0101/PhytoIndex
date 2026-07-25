@@ -1112,15 +1112,6 @@ impl NormalizedInput {
                 .and_then(|value| value.split_whitespace().next())
                 .map(str::to_string);
         }
-        for index in 1..target_index {
-            if path[index].is_some() && path[index - 1].is_none() {
-                return Err(format!(
-                    "{} cannot be supplied without {}",
-                    TaxonRank::ALL[index].as_str(),
-                    TaxonRank::ALL[index - 1].as_str()
-                ));
-            }
-        }
         let target_name = path[target_index].clone().unwrap_or_default();
         let mut seen_scientific_names = HashSet::from([target_name.clone()]);
         let synonyms = unique_names(&row.synonyms)
@@ -2112,6 +2103,90 @@ mod tests {
             !preview.rows[0]
                 .operation_types
                 .contains(&TaxonRowStatus::MultipleCandidates)
+        );
+    }
+
+    #[test]
+    fn sparse_lineage_fields_are_valid_filters_and_direct_parent_input() {
+        let (_directory, database) = database();
+        apply_rows(
+            &database,
+            &[
+                TaxonInputRow {
+                    kingdom: Some("Animalia".into()),
+                    ..TaxonInputRow::default()
+                },
+                TaxonInputRow {
+                    kingdom: Some("Animalia".into()),
+                    order: Some("Carnivora".into()),
+                    ..TaxonInputRow::default()
+                },
+                TaxonInputRow {
+                    kingdom: Some("Animalia".into()),
+                    order: Some("Carnivora".into()),
+                    family: Some("Canidae".into()),
+                    ..TaxonInputRow::default()
+                },
+                TaxonInputRow {
+                    kingdom: Some("Animalia".into()),
+                    order: Some("Carnivora".into()),
+                    family: Some("Canidae".into()),
+                    genus: Some("Canis".into()),
+                    ..TaxonInputRow::default()
+                },
+                TaxonInputRow {
+                    kingdom: Some("Animalia".into()),
+                    order: Some("Carnivora".into()),
+                    family: Some("Canidae".into()),
+                    genus: Some("Canis".into()),
+                    species: Some("Canis lupus".into()),
+                    ..TaxonInputRow::default()
+                },
+            ],
+        )
+        .unwrap();
+
+        let sparse_match = preview_rows(
+            &database,
+            &[TaxonInputRow {
+                family: Some("Canidae".into()),
+                species: Some("Canis lupus".into()),
+                ..TaxonInputRow::default()
+            }],
+        )
+        .unwrap();
+        assert_eq!(
+            sparse_match.rows[0]
+                .target
+                .as_ref()
+                .and_then(|target| target.names.sci_name.as_deref()),
+            Some("Canis lupus")
+        );
+        assert_eq!(
+            sparse_match.rows[0].operation_types,
+            vec![TaxonRowStatus::NoChange]
+        );
+
+        let direct_parent_only = apply_rows(
+            &database,
+            &[TaxonInputRow {
+                order: Some("Carnivora".into()),
+                family: Some("Felidae".into()),
+                ..TaxonInputRow::default()
+            }],
+        )
+        .unwrap();
+        assert!(
+            direct_parent_only.rows[0]
+                .operation_types
+                .contains(&TaxonRowStatus::NewTaxon)
+        );
+        assert_eq!(
+            direct_parent_only.rows[0]
+                .parent
+                .as_ref()
+                .and_then(|parent| parent.names.sci_name.as_deref()),
+            Some("Carnivora")
         );
     }
 }
