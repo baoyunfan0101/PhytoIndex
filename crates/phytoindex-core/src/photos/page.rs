@@ -33,16 +33,7 @@ pub(crate) enum PhotoCursor {
         status: String,
         photo_id: i64,
     },
-    OperationBatches {
-        created_at: String,
-        batch_id: i64,
-    },
     Operations {
-        operation_id: i64,
-    },
-    BatchOperations {
-        batch_id: i64,
-        row_number: usize,
         operation_id: i64,
     },
 }

@@ -8,13 +8,13 @@ use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params, para
 use serde::{Deserialize, Serialize};
 
 use super::update::{
-    ExistingTaxonUpdate, affected_taxon_ids_from_changeset, apply_existing_taxon_update_with_log,
-    finish_taxonomy_session, insert_operation_batch, insert_operation_log,
-    is_taxonomy_session_table, normalize_name, start_taxonomy_session, validate_taxonomy,
+    affected_taxon_ids_from_changeset, is_taxonomy_session_table, normalize_name,
+    start_taxonomy_session, validate_taxonomy,
 };
+use super::view::load_taxon_summary;
 use super::{
-    TaxonNameInput, TaxonRowOutcome, TaxonUpdateOptions, TaxonomyBatchContext,
-    TaxonomyCustomSqlTempTable, TaxonomyCustomSqlTempTableMetadata, TaxonomyNameKind,
+    TaxonInputRow, TaxonNameInput, TaxonRank, TaxonUpdateOptions, TaxonomyCustomSqlTempTable,
+    TaxonomyNameKind, TaxonomyOperationResult, apply_rows,
 };
 use crate::mapping;
 use crate::{CoreError, CoreResult, Database};
@@ -29,12 +29,6 @@ pub struct TaxonUpdateInput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct TaxonomyUpdateActionResult {
-    pub batch_id: Option<i64>,
-    pub outcome: TaxonRowOutcome,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DeleteTaxonNameInput {
     pub taxon_id: i64,
     pub name_kind: TaxonomyNameKind,
@@ -43,32 +37,11 @@ pub struct DeleteTaxonNameInput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct TaxonomyActionResult {
-    pub batch_id: i64,
-    pub operation_id: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TaxonomyCustomSqlResult {
-    pub batch_id: Option<i64>,
-    pub operation_id: Option<i64>,
     pub changeset_size: usize,
 }
 
-#[derive(Debug, Serialize)]
-struct DeleteTaxonInput {
-    taxon_id: i64,
-}
-
-#[derive(Debug, Serialize)]
-struct CustomSqlLogInput<'a> {
-    sql: &'a str,
-}
-
-pub fn delete_taxon_name(
-    database: &Database,
-    mut input: DeleteTaxonNameInput,
-) -> CoreResult<TaxonomyActionResult> {
+pub fn delete_taxon_name(database: &Database, mut input: DeleteTaxonNameInput) -> CoreResult<()> {
     input.name = normalize_name(Some(&input.name))
         .ok_or_else(|| CoreError::InvalidArgument("name is required".into()))?;
     input.replacement_accepted_name = input
@@ -91,7 +64,6 @@ pub fn delete_taxon_name(
     let remaining_names =
         count_other_names(&transaction, input.taxon_id, input.name_kind, &input.name)?;
 
-    let mut session = start_taxonomy_session(&transaction)?;
     if is_accepted && remaining_names > 0 {
         let replacement = input.replacement_accepted_name.as_deref().ok_or_else(|| {
             CoreError::InvalidArgument(
@@ -112,50 +84,26 @@ pub fn delete_taxon_name(
     }
 
     delete_name_record(&transaction, input.taxon_id, input.name_kind, &input.name)?;
-    let changeset_blob = finish_taxonomy_session(&mut session)?;
-    drop(session);
-    let batch_id =
-        insert_operation_batch(&transaction, &input, &TaxonomyBatchContext::QueryDeleteName)?;
-    let operation_id = insert_operation_log(&transaction, batch_id, 1, &changeset_blob)?;
+    validate_taxonomy(&transaction)?;
     transaction.commit()?;
     mapping::refresh_after_taxonomy_changes(database, [input.taxon_id])?;
-    Ok(TaxonomyActionResult {
-        batch_id,
-        operation_id,
-    })
+    Ok(())
 }
 
 pub fn update_taxon(
     database: &Database,
     input: TaxonUpdateInput,
     options: TaxonUpdateOptions,
-) -> CoreResult<TaxonomyUpdateActionResult> {
-    let mut connection = database.connect()?;
-    let update = ExistingTaxonUpdate::new(
-        input.geological_range.as_deref(),
-        input.scientific.as_ref(),
-        input.english.as_ref(),
-        input.chinese.as_ref(),
-    );
-    let mut batch_id = None;
-    let outcome = apply_existing_taxon_update_with_log(
-        &mut connection,
-        1,
-        input.taxon_id,
-        update,
-        options,
-        &mut batch_id,
-        &input,
-        &TaxonomyBatchContext::QueryUpdate { options },
-    )?;
-    if outcome.status == super::TaxonRowStatus::Applied {
-        let taxon_ids = outcome.target.as_ref().map(|taxon| taxon.taxon_id);
-        mapping::refresh_after_taxonomy_changes(database, taxon_ids)?;
-    }
-    Ok(TaxonomyUpdateActionResult { batch_id, outcome })
+) -> CoreResult<TaxonomyOperationResult> {
+    let connection = database.connect()?;
+    let summary = load_taxon_summary(&connection, input.taxon_id)?
+        .ok_or_else(|| CoreError::NotFound(format!("taxon {}", input.taxon_id)))?;
+    drop(connection);
+    let row = direct_update_input_row(summary, input)?;
+    apply_rows(database, &[row], options)
 }
 
-pub fn delete_taxon(database: &Database, taxon_id: i64) -> CoreResult<TaxonomyActionResult> {
+pub fn delete_taxon(database: &Database, taxon_id: i64) -> CoreResult<()> {
     let mut connection = database.connect()?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     ensure_taxon_exists(&transaction, taxon_id)?;
@@ -169,21 +117,9 @@ pub fn delete_taxon(database: &Database, taxon_id: i64) -> CoreResult<TaxonomyAc
             "taxon {taxon_id} cannot be deleted because it has child taxa"
         )));
     }
-    let mut session = start_taxonomy_session(&transaction)?;
     transaction.execute("DELETE FROM taxa WHERE taxon_id = ?", [taxon_id])?;
-    let changeset_blob = finish_taxonomy_session(&mut session)?;
-    drop(session);
-    let batch_id = insert_operation_batch(
-        &transaction,
-        &DeleteTaxonInput { taxon_id },
-        &TaxonomyBatchContext::QueryDeleteTaxon,
-    )?;
-    let operation_id = insert_operation_log(&transaction, batch_id, 1, &changeset_blob)?;
     transaction.commit()?;
-    Ok(TaxonomyActionResult {
-        batch_id,
-        operation_id,
-    })
+    Ok(())
 }
 
 pub fn execute_custom_taxonomy_sql(
@@ -197,10 +133,9 @@ pub fn execute_custom_taxonomy_sql(
     }
     let mut connection = database.connect()?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let input_metadata = match input.as_ref() {
-        Some(input) => Some(create_temp_input_table(&transaction, input)?),
-        None => None,
-    };
+    if let Some(input) = input.as_ref() {
+        create_temp_input_table(&transaction, input)?;
+    }
     authorize_custom_sql(&transaction, sql)?;
     let mut session = start_taxonomy_session(&transaction)?;
     transaction.execute_batch(sql)?;
@@ -210,29 +145,50 @@ pub fn execute_custom_taxonomy_sql(
     drop(session);
     if changeset_blob.is_empty() {
         transaction.commit()?;
-        return Ok(TaxonomyCustomSqlResult {
-            batch_id: None,
-            operation_id: None,
-            changeset_size,
-        });
+        return Ok(TaxonomyCustomSqlResult { changeset_size });
     }
     validate_taxonomy(&transaction)?;
-    let batch_id = insert_operation_batch(
-        &transaction,
-        &CustomSqlLogInput { sql },
-        &TaxonomyBatchContext::CustomSql {
-            input: input_metadata,
-        },
-    )?;
-    let operation_id = insert_operation_log(&transaction, batch_id, 1, &changeset_blob)?;
     let affected_taxon_ids = affected_taxon_ids_from_changeset(&transaction, &changeset_blob)?;
     transaction.commit()?;
     mapping::refresh_after_taxonomy_changes(database, affected_taxon_ids)?;
-    Ok(TaxonomyCustomSqlResult {
-        batch_id: Some(batch_id),
-        operation_id: Some(operation_id),
-        changeset_size,
-    })
+    Ok(TaxonomyCustomSqlResult { changeset_size })
+}
+
+fn direct_update_input_row(
+    summary: super::TaxonSummary,
+    input: TaxonUpdateInput,
+) -> CoreResult<TaxonInputRow> {
+    let mut row = TaxonInputRow {
+        selected_taxon_id: Some(input.taxon_id),
+        geological_range: input.geological_range,
+        scientific: input.scientific,
+        english: input.english,
+        chinese: input.chinese,
+        ..TaxonInputRow::default()
+    };
+    for item in summary.breadcrumb {
+        set_rank_locator(&mut row, item.rank, item.names.scientific)?;
+    }
+    set_rank_locator(&mut row, summary.rank, summary.names.scientific)?;
+    Ok(row)
+}
+
+fn set_rank_locator(
+    row: &mut TaxonInputRow,
+    rank: TaxonRank,
+    scientific_name: Option<String>,
+) -> CoreResult<()> {
+    let scientific_name = scientific_name.ok_or_else(|| {
+        CoreError::InvalidArgument(format!("{} taxon has no scientific name", rank.as_str()))
+    })?;
+    match rank {
+        TaxonRank::Kingdom => row.kingdom = Some(scientific_name),
+        TaxonRank::Order => row.order = Some(scientific_name),
+        TaxonRank::Family => row.family = Some(scientific_name),
+        TaxonRank::Genus => row.genus = Some(scientific_name),
+        TaxonRank::Species => row.species = Some(scientific_name),
+    }
+    Ok(())
 }
 
 fn ensure_taxon_exists(transaction: &Transaction<'_>, taxon_id: i64) -> CoreResult<()> {
@@ -408,7 +364,7 @@ fn sqlite_error(database: *mut ffi::sqlite3, code: i32) -> CoreError {
 fn create_temp_input_table(
     transaction: &Transaction<'_>,
     input: &TaxonomyCustomSqlTempTable,
-) -> CoreResult<TaxonomyCustomSqlTempTableMetadata> {
+) -> CoreResult<()> {
     if input.columns.is_empty() {
         return Err(CoreError::InvalidArgument(
             "custom sql input requires at least one column".into(),
@@ -462,10 +418,7 @@ fn create_temp_input_table(
             statement.execute(params_from_iter(row.iter()))?;
         }
     }
-    Ok(TaxonomyCustomSqlTempTableMetadata {
-        columns,
-        row_count: input.rows.len(),
-    })
+    Ok(())
 }
 
 fn is_safe_identifier(value: &str) -> bool {

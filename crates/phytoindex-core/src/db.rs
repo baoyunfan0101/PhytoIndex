@@ -8,6 +8,7 @@ use crate::error::{CoreError, CoreResult};
 use crate::models::Photo;
 
 const SCHEMA_VERSION: i64 = 2;
+pub(crate) const LOCAL_TAXON_ID_FLOOR: i64 = 8_000_000_000_000_000;
 
 #[derive(Debug, Clone)]
 pub struct Database {
@@ -146,30 +147,29 @@ CREATE TABLE IF NOT EXISTS photo_mapping_queue (
     FOREIGN KEY (photo_id) REFERENCES photos(photo_id) ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS photo_operation_batches (
-    batch_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    source TEXT NOT NULL,
-    root_path TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CHECK (source IN ('manual_rename', 'taxon_rename', 'taxon_batch_rename'))
-);
-
 CREATE TABLE IF NOT EXISTS photo_operations (
     operation_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    batch_id INTEGER NOT NULL,
-    row_number INTEGER NOT NULL,
+    source TEXT NOT NULL,
+    root_path TEXT NOT NULL,
+    input_json TEXT NOT NULL,
     status TEXT NOT NULL,
+    applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    reverted_at TEXT,
+    CHECK (status IN ('applied', 'reverted')),
+    CHECK (source IN ('manual_rename', 'taxon_rename', 'taxon_selection_rename'))
+);
+
+CREATE TABLE IF NOT EXISTS photo_operation_items (
+    operation_id INTEGER NOT NULL,
+    row_number INTEGER NOT NULL,
     photo_id INTEGER NOT NULL,
     directory_relative_path TEXT NOT NULL,
     old_filename TEXT NOT NULL,
     new_filename TEXT NOT NULL,
-    applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    reverted_at TEXT,
-    UNIQUE (batch_id, row_number),
-    CHECK (status IN ('applied', 'reverted')),
+    PRIMARY KEY (operation_id, row_number),
     CHECK (row_number > 0),
     CHECK (old_filename <> new_filename),
-    FOREIGN KEY (batch_id) REFERENCES photo_operation_batches(batch_id) ON DELETE RESTRICT
+    FOREIGN KEY (operation_id) REFERENCES photo_operations(operation_id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS taxa (
@@ -180,6 +180,13 @@ CREATE TABLE IF NOT EXISTS taxa (
     CHECK (rank IN (1, 2, 3, 4, 5)),
     FOREIGN KEY (parent_taxon_id) REFERENCES taxa(taxon_id) ON DELETE RESTRICT
 );
+
+INSERT INTO sqlite_sequence(name, seq)
+SELECT 'taxa', 8000000000000000
+WHERE NOT EXISTS (SELECT 1 FROM sqlite_sequence WHERE name = 'taxa');
+UPDATE sqlite_sequence
+SET seq = max(seq, 8000000000000000)
+WHERE name = 'taxa';
 
 CREATE TRIGGER IF NOT EXISTS taxa_bd_photo_mapping
 BEFORE DELETE ON taxa BEGIN
@@ -232,32 +239,28 @@ CREATE TRIGGER IF NOT EXISTS taxon_names_au AFTER UPDATE OF name ON taxon_names 
     INSERT INTO taxon_names_fts(rowid, name) VALUES (new.name_id, new.name);
 END;
 
-CREATE TABLE IF NOT EXISTS taxon_identifiers (
-    taxon_id INTEGER NOT NULL,
-    source TEXT NOT NULL,
-    external_id TEXT NOT NULL,
-    PRIMARY KEY (source, external_id),
-    FOREIGN KEY (taxon_id) REFERENCES taxa(taxon_id) ON DELETE CASCADE
-);
-
-CREATE TABLE IF NOT EXISTS taxonomy_operation_batches (
-    batch_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    context_json TEXT NOT NULL,
-    input_json TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
 CREATE TABLE IF NOT EXISTS taxonomy_operations (
     operation_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    batch_id INTEGER NOT NULL,
-    row_number INTEGER NOT NULL,
+    source TEXT NOT NULL,
+    options_json TEXT NOT NULL,
+    input_json TEXT NOT NULL,
+    result_json TEXT NOT NULL,
     status TEXT NOT NULL,
     changeset_blob BLOB NOT NULL,
     applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     reverted_at TEXT,
-    UNIQUE (batch_id, row_number),
-    CHECK (status IN ('applied', 'reverted')),
-    FOREIGN KEY (batch_id) REFERENCES taxonomy_operation_batches(batch_id) ON DELETE RESTRICT
+    CHECK (source = 'formatted_update'),
+    CHECK (status IN ('applied', 'reverted'))
+);
+
+CREATE TABLE IF NOT EXISTS taxonomy_base_metadata (
+    metadata_id INTEGER PRIMARY KEY CHECK (metadata_id = 1),
+    source_path TEXT NOT NULL,
+    taxa_count INTEGER NOT NULL,
+    taxon_names_count INTEGER NOT NULL,
+    imported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (taxa_count >= 0),
+    CHECK (taxon_names_count >= 0)
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_taxon_names_one_accepted
@@ -270,13 +273,8 @@ CREATE INDEX IF NOT EXISTS idx_taxon_names_kind_taxon ON taxon_names(name_kind, 
 CREATE INDEX IF NOT EXISTS idx_taxon_names_name ON taxon_names(name);
 CREATE INDEX IF NOT EXISTS idx_taxon_names_name_search
     ON taxon_names(normalized_name, taxon_id);
-CREATE INDEX IF NOT EXISTS idx_taxon_identifiers_taxon ON taxon_identifiers(taxon_id);
-CREATE INDEX IF NOT EXISTS idx_taxonomy_operations_batch
-    ON taxonomy_operations(batch_id, row_number);
-CREATE INDEX IF NOT EXISTS idx_taxonomy_operations_batch_page
-    ON taxonomy_operations(batch_id, row_number, operation_id);
-CREATE INDEX IF NOT EXISTS idx_taxonomy_operation_batches_created
-    ON taxonomy_operation_batches(created_at DESC, batch_id DESC);
+CREATE INDEX IF NOT EXISTS idx_taxonomy_operations_applied
+    ON taxonomy_operations(applied_at DESC, operation_id DESC);
 CREATE INDEX IF NOT EXISTS idx_photo_directories_parent_name
     ON photo_directories(parent_directory_id, name, directory_id);
 CREATE INDEX IF NOT EXISTS idx_photos_directory_filename
@@ -289,10 +287,10 @@ CREATE INDEX IF NOT EXISTS idx_photo_taxon_usage_subtree
     ON photo_taxon_usage(subtree_photo_count, taxon_id);
 CREATE INDEX IF NOT EXISTS idx_photo_mapping_queue_reason
     ON photo_mapping_queue(reason, photo_id);
-CREATE INDEX IF NOT EXISTS idx_photo_operations_batch_page
-    ON photo_operations(batch_id, row_number, operation_id);
-CREATE INDEX IF NOT EXISTS idx_photo_operation_batches_created
-    ON photo_operation_batches(created_at DESC, batch_id DESC);
+CREATE INDEX IF NOT EXISTS idx_photo_operation_items_photo
+    ON photo_operation_items(photo_id, operation_id);
+CREATE INDEX IF NOT EXISTS idx_photo_operations_applied
+    ON photo_operations(applied_at DESC, operation_id DESC);
 
 PRAGMA user_version = 2;
 "#;
@@ -314,7 +312,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn initializes_the_version_two_schema() {
+    fn initializes_the_current_schema() {
         let directory = tempfile::tempdir().unwrap();
         let database = Database::open(directory.path().join("vividarium.db")).unwrap();
         let connection = database.connect().unwrap();
@@ -331,14 +329,13 @@ mod tests {
             "photo_taxon_mapping",
             "photo_taxon_usage",
             "photo_mapping_queue",
-            "photo_operation_batches",
             "photo_operations",
+            "photo_operation_items",
             "taxa",
             "taxon_names",
             "taxon_names_fts",
-            "taxon_identifiers",
-            "taxonomy_operation_batches",
             "taxonomy_operations",
+            "taxonomy_base_metadata",
         ] {
             let exists: bool = connection
                 .query_row(
@@ -392,43 +389,44 @@ mod tests {
                 "thumbnail_path",
             ]
         );
-        let batch_columns = table_columns(&connection, "taxonomy_operation_batches");
-        assert_eq!(
-            batch_columns,
-            ["batch_id", "context_json", "input_json", "created_at"]
-        );
         let operation_columns = table_columns(&connection, "taxonomy_operations");
         assert_eq!(
             operation_columns,
             [
                 "operation_id",
-                "batch_id",
-                "row_number",
+                "source",
+                "options_json",
+                "input_json",
+                "result_json",
                 "status",
                 "changeset_blob",
                 "applied_at",
                 "reverted_at",
             ]
         );
-        let batch_columns = table_columns(&connection, "photo_operation_batches");
-        assert_eq!(
-            batch_columns,
-            ["batch_id", "source", "root_path", "created_at"]
-        );
         let operation_columns = table_columns(&connection, "photo_operations");
         assert_eq!(
             operation_columns,
             [
                 "operation_id",
-                "batch_id",
-                "row_number",
+                "source",
+                "root_path",
+                "input_json",
                 "status",
+                "applied_at",
+                "reverted_at",
+            ]
+        );
+        let item_columns = table_columns(&connection, "photo_operation_items");
+        assert_eq!(
+            item_columns,
+            [
+                "operation_id",
+                "row_number",
                 "photo_id",
                 "directory_relative_path",
                 "old_filename",
                 "new_filename",
-                "applied_at",
-                "reverted_at",
             ]
         );
     }

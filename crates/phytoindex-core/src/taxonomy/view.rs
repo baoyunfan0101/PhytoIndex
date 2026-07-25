@@ -57,19 +57,12 @@ pub struct TaxonNamesDetail {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct TaxonIdentifierDetail {
-    pub source: String,
-    pub external_id: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TaxonDetail {
     pub taxon_id: i64,
     pub rank: TaxonRank,
     pub parent_taxon_id: Option<i64>,
     pub geological_range: Option<String>,
     pub names: TaxonNamesDetail,
-    pub identifiers: Vec<TaxonIdentifierDetail>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -301,7 +294,6 @@ pub(super) fn load_taxon_details(
     let unique_ids = unique_taxon_ids(taxon_ids);
     let bases = load_taxon_bases(connection, &unique_ids)?;
     let names = load_names_for_taxa(connection, &unique_ids)?;
-    let identifiers = load_identifiers_for_taxa(connection, &unique_ids)?;
     let mut details_by_id = HashMap::new();
     for base in bases {
         let taxon_id = base.taxon_id;
@@ -313,7 +305,6 @@ pub(super) fn load_taxon_details(
                 parent_taxon_id: base.parent_taxon_id,
                 geological_range: base.geological_range,
                 names: names.get(&taxon_id).cloned().unwrap_or_default(),
-                identifiers: identifiers.get(&taxon_id).cloned().unwrap_or_default(),
             },
         );
     }
@@ -551,44 +542,6 @@ fn load_names_for_taxa(
         }
     }
     Ok(names_by_id)
-}
-
-fn load_identifiers_for_taxa(
-    connection: &Connection,
-    taxon_ids: &[i64],
-) -> CoreResult<HashMap<i64, Vec<TaxonIdentifierDetail>>> {
-    if taxon_ids.is_empty() {
-        return Ok(HashMap::new());
-    }
-    let (values_clause, params) = input_values(taxon_ids);
-    let sql = format!(
-        r#"
-        WITH input(taxon_id, sort_order) AS (VALUES {values_clause})
-        SELECT input.taxon_id, taxon_identifiers.source, taxon_identifiers.external_id
-        FROM input
-        JOIN taxon_identifiers ON taxon_identifiers.taxon_id = input.taxon_id
-        ORDER BY input.sort_order, taxon_identifiers.source, taxon_identifiers.external_id
-        "#
-    );
-    let mut statement = connection.prepare(&sql)?;
-    let rows = statement.query_map(params_from_iter(params), |row| {
-        Ok((
-            row.get::<_, i64>(0)?,
-            TaxonIdentifierDetail {
-                source: row.get(1)?,
-                external_id: row.get(2)?,
-            },
-        ))
-    })?;
-    let mut identifiers_by_id: HashMap<i64, Vec<TaxonIdentifierDetail>> = HashMap::new();
-    for row in rows {
-        let (taxon_id, identifier) = row?;
-        identifiers_by_id
-            .entry(taxon_id)
-            .or_default()
-            .push(identifier);
-    }
-    Ok(identifiers_by_id)
 }
 
 fn unique_taxon_ids(taxon_ids: &[i64]) -> Vec<i64> {

@@ -5,14 +5,15 @@ use phytoindex_core::mapping::{
     PhotoTaxonMatch, PhotoTaxonNode,
 };
 use phytoindex_core::models::{
-    DirectoryEntryCounts, MappingMetadata, OperationsStatus, Photo, PhotoDirectoryItem,
-    PhotoLibrary, PhotoMetadata, PhotoPage,
+    DirectoryEntryCounts, MappingMetadata, OperationInputTable, OperationsStatus, Photo,
+    PhotoDirectoryItem, PhotoLibrary, PhotoMetadata, PhotoPage,
 };
-use phytoindex_core::photos::{PhotoOperation, PhotoOperationBatch, PhotoRenameBatchResult};
+use phytoindex_core::photos::{PhotoOperation, PhotoRenameOperationResult};
 use phytoindex_core::taxonomy::{
-    DeleteTaxonNameInput, TaxonChild, TaxonDetailNode, TaxonSearchResult, TaxonUpdateInput,
-    TaxonUpdateOptions, TaxonomyActionResult, TaxonomyCustomSqlResult, TaxonomyCustomSqlTempTable,
-    TaxonomyOperation, TaxonomyOperationBatch, TaxonomyPage, TaxonomyUpdateActionResult,
+    DeleteTaxonNameInput, TaxonChild, TaxonDetailNode, TaxonInputRow, TaxonSearchResult,
+    TaxonUpdateInput, TaxonUpdateOptions, TaxonomyBaseMetadata, TaxonomyCustomSqlResult,
+    TaxonomyCustomSqlTempTable, TaxonomyOperation, TaxonomyOperationResult, TaxonomyPage,
+    TaxonomyPreviewResult,
 };
 use phytoindex_core::{export, mapping, photos, taxonomy};
 use serde_json::{Value, json};
@@ -111,18 +112,22 @@ pub fn rename_photo_from_taxon(state: State<'_, AppState>, photo_id: i64) -> Com
 pub fn rename_photos_from_taxa(
     state: State<'_, AppState>,
     photo_ids: Vec<i64>,
-) -> CommandResult<PhotoRenameBatchResult> {
+) -> CommandResult<PhotoRenameOperationResult> {
     photos::rename_photos_from_taxa(&state.database, &photo_ids).map_err(error)
 }
 
 #[tauri::command]
-pub fn list_photo_operation_batches(
+pub fn rename_photos_in_directory_from_taxa(
     state: State<'_, AppState>,
-    cursor: Option<String>,
-    limit: Option<usize>,
-) -> CommandResult<PhotoPage<PhotoOperationBatch>> {
-    photos::list_photo_operation_batches(&state.database, cursor.as_deref(), limit.unwrap_or(50))
-        .map_err(error)
+    directory_id: i64,
+    include_descendants: Option<bool>,
+) -> CommandResult<PhotoRenameOperationResult> {
+    photos::rename_photos_in_directory_from_taxa(
+        &state.database,
+        directory_id,
+        include_descendants.unwrap_or(true),
+    )
+    .map_err(error)
 }
 
 #[tauri::command]
@@ -136,24 +141,26 @@ pub fn list_photo_operations(
 }
 
 #[tauri::command]
-pub fn list_photo_operations_for_batch(
+pub fn get_photo_operation(
     state: State<'_, AppState>,
-    batch_id: i64,
-    cursor: Option<String>,
-    limit: Option<usize>,
-) -> CommandResult<PhotoPage<PhotoOperation>> {
-    photos::list_photo_operations_for_batch(
-        &state.database,
-        batch_id,
-        cursor.as_deref(),
-        limit.unwrap_or(50),
-    )
-    .map_err(error)
+    operation_id: i64,
+) -> CommandResult<PhotoOperation> {
+    photos::get_photo_operation(&state.database, operation_id)
+        .map_err(error)?
+        .ok_or_else(|| format!("photo operation {operation_id} not found"))
 }
 
 #[tauri::command]
 pub fn revert_photo_operation(state: State<'_, AppState>, operation_id: i64) -> CommandResult<()> {
     photos::revert_photo_operation(&state.database, operation_id).map_err(error)
+}
+
+#[tauri::command]
+pub fn export_photo_operation_inputs(
+    state: State<'_, AppState>,
+    operation_ids: Vec<i64>,
+) -> CommandResult<OperationInputTable> {
+    photos::export_photo_operation_inputs(&state.database, &operation_ids).map_err(error)
 }
 
 #[tauri::command]
@@ -230,7 +237,7 @@ pub fn list_taxon_children(
 pub fn delete_taxon_name(
     state: State<'_, AppState>,
     input: DeleteTaxonNameInput,
-) -> CommandResult<TaxonomyActionResult> {
+) -> CommandResult<()> {
     taxonomy::delete_taxon_name(&state.database, input).map_err(error)
 }
 
@@ -239,15 +246,12 @@ pub fn update_taxon(
     state: State<'_, AppState>,
     input: TaxonUpdateInput,
     options: Option<TaxonUpdateOptions>,
-) -> CommandResult<TaxonomyUpdateActionResult> {
+) -> CommandResult<TaxonomyOperationResult> {
     taxonomy::update_taxon(&state.database, input, options.unwrap_or_default()).map_err(error)
 }
 
 #[tauri::command]
-pub fn delete_taxon(
-    state: State<'_, AppState>,
-    taxon_id: i64,
-) -> CommandResult<TaxonomyActionResult> {
+pub fn delete_taxon(state: State<'_, AppState>, taxon_id: i64) -> CommandResult<()> {
     taxonomy::delete_taxon(&state.database, taxon_id).map_err(error)
 }
 
@@ -261,17 +265,21 @@ pub fn execute_custom_taxonomy_sql(
 }
 
 #[tauri::command]
-pub fn list_taxonomy_operation_batches(
+pub fn preview_taxonomy_rows(
     state: State<'_, AppState>,
-    cursor: Option<String>,
-    limit: Option<usize>,
-) -> CommandResult<TaxonomyPage<TaxonomyOperationBatch>> {
-    taxonomy::list_taxonomy_operation_batches(
-        &state.database,
-        cursor.as_deref(),
-        limit.unwrap_or(50),
-    )
-    .map_err(error)
+    rows: Vec<TaxonInputRow>,
+    options: Option<TaxonUpdateOptions>,
+) -> CommandResult<TaxonomyPreviewResult> {
+    taxonomy::preview_rows(&state.database, &rows, options.unwrap_or_default()).map_err(error)
+}
+
+#[tauri::command]
+pub fn apply_taxonomy_rows(
+    state: State<'_, AppState>,
+    rows: Vec<TaxonInputRow>,
+    options: Option<TaxonUpdateOptions>,
+) -> CommandResult<TaxonomyOperationResult> {
+    taxonomy::apply_rows(&state.database, &rows, options.unwrap_or_default()).map_err(error)
 }
 
 #[tauri::command]
@@ -285,19 +293,63 @@ pub fn list_taxonomy_operations(
 }
 
 #[tauri::command]
-pub fn list_taxonomy_operations_for_batch(
+pub fn get_taxonomy_operation(
     state: State<'_, AppState>,
-    batch_id: i64,
-    cursor: Option<String>,
-    limit: Option<usize>,
-) -> CommandResult<TaxonomyPage<TaxonomyOperation>> {
-    taxonomy::list_taxonomy_operations_for_batch(
-        &state.database,
-        batch_id,
-        cursor.as_deref(),
-        limit.unwrap_or(50),
-    )
-    .map_err(error)
+    operation_id: i64,
+) -> CommandResult<TaxonomyOperation> {
+    taxonomy::get_taxonomy_operation(&state.database, operation_id)
+        .map_err(error)?
+        .ok_or_else(|| format!("taxonomy operation {operation_id} not found"))
+}
+
+#[tauri::command]
+pub fn revert_taxonomy_operation(
+    state: State<'_, AppState>,
+    operation_id: i64,
+) -> CommandResult<()> {
+    taxonomy::revert_taxonomy_operation(&state.database, operation_id).map_err(error)
+}
+
+#[tauri::command]
+pub fn export_taxonomy_operation_inputs(
+    state: State<'_, AppState>,
+    operation_ids: Vec<i64>,
+) -> CommandResult<OperationInputTable> {
+    taxonomy::export_taxonomy_operation_inputs(&state.database, &operation_ids).map_err(error)
+}
+
+#[tauri::command]
+pub fn get_taxonomy_base_metadata(
+    state: State<'_, AppState>,
+) -> CommandResult<Option<TaxonomyBaseMetadata>> {
+    taxonomy::get_taxonomy_base_metadata(&state.database).map_err(error)
+}
+
+#[tauri::command]
+pub fn replace_taxonomy_base_database(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    source_path: String,
+) -> CommandResult<Value> {
+    let database = state.database.clone();
+    let operation =
+        state
+            .operations
+            .start(app, "mapping", "replace_taxonomy_base", move |progress| {
+                progress(0, None, "Replacing taxonomy base database");
+                let replacement =
+                    taxonomy::replace_taxonomy_base_database(&database, Path::new(&source_path))
+                        .map_err(error)?;
+                progress(
+                    0,
+                    Some(replacement.queued_photo_count as u64),
+                    "Remapping all photos",
+                );
+                let mapping =
+                    mapping::process_pending_photo_matches(&database, progress).map_err(error)?;
+                Ok(json!({ "replacement": replacement, "mapping": mapping }))
+            })?;
+    Ok(json!({ "operation": operation }))
 }
 
 #[tauri::command]

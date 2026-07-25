@@ -14,13 +14,12 @@ const ALLOWED_TABLES: &[&str] = &[
     "photo_metadata",
     "photo_taxon_mapping",
     "photo_taxon_usage",
-    "photo_operation_batches",
     "photo_operations",
+    "photo_operation_items",
     "taxa",
     "taxon_names",
-    "taxon_identifiers",
-    "taxonomy_operation_batches",
     "taxonomy_operations",
+    "taxonomy_base_metadata",
 ];
 
 pub fn export_table(database: &Database, table_name: &str, output: &Path) -> CoreResult<usize> {
