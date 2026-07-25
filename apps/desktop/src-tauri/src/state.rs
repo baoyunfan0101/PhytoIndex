@@ -85,7 +85,7 @@ pub struct OperationManager {
 
 impl OperationManager {
     fn new() -> Self {
-        let states = ["photos", "taxa", "mapping"]
+        let states = ["photos", "mapping"]
             .into_iter()
             .map(|module| (module.to_string(), idle_state(module)))
             .collect();

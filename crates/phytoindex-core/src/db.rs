@@ -5,7 +5,7 @@ use std::time::Duration;
 use rusqlite::{Connection, Row};
 
 use crate::error::{CoreError, CoreResult};
-use crate::models::{Photo, Taxon};
+use crate::models::Photo;
 
 const SCHEMA_VERSION: i64 = 2;
 
@@ -58,42 +58,118 @@ impl Database {
 }
 
 const SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS photo_library (
+    library_id INTEGER PRIMARY KEY CHECK (library_id = 1),
+    root_path TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE IF NOT EXISTS photo_directories (
+    directory_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    parent_directory_id INTEGER,
+    name TEXT NOT NULL,
+    relative_path TEXT NOT NULL UNIQUE,
+    UNIQUE (parent_directory_id, name),
+    FOREIGN KEY (parent_directory_id) REFERENCES photo_directories(directory_id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS photos (
     photo_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    root TEXT NOT NULL,
-    relative_path TEXT NOT NULL,
-    parent_dir TEXT NOT NULL,
-    path_depth INTEGER NOT NULL,
+    directory_id INTEGER NOT NULL,
     filename TEXT NOT NULL,
-    binomial_name TEXT,
+    file_size INTEGER NOT NULL,
+    modified_at_ns INTEGER NOT NULL,
+    thumbnail_path TEXT,
+    UNIQUE (directory_id, filename),
+    CHECK (length(filename) > 0),
+    CHECK (file_size >= 0),
+    FOREIGN KEY (directory_id) REFERENCES photo_directories(directory_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS photo_metadata (
+    photo_id INTEGER PRIMARY KEY,
     captured_at TEXT,
-    location TEXT,
     camera TEXT,
     width INTEGER,
     height INTEGER,
-    file_size INTEGER,
-    modified_at REAL,
     longitude REAL,
     latitude REAL,
     exif_json TEXT,
-    thumbnail_path TEXT DEFAULT NULL,
+    FOREIGN KEY (photo_id) REFERENCES photos(photo_id) ON DELETE CASCADE
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS photo_filenames_fts USING fts5(
+    filename,
+    content = 'photos',
+    content_rowid = 'photo_id',
+    tokenize = 'trigram'
+);
+
+CREATE TRIGGER IF NOT EXISTS photos_ai AFTER INSERT ON photos BEGIN
+    INSERT INTO photo_filenames_fts(rowid, filename) VALUES (new.photo_id, new.filename);
+END;
+
+CREATE TRIGGER IF NOT EXISTS photos_ad AFTER DELETE ON photos BEGIN
+    INSERT INTO photo_filenames_fts(photo_filenames_fts, rowid, filename)
+    VALUES ('delete', old.photo_id, old.filename);
+END;
+
+CREATE TRIGGER IF NOT EXISTS photos_au AFTER UPDATE OF filename ON photos BEGIN
+    INSERT INTO photo_filenames_fts(photo_filenames_fts, rowid, filename)
+    VALUES ('delete', old.photo_id, old.filename);
+    INSERT INTO photo_filenames_fts(rowid, filename) VALUES (new.photo_id, new.filename);
+END;
+
+CREATE TABLE IF NOT EXISTS photo_taxon_mapping (
+    photo_id INTEGER PRIMARY KEY,
+    taxon_id INTEGER,
     status TEXT NOT NULL,
-    UNIQUE(root, relative_path)
+    CHECK (status IN ('matched', 'unmatched', 'ambiguous', 'processing', 'stale')),
+    CHECK ((status = 'matched' AND taxon_id IS NOT NULL)
+        OR (status != 'matched' AND taxon_id IS NULL)),
+    FOREIGN KEY (photo_id) REFERENCES photos(photo_id) ON DELETE CASCADE,
+    FOREIGN KEY (taxon_id) REFERENCES taxa(taxon_id) ON DELETE SET NULL
 );
 
-CREATE TABLE IF NOT EXISTS photos_dir (
-    root TEXT NOT NULL,
-    relative_dir TEXT NOT NULL,
-    parent_dir TEXT NOT NULL,
-    name TEXT NOT NULL,
-    path_depth INTEGER NOT NULL,
-    PRIMARY KEY (root, relative_dir)
+CREATE TABLE IF NOT EXISTS photo_taxon_usage (
+    taxon_id INTEGER PRIMARY KEY,
+    direct_photo_count INTEGER NOT NULL,
+    subtree_photo_count INTEGER NOT NULL,
+    CHECK (direct_photo_count >= 0),
+    CHECK (subtree_photo_count >= direct_photo_count),
+    FOREIGN KEY (taxon_id) REFERENCES taxa(taxon_id) ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS photos_metadata (
-    root TEXT PRIMARY KEY,
-    last_synced_at TEXT,
-    sort_order INTEGER NOT NULL
+CREATE TABLE IF NOT EXISTS photo_mapping_queue (
+    photo_id INTEGER PRIMARY KEY,
+    reason TEXT NOT NULL,
+    CHECK (reason IN ('refresh', 'taxonomy')),
+    FOREIGN KEY (photo_id) REFERENCES photos(photo_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS photo_operation_batches (
+    batch_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source TEXT NOT NULL,
+    root_path TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (source IN ('manual_rename', 'taxon_rename', 'taxon_batch_rename'))
+);
+
+CREATE TABLE IF NOT EXISTS photo_operations (
+    operation_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_id INTEGER NOT NULL,
+    row_number INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    photo_id INTEGER NOT NULL,
+    directory_relative_path TEXT NOT NULL,
+    old_filename TEXT NOT NULL,
+    new_filename TEXT NOT NULL,
+    applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    reverted_at TEXT,
+    UNIQUE (batch_id, row_number),
+    CHECK (status IN ('applied', 'reverted')),
+    CHECK (row_number > 0),
+    CHECK (old_filename <> new_filename),
+    FOREIGN KEY (batch_id) REFERENCES photo_operation_batches(batch_id) ON DELETE RESTRICT
 );
 
 CREATE TABLE IF NOT EXISTS taxa (
@@ -105,12 +181,24 @@ CREATE TABLE IF NOT EXISTS taxa (
     FOREIGN KEY (parent_taxon_id) REFERENCES taxa(taxon_id) ON DELETE RESTRICT
 );
 
+CREATE TRIGGER IF NOT EXISTS taxa_bd_photo_mapping
+BEFORE DELETE ON taxa BEGIN
+    INSERT INTO photo_mapping_queue (photo_id, reason)
+    SELECT photo_id, 'taxonomy'
+    FROM photo_taxon_mapping
+    WHERE taxon_id = old.taxon_id
+    ON CONFLICT(photo_id) DO UPDATE SET reason = excluded.reason;
+    UPDATE photo_taxon_mapping
+    SET taxon_id = NULL, status = 'stale'
+    WHERE taxon_id = old.taxon_id;
+END;
+
 CREATE TABLE IF NOT EXISTS taxon_names (
     name_id INTEGER PRIMARY KEY AUTOINCREMENT,
     taxon_id INTEGER NOT NULL,
     name_kind INTEGER NOT NULL,
     name TEXT NOT NULL,
-    name_search TEXT GENERATED ALWAYS AS (lower(name)) STORED,
+    normalized_name TEXT GENERATED ALWAYS AS (lower(name)) STORED,
     is_accepted INTEGER NOT NULL DEFAULT 0,
     authority_year TEXT,
     category TEXT,
@@ -172,32 +260,6 @@ CREATE TABLE IF NOT EXISTS taxonomy_operations (
     FOREIGN KEY (batch_id) REFERENCES taxonomy_operation_batches(batch_id) ON DELETE RESTRICT
 );
 
-CREATE TABLE IF NOT EXISTS taxa_metadata (
-    knowledge_base_path TEXT,
-    knowledge_base_size INTEGER,
-    knowledge_base_modified_at TEXT,
-    last_synced_at TEXT
-);
-
-CREATE TABLE IF NOT EXISTS photos_taxa_mapping_metadata (
-    last_synced_at TEXT,
-    photos_last_synced_at TEXT,
-    taxa_last_synced_at TEXT
-);
-
-CREATE TABLE IF NOT EXISTS photos_taxa_mapping (
-    photo_id INTEGER PRIMARY KEY,
-    taxon_id INTEGER NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS photos_taxa_mapping_taxa (
-    taxon_id INTEGER PRIMARY KEY,
-    rank TEXT NOT NULL,
-    name TEXT NOT NULL,
-    parent_id INTEGER,
-    binomial_name TEXT
-);
-
 CREATE UNIQUE INDEX IF NOT EXISTS idx_taxon_names_one_accepted
     ON taxon_names(taxon_id, name_kind) WHERE is_accepted = 1;
 CREATE INDEX IF NOT EXISTS idx_taxa_parent ON taxa(parent_taxon_id);
@@ -206,7 +268,8 @@ CREATE INDEX IF NOT EXISTS idx_taxa_rank ON taxa(rank);
 CREATE INDEX IF NOT EXISTS idx_taxon_names_kind_name ON taxon_names(name_kind, name);
 CREATE INDEX IF NOT EXISTS idx_taxon_names_kind_taxon ON taxon_names(name_kind, taxon_id);
 CREATE INDEX IF NOT EXISTS idx_taxon_names_name ON taxon_names(name);
-CREATE INDEX IF NOT EXISTS idx_taxon_names_name_search ON taxon_names(name_search, taxon_id);
+CREATE INDEX IF NOT EXISTS idx_taxon_names_name_search
+    ON taxon_names(normalized_name, taxon_id);
 CREATE INDEX IF NOT EXISTS idx_taxon_identifiers_taxon ON taxon_identifiers(taxon_id);
 CREATE INDEX IF NOT EXISTS idx_taxonomy_operations_batch
     ON taxonomy_operations(batch_id, row_number);
@@ -214,49 +277,22 @@ CREATE INDEX IF NOT EXISTS idx_taxonomy_operations_batch_page
     ON taxonomy_operations(batch_id, row_number, operation_id);
 CREATE INDEX IF NOT EXISTS idx_taxonomy_operation_batches_created
     ON taxonomy_operation_batches(created_at DESC, batch_id DESC);
-CREATE INDEX IF NOT EXISTS idx_photos_root_path ON photos(root, relative_path);
-CREATE INDEX IF NOT EXISTS idx_photos_browse
-    ON photos(root, parent_dir, status, filename);
-CREATE INDEX IF NOT EXISTS idx_photos_browse_cursor
-    ON photos(root, parent_dir, status, filename, photo_id);
-CREATE INDEX IF NOT EXISTS idx_photos_status ON photos(status);
-CREATE INDEX IF NOT EXISTS idx_photos_binomial_name ON photos(binomial_name);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_photos_dir_unique
-    ON photos_dir(root, relative_dir);
-CREATE INDEX IF NOT EXISTS idx_photos_dir_browse
-    ON photos_dir(root, parent_dir, name);
-CREATE INDEX IF NOT EXISTS idx_photos_taxa_mapping_taxon
-    ON photos_taxa_mapping(taxon_id);
-CREATE INDEX IF NOT EXISTS idx_photos_taxa_mapping_taxa_parent
-    ON photos_taxa_mapping_taxa(parent_id);
-CREATE INDEX IF NOT EXISTS idx_photos_taxa_mapping_taxa_binomial
-    ON photos_taxa_mapping_taxa(binomial_name);
-CREATE INDEX IF NOT EXISTS idx_photos_taxa_mapping_taxa_name
-    ON photos_taxa_mapping_taxa(name);
-
-CREATE VIEW IF NOT EXISTS taxa_display AS
-SELECT
-    taxa.taxon_id,
-    CASE taxa.rank
-        WHEN 1 THEN 'kingdom'
-        WHEN 2 THEN 'order'
-        WHEN 3 THEN 'family'
-        WHEN 4 THEN 'genus'
-        WHEN 5 THEN 'species'
-    END AS rank,
-    COALESCE(
-        (SELECT name FROM taxon_names
-         WHERE taxon_names.taxon_id = taxa.taxon_id AND name_kind = 3 AND is_accepted = 1),
-        (SELECT name FROM taxon_names
-         WHERE taxon_names.taxon_id = taxa.taxon_id AND name_kind = 2 AND is_accepted = 1),
-        (SELECT name FROM taxon_names
-         WHERE taxon_names.taxon_id = taxa.taxon_id AND name_kind = 1 AND is_accepted = 1),
-        ''
-    ) AS name,
-    taxa.parent_taxon_id AS parent_id,
-    (SELECT name FROM taxon_names
-     WHERE taxon_names.taxon_id = taxa.taxon_id AND name_kind = 1 AND is_accepted = 1) AS binomial_name
-FROM taxa;
+CREATE INDEX IF NOT EXISTS idx_photo_directories_parent_name
+    ON photo_directories(parent_directory_id, name, directory_id);
+CREATE INDEX IF NOT EXISTS idx_photos_directory_filename
+    ON photos(directory_id, filename, photo_id);
+CREATE INDEX IF NOT EXISTS idx_photo_taxon_mapping_taxon
+    ON photo_taxon_mapping(taxon_id, photo_id);
+CREATE INDEX IF NOT EXISTS idx_photo_taxon_mapping_status
+    ON photo_taxon_mapping(status, photo_id);
+CREATE INDEX IF NOT EXISTS idx_photo_taxon_usage_subtree
+    ON photo_taxon_usage(subtree_photo_count, taxon_id);
+CREATE INDEX IF NOT EXISTS idx_photo_mapping_queue_reason
+    ON photo_mapping_queue(reason, photo_id);
+CREATE INDEX IF NOT EXISTS idx_photo_operations_batch_page
+    ON photo_operations(batch_id, row_number, operation_id);
+CREATE INDEX IF NOT EXISTS idx_photo_operation_batches_created
+    ON photo_operation_batches(created_at DESC, batch_id DESC);
 
 PRAGMA user_version = 2;
 "#;
@@ -264,34 +300,12 @@ PRAGMA user_version = 2;
 pub(crate) fn photo_from_row(row: &Row<'_>) -> rusqlite::Result<Photo> {
     Ok(Photo {
         photo_id: row.get("photo_id")?,
-        root: row.get("root")?,
+        directory_id: row.get("directory_id")?,
         relative_path: row.get("relative_path")?,
-        parent_dir: row.get("parent_dir")?,
-        path_depth: row.get("path_depth")?,
         filename: row.get("filename")?,
-        binomial_name: row.get("binomial_name")?,
-        captured_at: row.get("captured_at")?,
-        location: row.get("location")?,
-        camera: row.get("camera")?,
-        width: row.get("width")?,
-        height: row.get("height")?,
         file_size: row.get("file_size")?,
-        modified_at: row.get("modified_at")?,
-        longitude: row.get("longitude")?,
-        latitude: row.get("latitude")?,
-        exif_json: row.get("exif_json")?,
+        modified_at_ns: row.get("modified_at_ns")?,
         thumbnail_path: row.get("thumbnail_path")?,
-        status: row.get("status")?,
-    })
-}
-
-pub(crate) fn taxon_from_row(row: &Row<'_>) -> rusqlite::Result<Taxon> {
-    Ok(Taxon {
-        taxon_id: row.get("taxon_id")?,
-        rank: row.get("rank")?,
-        name: row.get("name")?,
-        parent_id: row.get("parent_id")?,
-        binomial_name: row.get("binomial_name")?,
     })
 }
 
@@ -309,6 +323,16 @@ mod tests {
             .unwrap();
         assert_eq!(version, SCHEMA_VERSION);
         for table in [
+            "photo_library",
+            "photo_directories",
+            "photos",
+            "photo_metadata",
+            "photo_filenames_fts",
+            "photo_taxon_mapping",
+            "photo_taxon_usage",
+            "photo_mapping_queue",
+            "photo_operation_batches",
+            "photo_operations",
             "taxa",
             "taxon_names",
             "taxon_names_fts",
@@ -325,6 +349,21 @@ mod tests {
                 .unwrap();
             assert!(exists, "missing table {table}");
         }
+        let triggers = connection
+            .prepare(
+                r#"
+                SELECT name
+                FROM sqlite_master
+                WHERE type = 'trigger' AND name LIKE 'taxa%photo_mapping%'
+                ORDER BY name
+                "#,
+            )
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(triggers, ["taxa_bd_photo_mapping"]);
         let name_columns = table_columns(&connection, "taxon_names");
         assert_eq!(
             name_columns,
@@ -337,6 +376,20 @@ mod tests {
                 "authority_year",
                 "category",
                 "source"
+            ]
+        );
+        let name_columns = table_xcolumns(&connection, "taxon_names");
+        assert!(name_columns.contains(&"normalized_name".to_string()));
+        let photo_columns = table_columns(&connection, "photos");
+        assert_eq!(
+            photo_columns,
+            [
+                "photo_id",
+                "directory_id",
+                "filename",
+                "file_size",
+                "modified_at_ns",
+                "thumbnail_path",
             ]
         );
         let batch_columns = table_columns(&connection, "taxonomy_operation_batches");
@@ -353,6 +406,27 @@ mod tests {
                 "row_number",
                 "status",
                 "changeset_blob",
+                "applied_at",
+                "reverted_at",
+            ]
+        );
+        let batch_columns = table_columns(&connection, "photo_operation_batches");
+        assert_eq!(
+            batch_columns,
+            ["batch_id", "source", "root_path", "created_at"]
+        );
+        let operation_columns = table_columns(&connection, "photo_operations");
+        assert_eq!(
+            operation_columns,
+            [
+                "operation_id",
+                "batch_id",
+                "row_number",
+                "status",
+                "photo_id",
+                "directory_relative_path",
+                "old_filename",
+                "new_filename",
                 "applied_at",
                 "reverted_at",
             ]
@@ -403,6 +477,17 @@ mod tests {
     fn table_columns(connection: &Connection, table: &str) -> Vec<String> {
         let mut statement = connection
             .prepare(&format!("PRAGMA table_info({table})"))
+            .unwrap();
+        statement
+            .query_map([], |row| row.get(1))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+    }
+
+    fn table_xcolumns(connection: &Connection, table: &str) -> Vec<String> {
+        let mut statement = connection
+            .prepare(&format!("PRAGMA table_xinfo({table})"))
             .unwrap();
         statement
             .query_map([], |row| row.get(1))

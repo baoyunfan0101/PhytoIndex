@@ -1,17 +1,20 @@
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use chrono::{DateTime, Local};
-use phytoindex_core::models::{
-    DirectoryListingPage, MappingMetadata, MappingNode, OperationsStatus, Photo, PhotoRootMetadata,
-    TaxaMetadata, Taxon,
+use phytoindex_core::mapping::{
+    PhotoMappingListItem, PhotoMappingListStatus, PhotoTaxonItem, PhotoTaxonMapping,
+    PhotoTaxonMatch, PhotoTaxonNode,
 };
+use phytoindex_core::models::{
+    DirectoryEntryCounts, MappingMetadata, OperationsStatus, Photo, PhotoDirectoryItem,
+    PhotoLibrary, PhotoMetadata, PhotoPage,
+};
+use phytoindex_core::photos::{PhotoOperation, PhotoOperationBatch, PhotoRenameBatchResult};
 use phytoindex_core::taxonomy::{
     DeleteTaxonNameInput, TaxonChild, TaxonDetailNode, TaxonSearchResult, TaxonUpdateInput,
     TaxonUpdateOptions, TaxonomyActionResult, TaxonomyCustomSqlResult, TaxonomyCustomSqlTempTable,
     TaxonomyOperation, TaxonomyOperationBatch, TaxonomyPage, TaxonomyUpdateActionResult,
 };
-use phytoindex_core::{export, mapping, photos, taxa, taxonomy};
+use phytoindex_core::{export, mapping, photos, taxonomy};
 use serde_json::{Value, json};
 use tauri::{AppHandle, State};
 
@@ -20,46 +23,142 @@ use crate::state::AppState;
 type CommandResult<T> = Result<T, String>;
 
 #[tauri::command]
-pub fn get_photo_roots_metadata(
-    state: State<'_, AppState>,
-) -> CommandResult<Vec<PhotoRootMetadata>> {
-    photos::get_roots_metadata(&state.database).map_err(error)
+pub fn get_photo_library(state: State<'_, AppState>) -> CommandResult<Option<PhotoLibrary>> {
+    photos::get_library(&state.database).map_err(error)
 }
 
 #[tauri::command]
-pub fn save_photo_roots(
-    state: State<'_, AppState>,
-    roots: Vec<String>,
-) -> CommandResult<Vec<PhotoRootMetadata>> {
-    photos::save_roots(&state.database, &roots).map_err(error)
+pub fn get_photo_library_count(state: State<'_, AppState>) -> CommandResult<i64> {
+    photos::get_photo_count(&state.database).map_err(error)
 }
 
 #[tauri::command]
-pub fn browse_photos_page(
+pub fn open_photo_library(state: State<'_, AppState>, root: String) -> CommandResult<PhotoLibrary> {
+    photos::open_library(&state.database, &root).map_err(error)
+}
+
+#[tauri::command]
+pub fn browse_photo_directory(
     state: State<'_, AppState>,
-    root: String,
-    relative_dir: Option<String>,
+    directory_id: i64,
     cursor: Option<String>,
     limit: Option<usize>,
-) -> CommandResult<DirectoryListingPage> {
-    photos::browse_photos_page(
+) -> CommandResult<PhotoPage<PhotoDirectoryItem>> {
+    photos::browse_directory(
         &state.database,
-        &root,
-        relative_dir.as_deref().unwrap_or_default(),
+        directory_id,
         cursor.as_deref(),
-        limit.unwrap_or(160),
+        limit.unwrap_or(50),
     )
     .map_err(error)
 }
 
 #[tauri::command]
-pub fn get_all_photos(state: State<'_, AppState>) -> CommandResult<Vec<Photo>> {
-    photos::list_photos(&state.database).map_err(error)
+pub fn get_photo_directory_counts(
+    state: State<'_, AppState>,
+    directory_id: i64,
+) -> CommandResult<DirectoryEntryCounts> {
+    photos::get_directory_counts(&state.database, directory_id).map_err(error)
 }
 
 #[tauri::command]
-pub fn get_changed_photos(state: State<'_, AppState>) -> CommandResult<Vec<Photo>> {
-    photos::list_changed_photos(&state.database).map_err(error)
+pub fn refresh_photo_directory(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    directory_id: i64,
+) -> CommandResult<Value> {
+    let database = state.database.clone();
+    let operation = state
+        .operations
+        .start(app, "photos", "refresh", move |progress| {
+            progress(0, None, "Refreshing directory");
+            let refresh = photos::refresh_directory(&database, directory_id).map_err(error)?;
+            let mapping =
+                mapping::process_pending_photo_matches(&database, progress).map_err(error)?;
+            Ok(json!({ "refresh": refresh, "mapping": mapping }))
+        })?;
+    Ok(json!({ "operation": operation }))
+}
+
+#[tauri::command]
+pub fn start_photo_mapping(app: AppHandle, state: State<'_, AppState>) -> CommandResult<Value> {
+    let database = state.database.clone();
+    let operation = state
+        .operations
+        .start(app, "mapping", "match", move |progress| {
+            let result =
+                mapping::process_pending_photo_matches(&database, progress).map_err(error)?;
+            serde_json::to_value(result).map_err(error)
+        })?;
+    Ok(json!({ "operation": operation }))
+}
+
+#[tauri::command]
+pub fn rename_photo(
+    state: State<'_, AppState>,
+    photo_id: i64,
+    new_filename: String,
+) -> CommandResult<Photo> {
+    photos::rename_photo(&state.database, photo_id, &new_filename).map_err(error)
+}
+
+#[tauri::command]
+pub fn rename_photo_from_taxon(state: State<'_, AppState>, photo_id: i64) -> CommandResult<Photo> {
+    photos::rename_photo_from_taxon(&state.database, photo_id).map_err(error)
+}
+
+#[tauri::command]
+pub fn rename_photos_from_taxa(
+    state: State<'_, AppState>,
+    photo_ids: Vec<i64>,
+) -> CommandResult<PhotoRenameBatchResult> {
+    photos::rename_photos_from_taxa(&state.database, &photo_ids).map_err(error)
+}
+
+#[tauri::command]
+pub fn list_photo_operation_batches(
+    state: State<'_, AppState>,
+    cursor: Option<String>,
+    limit: Option<usize>,
+) -> CommandResult<PhotoPage<PhotoOperationBatch>> {
+    photos::list_photo_operation_batches(&state.database, cursor.as_deref(), limit.unwrap_or(50))
+        .map_err(error)
+}
+
+#[tauri::command]
+pub fn list_photo_operations(
+    state: State<'_, AppState>,
+    cursor: Option<String>,
+    limit: Option<usize>,
+) -> CommandResult<PhotoPage<PhotoOperation>> {
+    photos::list_photo_operations(&state.database, cursor.as_deref(), limit.unwrap_or(50))
+        .map_err(error)
+}
+
+#[tauri::command]
+pub fn list_photo_operations_for_batch(
+    state: State<'_, AppState>,
+    batch_id: i64,
+    cursor: Option<String>,
+    limit: Option<usize>,
+) -> CommandResult<PhotoPage<PhotoOperation>> {
+    photos::list_photo_operations_for_batch(
+        &state.database,
+        batch_id,
+        cursor.as_deref(),
+        limit.unwrap_or(50),
+    )
+    .map_err(error)
+}
+
+#[tauri::command]
+pub fn revert_photo_operation(state: State<'_, AppState>, operation_id: i64) -> CommandResult<()> {
+    photos::revert_photo_operation(&state.database, operation_id).map_err(error)
+}
+
+#[tauri::command]
+pub fn get_all_photos(state: State<'_, AppState>) -> CommandResult<Vec<Photo>> {
+    photos::list_photos(&state.database).map_err(error)
 }
 
 #[tauri::command]
@@ -78,21 +177,11 @@ pub fn get_photo_availability(state: State<'_, AppState>, photo_id: i64) -> Comm
 }
 
 #[tauri::command]
-pub fn get_map_photos(state: State<'_, AppState>) -> CommandResult<Vec<Photo>> {
-    photos::list_map_photos(&state.database, None).map_err(error)
-}
-
-#[tauri::command]
-pub fn get_taxa_metadata(state: State<'_, AppState>) -> CommandResult<TaxaMetadata> {
-    taxa::get_metadata(&state.database).map_err(error)
-}
-
-#[tauri::command]
-pub fn save_knowledge_base_path(
+pub fn get_photo_metadata(
     state: State<'_, AppState>,
-    knowledge_base_path: Option<String>,
-) -> CommandResult<TaxaMetadata> {
-    taxa::save_knowledge_base_path(&state.database, knowledge_base_path.as_deref()).map_err(error)
+    photo_id: i64,
+) -> CommandResult<PhotoMetadata> {
+    photos::get_photo_metadata(&state.database, photo_id).map_err(error)
 }
 
 #[tauri::command]
@@ -217,29 +306,66 @@ pub fn get_mapping_metadata(state: State<'_, AppState>) -> CommandResult<Mapping
 }
 
 #[tauri::command]
-pub fn get_mapping_root(state: State<'_, AppState>) -> CommandResult<MappingNode> {
-    mapping::get_root(&state.database).map_err(error)
-}
-
-#[tauri::command]
-pub fn get_mapping_taxon(state: State<'_, AppState>, taxon_id: i64) -> CommandResult<MappingNode> {
-    mapping::get_by_taxon_id(&state.database, Some(taxon_id)).map_err(error)
-}
-
-#[tauri::command]
-pub fn search_mapping_by_name(
+pub fn get_photo_taxon_match(
     state: State<'_, AppState>,
-    name: String,
-) -> CommandResult<MappingNode> {
-    mapping::get_by_name(&state.database, &name).map_err(error)
+    photo_id: i64,
+) -> CommandResult<PhotoTaxonMatch> {
+    mapping::get_photo_taxon_match(&state.database, photo_id).map_err(error)
 }
 
 #[tauri::command]
-pub fn search_mapping_by_binomial(
+pub fn select_photo_taxon(
     state: State<'_, AppState>,
-    binomial_name: String,
-) -> CommandResult<MappingNode> {
-    mapping::get_by_binomial(&state.database, &binomial_name).map_err(error)
+    photo_id: i64,
+    taxon_id: i64,
+) -> CommandResult<PhotoTaxonMapping> {
+    mapping::select_photo_taxon(&state.database, photo_id, taxon_id).map_err(error)
+}
+
+#[tauri::command]
+pub fn get_photo_taxon_node(
+    state: State<'_, AppState>,
+    taxon_id: Option<i64>,
+    show_empty: Option<bool>,
+) -> CommandResult<PhotoTaxonNode> {
+    mapping::get_photo_taxon_node(&state.database, taxon_id, show_empty.unwrap_or(false))
+        .map_err(error)
+}
+
+#[tauri::command]
+pub fn browse_photo_taxon(
+    state: State<'_, AppState>,
+    taxon_id: Option<i64>,
+    show_empty: Option<bool>,
+    include_descendants: Option<bool>,
+    cursor: Option<String>,
+    limit: Option<usize>,
+) -> CommandResult<PhotoPage<PhotoTaxonItem>> {
+    mapping::browse_photo_taxon(
+        &state.database,
+        taxon_id,
+        show_empty.unwrap_or(false),
+        include_descendants.unwrap_or(true),
+        cursor.as_deref(),
+        limit.unwrap_or(50),
+    )
+    .map_err(error)
+}
+
+#[tauri::command]
+pub fn list_photos_by_mapping_status(
+    state: State<'_, AppState>,
+    status: PhotoMappingListStatus,
+    cursor: Option<String>,
+    limit: Option<usize>,
+) -> CommandResult<PhotoPage<PhotoMappingListItem>> {
+    mapping::list_photos_by_mapping_status(
+        &state.database,
+        status,
+        cursor.as_deref(),
+        limit.unwrap_or(50),
+    )
+    .map_err(error)
 }
 
 #[tauri::command]
@@ -247,100 +373,13 @@ pub fn suggest_mapping_taxa(
     state: State<'_, AppState>,
     query: String,
     mode: String,
-) -> CommandResult<Vec<Taxon>> {
+) -> CommandResult<Vec<TaxonSearchResult>> {
     mapping::suggest(&state.database, &query, &mode, 10).map_err(error)
 }
 
 #[tauri::command]
 pub fn get_operations_status(state: State<'_, AppState>) -> OperationsStatus {
     state.operations.status()
-}
-
-#[tauri::command]
-pub fn start_photos_update(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    roots: Vec<String>,
-) -> CommandResult<Value> {
-    if roots.is_empty() {
-        return Err("at least one photo root is required".into());
-    }
-    let database = state.database.clone();
-    let operation = state
-        .operations
-        .start(app, "photos", "update", move |progress| {
-            let results = photos::update_photos_many(&database, &roots, progress).map_err(error)?;
-            Ok(json!({ "roots": roots.len(), "results": results }))
-        })?;
-    Ok(json!({ "operation": operation }))
-}
-
-#[tauri::command]
-pub fn start_photos_rebuild(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    roots: Vec<String>,
-    force: bool,
-) -> CommandResult<Value> {
-    if !force {
-        return Ok(confirmation(
-            "photos_rebuild_clears_thumbnails",
-            "Rebuilding photos will clear all cached thumbnails and rebuild the photos table. Are you sure you want to continue?",
-        ));
-    }
-    if roots.is_empty() {
-        return Err("at least one photo root is required".into());
-    }
-    let database = state.database.clone();
-    let thumbnail_dir = state.thumbnail_dir.clone();
-    let operation = state
-        .operations
-        .start(app, "photos", "rebuild", move |progress| {
-            serde_json::to_value(
-                photos::rebuild_photos(&database, &roots, &thumbnail_dir, progress)
-                    .map_err(error)?,
-            )
-            .map_err(error)
-        })?;
-    Ok(json!({ "operation": operation }))
-}
-
-#[tauri::command]
-pub fn start_taxa_update(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    knowledge_base_path: Option<String>,
-    force: bool,
-) -> CommandResult<Value> {
-    start_taxa_operation(app, &state, knowledge_base_path, force, false)
-}
-
-#[tauri::command]
-pub fn start_taxa_rebuild(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    knowledge_base_path: Option<String>,
-    force: bool,
-) -> CommandResult<Value> {
-    start_taxa_operation(app, &state, knowledge_base_path, force, true)
-}
-
-#[tauri::command]
-pub fn start_mapping_update(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    force: bool,
-) -> CommandResult<Value> {
-    start_mapping_operation(app, &state, force, false)
-}
-
-#[tauri::command]
-pub fn start_mapping_rebuild(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    force: bool,
-) -> CommandResult<Value> {
-    start_mapping_operation(app, &state, force, true)
 }
 
 #[tauri::command]
@@ -352,116 +391,6 @@ pub fn export_table(
     let exported = export::export_table(&state.database, &table_name, Path::new(&output_path))
         .map_err(error)?;
     Ok(json!({ "exported": exported, "output_path": output_path }))
-}
-
-fn start_taxa_operation(
-    app: AppHandle,
-    state: &AppState,
-    knowledge_base_path: Option<String>,
-    force: bool,
-    rebuild: bool,
-) -> CommandResult<Value> {
-    if !force && taxa_input_unchanged(state, knowledge_base_path.as_deref())? {
-        return Ok(confirmation(
-            "knowledge_base_unchanged",
-            "The selected knowledge-base file appears unchanged. Are you sure you want to continue this update/rebuild anyway?",
-        ));
-    }
-    let database = state.database.clone();
-    let operation_name = if rebuild { "rebuild" } else { "update" };
-    let operation = state
-        .operations
-        .start(app, "taxa", operation_name, move |progress| {
-            let result = if rebuild {
-                taxa::rebuild_taxa(&database, knowledge_base_path.as_deref(), progress)
-            } else {
-                taxa::update_taxa(&database, knowledge_base_path.as_deref(), progress)
-            }
-            .map_err(error)?;
-            serde_json::to_value(result).map_err(error)
-        })?;
-    Ok(json!({ "operation": operation }))
-}
-
-fn start_mapping_operation(
-    app: AppHandle,
-    state: &AppState,
-    force: bool,
-    rebuild: bool,
-) -> CommandResult<Value> {
-    if !force && let Some(value) = mapping_confirmation(state)? {
-        return Ok(value);
-    }
-    let database = state.database.clone();
-    let operation_name = if rebuild { "rebuild" } else { "update" };
-    let operation = state
-        .operations
-        .start(app, "mapping", operation_name, move |progress| {
-            let result = if rebuild {
-                mapping::rebuild_mapping(&database, progress)
-            } else {
-                mapping::update_mapping(&database, progress)
-            }
-            .map_err(error)?;
-            serde_json::to_value(result).map_err(error)
-        })?;
-    Ok(json!({ "operation": operation }))
-}
-
-fn taxa_input_unchanged(state: &AppState, selected: Option<&str>) -> CommandResult<bool> {
-    let metadata = taxa::get_metadata(&state.database).map_err(error)?;
-    let selected = selected
-        .map(PathBuf::from)
-        .or_else(|| metadata.knowledge_base_path.as_deref().map(PathBuf::from));
-    let Some(path) = selected else {
-        return Ok(false);
-    };
-    let file = match fs::metadata(&path) {
-        Ok(file) => file,
-        Err(_) => return Ok(false),
-    };
-    let modified: DateTime<Local> = file.modified().map_err(error)?.into();
-    Ok(metadata.knowledge_base_path.as_deref() == path.to_str()
-        && metadata.knowledge_base_size == Some(file.len() as i64)
-        && metadata.knowledge_base_modified_at.as_deref()
-            == Some(modified.format("%Y-%m-%d %H:%M:%S").to_string().as_str()))
-}
-
-fn mapping_confirmation(state: &AppState) -> CommandResult<Option<Value>> {
-    let photos_metadata = photos::get_roots_metadata(&state.database).map_err(error)?;
-    let photos_latest = photos_metadata
-        .iter()
-        .filter_map(|value| value.last_synced_at.as_deref())
-        .max()
-        .map(str::to_string);
-    let taxa_latest = taxa::get_metadata(&state.database)
-        .map_err(error)?
-        .last_synced_at;
-    let mapping = mapping::get_metadata(&state.database).map_err(error)?;
-    let unchanged = mapping.last_synced_at.is_some()
-        && mapping.photos_last_synced_at == photos_latest
-        && mapping.taxa_last_synced_at == taxa_latest;
-    if unchanged {
-        return Ok(Some(confirmation(
-            "mapping_inputs_unchanged",
-            "Photos and taxa appear unchanged since the last mapping sync. Are you sure you want to continue this update/rebuild anyway?",
-        )));
-    }
-    if matches!((&taxa_latest, &photos_latest), (Some(taxa), Some(photos)) if taxa > photos) {
-        return Ok(Some(confirmation(
-            "taxa_newer_than_photos",
-            "Taxa were synced later than photos. Confirm before updating mapping.",
-        )));
-    }
-    Ok(None)
-}
-
-fn confirmation(reason: &str, message: &str) -> Value {
-    json!({
-        "needs_confirmation": true,
-        "reason": reason,
-        "message": message,
-    })
 }
 
 fn error(error: impl ToString) -> String {
