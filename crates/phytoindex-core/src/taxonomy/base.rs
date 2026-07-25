@@ -77,6 +77,7 @@ fn replace_from_attached_database(
         DELETE FROM photo_taxon_mapping;
         DELETE FROM taxonomy_operations;
         DELETE FROM taxonomy_base_metadata;
+        UPDATE taxa SET parent_taxon_id = NULL;
         DELETE FROM taxon_names;
         DELETE FROM taxa;
         DELETE FROM sqlite_sequence
@@ -250,19 +251,8 @@ mod tests {
     fn replaces_taxonomy_preserves_base_ids_and_queues_all_photos() {
         let directory = tempfile::tempdir().unwrap();
         let database = Database::open(directory.path().join("vividarium.db")).unwrap();
-        apply_rows(
-            &database,
-            &[TaxonInputRow {
-                kingdom: Some("Old kingdom".into()),
-                ..TaxonInputRow::default()
-            }],
-            TaxonUpdateOptions {
-                allow_new_taxa: true,
-                ..TaxonUpdateOptions::default()
-            },
-        )
-        .unwrap();
-        let old_taxon_id = taxon_id_by_name(&database, "Old kingdom");
+        let old_taxon_ids = seed_old_taxonomy_tree(&database);
+        let old_taxon_id = old_taxon_ids[2];
         let connection = database.connect().unwrap();
         connection
             .execute(
@@ -320,7 +310,9 @@ mod tests {
         assert_eq!(result.metadata.taxa_count, 2);
         assert_eq!(result.metadata.taxon_names_count, 2);
         assert_eq!(result.queued_photo_count, 1);
-        assert!(get_taxon_detail(&database, old_taxon_id).unwrap().is_none());
+        for taxon_id in old_taxon_ids {
+            assert!(get_taxon_detail(&database, taxon_id).unwrap().is_none());
+        }
         assert!(get_taxon_detail(&database, 101).unwrap().is_some());
         assert!(get_taxon_detail(&database, 102).unwrap().is_some());
         assert!(
@@ -371,26 +363,18 @@ mod tests {
     fn rejects_an_invalid_base_without_changing_taxonomy() {
         let directory = tempfile::tempdir().unwrap();
         let database = Database::open(directory.path().join("vividarium.db")).unwrap();
-        apply_rows(
-            &database,
-            &[TaxonInputRow {
-                kingdom: Some("Existing kingdom".into()),
-                ..TaxonInputRow::default()
-            }],
-            TaxonUpdateOptions {
-                allow_new_taxa: true,
-                ..TaxonUpdateOptions::default()
-            },
-        )
-        .unwrap();
-        let taxon_id = taxon_id_by_name(&database, "Existing kingdom");
+        let taxon_ids = seed_old_taxonomy_tree(&database);
         let invalid_path = directory.path().join("invalid.db");
-        Connection::open(&invalid_path).unwrap();
+        create_invalid_base_database(&invalid_path);
 
         let error = replace_taxonomy_base_database(&database, &invalid_path).unwrap_err();
 
-        assert!(error.to_string().contains("missing table taxa"));
-        assert!(get_taxon_detail(&database, taxon_id).unwrap().is_some());
+        assert!(error.to_string().contains("invalid parentage"));
+        for taxon_id in taxon_ids {
+            assert!(get_taxon_detail(&database, taxon_id).unwrap().is_some());
+        }
+        assert_eq!(parent_taxon_id(&database, taxon_ids[1]), Some(taxon_ids[0]));
+        assert_eq!(parent_taxon_id(&database, taxon_ids[2]), Some(taxon_ids[1]));
         assert_eq!(
             list_taxonomy_operations(&database, None, 10)
                 .unwrap()
@@ -398,6 +382,40 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    fn seed_old_taxonomy_tree(database: &Database) -> [i64; 3] {
+        let result = apply_rows(
+            database,
+            &[
+                TaxonInputRow {
+                    kingdom: Some("Old kingdom".into()),
+                    ..TaxonInputRow::default()
+                },
+                TaxonInputRow {
+                    kingdom: Some("Old kingdom".into()),
+                    order: Some("Old order".into()),
+                    ..TaxonInputRow::default()
+                },
+                TaxonInputRow {
+                    kingdom: Some("Old kingdom".into()),
+                    order: Some("Old order".into()),
+                    family: Some("Old family".into()),
+                    ..TaxonInputRow::default()
+                },
+            ],
+            TaxonUpdateOptions {
+                allow_new_taxa: true,
+                ..TaxonUpdateOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(result.succeeded_rows, 3);
+        [
+            taxon_id_by_name(database, "Old kingdom"),
+            taxon_id_by_name(database, "Old order"),
+            taxon_id_by_name(database, "Old family"),
+        ]
     }
 
     fn create_base_database(path: &Path) {
@@ -440,6 +458,46 @@ mod tests {
             .unwrap();
     }
 
+    fn create_invalid_base_database(path: &Path) {
+        let connection = Connection::open(path).unwrap();
+        connection
+            .execute_batch(
+                r#"
+                PRAGMA foreign_keys = ON;
+                CREATE TABLE taxa (
+                    taxon_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    parent_taxon_id INTEGER,
+                    rank INTEGER NOT NULL,
+                    geological_range TEXT,
+                    FOREIGN KEY (parent_taxon_id) REFERENCES taxa(taxon_id)
+                );
+                CREATE TABLE taxon_names (
+                    name_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    taxon_id INTEGER NOT NULL,
+                    name_kind INTEGER NOT NULL,
+                    name TEXT NOT NULL,
+                    normalized_name TEXT GENERATED ALWAYS AS (lower(name)) STORED,
+                    is_accepted INTEGER NOT NULL DEFAULT 0,
+                    authority_year TEXT,
+                    category TEXT,
+                    source TEXT,
+                    FOREIGN KEY (taxon_id) REFERENCES taxa(taxon_id)
+                );
+                INSERT INTO taxa (
+                    taxon_id, parent_taxon_id, rank, geological_range
+                ) VALUES
+                    (201, NULL, 1, NULL),
+                    (202, 201, 3, NULL);
+                INSERT INTO taxon_names (
+                    name_id, taxon_id, name_kind, name, is_accepted
+                ) VALUES
+                    (2001, 201, 1, 'Invalid kingdom', 1),
+                    (2002, 202, 1, 'Invalid family', 1);
+                "#,
+            )
+            .unwrap();
+    }
+
     fn taxon_id_by_name(database: &Database, name: &str) -> i64 {
         database
             .connect()
@@ -447,6 +505,18 @@ mod tests {
             .query_row(
                 "SELECT taxon_id FROM taxon_names WHERE name_kind = 1 AND name = ?",
                 [name],
+                |row| row.get(0),
+            )
+            .unwrap()
+    }
+
+    fn parent_taxon_id(database: &Database, taxon_id: i64) -> Option<i64> {
+        database
+            .connect()
+            .unwrap()
+            .query_row(
+                "SELECT parent_taxon_id FROM taxa WHERE taxon_id = ?",
+                [taxon_id],
                 |row| row.get(0),
             )
             .unwrap()
