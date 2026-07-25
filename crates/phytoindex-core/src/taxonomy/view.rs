@@ -42,6 +42,7 @@ pub struct TaxonChild {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TaxonNameDetail {
+    pub name_id: i64,
     pub name: String,
     pub authority_year: Option<String>,
     pub source: Option<String>,
@@ -332,7 +333,7 @@ fn load_name_details(connection: &Connection, taxon_id: i64) -> CoreResult<Taxon
     let mut result = TaxonNamesDetail::default();
     let mut statement = connection.prepare(
         r#"
-        SELECT name_type, name, authority_year, source
+        SELECT name_id, name_type, name, authority_year, source
         FROM taxon_names
         WHERE taxon_id = ?
         ORDER BY CASE name_type
@@ -346,11 +347,12 @@ fn load_name_details(connection: &Connection, taxon_id: i64) -> CoreResult<Taxon
     )?;
     let rows = statement.query_map([taxon_id], |row| {
         Ok((
-            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
             TaxonNameDetail {
-                name: row.get(1)?,
-                authority_year: row.get(2)?,
-                source: row.get(3)?,
+                name_id: row.get(0)?,
+                name: row.get(2)?,
+                authority_year: row.get(3)?,
+                source: row.get(4)?,
             },
         ))
     })?;

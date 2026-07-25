@@ -28,7 +28,7 @@ Ranks are `kingdom`, `order`, `family`, `genus`, and `species`. Name types are:
 - `en_alias`: an English alias
 
 `TaxonNamesDetail` exposes the same six groups. Each detail record contains
-`name`, optional `authority_year`, and optional `source`.
+the stable `name_id`, `name`, optional `authority_year`, and optional `source`.
 
 ## Formatted input
 
@@ -164,7 +164,8 @@ pub fn promote_taxon_name(
 Promotion exchanges the selected alias type with the current accepted type:
 `synonym` with `sci_name`, `zh_alias` with `zh_name`, or `en_alias` with
 `en_name`. When promoting a species synonym, its first word must exactly equal
-the parent genus `sci_name`.
+the parent genus `sci_name`. `PromoteTaxonNameInput` identifies the record by
+`taxon_id` and `name_id`.
 
 Name and taxon deletion are also unlogged:
 
@@ -178,7 +179,8 @@ pub fn delete_taxon(database: &Database, taxon_id: i64) -> CoreResult<()>
 ```
 
 The unique `sci_name` cannot be deleted. A taxon with children cannot be
-deleted.
+deleted. `DeleteTaxonNameInput` also identifies a name by `taxon_id` and
+`name_id`; display text is never used as record identity.
 
 ## Operation history and rollback
 
