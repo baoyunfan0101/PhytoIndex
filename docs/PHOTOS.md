@@ -155,11 +155,11 @@ returned before photos.
 | `message` | `String` | Short result or error description. |
 | `photo` | `Option<Photo>` | Current photo for `applied` and `no_change`; `null` for `failed`. |
 
-### `PhotoRenameBatchResult`
+### `PhotoRenameOperationResult`
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `batch_id` | `Option<i64>` | Shared batch ID when at least one row was applied; otherwise `null`. |
+| `operation_id` | `Option<i64>` | Shared operation ID when at least one row was applied; otherwise `null`. |
 | `rows` | `Vec<PhotoRenameRowOutcome>` | One outcome for every input ID, in input order. |
 
 ### `PhotoOperationSource`
@@ -168,7 +168,7 @@ returned before photos.
 | --- | --- |
 | `manual_rename` | One call to `rename_photo`. |
 | `taxon_rename` | One call to `rename_photo_from_taxon`. |
-| `taxon_batch_rename` | One call to `rename_photos_from_taxa`. |
+| `taxon_selection_rename` | One call to `rename_photos_from_taxa` or the directory selection API. |
 
 ### `PhotoOperationStatus`
 
@@ -177,35 +177,32 @@ returned before photos.
 | `applied` | The recorded rename is currently applied. |
 | `reverted` | The recorded rename has been reverted. |
 
-### `PhotoOperationBatch`
-
-One public rename call creates at most one batch. A no-op rename does not
-create a batch or operation.
-
-| Field | Type | Description |
-| --- | --- | --- |
-| `batch_id` | `i64` | Batch ID. |
-| `source` | `PhotoOperationSource` | Rename API that created the batch. |
-| `root_path` | `String` | Canonical photo library root at apply time. |
-| `created_at` | `String` | Batch creation timestamp. |
-
 ### `PhotoOperation`
 
-The operation stores explicit rename values. It does not expose or depend on a
-SQLite changeset.
+One public rename call creates at most one operation. A no-op call creates no
+operation. The operation stores its ordered request input and all successful
+file rename items.
 
 | Field | Type | Description |
 | --- | --- | --- |
 | `operation_id` | `i64` | Operation ID. |
-| `batch_id` | `i64` | Parent batch ID. |
-| `row_number` | `usize` | One-based position in the source call. |
+| `source` | `PhotoOperationSource` | Rename API that created the operation. |
+| `root_path` | `String` | Canonical photo library root at apply time. |
+| `input` | `Vec<PhotoOperationInput>` | Ordered requested photo IDs and optional manual filenames. |
 | `status` | `PhotoOperationStatus` | `applied` or `reverted`. |
+| `items` | `Vec<PhotoOperationItem>` | Successful renames in original row order. |
+| `applied_at` | `String` | Apply timestamp. |
+| `reverted_at` | `Option<String>` | Revert timestamp, or `null`. |
+
+`PhotoOperationItem` contains:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `row_number` | `usize` | One-based position in the source call. |
 | `photo_id` | `i64` | Photo ID at apply time. |
 | `directory_relative_path` | `String` | Exact containing-directory path at apply time. |
 | `old_filename` | `String` | Exact filename before the rename. |
 | `new_filename` | `String` | Exact filename after the rename. |
-| `applied_at` | `String` | Apply timestamp. |
-| `reverted_at` | `Option<String>` | Revert timestamp, or `null`. |
 
 ## `phytoindex_core::photos`
 
@@ -426,7 +423,7 @@ have an accepted scientific name. Returns the updated `Photo`.
 pub fn rename_photos_from_taxa(
     database: &Database,
     photo_ids: &[i64],
-) -> CoreResult<PhotoRenameBatchResult>
+) -> CoreResult<PhotoRenameOperationResult>
 ```
 
 | Parameter | Description |
@@ -435,31 +432,16 @@ pub fn rename_photos_from_taxa(
 
 Returns one outcome for every input ID. A row failure does not stop later rows;
 successful earlier and later renames remain applied. All changing rows share
-the returned `batch_id`. If every row fails or needs no change, `batch_id` is
-`None`. Database, cancellation, or runtime consistency failures abort the call
-as a top-level error.
+the returned `operation_id`. If every row fails or needs no change,
+`operation_id` is `None`.
+
+`rename_photos_in_directory_from_taxa` accepts a directory ID and an
+`include_descendants` flag. It resolves only photos with a current `matched`
+mapping and then uses the same operation interface.
 
 ### Rename history APIs
 
-All changing rename calls are logged. Single-photo calls contain one operation.
-Successful rows from `rename_photos_from_taxa` share one batch.
-
-#### `list_photo_operation_batches`
-
-```rust
-pub fn list_photo_operation_batches(
-    database: &Database,
-    cursor: Option<&str>,
-    limit: usize,
-) -> CoreResult<PhotoPage<PhotoOperationBatch>>
-```
-
-| Parameter | Description |
-| --- | --- |
-| `cursor` | `None` for the first page, otherwise the previous page's `next_cursor`. |
-| `limit` | Requested maximum number of batches. |
-
-Returns batches newest first by creation time and batch ID.
+All changing rows from one public rename call share one operation.
 
 #### `list_photo_operations`
 
@@ -478,25 +460,16 @@ pub fn list_photo_operations(
 
 Returns operations newest first by operation ID.
 
-#### `list_photo_operations_for_batch`
+#### `get_photo_operation`
 
 ```rust
-pub fn list_photo_operations_for_batch(
+pub fn get_photo_operation(
     database: &Database,
-    batch_id: i64,
-    cursor: Option<&str>,
-    limit: usize,
-) -> CoreResult<PhotoPage<PhotoOperation>>
+    operation_id: i64,
+) -> CoreResult<Option<PhotoOperation>>
 ```
 
-| Parameter | Description |
-| --- | --- |
-| `batch_id` | Batch whose operations are requested. |
-| `cursor` | `None` for the first page, otherwise the previous page's `next_cursor`. |
-| `limit` | Requested maximum number of operations. |
-
-Returns operations in source-row and operation-ID order. A cursor from one
-batch cannot be used with another batch.
+Returns one operation with all successful file items in input order.
 
 #### `revert_photo_operation`
 
@@ -507,16 +480,32 @@ pub fn revert_photo_operation(
 ) -> CoreResult<()>
 ```
 
-Reverts one applied rename and marks it `reverted`. Revert succeeds only when:
+Reverts one applied operation and marks it `reverted`. Revert preflights every
+recorded file and then restores all items in reverse row order. It succeeds
+only when:
 
 - the currently open root equals the recorded root;
-- the photo still has the recorded ID and directory;
-- its current indexed and real filename equals `new_filename`;
-- `old_filename` is available as the destination.
+- every photo still has the recorded ID and directory;
+- every current indexed and real filename equals its `new_filename`;
+- every filesystem rename can be completed.
 
-On success the real file is renamed to `old_filename`, the photo mapping is
-re-evaluated, and the operation status is updated together. If a later rename
-changed the filename again, that later operation must be reverted first.
+Database changes and status update use one transaction. Filesystem work uses
+compensating renames if a later file or database step fails, so the operation
+restores as a whole or reports a consistency error.
+
+#### `export_photo_operation_inputs`
+
+```rust
+pub fn export_photo_operation_inputs(
+    database: &Database,
+    operation_ids: &[i64],
+) -> CoreResult<OperationInputTable>
+```
+
+Selected operations are sorted by original operation ID and their inputs keep
+source row order. The returned archive table has `photo_id` and
+`requested_filename` columns. Taxon-derived renames leave
+`requested_filename` empty. No table-driven rename import is implemented.
 
 ## Public mapping types
 
@@ -851,11 +840,12 @@ strings. Parameter names below are the camel-case keys used in JavaScript
 | `start_photo_mapping` | none | `{ operation: OperationState }` |
 | `rename_photo` | `photoId: number`, `newFilename: string` | `Photo` |
 | `rename_photo_from_taxon` | `photoId: number` | `Photo` |
-| `rename_photos_from_taxa` | `photoIds: number[]` | `PhotoRenameBatchResult` |
-| `list_photo_operation_batches` | optional `cursor: string`, optional `limit: number` | `PhotoPage<PhotoOperationBatch>` |
+| `rename_photos_from_taxa` | `photoIds: number[]` | `PhotoRenameOperationResult` |
+| `rename_photos_in_directory_from_taxa` | `directoryId: number`, optional `includeDescendants: boolean` | `PhotoRenameOperationResult` |
 | `list_photo_operations` | optional `cursor: string`, optional `limit: number` | `PhotoPage<PhotoOperation>` |
-| `list_photo_operations_for_batch` | `batchId: number`, optional `cursor: string`, optional `limit: number` | `PhotoPage<PhotoOperation>` |
+| `get_photo_operation` | `operationId: number` | `PhotoOperation` |
 | `revert_photo_operation` | `operationId: number` | `null` |
+| `export_photo_operation_inputs` | `operationIds: number[]` | `OperationInputTable` |
 | `get_all_photos` | none | `Photo[]` |
 | `get_photo` | `photoId: number` | `Photo` |
 | `get_photo_availability` | `photoId: number` | `{ available: boolean, error: string \| null }` |
