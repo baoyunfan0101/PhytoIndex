@@ -20,7 +20,7 @@ use phytoindex_core::mapping::*;
 use phytoindex_core::photos::*;
 ```
 
-Shared taxonomy types such as `TaxonRank`, `TaxonomyNameKind`,
+Shared taxonomy types such as `TaxonRank`, `TaxonomyNameType`,
 `TaxonDisplayNames`, and `TaxonSummary` are defined in the
 [taxonomy backend API](TAXONOMY.md).
 
@@ -170,13 +170,6 @@ returned before photos.
 | `taxon_rename` | One call to `rename_photo_from_taxon`. |
 | `taxon_selection_rename` | One call to `rename_photos_from_taxa` or the directory selection API. |
 
-### `PhotoOperationStatus`
-
-| Value | Description |
-| --- | --- |
-| `applied` | The recorded rename is currently applied. |
-| `reverted` | The recorded rename has been reverted. |
-
 ### `PhotoOperation`
 
 One public rename call creates at most one operation. A no-op call creates no
@@ -189,10 +182,8 @@ file rename items.
 | `source` | `PhotoOperationSource` | Rename API that created the operation. |
 | `root_path` | `String` | Canonical photo library root at apply time. |
 | `input` | `Vec<PhotoOperationInput>` | Ordered requested photo IDs and optional manual filenames. |
-| `status` | `PhotoOperationStatus` | `applied` or `reverted`. |
 | `items` | `Vec<PhotoOperationItem>` | Successful renames in original row order. |
 | `applied_at` | `String` | Apply timestamp. |
-| `reverted_at` | `Option<String>` | Revert timestamp, or `null`. |
 
 `PhotoOperationItem` contains:
 
@@ -480,8 +471,9 @@ pub fn revert_photo_operation(
 ) -> CoreResult<()>
 ```
 
-Reverts one applied operation and marks it `reverted`. Revert preflights every
-recorded file and then restores all items in reverse row order. It succeeds
+Reverts one operation and deletes its history record after success. Revert
+preflights every recorded file and then restores all items in reverse row
+order. It succeeds
 only when:
 
 - the currently open root equals the recorded root;
@@ -538,9 +530,8 @@ that selection is being revalidated.
 | Field | Type | Description |
 | --- | --- | --- |
 | `name_id` | `i64` | Matched taxonomy name ID. |
-| `name_kind` | `TaxonomyNameKind` | Scientific, English, or Chinese name kind. |
+| `name_type` | `TaxonomyNameType` | One of the six taxonomy name types. |
 | `name` | `String` | Taxonomy name text that matched. |
-| `is_accepted` | `bool` | Whether the matched name is currently accepted. |
 
 ### `PhotoTaxonCandidate`
 
@@ -548,7 +539,7 @@ that selection is being revalidated.
 | --- | --- | --- |
 | `summary` | `TaxonSummary` | Candidate taxon, accepted display names, and breadcrumb. |
 | `matched_names` | `Vec<PhotoMatchedName>` | Taxonomy names responsible for this candidate. |
-| `accepted_names` | `TaxonDisplayNames` | Current accepted scientific, English, and Chinese names. |
+| `accepted_names` | `TaxonDisplayNames` | Current `sci_name`, `en_name`, and `zh_name`. |
 
 ### `PhotoTaxonMatch`
 
