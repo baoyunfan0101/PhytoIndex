@@ -1313,7 +1313,6 @@ pub fn parse_taxonomy_input_csv(
     let separator = separator.chars().next().unwrap_or(';');
     let mut reader = ReaderBuilder::new()
         .delimiter(b'|')
-        .flexible(true)
         .from_reader(input.as_bytes());
     let headers = reader.headers()?.clone();
     if headers.is_empty() {
@@ -1788,6 +1787,13 @@ mod tests {
         assert_eq!(rows[0].species.as_deref(), Some("Canis lupus"));
         assert_eq!(rows[0].synonyms.len(), 1);
         assert_eq!(rows[0].zh_alias, vec!["wolf", "dog"]);
+    }
+
+    #[test]
+    fn csv_rejects_rows_with_a_different_column_count() {
+        let (_directory, database) = database();
+        let error = parse_taxonomy_input_csv(&database, "kingdom|order\nAnimalia\n").unwrap_err();
+        assert!(error.to_string().contains("fields"));
     }
 
     #[test]
