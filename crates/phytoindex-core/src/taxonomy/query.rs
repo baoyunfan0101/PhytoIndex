@@ -4,16 +4,15 @@ use rusqlite::{Connection, params_from_iter, types::Value as SqlValue};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    TaxonomyNameKind, page::page_limit, view::load_taxon_details, view::load_taxon_summaries,
+    TaxonomyNameType, page::page_limit, view::load_taxon_details, view::load_taxon_summaries,
 };
 use crate::{CoreError, CoreResult, Database};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TaxonNameMatch {
     pub name_id: i64,
-    pub name_kind: TaxonomyNameKind,
+    pub name_type: TaxonomyNameType,
     pub name: String,
-    pub is_accepted: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -168,7 +167,7 @@ fn append_exact_matches(
         FROM taxon_names
         WHERE normalized_name = ?
         GROUP BY taxon_id
-        ORDER BY MIN(CASE WHEN is_accepted = 1 THEN 0 ELSE 1 END), MIN(name_kind), taxon_id
+        ORDER BY MIN(CASE name_type WHEN 'sci_name' THEN 0 WHEN 'synonym' THEN 1 ELSE 2 END), taxon_id
         LIMIT ?
         "#;
     append_query_ids(
@@ -204,7 +203,9 @@ fn append_full_prefix_matches(
           AND normalized_name != ?
           {exclusion_sql}
         GROUP BY taxon_id
-        ORDER BY MIN(normalized_name), MIN(CASE WHEN is_accepted = 1 THEN 0 ELSE 1 END), MIN(name_kind), taxon_id
+        ORDER BY MIN(normalized_name),
+                 MIN(CASE name_type WHEN 'sci_name' THEN 0 WHEN 'synonym' THEN 1 ELSE 2 END),
+                 taxon_id
         LIMIT ?
         "#
     );
@@ -239,8 +240,8 @@ fn append_fts_matches(
           {exclusion_sql}
         GROUP BY taxon_names.taxon_id
         ORDER BY MIN(taxon_names.normalized_name),
-                 MIN(CASE WHEN taxon_names.is_accepted = 1 THEN 0 ELSE 1 END),
-                 MIN(taxon_names.name_kind),
+                 MIN(CASE taxon_names.name_type
+                     WHEN 'sci_name' THEN 0 WHEN 'synonym' THEN 1 ELSE 2 END),
                  taxon_names.taxon_id
         LIMIT ?
         "#
@@ -255,9 +256,8 @@ fn append_fts_matches(
 struct FuzzyNameCandidate {
     name_id: i64,
     taxon_id: i64,
-    name_kind: i64,
+    name_type: String,
     normalized_name: String,
-    is_accepted: bool,
     edit_distance: usize,
 }
 
@@ -283,17 +283,16 @@ fn append_fuzzy_matches(
         r#"
         SELECT taxon_names.name_id,
                taxon_names.taxon_id,
-               taxon_names.name_kind,
-               taxon_names.normalized_name,
-               taxon_names.is_accepted
+               taxon_names.name_type,
+               taxon_names.normalized_name
         FROM taxon_names_fts
         JOIN taxon_names ON taxon_names.name_id = taxon_names_fts.rowid
         WHERE taxon_names_fts MATCH ?
           {exclusion_sql}
         ORDER BY bm25(taxon_names_fts),
                  taxon_names.normalized_name,
-                 CASE WHEN taxon_names.is_accepted = 1 THEN 0 ELSE 1 END,
-                 taxon_names.name_kind,
+                 CASE taxon_names.name_type
+                     WHEN 'sci_name' THEN 0 WHEN 'synonym' THEN 1 ELSE 2 END,
                  taxon_names.taxon_id
         LIMIT ?
         "#
@@ -307,9 +306,8 @@ fn append_fuzzy_matches(
         Ok(FuzzyNameCandidate {
             name_id: row.get(0)?,
             taxon_id: row.get(1)?,
-            name_kind: row.get(2)?,
+            name_type: row.get(2)?,
             normalized_name: row.get(3)?,
-            is_accepted: row.get::<_, i64>(4)? != 0,
             edit_distance: 0,
         })
     })?;
@@ -328,8 +326,9 @@ fn append_fuzzy_matches(
     candidates.sort_by(|left, right| {
         left.edit_distance
             .cmp(&right.edit_distance)
-            .then_with(|| right.is_accepted.cmp(&left.is_accepted))
-            .then_with(|| left.name_kind.cmp(&right.name_kind))
+            .then_with(|| {
+                name_type_priority(&left.name_type).cmp(&name_type_priority(&right.name_type))
+            })
             .then_with(|| left.normalized_name.cmp(&right.normalized_name))
             .then_with(|| left.taxon_id.cmp(&right.taxon_id))
             .then_with(|| left.name_id.cmp(&right.name_id))
@@ -428,30 +427,33 @@ fn load_name_matches_for_taxa(
     let sql = format!(
         r#"
         WITH input(taxon_id, sort_order) AS (VALUES {values_clause})
-        SELECT input.taxon_id, taxon_names.name_id, taxon_names.name_kind,
-               taxon_names.name, taxon_names.is_accepted
+        SELECT input.taxon_id, taxon_names.name_id, taxon_names.name_type,
+               taxon_names.name
         FROM input
         JOIN taxon_names ON taxon_names.taxon_id = input.taxon_id
         WHERE {conditions}
-        ORDER BY input.sort_order, taxon_names.name_kind, taxon_names.is_accepted DESC, taxon_names.name
+        ORDER BY input.sort_order,
+                 CASE taxon_names.name_type
+                     WHEN 'sci_name' THEN 0 WHEN 'synonym' THEN 1 ELSE 2 END,
+                 taxon_names.name
         "#
     );
     let mut statement = connection.prepare(&sql)?;
     let rows = statement.query_map(params_from_iter(query_params), |row| {
-        let name_kind = TaxonomyNameKind::from_code(row.get::<_, i64>(2)?).map_err(|error| {
-            rusqlite::Error::FromSqlConversionFailure(
-                2,
-                rusqlite::types::Type::Integer,
-                error.to_string().into(),
-            )
-        })?;
+        let name_type =
+            TaxonomyNameType::from_value(&row.get::<_, String>(2)?).map_err(|error| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    2,
+                    rusqlite::types::Type::Text,
+                    error.to_string().into(),
+                )
+            })?;
         Ok((
             row.get::<_, i64>(0)?,
             TaxonNameMatch {
                 name_id: row.get(1)?,
-                name_kind,
+                name_type,
                 name: row.get(3)?,
-                is_accepted: row.get::<_, i64>(4)? != 0,
             },
         ))
     })?;
@@ -460,6 +462,14 @@ fn load_name_matches_for_taxa(
         matches_by_id.entry(taxon_id).or_default().push(name_match);
     }
     Ok(matches_by_id)
+}
+
+fn name_type_priority(value: &str) -> usize {
+    match value {
+        "sci_name" => 0,
+        "synonym" => 1,
+        _ => 2,
+    }
 }
 
 fn escape_like(value: &str) -> String {

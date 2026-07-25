@@ -13,27 +13,36 @@ use super::update::{
 };
 use super::view::load_taxon_summary;
 use super::{
-    TaxonInputRow, TaxonNameInput, TaxonRank, TaxonUpdateOptions, TaxonomyCustomSqlTempTable,
-    TaxonomyNameKind, TaxonomyOperationResult, apply_rows,
+    TaxonInputRow, TaxonRank, TaxonRowStatus, TaxonomyCustomSqlTempTable, TaxonomyNameType,
+    TaxonomyOperationResult, apply_rows, preview_rows,
 };
 use crate::mapping;
 use crate::{CoreError, CoreResult, Database};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TaxonUpdateInput {
     pub taxon_id: i64,
+    pub authority_year: Option<String>,
+    pub synonyms: Vec<String>,
+    pub zh_name: Option<String>,
+    pub zh_alias: Vec<String>,
+    pub en_name: Option<String>,
+    pub en_alias: Vec<String>,
     pub geological_range: Option<String>,
-    pub scientific: Option<TaxonNameInput>,
-    pub english: Option<TaxonNameInput>,
-    pub chinese: Option<TaxonNameInput>,
+    pub source: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DeleteTaxonNameInput {
     pub taxon_id: i64,
-    pub name_kind: TaxonomyNameKind,
+    pub name_type: TaxonomyNameType,
     pub name: String,
-    pub replacement_accepted_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PromoteTaxonNameInput {
+    pub taxon_id: i64,
+    pub name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -41,72 +50,173 @@ pub struct TaxonomyCustomSqlResult {
     pub changeset_size: usize,
 }
 
-pub fn delete_taxon_name(database: &Database, mut input: DeleteTaxonNameInput) -> CoreResult<()> {
-    input.name = normalize_name(Some(&input.name))
+pub fn update_taxon(
+    database: &Database,
+    input: TaxonUpdateInput,
+) -> CoreResult<TaxonomyOperationResult> {
+    let connection = database.connect()?;
+    let summary = load_taxon_summary(&connection, input.taxon_id)?
+        .ok_or_else(|| CoreError::NotFound(format!("taxon {}", input.taxon_id)))?;
+    drop(connection);
+    let mut row = TaxonInputRow {
+        selected_taxon_id: Some(input.taxon_id),
+        authority_year: input.authority_year,
+        synonyms: input.synonyms,
+        zh_name: input.zh_name,
+        zh_alias: input.zh_alias,
+        en_name: input.en_name,
+        en_alias: input.en_alias,
+        geological_range: input.geological_range,
+        source: input.source,
+        ..TaxonInputRow::default()
+    };
+    for item in &summary.breadcrumb {
+        set_rank_locator(&mut row, item.rank, item.names.sci_name.clone())?;
+    }
+    set_rank_locator(&mut row, summary.rank, summary.names.sci_name)?;
+    let preview = preview_rows(database, std::slice::from_ref(&row))?;
+    if preview.rows[0].operation_types.iter().any(|value| {
+        matches!(
+            value,
+            TaxonRowStatus::Invalid
+                | TaxonRowStatus::NotMatched
+                | TaxonRowStatus::MultipleCandidates
+        )
+    }) {
+        return Err(CoreError::InvalidArgument(preview.rows[0].message.clone()));
+    }
+    apply_rows(database, &[row])
+}
+
+pub fn promote_taxon_name(database: &Database, input: PromoteTaxonNameInput) -> CoreResult<()> {
+    let name = normalize_name(Some(&input.name))
         .ok_or_else(|| CoreError::InvalidArgument("name is required".into()))?;
-    input.replacement_accepted_name = input
-        .replacement_accepted_name
-        .as_deref()
-        .and_then(|value| normalize_name(Some(value)));
     let mut connection = database.connect()?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    ensure_taxon_exists(&transaction, input.taxon_id)?;
-    let is_accepted =
-        load_name_is_accepted(&transaction, input.taxon_id, input.name_kind, &input.name)?
-            .ok_or_else(|| {
-                CoreError::NotFound(format!(
-                    "{} name '{}' for taxon {}",
-                    input.name_kind.as_str(),
-                    input.name,
-                    input.taxon_id
-                ))
-            })?;
-    let remaining_names =
-        count_other_names(&transaction, input.taxon_id, input.name_kind, &input.name)?;
-
-    if is_accepted && remaining_names > 0 {
-        let replacement = input.replacement_accepted_name.as_deref().ok_or_else(|| {
-            CoreError::InvalidArgument(
-                "deleting an accepted name requires replacement_accepted_name".into(),
-            )
+    let (rank, current_type) = transaction
+        .query_row(
+            r#"
+            SELECT taxa.rank, taxon_names.name_type
+            FROM taxa JOIN taxon_names USING (taxon_id)
+            WHERE taxa.taxon_id = ? AND taxon_names.name = ?
+            "#,
+            params![input.taxon_id, name],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()?
+        .ok_or_else(|| {
+            CoreError::NotFound(format!("name '{}' for taxon {}", name, input.taxon_id))
         })?;
-        if replacement == input.name {
-            return Err(CoreError::InvalidArgument(
-                "replacement_accepted_name must differ from the deleted name".into(),
-            ));
-        }
-        ensure_name_exists(&transaction, input.taxon_id, input.name_kind, replacement)?;
-        promote_name(&transaction, input.taxon_id, input.name_kind, replacement)?;
-    } else if input.replacement_accepted_name.as_deref().is_some() {
+    let current_type = TaxonomyNameType::from_value(&current_type)?;
+    if current_type.is_primary() {
         return Err(CoreError::InvalidArgument(
-            "replacement_accepted_name is only valid when deleting an accepted name".into(),
+            "the selected name is already accepted".into(),
         ));
     }
-
-    delete_name_record(&transaction, input.taxon_id, input.name_kind, &input.name)?;
+    let accepted_type = current_type.accepted_type();
+    let accepted_name = transaction
+        .query_row(
+            "SELECT name FROM taxon_names WHERE taxon_id = ? AND name_type = ?",
+            params![input.taxon_id, accepted_type.as_str()],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .ok_or_else(|| {
+            CoreError::InvalidArgument(format!(
+                "taxon {} has no {} to exchange",
+                input.taxon_id,
+                accepted_type.as_str()
+            ))
+        })?;
+    if current_type == TaxonomyNameType::Synonym
+        && TaxonRank::from_code(rank)? == TaxonRank::Species
+    {
+        let genus_name: Option<String> = transaction
+            .query_row(
+                r#"
+                SELECT name
+                FROM taxa AS species
+                JOIN taxon_names
+                  ON taxon_names.taxon_id = species.parent_taxon_id
+                 AND taxon_names.name_type = 'sci_name'
+                WHERE species.taxon_id = ?
+                "#,
+                [input.taxon_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let first_word = name.split_whitespace().next();
+        if genus_name.as_deref() != first_word {
+            return Err(CoreError::InvalidArgument(format!(
+                "species scientific name '{}' does not start with parent genus '{}'",
+                name,
+                genus_name.unwrap_or_default()
+            )));
+        }
+    }
+    transaction.execute(
+        "UPDATE taxon_names SET name_type = ? WHERE taxon_id = ? AND name_type = ? AND name = ?",
+        params![
+            current_type.as_str(),
+            input.taxon_id,
+            accepted_type.as_str(),
+            accepted_name
+        ],
+    )?;
+    transaction.execute(
+        "UPDATE taxon_names SET name_type = ? WHERE taxon_id = ? AND name_type = ? AND name = ?",
+        params![
+            accepted_type.as_str(),
+            input.taxon_id,
+            current_type.as_str(),
+            name
+        ],
+    )?;
     validate_taxonomy(&transaction)?;
     transaction.commit()?;
     mapping::refresh_after_taxonomy_changes(database, [input.taxon_id])?;
     Ok(())
 }
 
-pub fn update_taxon(
-    database: &Database,
-    input: TaxonUpdateInput,
-    options: TaxonUpdateOptions,
-) -> CoreResult<TaxonomyOperationResult> {
-    let connection = database.connect()?;
-    let summary = load_taxon_summary(&connection, input.taxon_id)?
-        .ok_or_else(|| CoreError::NotFound(format!("taxon {}", input.taxon_id)))?;
-    drop(connection);
-    let row = direct_update_input_row(summary, input)?;
-    apply_rows(database, &[row], options)
+pub fn delete_taxon_name(database: &Database, input: DeleteTaxonNameInput) -> CoreResult<()> {
+    let name = normalize_name(Some(&input.name))
+        .ok_or_else(|| CoreError::InvalidArgument("name is required".into()))?;
+    if input.name_type == TaxonomyNameType::SciName {
+        return Err(CoreError::InvalidArgument(
+            "the unique sci_name cannot be deleted".into(),
+        ));
+    }
+    let mut connection = database.connect()?;
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let deleted = transaction.execute(
+        "DELETE FROM taxon_names WHERE taxon_id = ? AND name_type = ? AND name = ?",
+        params![input.taxon_id, input.name_type.as_str(), name],
+    )?;
+    if deleted == 0 {
+        return Err(CoreError::NotFound(format!(
+            "{} '{}' for taxon {}",
+            input.name_type.as_str(),
+            name,
+            input.taxon_id
+        )));
+    }
+    validate_taxonomy(&transaction)?;
+    transaction.commit()?;
+    mapping::refresh_after_taxonomy_changes(database, [input.taxon_id])?;
+    Ok(())
 }
 
 pub fn delete_taxon(database: &Database, taxon_id: i64) -> CoreResult<()> {
     let mut connection = database.connect()?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    ensure_taxon_exists(&transaction, taxon_id)?;
+    let exists: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM taxa WHERE taxon_id = ?)",
+        [taxon_id],
+        |row| row.get(0),
+    )?;
+    if !exists {
+        return Err(CoreError::NotFound(format!("taxon {taxon_id}")));
+    }
     let child_count: i64 = transaction.query_row(
         "SELECT COUNT(*) FROM taxa WHERE parent_taxon_id = ?",
         [taxon_id],
@@ -119,6 +229,24 @@ pub fn delete_taxon(database: &Database, taxon_id: i64) -> CoreResult<()> {
     }
     transaction.execute("DELETE FROM taxa WHERE taxon_id = ?", [taxon_id])?;
     transaction.commit()?;
+    Ok(())
+}
+
+fn set_rank_locator(
+    row: &mut TaxonInputRow,
+    rank: TaxonRank,
+    scientific_name: Option<String>,
+) -> CoreResult<()> {
+    let name = scientific_name.ok_or_else(|| {
+        CoreError::InvalidArgument(format!("{} taxon has no sci_name", rank.as_str()))
+    })?;
+    match rank {
+        TaxonRank::Kingdom => row.kingdom = Some(name),
+        TaxonRank::Order => row.order = Some(name),
+        TaxonRank::Family => row.family = Some(name),
+        TaxonRank::Genus => row.genus = Some(name),
+        TaxonRank::Species => row.species = Some(name),
+    }
     Ok(())
 }
 
@@ -154,161 +282,13 @@ pub fn execute_custom_taxonomy_sql(
     Ok(TaxonomyCustomSqlResult { changeset_size })
 }
 
-fn direct_update_input_row(
-    summary: super::TaxonSummary,
-    input: TaxonUpdateInput,
-) -> CoreResult<TaxonInputRow> {
-    let mut row = TaxonInputRow {
-        selected_taxon_id: Some(input.taxon_id),
-        geological_range: input.geological_range,
-        scientific: input.scientific,
-        english: input.english,
-        chinese: input.chinese,
-        ..TaxonInputRow::default()
-    };
-    for item in summary.breadcrumb {
-        set_rank_locator(&mut row, item.rank, item.names.scientific)?;
-    }
-    set_rank_locator(&mut row, summary.rank, summary.names.scientific)?;
-    Ok(row)
-}
-
-fn set_rank_locator(
-    row: &mut TaxonInputRow,
-    rank: TaxonRank,
-    scientific_name: Option<String>,
-) -> CoreResult<()> {
-    let scientific_name = scientific_name.ok_or_else(|| {
-        CoreError::InvalidArgument(format!("{} taxon has no scientific name", rank.as_str()))
-    })?;
-    match rank {
-        TaxonRank::Kingdom => row.kingdom = Some(scientific_name),
-        TaxonRank::Order => row.order = Some(scientific_name),
-        TaxonRank::Family => row.family = Some(scientific_name),
-        TaxonRank::Genus => row.genus = Some(scientific_name),
-        TaxonRank::Species => row.species = Some(scientific_name),
-    }
-    Ok(())
-}
-
-fn ensure_taxon_exists(transaction: &Transaction<'_>, taxon_id: i64) -> CoreResult<()> {
-    let exists: bool = transaction.query_row(
-        "SELECT EXISTS(SELECT 1 FROM taxa WHERE taxon_id = ?)",
-        [taxon_id],
-        |row| row.get(0),
-    )?;
-    if !exists {
-        return Err(CoreError::NotFound(format!("taxon {taxon_id}")));
-    }
-    Ok(())
-}
-
-fn load_name_is_accepted(
-    transaction: &Transaction<'_>,
-    taxon_id: i64,
-    kind: TaxonomyNameKind,
-    name: &str,
-) -> CoreResult<Option<bool>> {
-    Ok(transaction
-        .query_row(
-            r#"
-            SELECT is_accepted
-            FROM taxon_names
-            WHERE taxon_id = ? AND name_kind = ? AND name = ?
-            "#,
-            params![taxon_id, kind.code(), name],
-            |row| Ok(row.get::<_, i64>(0)? != 0),
-        )
-        .optional()?)
-}
-
-fn ensure_name_exists(
-    transaction: &Transaction<'_>,
-    taxon_id: i64,
-    kind: TaxonomyNameKind,
-    name: &str,
-) -> CoreResult<()> {
-    let exists: bool = transaction.query_row(
-        r#"
-        SELECT EXISTS(
-            SELECT 1 FROM taxon_names
-            WHERE taxon_id = ? AND name_kind = ? AND name = ?
-        )
-        "#,
-        params![taxon_id, kind.code(), name],
-        |row| row.get(0),
-    )?;
-    if !exists {
-        return Err(CoreError::NotFound(format!(
-            "replacement {} name '{}' for taxon {}",
-            kind.as_str(),
-            name,
-            taxon_id
-        )));
-    }
-    Ok(())
-}
-
-fn count_other_names(
-    transaction: &Transaction<'_>,
-    taxon_id: i64,
-    kind: TaxonomyNameKind,
-    name: &str,
-) -> CoreResult<i64> {
-    Ok(transaction.query_row(
-        r#"
-        SELECT COUNT(*)
-        FROM taxon_names
-        WHERE taxon_id = ? AND name_kind = ? AND name != ?
-        "#,
-        params![taxon_id, kind.code(), name],
-        |row| row.get(0),
-    )?)
-}
-
-fn promote_name(
-    transaction: &Transaction<'_>,
-    taxon_id: i64,
-    kind: TaxonomyNameKind,
-    name: &str,
-) -> CoreResult<()> {
-    transaction.execute(
-        "UPDATE taxon_names SET is_accepted = 0 WHERE taxon_id = ? AND name_kind = ?",
-        params![taxon_id, kind.code()],
-    )?;
-    transaction.execute(
-        r#"
-        UPDATE taxon_names
-        SET is_accepted = 1
-        WHERE taxon_id = ? AND name_kind = ? AND name = ?
-        "#,
-        params![taxon_id, kind.code(), name],
-    )?;
-    Ok(())
-}
-
-fn delete_name_record(
-    transaction: &Transaction<'_>,
-    taxon_id: i64,
-    kind: TaxonomyNameKind,
-    name: &str,
-) -> CoreResult<()> {
-    transaction.execute(
-        "DELETE FROM taxon_names WHERE taxon_id = ? AND name_kind = ? AND name = ?",
-        params![taxon_id, kind.code(), name],
-    )?;
-    Ok(())
-}
-
 fn authorize_custom_sql(transaction: &Transaction<'_>, sql: &str) -> CoreResult<()> {
     if sql.to_ascii_lowercase().contains("taxon_names_fts") {
         return Err(CoreError::InvalidArgument(
             "custom sql cannot access taxonomy search index tables directly".into(),
         ));
     }
-    let authorize_result = prepare_custom_sql_batch(transaction, sql);
-    authorize_result?;
-    Ok(())
+    prepare_custom_sql_batch(transaction, sql)
 }
 
 fn prepare_custom_sql_batch(connection: &rusqlite::Connection, sql: &str) -> CoreResult<()> {
@@ -379,8 +359,7 @@ fn create_temp_input_table(
                 "invalid custom sql input column: {column}"
             )));
         }
-        let key = column.to_ascii_lowercase();
-        if !seen.insert(key) {
+        if !seen.insert(column.to_ascii_lowercase()) {
             return Err(CoreError::InvalidArgument(format!(
                 "duplicate custom sql input column: {column}"
             )));
@@ -412,8 +391,8 @@ fn create_temp_input_table(
         let placeholders = std::iter::repeat_n("?", columns.len())
             .collect::<Vec<_>>()
             .join(", ");
-        let insert_sql = format!("INSERT INTO temp.input ({column_list}) VALUES ({placeholders})");
-        let mut statement = transaction.prepare(&insert_sql)?;
+        let sql = format!("INSERT INTO temp.input ({column_list}) VALUES ({placeholders})");
+        let mut statement = transaction.prepare(&sql)?;
         for row in &input.rows {
             statement.execute(params_from_iter(row.iter()))?;
         }
@@ -423,13 +402,10 @@ fn create_temp_input_table(
 
 fn is_safe_identifier(value: &str) -> bool {
     let mut chars = value.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    if !(first == '_' || first.is_ascii_alphabetic()) {
-        return false;
-    }
-    chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+    chars
+        .next()
+        .is_some_and(|first| first == '_' || first.is_ascii_alphabetic())
+        && chars.all(|character| character == '_' || character.is_ascii_alphanumeric())
 }
 
 fn quote_identifier(value: &str) -> String {
@@ -531,4 +507,105 @@ fn is_taxa_delete_foreign_key_access(
     deletes_taxa
         && accessor.is_none()
         && matches!(table_name, "photo_taxon_mapping" | "photo_taxon_usage")
+}
+
+#[cfg(test)]
+mod tests {
+    use tempfile::TempDir;
+
+    use super::*;
+
+    fn database() -> (TempDir, Database) {
+        let directory = TempDir::new().unwrap();
+        let database = Database::open(directory.path().join("test.db")).unwrap();
+        (directory, database)
+    }
+
+    #[test]
+    fn promoting_a_species_synonym_exchanges_name_types() {
+        let (_directory, database) = database();
+        apply_rows(
+            &database,
+            &[
+                TaxonInputRow {
+                    kingdom: Some("Animalia".into()),
+                    ..TaxonInputRow::default()
+                },
+                TaxonInputRow {
+                    kingdom: Some("Animalia".into()),
+                    order: Some("Carnivora".into()),
+                    ..TaxonInputRow::default()
+                },
+                TaxonInputRow {
+                    kingdom: Some("Animalia".into()),
+                    order: Some("Carnivora".into()),
+                    family: Some("Canidae".into()),
+                    ..TaxonInputRow::default()
+                },
+                TaxonInputRow {
+                    kingdom: Some("Animalia".into()),
+                    order: Some("Carnivora".into()),
+                    family: Some("Canidae".into()),
+                    genus: Some("Canis".into()),
+                    ..TaxonInputRow::default()
+                },
+                TaxonInputRow {
+                    kingdom: Some("Animalia".into()),
+                    order: Some("Carnivora".into()),
+                    family: Some("Canidae".into()),
+                    genus: Some("Canis".into()),
+                    species: Some("Canis lupus".into()),
+                    synonyms: vec!["Canis lycaon".into(), "Felis lupus".into()],
+                    ..TaxonInputRow::default()
+                },
+            ],
+        )
+        .unwrap();
+        let connection = database.connect().unwrap();
+        let taxon_id: i64 = connection
+            .query_row(
+                "SELECT taxon_id FROM taxon_names WHERE name = 'Canis lupus'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        drop(connection);
+
+        promote_taxon_name(
+            &database,
+            PromoteTaxonNameInput {
+                taxon_id,
+                name: "Canis lycaon".into(),
+            },
+        )
+        .unwrap();
+        let connection = database.connect().unwrap();
+        let promoted: String = connection
+            .query_row(
+                "SELECT name_type FROM taxon_names WHERE name = 'Canis lycaon'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let previous: String = connection
+            .query_row(
+                "SELECT name_type FROM taxon_names WHERE name = 'Canis lupus'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(promoted, "sci_name");
+        assert_eq!(previous, "synonym");
+        drop(connection);
+
+        let error = promote_taxon_name(
+            &database,
+            PromoteTaxonNameInput {
+                taxon_id,
+                name: "Felis lupus".into(),
+            },
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("parent genus"));
+    }
 }

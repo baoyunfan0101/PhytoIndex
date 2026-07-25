@@ -152,10 +152,7 @@ CREATE TABLE IF NOT EXISTS photo_operations (
     source TEXT NOT NULL,
     root_path TEXT NOT NULL,
     input_json TEXT NOT NULL,
-    status TEXT NOT NULL,
     applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    reverted_at TEXT,
-    CHECK (status IN ('applied', 'reverted')),
     CHECK (source IN ('manual_rename', 'taxon_rename', 'taxon_selection_rename'))
 );
 
@@ -203,16 +200,17 @@ END;
 CREATE TABLE IF NOT EXISTS taxon_names (
     name_id INTEGER PRIMARY KEY AUTOINCREMENT,
     taxon_id INTEGER NOT NULL,
-    name_kind INTEGER NOT NULL,
+    name_type TEXT NOT NULL,
     name TEXT NOT NULL,
     normalized_name TEXT GENERATED ALWAYS AS (lower(name)) STORED,
-    is_accepted INTEGER NOT NULL DEFAULT 0,
     authority_year TEXT,
-    category TEXT,
     source TEXT,
-    UNIQUE (taxon_id, name_kind, name),
-    CHECK (name_kind IN (1, 2, 3)),
-    CHECK (is_accepted IN (0, 1)),
+    UNIQUE (taxon_id, name_type, name),
+    CHECK (name_type IN (
+        'sci_name', 'synonym',
+        'zh_name', 'zh_alias',
+        'en_name', 'en_alias'
+    )),
     CHECK (length(trim(name)) > 0),
     FOREIGN KEY (taxon_id) REFERENCES taxa(taxon_id) ON DELETE CASCADE
 );
@@ -242,15 +240,11 @@ END;
 CREATE TABLE IF NOT EXISTS taxonomy_operations (
     operation_id INTEGER PRIMARY KEY AUTOINCREMENT,
     source TEXT NOT NULL,
-    options_json TEXT NOT NULL,
     input_json TEXT NOT NULL,
     result_json TEXT NOT NULL,
-    status TEXT NOT NULL,
     changeset_blob BLOB NOT NULL,
     applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    reverted_at TEXT,
-    CHECK (source = 'formatted_update'),
-    CHECK (status IN ('applied', 'reverted'))
+    CHECK (source = 'formatted_update')
 );
 
 CREATE TABLE IF NOT EXISTS taxonomy_base_metadata (
@@ -263,13 +257,26 @@ CREATE TABLE IF NOT EXISTS taxonomy_base_metadata (
     CHECK (taxon_names_count >= 0)
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_taxon_names_one_accepted
-    ON taxon_names(taxon_id, name_kind) WHERE is_accepted = 1;
+CREATE TABLE IF NOT EXISTS app_metadata (
+    metadata_key TEXT PRIMARY KEY,
+    metadata_value TEXT NOT NULL
+);
+
+INSERT INTO app_metadata(metadata_key, metadata_value)
+VALUES ('taxonomy_name_separator', ';')
+ON CONFLICT(metadata_key) DO NOTHING;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_taxon_names_one_sci_name
+    ON taxon_names(taxon_id) WHERE name_type = 'sci_name';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_taxon_names_one_zh_name
+    ON taxon_names(taxon_id) WHERE name_type = 'zh_name';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_taxon_names_one_en_name
+    ON taxon_names(taxon_id) WHERE name_type = 'en_name';
 CREATE INDEX IF NOT EXISTS idx_taxa_parent ON taxa(parent_taxon_id);
 CREATE INDEX IF NOT EXISTS idx_taxa_parent_rank_id ON taxa(parent_taxon_id, rank, taxon_id);
 CREATE INDEX IF NOT EXISTS idx_taxa_rank ON taxa(rank);
-CREATE INDEX IF NOT EXISTS idx_taxon_names_kind_name ON taxon_names(name_kind, name);
-CREATE INDEX IF NOT EXISTS idx_taxon_names_kind_taxon ON taxon_names(name_kind, taxon_id);
+CREATE INDEX IF NOT EXISTS idx_taxon_names_type_name ON taxon_names(name_type, name);
+CREATE INDEX IF NOT EXISTS idx_taxon_names_type_taxon ON taxon_names(name_type, taxon_id);
 CREATE INDEX IF NOT EXISTS idx_taxon_names_name ON taxon_names(name);
 CREATE INDEX IF NOT EXISTS idx_taxon_names_name_search
     ON taxon_names(normalized_name, taxon_id);
@@ -336,6 +343,7 @@ mod tests {
             "taxon_names_fts",
             "taxonomy_operations",
             "taxonomy_base_metadata",
+            "app_metadata",
         ] {
             let exists: bool = connection
                 .query_row(
@@ -367,11 +375,9 @@ mod tests {
             [
                 "name_id",
                 "taxon_id",
-                "name_kind",
+                "name_type",
                 "name",
-                "is_accepted",
                 "authority_year",
-                "category",
                 "source"
             ]
         );
@@ -395,13 +401,10 @@ mod tests {
             [
                 "operation_id",
                 "source",
-                "options_json",
                 "input_json",
                 "result_json",
-                "status",
                 "changeset_blob",
                 "applied_at",
-                "reverted_at",
             ]
         );
         let operation_columns = table_columns(&connection, "photo_operations");
@@ -412,9 +415,7 @@ mod tests {
                 "source",
                 "root_path",
                 "input_json",
-                "status",
                 "applied_at",
-                "reverted_at",
             ]
         );
         let item_columns = table_columns(&connection, "photo_operation_items");
@@ -432,7 +433,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_a_second_accepted_name_of_the_same_kind() {
+    fn rejects_a_second_sci_name() {
         let directory = tempfile::tempdir().unwrap();
         let database = Database::open(directory.path().join("vividarium.db")).unwrap();
         let connection = database.connect().unwrap();
@@ -442,12 +443,12 @@ mod tests {
         let taxon_id = connection.last_insert_rowid();
         connection
             .execute(
-                "INSERT INTO taxon_names (taxon_id, name_kind, name, is_accepted) VALUES (?, 1, 'A a', 1)",
+                "INSERT INTO taxon_names (taxon_id, name_type, name) VALUES (?, 'sci_name', 'A a')",
                 [taxon_id],
             )
             .unwrap();
         let result = connection.execute(
-            "INSERT INTO taxon_names (taxon_id, name_kind, name, is_accepted) VALUES (?, 1, 'A b', 1)",
+            "INSERT INTO taxon_names (taxon_id, name_type, name) VALUES (?, 'sci_name', 'A b')",
             [taxon_id],
         );
         assert!(result.is_err());

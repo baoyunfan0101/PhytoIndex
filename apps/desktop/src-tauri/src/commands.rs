@@ -10,10 +10,10 @@ use phytoindex_core::models::{
 };
 use phytoindex_core::photos::{PhotoOperation, PhotoRenameOperationResult};
 use phytoindex_core::taxonomy::{
-    DeleteTaxonNameInput, TaxonChild, TaxonDetailNode, TaxonInputRow, TaxonSearchResult,
-    TaxonUpdateInput, TaxonUpdateOptions, TaxonomyBaseMetadata, TaxonomyCustomSqlResult,
-    TaxonomyCustomSqlTempTable, TaxonomyOperation, TaxonomyOperationResult, TaxonomyPage,
-    TaxonomyPreviewResult,
+    DeleteTaxonNameInput, PromoteTaxonNameInput, TaxonChild, TaxonDetailNode, TaxonInputRow,
+    TaxonRowOutcome, TaxonSearchResult, TaxonUpdateInput, TaxonomyBaseMetadata,
+    TaxonomyCustomSqlResult, TaxonomyCustomSqlTempTable, TaxonomyOperation,
+    TaxonomyOperationResult, TaxonomyPage, TaxonomyPreviewResult,
 };
 use phytoindex_core::{export, mapping, photos, taxonomy};
 use serde_json::{Value, json};
@@ -245,9 +245,16 @@ pub fn delete_taxon_name(
 pub fn update_taxon(
     state: State<'_, AppState>,
     input: TaxonUpdateInput,
-    options: Option<TaxonUpdateOptions>,
 ) -> CommandResult<TaxonomyOperationResult> {
-    taxonomy::update_taxon(&state.database, input, options.unwrap_or_default()).map_err(error)
+    taxonomy::update_taxon(&state.database, input).map_err(error)
+}
+
+#[tauri::command]
+pub fn promote_taxon_name(
+    state: State<'_, AppState>,
+    input: PromoteTaxonNameInput,
+) -> CommandResult<()> {
+    taxonomy::promote_taxon_name(&state.database, input).map_err(error)
 }
 
 #[tauri::command]
@@ -268,18 +275,47 @@ pub fn execute_custom_taxonomy_sql(
 pub fn preview_taxonomy_rows(
     state: State<'_, AppState>,
     rows: Vec<TaxonInputRow>,
-    options: Option<TaxonUpdateOptions>,
 ) -> CommandResult<TaxonomyPreviewResult> {
-    taxonomy::preview_rows(&state.database, &rows, options.unwrap_or_default()).map_err(error)
+    taxonomy::preview_rows(&state.database, &rows).map_err(error)
 }
 
 #[tauri::command]
 pub fn apply_taxonomy_rows(
     state: State<'_, AppState>,
     rows: Vec<TaxonInputRow>,
-    options: Option<TaxonUpdateOptions>,
 ) -> CommandResult<TaxonomyOperationResult> {
-    taxonomy::apply_rows(&state.database, &rows, options.unwrap_or_default()).map_err(error)
+    taxonomy::apply_rows(&state.database, &rows).map_err(error)
+}
+
+#[tauri::command]
+pub fn parse_taxonomy_input_csv(
+    state: State<'_, AppState>,
+    input: String,
+) -> CommandResult<Vec<TaxonInputRow>> {
+    taxonomy::parse_taxonomy_input_csv(&state.database, &input).map_err(error)
+}
+
+#[tauri::command]
+pub fn get_taxonomy_formatted_update_template() -> CommandResult<String> {
+    taxonomy::taxonomy_formatted_update_template().map_err(error)
+}
+
+#[tauri::command]
+pub fn export_taxonomy_log(rows: Vec<TaxonRowOutcome>) -> CommandResult<String> {
+    taxonomy::taxonomy_log_csv(&rows).map_err(error)
+}
+
+#[tauri::command]
+pub fn get_taxonomy_name_separator(state: State<'_, AppState>) -> CommandResult<String> {
+    taxonomy::get_taxonomy_name_separator(&state.database).map_err(error)
+}
+
+#[tauri::command]
+pub fn set_taxonomy_name_separator(
+    state: State<'_, AppState>,
+    separator: String,
+) -> CommandResult<()> {
+    taxonomy::set_taxonomy_name_separator(&state.database, &separator).map_err(error)
 }
 
 #[tauri::command]

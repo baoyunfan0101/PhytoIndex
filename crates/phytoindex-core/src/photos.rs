@@ -25,8 +25,8 @@ pub use media::{
 };
 pub use operations::{
     PhotoOperation, PhotoOperationInput, PhotoOperationItem, PhotoOperationSource,
-    PhotoOperationStatus, export_photo_operation_inputs, get_photo_operation,
-    list_photo_operations, revert_photo_operation,
+    export_photo_operation_inputs, get_photo_operation, list_photo_operations,
+    revert_photo_operation,
 };
 use operations::{insert_photo_operation, insert_photo_operation_item};
 pub(crate) use page::{
@@ -708,8 +708,7 @@ fn taxon_filename(database: &Database, photo_id: i64) -> CoreResult<String> {
             JOIN taxon_names USING (taxon_id)
             WHERE photo_taxon_mapping.photo_id = ?1
               AND photo_taxon_mapping.status = 'matched'
-              AND taxon_names.name_kind = 1
-              AND taxon_names.is_accepted = 1
+              AND taxon_names.name_type = 'sci_name'
               AND NOT EXISTS (
                   SELECT 1
                   FROM photo_mapping_queue
@@ -1107,7 +1106,6 @@ mod tests {
         assert_eq!(operations[0].items[0].directory_relative_path, "");
         assert_eq!(operations[0].items[0].old_filename, "before.jpg");
         assert_eq!(operations[0].items[0].new_filename, "after.jpg");
-        assert_eq!(operations[0].status, PhotoOperationStatus::Applied);
 
         revert_photo_operation(&database, operations[0].operation_id).unwrap();
 
@@ -1120,14 +1118,14 @@ mod tests {
                 .filename,
             "before.jpg"
         );
-        let operation = list_photo_operations(&database, None, 10)
-            .unwrap()
-            .items
-            .remove(0);
-        assert_eq!(operation.status, PhotoOperationStatus::Reverted);
-        assert!(operation.reverted_at.is_some());
-        let error = revert_photo_operation(&database, operation.operation_id).unwrap_err();
-        assert!(error.to_string().contains("already reverted"));
+        assert!(
+            list_photo_operations(&database, None, 10)
+                .unwrap()
+                .items
+                .is_empty()
+        );
+        let error = revert_photo_operation(&database, operations[0].operation_id).unwrap_err();
+        assert!(error.to_string().contains("not found"));
     }
 
     #[test]
@@ -1180,8 +1178,8 @@ mod tests {
         connection
             .execute(
                 r#"
-                INSERT INTO taxon_names (taxon_id, name_kind, name, is_accepted)
-                VALUES (?, 1, 'Canis lupus', 1)
+                INSERT INTO taxon_names (taxon_id, name_type, name)
+                VALUES (?, 'sci_name', 'Canis lupus')
                 "#,
                 [taxon_id],
             )
@@ -1273,8 +1271,8 @@ mod tests {
         connection
             .execute(
                 r#"
-                INSERT INTO taxon_names (taxon_id, name_kind, name, is_accepted)
-                VALUES (?, 1, 'Canis lupus', 1)
+                INSERT INTO taxon_names (taxon_id, name_type, name)
+                VALUES (?, 'sci_name', 'Canis lupus')
                 "#,
                 [taxon_id],
             )
@@ -1327,8 +1325,8 @@ mod tests {
         connection
             .execute(
                 r#"
-                INSERT INTO taxon_names (taxon_id, name_kind, name, is_accepted)
-                VALUES (?, 1, 'Canis lupus', 1)
+                INSERT INTO taxon_names (taxon_id, name_type, name)
+                VALUES (?, 'sci_name', 'Canis lupus')
                 "#,
                 [taxon_id],
             )
@@ -1403,8 +1401,8 @@ mod tests {
         connection
             .execute(
                 r#"
-                INSERT INTO taxon_names (taxon_id, name_kind, name, is_accepted)
-                VALUES (?, 1, 'Canis lupus', 1)
+                INSERT INTO taxon_names (taxon_id, name_type, name)
+                VALUES (?, 'sci_name', 'Canis lupus')
                 "#,
                 [taxon_id],
             )

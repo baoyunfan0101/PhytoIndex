@@ -44,32 +44,6 @@ impl PhotoOperationSource {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum PhotoOperationStatus {
-    Applied,
-    Reverted,
-}
-
-impl PhotoOperationStatus {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Applied => "applied",
-            Self::Reverted => "reverted",
-        }
-    }
-
-    fn from_str(value: &str) -> CoreResult<Self> {
-        match value {
-            "applied" => Ok(Self::Applied),
-            "reverted" => Ok(Self::Reverted),
-            _ => Err(CoreError::InvalidArgument(format!(
-                "invalid photo operation status: {value}"
-            ))),
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PhotoOperationInput {
     pub row_number: usize,
@@ -92,10 +66,8 @@ pub struct PhotoOperation {
     pub source: PhotoOperationSource,
     pub root_path: String,
     pub input: Vec<PhotoOperationInput>,
-    pub status: PhotoOperationStatus,
     pub items: Vec<PhotoOperationItem>,
     pub applied_at: String,
-    pub reverted_at: Option<String>,
 }
 
 pub(super) fn insert_photo_operation(
@@ -108,8 +80,8 @@ pub(super) fn insert_photo_operation(
         .map_err(|error| CoreError::InvalidArgument(format!("invalid photo input: {error}")))?;
     transaction.execute(
         r#"
-        INSERT INTO photo_operations (source, root_path, input_json, status)
-        VALUES (?, ?, ?, 'applied')
+        INSERT INTO photo_operations (source, root_path, input_json)
+        VALUES (?, ?, ?)
         "#,
         params![source.as_str(), root_path, input_json],
     )?;
@@ -160,7 +132,7 @@ pub fn list_photo_operations(
     let mut headers = if let Some(operation_id) = operation_cursor {
         let mut statement = connection.prepare(
             r#"
-            SELECT operation_id, source, root_path, input_json, status, applied_at, reverted_at
+            SELECT operation_id, source, root_path, input_json, applied_at
             FROM photo_operations
             WHERE operation_id < ?1
             ORDER BY operation_id DESC
@@ -176,7 +148,7 @@ pub fn list_photo_operations(
     } else {
         let mut statement = connection.prepare(
             r#"
-            SELECT operation_id, source, root_path, input_json, status, applied_at, reverted_at
+            SELECT operation_id, source, root_path, input_json, applied_at
             FROM photo_operations
             ORDER BY operation_id DESC
             LIMIT ?1
@@ -214,7 +186,7 @@ pub fn get_photo_operation(
     connection
         .query_row(
             r#"
-            SELECT operation_id, source, root_path, input_json, status, applied_at, reverted_at
+            SELECT operation_id, source, root_path, input_json, applied_at
             FROM photo_operations
             WHERE operation_id = ?
             "#,
@@ -274,12 +246,6 @@ pub fn revert_photo_operation(database: &Database, operation_id: i64) -> CoreRes
         .map_err(|_| CoreError::InvalidArgument("photo workspace lock is poisoned".into()))?;
     let operation = get_photo_operation(database, operation_id)?
         .ok_or_else(|| CoreError::NotFound(format!("photo operation {operation_id}")))?;
-    if operation.status != PhotoOperationStatus::Applied {
-        return Err(CoreError::InvalidArgument(format!(
-            "photo operation {operation_id} is already {}",
-            operation.status.as_str()
-        )));
-    }
     let connection = database.connect()?;
     let root = library_root(&connection)?;
     if root.to_str() != Some(operation.root_path.as_str()) {
@@ -375,15 +341,11 @@ fn revert_photo_operation_database(
             [photo_id],
         )?;
     }
-    let updated = transaction.execute(
-        r#"
-        UPDATE photo_operations
-        SET status = 'reverted', reverted_at = CURRENT_TIMESTAMP
-        WHERE operation_id = ? AND status = 'applied'
-        "#,
+    let deleted = transaction.execute(
+        "DELETE FROM photo_operations WHERE operation_id = ?",
         [operation.operation_id],
     )?;
-    if updated != 1 {
+    if deleted != 1 {
         return Err(CoreError::InvalidArgument(format!(
             "photo operation {} is no longer applied",
             operation.operation_id
@@ -415,9 +377,7 @@ struct PhotoOperationHeader {
     source: String,
     root_path: String,
     input_json: String,
-    status: String,
     applied_at: String,
-    reverted_at: Option<String>,
 }
 
 fn photo_operation_header_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PhotoOperationHeader> {
@@ -426,9 +386,7 @@ fn photo_operation_header_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Photo
         source: row.get(1)?,
         root_path: row.get(2)?,
         input_json: row.get(3)?,
-        status: row.get(4)?,
-        applied_at: row.get(5)?,
-        reverted_at: row.get(6)?,
+        applied_at: row.get(4)?,
     })
 }
 
@@ -462,10 +420,8 @@ fn photo_operation_from_header(
         source: PhotoOperationSource::from_str(&header.source)?,
         root_path: header.root_path,
         input,
-        status: PhotoOperationStatus::from_str(&header.status)?,
         items,
         applied_at: header.applied_at,
-        reverted_at: header.reverted_at,
     })
 }
 

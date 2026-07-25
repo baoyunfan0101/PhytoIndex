@@ -89,12 +89,10 @@ fn replace_from_attached_database(
         ORDER BY rank, taxon_id;
 
         INSERT INTO taxon_names (
-            name_id, taxon_id, name_kind, name, is_accepted,
-            authority_year, category, source
+            name_id, taxon_id, name_type, name, authority_year, source
         )
         SELECT
-            name_id, taxon_id, name_kind, name, is_accepted,
-            authority_year, category, source
+            name_id, taxon_id, name_type, name, authority_year, source
         FROM taxonomy_base.taxon_names
         ORDER BY name_id;
         "#,
@@ -183,12 +181,10 @@ fn validate_base_database(path: &Path) -> CoreResult<()> {
         &[
             "name_id",
             "taxon_id",
-            "name_kind",
+            "name_type",
             "name",
             "normalized_name",
-            "is_accepted",
             "authority_year",
-            "category",
             "source",
         ],
         true,
@@ -243,9 +239,7 @@ fn taxonomy_base_metadata_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Taxon
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::taxonomy::{
-        TaxonInputRow, TaxonUpdateOptions, apply_rows, get_taxon_detail, list_taxonomy_operations,
-    };
+    use crate::taxonomy::{TaxonInputRow, apply_rows, get_taxon_detail, list_taxonomy_operations};
 
     #[test]
     fn replaces_taxonomy_preserves_base_ids_and_queues_all_photos() {
@@ -325,16 +319,9 @@ mod tests {
             &database,
             &[TaxonInputRow {
                 order: Some("New order".into()),
-                english: Some(crate::taxonomy::TaxonNameInput {
-                    name: "new order".into(),
-                    ..crate::taxonomy::TaxonNameInput::default()
-                }),
+                en_name: Some("new order".into()),
                 ..TaxonInputRow::default()
             }],
-            TaxonUpdateOptions {
-                allow_new_names: true,
-                ..TaxonUpdateOptions::default()
-            },
         )
         .unwrap();
         assert_eq!(rebased.operation_id, 1);
@@ -404,10 +391,6 @@ mod tests {
                     ..TaxonInputRow::default()
                 },
             ],
-            TaxonUpdateOptions {
-                allow_new_taxa: true,
-                ..TaxonUpdateOptions::default()
-            },
         )
         .unwrap();
         assert_eq!(result.succeeded_rows, 3);
@@ -434,12 +417,10 @@ mod tests {
                 CREATE TABLE taxon_names (
                     name_id INTEGER PRIMARY KEY AUTOINCREMENT,
                     taxon_id INTEGER NOT NULL,
-                    name_kind INTEGER NOT NULL,
+                    name_type TEXT NOT NULL,
                     name TEXT NOT NULL,
                     normalized_name TEXT GENERATED ALWAYS AS (lower(name)) STORED,
-                    is_accepted INTEGER NOT NULL DEFAULT 0,
                     authority_year TEXT,
-                    category TEXT,
                     source TEXT,
                     FOREIGN KEY (taxon_id) REFERENCES taxa(taxon_id)
                 );
@@ -449,10 +430,10 @@ mod tests {
                     (101, NULL, 1, NULL),
                     (102, 101, 2, 'Recent');
                 INSERT INTO taxon_names (
-                    name_id, taxon_id, name_kind, name, is_accepted
+                    name_id, taxon_id, name_type, name
                 ) VALUES
-                    (1001, 101, 1, 'New kingdom', 1),
-                    (1002, 102, 1, 'New order', 1);
+                    (1001, 101, 'sci_name', 'New kingdom'),
+                    (1002, 102, 'sci_name', 'New order');
                 "#,
             )
             .unwrap();
@@ -474,12 +455,10 @@ mod tests {
                 CREATE TABLE taxon_names (
                     name_id INTEGER PRIMARY KEY AUTOINCREMENT,
                     taxon_id INTEGER NOT NULL,
-                    name_kind INTEGER NOT NULL,
+                    name_type TEXT NOT NULL,
                     name TEXT NOT NULL,
                     normalized_name TEXT GENERATED ALWAYS AS (lower(name)) STORED,
-                    is_accepted INTEGER NOT NULL DEFAULT 0,
                     authority_year TEXT,
-                    category TEXT,
                     source TEXT,
                     FOREIGN KEY (taxon_id) REFERENCES taxa(taxon_id)
                 );
@@ -489,10 +468,10 @@ mod tests {
                     (201, NULL, 1, NULL),
                     (202, 201, 3, NULL);
                 INSERT INTO taxon_names (
-                    name_id, taxon_id, name_kind, name, is_accepted
+                    name_id, taxon_id, name_type, name
                 ) VALUES
-                    (2001, 201, 1, 'Invalid kingdom', 1),
-                    (2002, 202, 1, 'Invalid family', 1);
+                    (2001, 201, 'sci_name', 'Invalid kingdom'),
+                    (2002, 202, 'sci_name', 'Invalid family');
                 "#,
             )
             .unwrap();
@@ -503,7 +482,7 @@ mod tests {
             .connect()
             .unwrap()
             .query_row(
-                "SELECT taxon_id FROM taxon_names WHERE name_kind = 1 AND name = ?",
+                "SELECT taxon_id FROM taxon_names WHERE name_type = 'sci_name' AND name = ?",
                 [name],
                 |row| row.get(0),
             )

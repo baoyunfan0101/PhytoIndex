@@ -12,7 +12,7 @@ use crate::photos::{
     invalid_photo_cursor, photo_page_limit,
 };
 use crate::taxonomy::{
-    TaxonDisplayNames, TaxonRank, TaxonSearchResult, TaxonSummary, TaxonomyNameKind, search_taxa,
+    TaxonDisplayNames, TaxonRank, TaxonSearchResult, TaxonSummary, TaxonomyNameType, search_taxa,
     search_taxa_with_connection,
 };
 
@@ -61,9 +61,8 @@ pub struct PhotoTaxonMapping {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PhotoMatchedName {
     pub name_id: i64,
-    pub name_kind: TaxonomyNameKind,
+    pub name_type: TaxonomyNameType,
     pub name: String,
-    pub is_accepted: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -604,10 +603,12 @@ pub fn suggest(
         .into_iter()
         .filter(|result| {
             mode != "binomial"
-                || result
-                    .matches
-                    .iter()
-                    .any(|value| value.name_kind == TaxonomyNameKind::Scientific)
+                || result.matches.iter().any(|value| {
+                    matches!(
+                        value.name_type,
+                        TaxonomyNameType::SciName | TaxonomyNameType::Synonym
+                    )
+                })
         })
         .collect())
 }
@@ -946,13 +947,13 @@ fn usage_taxon_select() -> &'static str {
     SELECT taxa.taxon_id, taxa.rank,
            (SELECT name FROM taxon_names
             WHERE taxon_names.taxon_id = taxa.taxon_id
-              AND name_kind = 1 AND is_accepted = 1) AS scientific_name,
+              AND name_type = 'sci_name') AS scientific_name,
            (SELECT name FROM taxon_names
             WHERE taxon_names.taxon_id = taxa.taxon_id
-              AND name_kind = 2 AND is_accepted = 1) AS english_name,
+              AND name_type = 'en_name') AS english_name,
            (SELECT name FROM taxon_names
             WHERE taxon_names.taxon_id = taxa.taxon_id
-              AND name_kind = 3 AND is_accepted = 1) AS chinese_name,
+              AND name_type = 'zh_name') AS chinese_name,
            COALESCE(photo_taxon_usage.direct_photo_count, 0) AS direct_photo_count,
            COALESCE(photo_taxon_usage.subtree_photo_count, 0) AS subtree_photo_count
     FROM taxa
@@ -972,9 +973,9 @@ fn usage_taxon_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PhotoTaxonU
             )
         })?,
         names: TaxonDisplayNames {
-            scientific: row.get(2)?,
-            english: row.get(3)?,
-            chinese: row.get(4)?,
+            sci_name: row.get(2)?,
+            en_name: row.get(3)?,
+            zh_name: row.get(4)?,
         },
         direct_photo_count: row.get(5)?,
         subtree_photo_count: row.get(6)?,
@@ -1049,9 +1050,8 @@ fn photo_candidate(result: TaxonSearchResult) -> PhotoTaxonCandidate {
             .into_iter()
             .map(|name| PhotoMatchedName {
                 name_id: name.name_id,
-                name_kind: name.name_kind,
+                name_type: name.name_type,
                 name: name.name,
-                is_accepted: name.is_accepted,
             })
             .collect(),
     }
@@ -1281,8 +1281,7 @@ mod tests {
     use super::*;
     use crate::photos::{open_library, refresh_directory};
     use crate::taxonomy::{
-        TaxonInputRow, TaxonNameInput, TaxonUpdateInput, TaxonUpdateOptions, apply_rows,
-        execute_custom_taxonomy_sql, update_taxon,
+        TaxonInputRow, TaxonUpdateInput, apply_rows, execute_custom_taxonomy_sql, update_taxon,
     };
     use std::fs;
 
@@ -1342,16 +1341,7 @@ mod tests {
                 ..Default::default()
             },
         ];
-        apply_rows(
-            &database,
-            &rows,
-            TaxonUpdateOptions {
-                allow_new_names: true,
-                allow_new_taxa: true,
-                ..Default::default()
-            },
-        )
-        .unwrap();
+        apply_rows(&database, &rows).unwrap();
         let library = open_library(&database, root.path().to_str().unwrap()).unwrap();
         refresh_directory(&database, library.root_directory_id).unwrap();
         let mut progress = |_: u64, _: Option<u64>, _: &str| {};
@@ -1362,7 +1352,7 @@ mod tests {
         let species_id = matched
             .candidates
             .iter()
-            .find(|candidate| candidate.summary.names.scientific.as_deref() == Some("Canis lupus"))
+            .find(|candidate| candidate.summary.names.sci_name.as_deref() == Some("Canis lupus"))
             .unwrap()
             .summary
             .taxon_id;
@@ -1414,8 +1404,8 @@ mod tests {
             connection
                 .execute(
                     r#"
-                    INSERT INTO taxon_names (taxon_id, name_kind, name, is_accepted)
-                    VALUES (?, 1, 'Shared name', 1)
+                    INSERT INTO taxon_names (taxon_id, name_type, name)
+                    VALUES (?, 'sci_name', 'Shared name')
                     "#,
                     [taxon_id],
                 )
@@ -1460,14 +1450,14 @@ mod tests {
         let database = Database::open(data.path().join("vividarium.db")).unwrap();
         let connection = database.connect().unwrap();
         connection
-            .execute("INSERT INTO taxa (rank) VALUES (5)", [])
+            .execute("INSERT INTO taxa (rank) VALUES (1)", [])
             .unwrap();
         let taxon_id = connection.last_insert_rowid();
         connection
             .execute(
                 r#"
-                INSERT INTO taxon_names (taxon_id, name_kind, name, is_accepted)
-                VALUES (?, 1, 'Felis catus', 1)
+                INSERT INTO taxon_names (taxon_id, name_type, name)
+                VALUES (?, 'sci_name', 'Felis catus')
                 "#,
                 [taxon_id],
             )
@@ -1509,27 +1499,27 @@ mod tests {
         let database = Database::open(data.path().join("vividarium.db")).unwrap();
         let connection = database.connect().unwrap();
         connection
-            .execute("INSERT INTO taxa (rank) VALUES (5)", [])
+            .execute("INSERT INTO taxa (rank) VALUES (1)", [])
             .unwrap();
         let canis_taxon_id = connection.last_insert_rowid();
         connection
             .execute(
                 r#"
-                INSERT INTO taxon_names (taxon_id, name_kind, name, is_accepted)
-                VALUES (?, 1, 'Canis lupus', 1)
+                INSERT INTO taxon_names (taxon_id, name_type, name)
+                VALUES (?, 'sci_name', 'Canis lupus')
                 "#,
                 [canis_taxon_id],
             )
             .unwrap();
         connection
-            .execute("INSERT INTO taxa (rank) VALUES (5)", [])
+            .execute("INSERT INTO taxa (rank) VALUES (1)", [])
             .unwrap();
         let felis_taxon_id = connection.last_insert_rowid();
         connection
             .execute(
                 r#"
-                INSERT INTO taxon_names (taxon_id, name_kind, name, is_accepted)
-                VALUES (?, 1, 'Felis catus', 1)
+                INSERT INTO taxon_names (taxon_id, name_type, name)
+                VALUES (?, 'sci_name', 'Felis catus')
                 "#,
                 [felis_taxon_id],
             )
@@ -1560,16 +1550,7 @@ mod tests {
             TaxonUpdateInput {
                 taxon_id: felis_taxon_id,
                 geological_range: None,
-                scientific: None,
-                english: Some(TaxonNameInput {
-                    name: "domestic cat".into(),
-                    is_accepted: Some(true),
-                    ..Default::default()
-                }),
-                chinese: None,
-            },
-            TaxonUpdateOptions {
-                allow_new_names: true,
+                en_name: Some("domestic cat".into()),
                 ..Default::default()
             },
         )
@@ -1611,8 +1592,8 @@ mod tests {
         connection
             .execute(
                 r#"
-                INSERT INTO taxon_names (taxon_id, name_kind, name, is_accepted)
-                VALUES (?, 1, 'Parent', 1)
+                INSERT INTO taxon_names (taxon_id, name_type, name)
+                VALUES (?, 'sci_name', 'Parent')
                 "#,
                 [parent_taxon_id],
             )
@@ -1629,8 +1610,8 @@ mod tests {
             connection
                 .execute(
                     r#"
-                    INSERT INTO taxon_names (taxon_id, name_kind, name, is_accepted)
-                    VALUES (?, 1, ?, 1)
+                    INSERT INTO taxon_names (taxon_id, name_type, name)
+                    VALUES (?, 'sci_name', ?)
                     "#,
                     params![child_taxon_id, name],
                 )
