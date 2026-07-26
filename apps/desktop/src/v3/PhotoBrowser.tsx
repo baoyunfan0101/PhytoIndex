@@ -7,7 +7,6 @@ import {
   Segmented,
   VirtualGrid,
   VirtualList,
-  useStableSelection,
 } from "./components";
 import { PhotoContextMenu } from "./PhotoContextMenu";
 
@@ -42,7 +41,12 @@ export function PhotoBrowser({
   onOpenMappingEditor: (photo: Photo) => void;
   onPhotoChanged?: (photo: Photo) => void;
 }) {
-  const [selected, setSelected] = useStableSelection(photos, (photo) => photo.photo_id);
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const selected = useMemo(
+    () => photos.find((photo) => photo.photo_id === selectedId) ?? photos[0] ?? null,
+    [photos, selectedId],
+  );
+  const setSelected = (photo: Photo) => setSelectedId(photo.photo_id);
   const [mode, setMode] = useState<DisplayMode>("Thumbnails");
   const [context, setContext] = useState<ContextState | null>(null);
 

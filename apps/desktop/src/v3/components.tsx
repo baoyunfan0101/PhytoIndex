@@ -9,7 +9,6 @@ import {
 } from "lucide-react";
 import {
   useEffect,
-  useMemo,
   useRef,
   useState,
   type CSSProperties,
@@ -394,16 +393,4 @@ export function Disclosure({
 
 export function Busy({ label = "Loading" }: { label?: string }) {
   return <div className="busy"><LoaderCircle className="spin" size={15} /><span>{label}</span></div>;
-}
-
-export function useStableSelection<T>(
-  items: T[],
-  getId: (item: T) => number,
-): [T | null, (item: T | null) => void] {
-  const [selectedId, setSelectedId] = useState<number | null>(null);
-  const selected = useMemo(
-    () => items.find((item) => getId(item) === selectedId) ?? items[0] ?? null,
-    [getId, items, selectedId],
-  );
-  return [selected, (item) => setSelectedId(item ? getId(item) : null)];
 }
