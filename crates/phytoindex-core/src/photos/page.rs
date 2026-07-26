@@ -33,6 +33,11 @@ pub(crate) enum PhotoCursor {
         status: String,
         photo_id: i64,
     },
+    MappingStatusSearch {
+        status: String,
+        query: String,
+        photo_id: i64,
+    },
     FilenameSearch {
         query: String,
         photo_id: i64,

@@ -603,6 +603,28 @@ pub fn get_photo_mapping(
 }
 
 #[tauri::command]
+pub fn clear_photo_mapping(
+    state: State<'_, AppState>,
+    photo_id: i64,
+) -> CommandResult<PhotoTaxonMapping> {
+    mapping::clear_photo_mapping(&state.database, photo_id).map_err(error)
+}
+
+#[tauri::command]
+pub fn set_photo_mapping(
+    state: State<'_, AppState>,
+    photo_id: i64,
+    taxon_id: i64,
+) -> CommandResult<PhotoTaxonMapping> {
+    mapping::set_photo_mapping(&state.database, photo_id, taxon_id).map_err(error)
+}
+
+#[tauri::command]
+pub fn remap_photo(state: State<'_, AppState>, photo_id: i64) -> CommandResult<PhotoTaxonMatch> {
+    mapping::remap_photo(&state.database, photo_id).map_err(error)
+}
+
+#[tauri::command]
 pub fn list_taxon_photos(
     state: State<'_, AppState>,
     taxon_id: i64,
@@ -675,6 +697,24 @@ pub fn list_photos_by_mapping_status(
     mapping::list_photos_by_mapping_status(
         &state.database,
         status,
+        cursor.as_deref(),
+        limit.unwrap_or(50),
+    )
+    .map_err(error)
+}
+
+#[tauri::command]
+pub fn search_photos_by_mapping_status(
+    state: State<'_, AppState>,
+    status: PhotoMappingListStatus,
+    query: String,
+    cursor: Option<String>,
+    limit: Option<usize>,
+) -> CommandResult<PhotoPage<PhotoMappingListItem>> {
+    mapping::search_photos_by_mapping_status(
+        &state.database,
+        status,
+        &query,
         cursor.as_deref(),
         limit.unwrap_or(50),
     )

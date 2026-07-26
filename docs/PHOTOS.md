@@ -324,11 +324,11 @@ pub fn search_photos(
 | `limit` | Requested maximum number of photos. |
 
 Combines filename matches with photos assigned to matching taxa. The taxonomy
-search relation is joined directly to `photo_taxon_mapping`; it is not first
-materialized as a bounded taxon ID list. Taxon matches include photos on
-descendant taxa. Duplicate photos are removed and results are ordered by
-`photo_id`. Blank input returns an empty page. The cursor is bound to the
-normalized query.
+search relation is joined directly to the current matched mapping relation; it
+is not first materialized as a bounded taxon ID list. Taxon matches include
+photos on descendant taxa. Duplicate photos are removed and results are
+ordered by `photo_id`. Blank input returns an empty page. The cursor is bound
+to the normalized query.
 
 This is the backend source for a general-search PhotoSet. PhotoSet itself is a
 frontend window concept and is not stored by the backend.
@@ -570,7 +570,7 @@ source row order. The returned archive table has `photo_id` and
 | `processing` | The photo is waiting for background knowledge-base matching. |
 | `unmatched` | Matching found no candidate taxon. |
 | `ambiguous` | The highest-priority matching dimension found more than one taxon. |
-| `matched` | Matching found one taxon, or the user selected one ambiguous candidate. |
+| `matched` | Matching found one taxon, or the user selected or forced a taxon. |
 
 There is no `resolved_by` field. A selected taxon remains selected after
 rematching only while it is still a current candidate.
@@ -610,12 +610,16 @@ that selection is being revalidated.
 | `matched_names` | `Vec<PhotoMatchedName>` | Taxonomy names responsible for this candidate. |
 | `accepted_names` | `TaxonDisplayNames` | Current `sci_name`, `en_name`, and `zh_name`. |
 
+Candidates and matched-name snapshots are persisted only for stored
+`ambiguous` mappings. They are replaced atomically by each automatic mapping
+run and removed when the mapping becomes `matched` or `unmatched`.
+
 ### `PhotoTaxonMatch`
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `mapping` | `PhotoTaxonMapping` | Current stored or synthesized mapping state. |
-| `candidates` | `Vec<PhotoTaxonCandidate>` | Current candidates for the photo filename. |
+| `mapping` | `PhotoTaxonMapping` | Current logical mapping state. |
+| `candidates` | `Vec<PhotoTaxonCandidate>` | Persisted candidates when the current status is `ambiguous`; otherwise empty. |
 
 ### `PhotoTaxonUsage`
 
@@ -727,15 +731,16 @@ pub fn get_photo_taxon_match(
 | --- | --- |
 | `photo_id` | Photo whose current mapping and candidates are requested. |
 
-Returns the current mapping and freshly evaluated candidates. A missing photo
-is an error.
+Returns the current mapping and its persisted candidates. Candidates are
+returned only for a current `ambiguous` mapping. A missing photo is an error.
 
 The configured filename parser returns six possible names: scientific and
 Chinese names at species, genus, and family ranks. Each scientific field
 queries `sci_name` and `synonym` together; each Chinese field queries `zh_name`
 and `zh_alias` together. Results within one field are merged and deduplicated
 by taxon ID. The first configured field producing candidates wins. One
-candidate is mapped automatically; several candidates are `ambiguous`.
+candidate is mapped automatically; several candidates are persisted with an
+`ambiguous` mapping.
 
 The default priority is `species_sci`, `species_zh`, `genus_sci`, `genus_zh`,
 `family_sci`, `family_zh`.
@@ -771,6 +776,46 @@ pub fn select_photo_taxon(
 
 Returns a `matched` mapping. Selecting a taxon that is not a current candidate
 is an error.
+
+#### `clear_photo_mapping`
+
+```rust
+pub fn clear_photo_mapping(
+    database: &Database,
+    photo_id: i64,
+) -> CoreResult<PhotoTaxonMapping>
+```
+
+Removes the current taxon binding and records the photo as `unmatched`.
+Persisted candidates and any queue entry are removed. A missing photo is an
+error.
+
+#### `set_photo_mapping`
+
+```rust
+pub fn set_photo_mapping(
+    database: &Database,
+    photo_id: i64,
+    taxon_id: i64,
+) -> CoreResult<PhotoTaxonMapping>
+```
+
+Forces the photo to `matched` with any existing taxon. The taxon does not need
+to be an automatic candidate. This also replaces an existing binding and
+removes persisted candidates and any queue entry.
+
+#### `remap_photo`
+
+```rust
+pub fn remap_photo(
+    database: &Database,
+    photo_id: i64,
+) -> CoreResult<PhotoTaxonMatch>
+```
+
+Runs the configured filename parser and six-field matching engine for one
+photo, clears its queue entry, and returns the resulting mapping. Persisted
+candidates are included when the result is `ambiguous`.
 
 #### `process_pending_photo_matches`
 
@@ -911,6 +956,30 @@ pub fn list_photos_by_mapping_status(
 
 Returns photos in the requested logical status ordered by `photo_id`.
 
+#### `search_photos_by_mapping_status`
+
+```rust
+pub fn search_photos_by_mapping_status(
+    database: &Database,
+    status: PhotoMappingListStatus,
+    query: &str,
+    cursor: Option<&str>,
+    limit: usize,
+) -> CoreResult<PhotoPage<PhotoMappingListItem>>
+```
+
+| Parameter | Description |
+| --- | --- |
+| `status` | Logical status to search. |
+| `query` | Filename or taxonomy query. |
+| `cursor` | `None` for the first page, otherwise the previous page's `next_cursor`. |
+| `limit` | Requested maximum number of photos. |
+
+For `matched`, this uses the same combined filename and taxonomy search
+relation as `search_photos`, constrained to current matched photos. Other
+statuses search filenames only. Results are ordered by `photo_id`; the cursor
+is bound to both the normalized query and status.
+
 ## Desktop interface
 
 The desktop adapter supplies the current database and converts core errors to
@@ -959,12 +1028,16 @@ strings. Parameter names below are the camel-case keys used in JavaScript
 | `search_photo_taxa` | `query: string`, optional `cursor: string`, optional `limit: number` | `PhotoPage<TaxonSearchResult>` |
 | `suggest_photo_taxa` | `query: string`, optional `limit: number` | `TaxonSuggestion[]` |
 | `get_photo_mapping` | `photoId: number` | `PhotoTaxonMapping \| null` |
+| `clear_photo_mapping` | `photoId: number` | `PhotoTaxonMapping` |
+| `set_photo_mapping` | `photoId: number`, `taxonId: number` | `PhotoTaxonMapping` |
+| `remap_photo` | `photoId: number` | `PhotoTaxonMatch` |
 | `list_taxon_photos` | `taxonId: number`, optional `cursor: string`, optional `limit: number` | `PhotoPage<Photo>` |
 | `get_photo_taxon_match` | `photoId: number` | `PhotoTaxonMatch` |
 | `select_photo_taxon` | `photoId: number`, `taxonId: number` | `PhotoTaxonMapping` |
 | `get_photo_taxon_node` | optional `taxonId: number`, optional `showEmpty: boolean` | `PhotoTaxonNode` |
 | `browse_photo_taxon` | optional `taxonId: number`, optional `showEmpty: boolean`, optional `includeDescendants: boolean`, optional `cursor: string`, optional `limit: number` | `PhotoPage<PhotoTaxonItem>` |
 | `list_photos_by_mapping_status` | `status: PhotoMappingListStatus`, optional `cursor: string`, optional `limit: number` | `PhotoPage<PhotoMappingListItem>` |
+| `search_photos_by_mapping_status` | `status: PhotoMappingListStatus`, `query: string`, optional `cursor: string`, optional `limit: number` | `PhotoPage<PhotoMappingListItem>` |
 | `get_operations_status` | none | `Record<string, OperationState>` |
 
 Desktop defaults:
@@ -980,6 +1053,7 @@ Desktop defaults:
 - `browse_photo_taxon.show_empty = false`
 - `browse_photo_taxon.include_descendants = true`
 - `list_photos_by_mapping_status.limit = 50`
+- `search_photos_by_mapping_status.limit = 50`
 
 `refresh_photo_directory` and `start_photo_mapping` schedule background work
 and return immediately. Their `OperationState` has:

@@ -139,6 +139,45 @@ CREATE TABLE IF NOT EXISTS photo_taxon_mapping (
     FOREIGN KEY (taxon_id) REFERENCES taxa(taxon_id) ON DELETE SET NULL
 );
 
+CREATE TABLE IF NOT EXISTS photo_taxon_candidates (
+    photo_id INTEGER NOT NULL,
+    taxon_id INTEGER NOT NULL,
+    PRIMARY KEY (photo_id, taxon_id),
+    FOREIGN KEY (photo_id)
+        REFERENCES photo_taxon_mapping(photo_id) ON DELETE CASCADE,
+    FOREIGN KEY (taxon_id) REFERENCES taxa(taxon_id) ON DELETE CASCADE
+) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS photo_taxon_candidate_names (
+    photo_id INTEGER NOT NULL,
+    taxon_id INTEGER NOT NULL,
+    name_id INTEGER NOT NULL,
+    name_type INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    PRIMARY KEY (photo_id, taxon_id, name_id),
+    CHECK (name_type BETWEEN 1 AND 6),
+    CHECK (length(trim(name)) > 0),
+    FOREIGN KEY (photo_id, taxon_id)
+        REFERENCES photo_taxon_candidates(photo_id, taxon_id) ON DELETE CASCADE
+) WITHOUT ROWID;
+
+CREATE TRIGGER IF NOT EXISTS photo_taxon_candidates_bi
+BEFORE INSERT ON photo_taxon_candidates
+WHEN NOT EXISTS (
+    SELECT 1
+    FROM photo_taxon_mapping
+    WHERE photo_id = new.photo_id
+      AND status = 'ambiguous'
+) BEGIN
+    SELECT RAISE(ABORT, 'photo candidates require an ambiguous mapping');
+END;
+
+CREATE TRIGGER IF NOT EXISTS photo_taxon_mapping_au_candidates
+AFTER UPDATE OF status ON photo_taxon_mapping
+WHEN new.status != 'ambiguous' BEGIN
+    DELETE FROM photo_taxon_candidates WHERE photo_id = new.photo_id;
+END;
+
 CREATE TABLE IF NOT EXISTS photo_taxon_usage (
     taxon_id INTEGER PRIMARY KEY,
     direct_photo_count INTEGER NOT NULL,
@@ -196,9 +235,17 @@ WHERE name = 'taxa';
 CREATE TRIGGER IF NOT EXISTS taxa_bd_photo_mapping
 BEFORE DELETE ON taxa BEGIN
     INSERT INTO photo_mapping_queue (photo_id, reason)
-    SELECT photo_id, 'taxonomy'
-    FROM photo_taxon_mapping
-    WHERE taxon_id = old.taxon_id
+    SELECT affected.photo_id, 'taxonomy'
+    FROM (
+        SELECT photo_id
+        FROM photo_taxon_mapping
+        WHERE taxon_id = old.taxon_id
+        UNION
+        SELECT photo_id
+        FROM photo_taxon_candidates
+        WHERE taxon_id = old.taxon_id
+    ) AS affected
+    WHERE true
     ON CONFLICT(photo_id) DO UPDATE SET reason = excluded.reason;
     UPDATE photo_taxon_usage
     SET direct_photo_count = direct_photo_count
@@ -359,6 +406,8 @@ CREATE INDEX IF NOT EXISTS idx_photo_taxon_mapping_taxon
     ON photo_taxon_mapping(taxon_id, photo_id);
 CREATE INDEX IF NOT EXISTS idx_photo_taxon_mapping_status
     ON photo_taxon_mapping(status, photo_id);
+CREATE INDEX IF NOT EXISTS idx_photo_taxon_candidates_taxon
+    ON photo_taxon_candidates(taxon_id, photo_id);
 CREATE INDEX IF NOT EXISTS idx_photo_taxon_usage_subtree
     ON photo_taxon_usage(subtree_photo_count, taxon_id);
 CREATE INDEX IF NOT EXISTS idx_photo_mapping_queue_reason
@@ -403,6 +452,8 @@ mod tests {
             "photo_metadata",
             "photo_filenames_fts",
             "photo_taxon_mapping",
+            "photo_taxon_candidates",
+            "photo_taxon_candidate_names",
             "photo_taxon_usage",
             "photo_mapping_queue",
             "photo_operations",
@@ -628,6 +679,93 @@ mod tests {
 
         assert_eq!(current_count("current_photo_taxon_mapping"), 0);
         assert_eq!(current_count("current_photo_taxon_usage"), 0);
+    }
+
+    #[test]
+    fn ambiguous_candidates_are_constrained_and_follow_taxon_deletion() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = Database::open(directory.path().join("vividarium.db")).unwrap();
+        let connection = database.connect().unwrap();
+        connection
+            .execute_batch(
+                r#"
+                INSERT INTO photo_directories (
+                    directory_id, parent_directory_id, name, relative_path
+                ) VALUES (1, NULL, '', '');
+                INSERT INTO photos (
+                    photo_id, directory_id, filename, file_size, modified_at_ns
+                ) VALUES (1, 1, 'ambiguous.jpg', 1, 1);
+                INSERT INTO taxa (taxon_id, rank) VALUES (1, 5), (2, 5);
+                INSERT INTO taxon_names (name_id, taxon_id, name_type, name)
+                VALUES (1, 1, 1, 'Shared'), (2, 2, 1, 'Shared');
+                INSERT INTO photo_taxon_mapping (photo_id, taxon_id, status)
+                VALUES (1, NULL, 'ambiguous');
+                INSERT INTO photo_taxon_candidates (photo_id, taxon_id)
+                VALUES (1, 1), (1, 2);
+                INSERT INTO photo_taxon_candidate_names (
+                    photo_id, taxon_id, name_id, name_type, name
+                )
+                VALUES (1, 1, 1, 1, 'Shared'), (1, 2, 2, 1, 'Shared');
+                "#,
+            )
+            .unwrap();
+        connection
+            .execute(
+                "UPDATE photo_taxon_mapping SET status = 'unmatched' WHERE photo_id = 1",
+                [],
+            )
+            .unwrap();
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM photo_taxon_candidates", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap(),
+            0
+        );
+        assert!(
+            connection
+                .execute(
+                    "INSERT INTO photo_taxon_candidates (photo_id, taxon_id) VALUES (1, 1)",
+                    [],
+                )
+                .is_err()
+        );
+        connection
+            .execute_batch(
+                r#"
+                UPDATE photo_taxon_mapping
+                SET status = 'ambiguous'
+                WHERE photo_id = 1;
+                INSERT INTO photo_taxon_candidates (photo_id, taxon_id)
+                VALUES (1, 1), (1, 2);
+                INSERT INTO photo_taxon_candidate_names (
+                    photo_id, taxon_id, name_id, name_type, name
+                )
+                VALUES (1, 1, 1, 1, 'Shared'), (1, 2, 2, 1, 'Shared');
+                DELETE FROM taxa WHERE taxon_id = 1;
+                "#,
+            )
+            .unwrap();
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT taxon_id FROM photo_taxon_candidates WHERE photo_id = 1",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            2
+        );
+        assert!(
+            connection
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM photo_mapping_queue WHERE photo_id = 1)",
+                    [],
+                    |row| row.get::<_, bool>(0),
+                )
+                .unwrap()
+        );
     }
 
     #[test]

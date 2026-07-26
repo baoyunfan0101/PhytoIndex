@@ -6,6 +6,11 @@ use super::{
 use crate::models::{Photo, PhotoPage};
 use crate::{CoreResult, Database};
 
+pub(crate) struct PhotoSearchRelation {
+    pub sql: String,
+    pub params: Vec<SqlValue>,
+}
+
 pub fn search_photos_by_filename(
     database: &Database,
     query: &str,
@@ -107,49 +112,21 @@ pub fn search_photos(
     };
     let limit = photo_page_limit(limit);
     let connection = database.connect()?;
-    let taxonomy_relation = crate::taxonomy::taxon_search_relation(&connection, &query)?;
-    let filename_match = if query.chars().count() >= 3 {
-        "SELECT rowid FROM photo_filenames_fts WHERE photo_filenames_fts MATCH ?"
-    } else {
-        "SELECT photo_id FROM photos WHERE filename LIKE ? ESCAPE '\\'"
-    };
-    let filename_value = if query.chars().count() >= 3 {
-        quoted_fts_match(&query)
-    } else {
-        format!("%{}%", escape_like(&query))
-    };
-    let mut parameters = taxonomy_relation.params;
-    parameters.push(SqlValue::Text(filename_value));
+    let search_relation = photo_search_relation(&connection, &query, true)?;
+    let mut parameters = search_relation.params;
     parameters.push(SqlValue::Integer(after_photo_id));
     let after_parameter = parameters.len();
     parameters.push(SqlValue::Integer(limit as i64 + 1));
     let limit_parameter = parameters.len();
     let sql = crate::photos::photo_select(&format!(
         r#"
-        JOIN (
-            WITH RECURSIVE {taxonomy_ctes},
-            descendants(taxon_id) AS (
-                SELECT taxon_id FROM ranked_taxa
-                UNION
-                SELECT taxa.taxon_id
-                FROM taxa
-                JOIN descendants
-                  ON taxa.parent_taxon_id = descendants.taxon_id
-            ),
-            matched_photos(photo_id) AS (
-                {filename_match}
-                UNION
-                SELECT current_photo_taxon_mapping.photo_id
-                FROM current_photo_taxon_mapping
-                JOIN descendants USING (taxon_id)
-            )
-            SELECT photo_id FROM matched_photos
-        ) AS search_matches ON search_matches.photo_id = photos.photo_id
+        JOIN ({search_relation}) AS search_matches
+          ON search_matches.photo_id = photos.photo_id
         WHERE photos.photo_id > ?{after_parameter}
         ORDER BY photos.photo_id
         LIMIT ?{limit_parameter}
         "#,
-        taxonomy_ctes = taxonomy_relation.cte_sql,
+        search_relation = search_relation.sql,
     ));
     let mut statement = connection.prepare(&sql)?;
     let rows = statement.query_map(params_from_iter(parameters), crate::db::photo_from_row)?;
@@ -169,6 +146,57 @@ pub fn search_photos(
         None
     };
     Ok(PhotoPage { items, next_cursor })
+}
+
+pub(crate) fn photo_search_relation(
+    connection: &rusqlite::Connection,
+    query: &str,
+    include_taxonomy: bool,
+) -> CoreResult<PhotoSearchRelation> {
+    let filename_match = if query.chars().count() >= 3 {
+        "SELECT rowid AS photo_id FROM photo_filenames_fts WHERE photo_filenames_fts MATCH ?"
+    } else {
+        "SELECT photo_id FROM photos WHERE filename LIKE ? ESCAPE '\\'"
+    };
+    let filename_value = if query.chars().count() >= 3 {
+        quoted_fts_match(query)
+    } else {
+        format!("%{}%", escape_like(query))
+    };
+    if !include_taxonomy {
+        return Ok(PhotoSearchRelation {
+            sql: filename_match.into(),
+            params: vec![SqlValue::Text(filename_value)],
+        });
+    }
+    let taxonomy_relation = crate::taxonomy::taxon_search_relation(connection, query)?;
+    let mut parameters = taxonomy_relation.params;
+    parameters.push(SqlValue::Text(filename_value));
+    Ok(PhotoSearchRelation {
+        sql: format!(
+            r#"
+        WITH RECURSIVE {taxonomy_ctes},
+            descendants(taxon_id) AS (
+                SELECT taxon_id FROM ranked_taxa
+                UNION
+                SELECT taxa.taxon_id
+                FROM taxa
+                JOIN descendants
+                  ON taxa.parent_taxon_id = descendants.taxon_id
+            ),
+            matched_photos(photo_id) AS (
+                {filename_match}
+                UNION
+                SELECT current_photo_taxon_mapping.photo_id
+                FROM current_photo_taxon_mapping
+                JOIN descendants USING (taxon_id)
+            )
+        SELECT photo_id FROM matched_photos
+        "#,
+            taxonomy_ctes = taxonomy_relation.cte_sql,
+        ),
+        params: parameters,
+    })
 }
 
 fn quoted_fts_match(value: &str) -> String {

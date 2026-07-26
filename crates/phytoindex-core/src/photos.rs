@@ -39,6 +39,7 @@ pub(crate) use page::{
     PhotoCursor, PhotoPageSection, decode_photo_cursor, encode_photo_cursor, invalid_photo_cursor,
     photo_page_limit,
 };
+pub(crate) use search::photo_search_relation;
 pub use search::{search_photos, search_photos_by_filename};
 
 const IMAGE_EXTENSIONS: &[&str] = &[
@@ -1459,7 +1460,7 @@ mod tests {
         let photo = list_photos(&database).unwrap().remove(0);
         let mut progress = |_: u64, _: Option<u64>, _: &str| {};
         mapping::process_pending_photo_matches(&database, &mut progress).unwrap();
-        mapping::select_photo_taxon(&database, photo.photo_id, taxon_id).unwrap();
+        mapping::set_photo_mapping(&database, photo.photo_id, taxon_id).unwrap();
         mapping::refresh_after_taxonomy_changes(&database, [taxon_id]).unwrap();
         let error = rename_photo_from_taxon(&database, photo.photo_id).unwrap_err();
         assert!(

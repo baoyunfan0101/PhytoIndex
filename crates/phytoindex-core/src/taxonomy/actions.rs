@@ -495,6 +495,7 @@ fn is_allowed_custom_sql_read(
                 table_name,
                 "photo_mapping_queue"
                     | "photo_taxon_mapping"
+                    | "photo_taxon_candidates"
                     | "photo_taxon_usage"
                     | "photos"
                     | "taxa"
@@ -524,7 +525,13 @@ fn is_taxa_delete_foreign_key_access(
 ) -> bool {
     deletes_taxa
         && accessor.is_none()
-        && matches!(table_name, "photo_taxon_mapping" | "photo_taxon_usage")
+        && matches!(
+            table_name,
+            "photo_taxon_mapping"
+                | "photo_taxon_candidates"
+                | "photo_taxon_candidate_names"
+                | "photo_taxon_usage"
+        )
 }
 
 #[cfg(test)]
@@ -742,6 +749,7 @@ mod tests {
                 [taxon_id],
             )
             .unwrap();
+        let name_id = connection.last_insert_rowid();
         connection
             .execute_batch(
                 r#"
@@ -750,7 +758,9 @@ mod tests {
                 ) VALUES (1, NULL, '', '');
                 INSERT INTO photos (
                     photo_id, directory_id, filename, file_size, modified_at_ns
-                ) VALUES (1, 1, 'Felis catus.jpg', 1, 1);
+                ) VALUES
+                    (1, 1, 'Felis catus.jpg', 1, 1),
+                    (2, 1, 'Ambiguous cat.jpg', 1, 1);
                 "#,
             )
             .unwrap();
@@ -761,6 +771,31 @@ mod tests {
                 VALUES (1, ?, 'matched')
                 "#,
                 [taxon_id],
+            )
+            .unwrap();
+        connection
+            .execute(
+                r#"
+                INSERT INTO photo_taxon_mapping (photo_id, taxon_id, status)
+                VALUES (2, NULL, 'ambiguous')
+                "#,
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO photo_taxon_candidates (photo_id, taxon_id) VALUES (2, ?)",
+                [taxon_id],
+            )
+            .unwrap();
+        connection
+            .execute(
+                r#"
+                INSERT INTO photo_taxon_candidate_names (
+                    photo_id, taxon_id, name_id, name_type, name
+                ) VALUES (2, ?, ?, 1, 'Felis catus')
+                "#,
+                params![taxon_id, name_id],
             )
             .unwrap();
         connection
@@ -783,13 +818,13 @@ mod tests {
         .unwrap();
 
         let connection = database.connect().unwrap();
-        let queued: bool = connection
+        let queued: i64 = connection
             .query_row(
-                "SELECT EXISTS(SELECT 1 FROM photo_mapping_queue WHERE photo_id = 1)",
+                "SELECT COUNT(*) FROM photo_mapping_queue WHERE photo_id IN (1, 2)",
                 [],
                 |row| row.get(0),
             )
             .unwrap();
-        assert!(queued);
+        assert_eq!(queued, 2);
     }
 }
