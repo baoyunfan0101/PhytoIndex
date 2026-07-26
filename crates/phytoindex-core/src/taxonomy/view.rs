@@ -4,7 +4,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    TaxonRank,
+    TaxonRank, TaxonomyNameType,
     page::{
         TaxonomyCursor, TaxonomyPage, decode_cursor, encode_cursor, invalid_cursor, page_limit,
     },
@@ -311,18 +311,18 @@ fn load_display_names(connection: &Connection, taxon_id: i64) -> CoreResult<Taxo
         r#"
         SELECT name_type, name
         FROM taxon_names
-        WHERE taxon_id = ? AND name_type IN ('sci_name', 'zh_name', 'en_name')
+        WHERE taxon_id = ? AND name_type IN (1, 3, 5)
         "#,
     )?;
     let rows = statement.query_map([taxon_id], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
     })?;
     for row in rows {
         let (name_type, name) = row?;
-        match name_type.as_str() {
-            "sci_name" => names.sci_name = Some(name),
-            "zh_name" => names.zh_name = Some(name),
-            "en_name" => names.en_name = Some(name),
+        match TaxonomyNameType::from_code(name_type)? {
+            TaxonomyNameType::SciName => names.sci_name = Some(name),
+            TaxonomyNameType::ZhName => names.zh_name = Some(name),
+            TaxonomyNameType::EnName => names.en_name = Some(name),
             _ => {}
         }
     }
@@ -336,18 +336,12 @@ fn load_name_details(connection: &Connection, taxon_id: i64) -> CoreResult<Taxon
         SELECT name_id, name_type, name, authority_year, source
         FROM taxon_names
         WHERE taxon_id = ?
-        ORDER BY CASE name_type
-            WHEN 'sci_name' THEN 0
-            WHEN 'synonym' THEN 1
-            WHEN 'zh_name' THEN 2
-            WHEN 'zh_alias' THEN 3
-            WHEN 'en_name' THEN 4
-            ELSE 5 END, name
+        ORDER BY name_type, name
         "#,
     )?;
     let rows = statement.query_map([taxon_id], |row| {
         Ok((
-            row.get::<_, String>(1)?,
+            row.get::<_, i64>(1)?,
             TaxonNameDetail {
                 name_id: row.get(0)?,
                 name: row.get(2)?,
@@ -358,18 +352,13 @@ fn load_name_details(connection: &Connection, taxon_id: i64) -> CoreResult<Taxon
     })?;
     for row in rows {
         let (name_type, detail) = row?;
-        match name_type.as_str() {
-            "sci_name" => result.sci_name = Some(detail),
-            "synonym" => result.synonyms.push(detail),
-            "zh_name" => result.zh_name = Some(detail),
-            "zh_alias" => result.zh_aliases.push(detail),
-            "en_name" => result.en_name = Some(detail),
-            "en_alias" => result.en_aliases.push(detail),
-            _ => {
-                return Err(CoreError::InvalidArgument(format!(
-                    "invalid taxonomy name type: {name_type}"
-                )));
-            }
+        match TaxonomyNameType::from_code(name_type)? {
+            TaxonomyNameType::SciName => result.sci_name = Some(detail),
+            TaxonomyNameType::Synonym => result.synonyms.push(detail),
+            TaxonomyNameType::ZhName => result.zh_name = Some(detail),
+            TaxonomyNameType::ZhAlias => result.zh_aliases.push(detail),
+            TaxonomyNameType::EnName => result.en_name = Some(detail),
+            TaxonomyNameType::EnAlias => result.en_aliases.push(detail),
         }
     }
     Ok(result)

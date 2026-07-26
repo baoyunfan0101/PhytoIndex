@@ -107,7 +107,7 @@ pub fn promote_taxon_name(database: &Database, input: PromoteTaxonNameInput) -> 
             |row| {
                 Ok((
                     row.get::<_, i64>(0)?,
-                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(1)?,
                     row.get::<_, String>(2)?,
                 ))
             },
@@ -119,7 +119,7 @@ pub fn promote_taxon_name(database: &Database, input: PromoteTaxonNameInput) -> 
                 input.name_id, input.taxon_id
             ))
         })?;
-    let current_type = TaxonomyNameType::from_value(&current_type)?;
+    let current_type = TaxonomyNameType::from_code(current_type)?;
     if current_type.is_primary() {
         return Err(CoreError::InvalidArgument(
             "the selected name is already accepted".into(),
@@ -129,7 +129,7 @@ pub fn promote_taxon_name(database: &Database, input: PromoteTaxonNameInput) -> 
     let accepted_name_id = transaction
         .query_row(
             "SELECT name_id FROM taxon_names WHERE taxon_id = ? AND name_type = ?",
-            params![input.taxon_id, accepted_type.as_str()],
+            params![input.taxon_id, accepted_type.code()],
             |row| row.get::<_, i64>(0),
         )
         .optional()?
@@ -150,7 +150,7 @@ pub fn promote_taxon_name(database: &Database, input: PromoteTaxonNameInput) -> 
                 FROM taxa AS species
                 JOIN taxon_names
                   ON taxon_names.taxon_id = species.parent_taxon_id
-                 AND taxon_names.name_type = 'sci_name'
+                 AND taxon_names.name_type = 1
                 WHERE species.taxon_id = ?
                 "#,
                 [input.taxon_id],
@@ -168,11 +168,11 @@ pub fn promote_taxon_name(database: &Database, input: PromoteTaxonNameInput) -> 
     }
     transaction.execute(
         "UPDATE taxon_names SET name_type = ? WHERE taxon_id = ? AND name_id = ?",
-        params![current_type.as_str(), input.taxon_id, accepted_name_id],
+        params![current_type.code(), input.taxon_id, accepted_name_id],
     )?;
     transaction.execute(
         "UPDATE taxon_names SET name_type = ? WHERE taxon_id = ? AND name_id = ?",
-        params![accepted_type.as_str(), input.taxon_id, input.name_id],
+        params![accepted_type.code(), input.taxon_id, input.name_id],
     )?;
     validate_taxonomy(&transaction)?;
     transaction.commit()?;
@@ -187,7 +187,7 @@ pub fn delete_taxon_name(database: &Database, input: DeleteTaxonNameInput) -> Co
         .query_row(
             "SELECT name_type, name FROM taxon_names WHERE taxon_id = ? AND name_id = ?",
             params![input.taxon_id, input.name_id],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
         )
         .optional()?
         .ok_or_else(|| {
@@ -196,7 +196,7 @@ pub fn delete_taxon_name(database: &Database, input: DeleteTaxonNameInput) -> Co
                 input.name_id, input.taxon_id
             ))
         })?;
-    if TaxonomyNameType::from_value(&name_type)? == TaxonomyNameType::SciName {
+    if TaxonomyNameType::from_code(name_type)? == TaxonomyNameType::SciName {
         return Err(CoreError::InvalidArgument(
             "the unique sci_name cannot be deleted".into(),
         ));
@@ -601,22 +601,22 @@ mod tests {
         )
         .unwrap();
         let connection = database.connect().unwrap();
-        let promoted: String = connection
+        let promoted: i64 = connection
             .query_row(
                 "SELECT name_type FROM taxon_names WHERE name = 'Canis lycaon'",
                 [],
                 |row| row.get(0),
             )
             .unwrap();
-        let previous: String = connection
+        let previous: i64 = connection
             .query_row(
                 "SELECT name_type FROM taxon_names WHERE name = 'Canis lupus'",
                 [],
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(promoted, "sci_name");
-        assert_eq!(previous, "synonym");
+        assert_eq!(promoted, TaxonomyNameType::SciName.code());
+        assert_eq!(previous, TaxonomyNameType::Synonym.code());
         drop(connection);
 
         let error = promote_taxon_name(

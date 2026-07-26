@@ -417,7 +417,7 @@ mod tests {
                 CREATE TABLE taxon_names (
                     name_id INTEGER PRIMARY KEY AUTOINCREMENT,
                     taxon_id INTEGER NOT NULL,
-                    name_type TEXT NOT NULL,
+                    name_type INTEGER NOT NULL,
                     name TEXT NOT NULL,
                     normalized_name TEXT GENERATED ALWAYS AS (lower(name)) STORED,
                     authority_year TEXT,
@@ -432,8 +432,8 @@ mod tests {
                 INSERT INTO taxon_names (
                     name_id, taxon_id, name_type, name
                 ) VALUES
-                    (1001, 101, 'sci_name', 'New kingdom'),
-                    (1002, 102, 'sci_name', 'New order');
+                    (1001, 101, 1, 'New kingdom'),
+                    (1002, 102, 1, 'New order');
                 "#,
             )
             .unwrap();
@@ -455,7 +455,7 @@ mod tests {
                 CREATE TABLE taxon_names (
                     name_id INTEGER PRIMARY KEY AUTOINCREMENT,
                     taxon_id INTEGER NOT NULL,
-                    name_type TEXT NOT NULL,
+                    name_type INTEGER NOT NULL,
                     name TEXT NOT NULL,
                     normalized_name TEXT GENERATED ALWAYS AS (lower(name)) STORED,
                     authority_year TEXT,
@@ -470,8 +470,8 @@ mod tests {
                 INSERT INTO taxon_names (
                     name_id, taxon_id, name_type, name
                 ) VALUES
-                    (2001, 201, 'sci_name', 'Invalid kingdom'),
-                    (2002, 202, 'sci_name', 'Invalid family');
+                    (2001, 201, 1, 'Invalid kingdom'),
+                    (2002, 202, 1, 'Invalid family');
                 "#,
             )
             .unwrap();
@@ -482,7 +482,7 @@ mod tests {
             .connect()
             .unwrap()
             .query_row(
-                "SELECT taxon_id FROM taxon_names WHERE name_type = 'sci_name' AND name = ?",
+                "SELECT taxon_id FROM taxon_names WHERE name_type = 1 AND name = ?",
                 [name],
                 |row| row.get(0),
             )

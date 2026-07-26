@@ -107,6 +107,15 @@ pub enum TaxonomyNameType {
 }
 
 impl TaxonomyNameType {
+    pub(crate) const ALL: [Self; 6] = [
+        Self::SciName,
+        Self::Synonym,
+        Self::ZhName,
+        Self::ZhAlias,
+        Self::EnName,
+        Self::EnAlias,
+    ];
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::SciName => "sci_name",
@@ -129,6 +138,30 @@ impl TaxonomyNameType {
             _ => Err(CoreError::InvalidArgument(format!(
                 "invalid taxonomy name type: {value}"
             ))),
+        }
+    }
+
+    pub(crate) fn code(self) -> i64 {
+        self.index() as i64 + 1
+    }
+
+    pub(crate) fn from_code(value: i64) -> CoreResult<Self> {
+        Self::ALL
+            .get(value.saturating_sub(1) as usize)
+            .copied()
+            .ok_or_else(|| {
+                CoreError::InvalidArgument(format!("invalid taxonomy name type code: {value}"))
+            })
+    }
+
+    fn index(self) -> usize {
+        match self {
+            Self::SciName => 0,
+            Self::Synonym => 1,
+            Self::ZhName => 2,
+            Self::ZhAlias => 3,
+            Self::EnName => 4,
+            Self::EnAlias => 5,
         }
     }
 
@@ -500,10 +533,11 @@ fn create_taxon(
     transaction.execute(
         r#"
         INSERT INTO taxon_names (taxon_id, name_type, name, authority_year, source)
-        VALUES (?, 'sci_name', ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?)
         "#,
         params![
             taxon_id,
+            TaxonomyNameType::SciName.code(),
             input.target_name,
             input.authority_year,
             input.source
@@ -693,7 +727,7 @@ fn apply_localized_names(
 ) -> CoreResult<()> {
     let mut has_accepted: bool = transaction.query_row(
         "SELECT EXISTS(SELECT 1 FROM taxon_names WHERE taxon_id = ? AND name_type = ?)",
-        params![taxon_id, accepted_type.as_str()],
+        params![taxon_id, accepted_type.code()],
         |row| row.get(0),
     )?;
     for name in names {
@@ -775,7 +809,7 @@ fn insert_name(
         INSERT INTO taxon_names (taxon_id, name_type, name, authority_year, source)
         VALUES (?, ?, ?, ?, ?)
         "#,
-        params![taxon_id, name_type.as_str(), name, authority_year, source],
+        params![taxon_id, name_type.code(), name, authority_year, source],
     )?;
     changes.push(TaxonChange {
         kind: TaxonChangeKind::AppendName,
@@ -837,7 +871,7 @@ fn update_name_fields(
             FROM taxon_names
             WHERE taxon_id = ? AND name_type = ? AND name = ?
             "#,
-            params![taxon_id, name_type.as_str(), name],
+            params![taxon_id, name_type.code(), name],
             |row| {
                 Ok((
                     row.get::<_, Option<String>>(0)?,
@@ -857,7 +891,7 @@ fn update_name_fields(
             UPDATE taxon_names SET authority_year = ?
             WHERE taxon_id = ? AND name_type = ? AND name = ?
             "#,
-            params![authority_year, taxon_id, name_type.as_str(), name],
+            params![authority_year, taxon_id, name_type.code(), name],
         )?;
         changes.push(TaxonChange {
             kind: if old_authority.is_some() {
@@ -878,7 +912,7 @@ fn update_name_fields(
             UPDATE taxon_names SET source = ?
             WHERE taxon_id = ? AND name_type = ? AND name = ?
             "#,
-            params![source, taxon_id, name_type.as_str(), name],
+            params![source, taxon_id, name_type.code(), name],
         )?;
         changes.push(TaxonChange {
             kind: TaxonChangeKind::Supplement,
@@ -909,14 +943,14 @@ fn existing_name_type(
             params![
                 taxon_id,
                 name,
-                accepted_type.as_str(),
-                alias_type.as_str(),
-                accepted_type.as_str()
+                accepted_type.code(),
+                alias_type.code(),
+                accepted_type.code()
             ],
-            |row| row.get::<_, String>(0),
+            |row| row.get::<_, i64>(0),
         )
         .optional()?
-        .map(|value| TaxonomyNameType::from_value(&value))
+        .map(TaxonomyNameType::from_code)
         .transpose()
 }
 
@@ -930,15 +964,15 @@ fn existing_scientific_name_type(
             r#"
             SELECT name_type FROM taxon_names
             WHERE taxon_id = ? AND name = ?
-              AND name_type IN ('sci_name', 'synonym')
-            ORDER BY CASE name_type WHEN 'sci_name' THEN 0 ELSE 1 END
+              AND name_type IN (1, 2)
+            ORDER BY name_type
             LIMIT 1
             "#,
             params![taxon_id, name],
-            |row| row.get::<_, String>(0),
+            |row| row.get::<_, i64>(0),
         )
         .optional()?
-        .map(|value| TaxonomyNameType::from_value(&value))
+        .map(TaxonomyNameType::from_code)
         .transpose()
 }
 
@@ -1007,7 +1041,7 @@ fn find_candidates_by_type(
         "#,
     )?;
     let ids = statement
-        .query_map(params![rank.code(), name, name_type.as_str()], |row| {
+        .query_map(params![rank.code(), name, name_type.code()], |row| {
             row.get::<_, i64>(0)
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -1046,7 +1080,7 @@ fn lineage_has_scientific_name(
         )
         SELECT EXISTS(
             SELECT 1 FROM lineage JOIN taxon_names USING (taxon_id)
-            WHERE lineage.rank = ? AND taxon_names.name_type = 'sci_name'
+            WHERE lineage.rank = ? AND taxon_names.name_type = 1
               AND taxon_names.name = ? COLLATE BINARY
         )
         "#,
@@ -1722,7 +1756,7 @@ pub(super) fn validate_taxonomy(connection: &Connection) -> CoreResult<()> {
             FROM taxa
             LEFT JOIN taxon_names
               ON taxon_names.taxon_id = taxa.taxon_id
-             AND taxon_names.name_type = 'sci_name'
+             AND taxon_names.name_type = 1
             GROUP BY taxa.taxon_id
             HAVING COUNT(taxon_names.name_id) != 1
             LIMIT 1
@@ -1770,6 +1804,17 @@ mod tests {
         let directory = TempDir::new().unwrap();
         let database = Database::open(directory.path().join("test.db")).unwrap();
         (directory, database)
+    }
+
+    #[test]
+    fn name_type_codes_follow_public_name_order() {
+        for (index, name_type) in TaxonomyNameType::ALL.into_iter().enumerate() {
+            let code = index as i64 + 1;
+            assert_eq!(name_type.code(), code);
+            assert_eq!(TaxonomyNameType::from_code(code).unwrap(), name_type);
+        }
+        assert!(TaxonomyNameType::from_code(0).is_err());
+        assert!(TaxonomyNameType::from_code(7).is_err());
     }
 
     #[test]
@@ -1839,7 +1884,7 @@ mod tests {
         let connection = database.connect().unwrap();
         connection
             .execute(
-                "UPDATE taxon_names SET source = NULL WHERE name_type = 'sci_name'",
+                "UPDATE taxon_names SET source = NULL WHERE name_type = 1",
                 [],
             )
             .unwrap();
@@ -1897,7 +1942,7 @@ mod tests {
             .connect()
             .unwrap()
             .query_row(
-                "SELECT source FROM taxon_names WHERE name_type = 'sci_name'",
+                "SELECT source FROM taxon_names WHERE name_type = 1",
                 [],
                 |row| row.get(0),
             )
@@ -1989,7 +2034,7 @@ mod tests {
             .unwrap()
             .query_map([], |row| {
                 Ok((
-                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(0)?,
                     row.get::<_, String>(1)?,
                     row.get::<_, Option<String>>(2)?,
                 ))
@@ -2000,19 +2045,23 @@ mod tests {
         assert_eq!(
             names,
             vec![
-                ("sci_name".into(), "Accepted name".into(), None),
                 (
-                    "synonym".into(),
+                    TaxonomyNameType::SciName.code(),
+                    "Accepted name".into(),
+                    None
+                ),
+                (
+                    TaxonomyNameType::Synonym.code(),
                     "Matched synonym".into(),
                     Some("Matched authority".into())
                 ),
                 (
-                    "synonym".into(),
+                    TaxonomyNameType::Synonym.code(),
                     "Proposed name".into(),
                     Some("Proposed authority".into())
                 ),
                 (
-                    "synonym".into(),
+                    TaxonomyNameType::Synonym.code(),
                     "Other synonym".into(),
                     Some("Other authority".into())
                 ),

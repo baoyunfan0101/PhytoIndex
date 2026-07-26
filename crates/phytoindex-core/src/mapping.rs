@@ -947,13 +947,13 @@ fn usage_taxon_select() -> &'static str {
     SELECT taxa.taxon_id, taxa.rank,
            (SELECT name FROM taxon_names
             WHERE taxon_names.taxon_id = taxa.taxon_id
-              AND name_type = 'sci_name') AS scientific_name,
+              AND name_type = 1) AS scientific_name,
            (SELECT name FROM taxon_names
             WHERE taxon_names.taxon_id = taxa.taxon_id
-              AND name_type = 'en_name') AS english_name,
+              AND name_type = 5) AS english_name,
            (SELECT name FROM taxon_names
             WHERE taxon_names.taxon_id = taxa.taxon_id
-              AND name_type = 'zh_name') AS chinese_name,
+              AND name_type = 3) AS chinese_name,
            COALESCE(photo_taxon_usage.direct_photo_count, 0) AS direct_photo_count,
            COALESCE(photo_taxon_usage.subtree_photo_count, 0) AS subtree_photo_count
     FROM taxa
@@ -1405,7 +1405,7 @@ mod tests {
                 .execute(
                     r#"
                     INSERT INTO taxon_names (taxon_id, name_type, name)
-                    VALUES (?, 'sci_name', 'Shared name')
+                    VALUES (?, 1, 'Shared name')
                     "#,
                     [taxon_id],
                 )
@@ -1457,7 +1457,7 @@ mod tests {
             .execute(
                 r#"
                 INSERT INTO taxon_names (taxon_id, name_type, name)
-                VALUES (?, 'sci_name', 'Felis catus')
+                VALUES (?, 1, 'Felis catus')
                 "#,
                 [taxon_id],
             )
@@ -1506,7 +1506,7 @@ mod tests {
             .execute(
                 r#"
                 INSERT INTO taxon_names (taxon_id, name_type, name)
-                VALUES (?, 'sci_name', 'Canis lupus')
+                VALUES (?, 1, 'Canis lupus')
                 "#,
                 [canis_taxon_id],
             )
@@ -1519,7 +1519,7 @@ mod tests {
             .execute(
                 r#"
                 INSERT INTO taxon_names (taxon_id, name_type, name)
-                VALUES (?, 'sci_name', 'Felis catus')
+                VALUES (?, 1, 'Felis catus')
                 "#,
                 [felis_taxon_id],
             )
@@ -1593,7 +1593,7 @@ mod tests {
             .execute(
                 r#"
                 INSERT INTO taxon_names (taxon_id, name_type, name)
-                VALUES (?, 'sci_name', 'Parent')
+                VALUES (?, 1, 'Parent')
                 "#,
                 [parent_taxon_id],
             )
@@ -1611,7 +1611,7 @@ mod tests {
                 .execute(
                     r#"
                     INSERT INTO taxon_names (taxon_id, name_type, name)
-                    VALUES (?, 'sci_name', ?)
+                    VALUES (?, 1, ?)
                     "#,
                     params![child_taxon_id, name],
                 )

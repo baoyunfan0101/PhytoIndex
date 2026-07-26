@@ -16,6 +16,11 @@ and `species`.
 `zh_alias`, `en_name`, and `en_alias`. A taxon has exactly one `sci_name`, and
 may have at most one `zh_name` and one `en_name`.
 
+Database-facing inputs use integer codes in the same order: `1` for
+`sci_name`, `2` for `synonym`, `3` for `zh_name`, `4` for `zh_alias`, `5` for
+`en_name`, and `6` for `en_alias`. API and JSON values remain the string
+names.
+
 `TaxonomyPage<T>` is used by paginated interfaces:
 
 | Field | Type | Description |
@@ -474,6 +479,9 @@ pub fn replace_taxonomy_base_database(
 `source_path` identifies the external SQLite base database. It must differ
 from the application database and contain valid taxonomy data in the expected
 base-database layout.
+
+Within that external database, `name_type` uses the integer codes listed under
+Common types.
 
 Replacement discards the current taxonomy, taxonomy operation history, and
 mapping state, then imports the external taxon and name IDs. The return value

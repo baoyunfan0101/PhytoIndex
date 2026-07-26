@@ -708,7 +708,7 @@ fn taxon_filename(database: &Database, photo_id: i64) -> CoreResult<String> {
             JOIN taxon_names USING (taxon_id)
             WHERE photo_taxon_mapping.photo_id = ?1
               AND photo_taxon_mapping.status = 'matched'
-              AND taxon_names.name_type = 'sci_name'
+              AND taxon_names.name_type = 1
               AND NOT EXISTS (
                   SELECT 1
                   FROM photo_mapping_queue
@@ -1179,7 +1179,7 @@ mod tests {
             .execute(
                 r#"
                 INSERT INTO taxon_names (taxon_id, name_type, name)
-                VALUES (?, 'sci_name', 'Canis lupus')
+                VALUES (?, 1, 'Canis lupus')
                 "#,
                 [taxon_id],
             )
@@ -1272,7 +1272,7 @@ mod tests {
             .execute(
                 r#"
                 INSERT INTO taxon_names (taxon_id, name_type, name)
-                VALUES (?, 'sci_name', 'Canis lupus')
+                VALUES (?, 1, 'Canis lupus')
                 "#,
                 [taxon_id],
             )
@@ -1326,7 +1326,7 @@ mod tests {
             .execute(
                 r#"
                 INSERT INTO taxon_names (taxon_id, name_type, name)
-                VALUES (?, 'sci_name', 'Canis lupus')
+                VALUES (?, 1, 'Canis lupus')
                 "#,
                 [taxon_id],
             )
@@ -1402,7 +1402,7 @@ mod tests {
             .execute(
                 r#"
                 INSERT INTO taxon_names (taxon_id, name_type, name)
-                VALUES (?, 'sci_name', 'Canis lupus')
+                VALUES (?, 1, 'Canis lupus')
                 "#,
                 [taxon_id],
             )

@@ -200,17 +200,13 @@ END;
 CREATE TABLE IF NOT EXISTS taxon_names (
     name_id INTEGER PRIMARY KEY AUTOINCREMENT,
     taxon_id INTEGER NOT NULL,
-    name_type TEXT NOT NULL,
+    name_type INTEGER NOT NULL,
     name TEXT NOT NULL,
     normalized_name TEXT GENERATED ALWAYS AS (lower(name)) STORED,
     authority_year TEXT,
     source TEXT,
     UNIQUE (taxon_id, name_type, name),
-    CHECK (name_type IN (
-        'sci_name', 'synonym',
-        'zh_name', 'zh_alias',
-        'en_name', 'en_alias'
-    )),
+    CHECK (name_type BETWEEN 1 AND 6),
     CHECK (length(trim(name)) > 0),
     FOREIGN KEY (taxon_id) REFERENCES taxa(taxon_id) ON DELETE CASCADE
 );
@@ -267,11 +263,11 @@ VALUES ('taxonomy_name_separator', ';')
 ON CONFLICT(metadata_key) DO NOTHING;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_taxon_names_one_sci_name
-    ON taxon_names(taxon_id) WHERE name_type = 'sci_name';
+    ON taxon_names(taxon_id) WHERE name_type = 1;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_taxon_names_one_zh_name
-    ON taxon_names(taxon_id) WHERE name_type = 'zh_name';
+    ON taxon_names(taxon_id) WHERE name_type = 3;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_taxon_names_one_en_name
-    ON taxon_names(taxon_id) WHERE name_type = 'en_name';
+    ON taxon_names(taxon_id) WHERE name_type = 5;
 CREATE INDEX IF NOT EXISTS idx_taxa_parent ON taxa(parent_taxon_id);
 CREATE INDEX IF NOT EXISTS idx_taxa_parent_rank_id ON taxa(parent_taxon_id, rank, taxon_id);
 CREATE INDEX IF NOT EXISTS idx_taxa_rank ON taxa(rank);
@@ -383,6 +379,14 @@ mod tests {
         );
         let name_columns = table_xcolumns(&connection, "taxon_names");
         assert!(name_columns.contains(&"normalized_name".to_string()));
+        let name_type_storage: String = connection
+            .query_row(
+                "SELECT type FROM pragma_table_info('taxon_names') WHERE name = 'name_type'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(name_type_storage, "INTEGER");
         let photo_columns = table_columns(&connection, "photos");
         assert_eq!(
             photo_columns,
@@ -443,12 +447,12 @@ mod tests {
         let taxon_id = connection.last_insert_rowid();
         connection
             .execute(
-                "INSERT INTO taxon_names (taxon_id, name_type, name) VALUES (?, 'sci_name', 'A a')",
+                "INSERT INTO taxon_names (taxon_id, name_type, name) VALUES (?, 1, 'A a')",
                 [taxon_id],
             )
             .unwrap();
         let result = connection.execute(
-            "INSERT INTO taxon_names (taxon_id, name_type, name) VALUES (?, 'sci_name', 'A b')",
+            "INSERT INTO taxon_names (taxon_id, name_type, name) VALUES (?, 1, 'A b')",
             [taxon_id],
         );
         assert!(result.is_err());
