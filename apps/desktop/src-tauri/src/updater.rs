@@ -1,5 +1,6 @@
 use std::sync::Mutex;
 
+use phytoindex_core::OperationsStatus;
 use serde::Serialize;
 use tauri::{AppHandle, ipc::Channel};
 use tauri_plugin_updater::{Update, UpdaterExt};
@@ -27,6 +28,27 @@ pub enum AppUpdateEvent {
 
 #[derive(Default)]
 pub struct PendingAppUpdate(Mutex<Option<Update>>);
+
+pub(crate) fn ensure_install_allowed(operations: &OperationsStatus) -> Result<(), String> {
+    let running = operations
+        .values()
+        .filter(|state| state.running)
+        .map(|state| {
+            state.operation.as_deref().map_or_else(
+                || state.module.clone(),
+                |operation| format!("{}/{operation}", state.module),
+            )
+        })
+        .collect::<Vec<_>>();
+    if running.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "app update installation is blocked by running operations: {}",
+            running.join(", ")
+        ))
+    }
+}
 
 pub async fn check(
     app: &AppHandle,
@@ -94,7 +116,8 @@ pub async fn install(
 
 #[cfg(test)]
 mod tests {
-    use super::{AppUpdateEvent, AppUpdateInfo};
+    use super::{AppUpdateEvent, AppUpdateInfo, ensure_install_allowed};
+    use phytoindex_core::{OperationState, OperationsStatus};
     use serde_json::json;
 
     #[test]
@@ -151,5 +174,56 @@ mod tests {
                 "event": "finished"
             })
         );
+    }
+
+    #[test]
+    fn install_guard_rejects_running_operations() {
+        let mut operations = OperationsStatus::new();
+        operations.insert(
+            "mapping".into(),
+            OperationState {
+                module: "mapping".into(),
+                task_id: Some("task".into()),
+                operation: Some("match".into()),
+                running: true,
+                started_at: None,
+                finished_at: None,
+                message: "running".into(),
+                processed: 0,
+                total: None,
+                result: None,
+                error: None,
+            },
+        );
+
+        let error = ensure_install_allowed(&operations).unwrap_err();
+
+        assert_eq!(
+            error,
+            "app update installation is blocked by running operations: mapping/match"
+        );
+    }
+
+    #[test]
+    fn install_guard_accepts_idle_operations() {
+        let mut operations = OperationsStatus::new();
+        operations.insert(
+            "photos".into(),
+            OperationState {
+                module: "photos".into(),
+                task_id: None,
+                operation: None,
+                running: false,
+                started_at: None,
+                finished_at: None,
+                message: "idle".into(),
+                processed: 0,
+                total: None,
+                result: None,
+                error: None,
+            },
+        );
+
+        ensure_install_allowed(&operations).unwrap();
     }
 }

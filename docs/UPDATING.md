@@ -65,6 +65,8 @@ installation. If installation fails, the retained update remains available for a
 retry.
 
 Call `check_app_update` and receive a non-null result before calling this command.
+Installation is rejected while any backend operation is running. Update checks
+remain available during backend operations.
 
 ## Data Compatibility
 

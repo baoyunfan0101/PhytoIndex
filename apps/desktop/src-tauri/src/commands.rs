@@ -50,9 +50,11 @@ pub async fn check_app_update(
 #[tauri::command]
 pub async fn install_app_update(
     app: AppHandle,
+    state: State<'_, AppState>,
     pending: State<'_, PendingAppUpdate>,
     on_event: Channel<AppUpdateEvent>,
 ) -> CommandResult<()> {
+    crate::updater::ensure_install_allowed(&state.operations.status())?;
     crate::updater::install(&app, pending.inner(), on_event).await
 }
 
