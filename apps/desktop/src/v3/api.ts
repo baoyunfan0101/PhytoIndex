@@ -1,5 +1,7 @@
 import { Channel, convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
+import defaultPhotoFilenameHook from "../../../../crates/phytoindex-core/src/naming/templates/photo_filename.rhai?raw";
+import defaultSynonymAuthorityHook from "../../../../crates/phytoindex-core/src/naming/templates/synonym_authority.rhai?raw";
 
 export type Page<T> = { items: T[]; next_cursor: string | null };
 
@@ -768,16 +770,13 @@ export const getNamingHookSettings = () =>
   call<NamingHookSettings>("get_naming_hook_settings", undefined, () => ({ photo_filename: null, synonym_authority: null }));
 export const getNamingHookTemplates = () =>
   call<NamingHookTemplates>("get_naming_hook_templates", undefined, () => ({
-    photo_filename: "fn parse_photo_filename(filename) {\n    #{ info: #{ family_sci: (), genus_sci: (), species_sci: filename, family_zh: (), genus_zh: (), species_zh: () }, suffix: \".jpg\" }\n}",
-    synonym_authority: "fn split_synonym_authority(value) {\n    #{ name: value, authority_year: () }\n}",
+    photo_filename: defaultPhotoFilenameHook,
+    synonym_authority: defaultSynonymAuthorityHook,
   }));
 export const setNamingHook = (kind: NamingHookKind, script: string | null) =>
   call<void>("set_naming_hook", { kind, script }, () => undefined);
 export const getNamingHookTestCases = () =>
-  call<NamingHookTestCases>("get_naming_hook_test_cases", undefined, () => ({
-    photo_filename: [{ name: "Species filename", input: "Canis lupus001.jpg", expected: { kind: "photo_filename", output: {} } }],
-    synonym_authority: [{ name: "Authority", input: "Canis lupus Linnaeus, 1758", expected: { kind: "synonym_authority", output: {} } }],
-  }));
+  call<NamingHookTestCases>("get_naming_hook_test_cases", undefined, defaultNamingHookTestCases);
 export const setNamingHookTestCases = (kind: NamingHookKind, cases: NamingHookTestCase[]) =>
   call<void>("set_naming_hook_test_cases", { kind, cases }, () => undefined);
 export const runNamingHookTests = (kind: NamingHookKind, script: string | null) =>
@@ -883,4 +882,94 @@ function parseDemoTaxonomyCsv(input: string): TaxonInputRow[] {
     });
     return row as TaxonInputRow;
   });
+}
+
+function defaultNamingHookTestCases(): NamingHookTestCases {
+  const photoCase = (
+    name: string,
+    input: string,
+    info: Partial<Record<
+      "family_sci" | "genus_sci" | "species_sci" | "family_zh" | "genus_zh" | "species_zh",
+      string
+    >>,
+    suffix: string,
+  ): NamingHookTestCase => ({
+    name,
+    input,
+    expected: {
+      kind: "photo_filename",
+      output: {
+        info: {
+          family_sci: null,
+          genus_sci: null,
+          species_sci: null,
+          family_zh: null,
+          genus_zh: null,
+          species_zh: null,
+          ...info,
+        },
+        suffix,
+      },
+    },
+  });
+  const synonymCase = (
+    name: string,
+    input: string,
+    splitName: string,
+    authorityYear: string,
+  ): NamingHookTestCase => ({
+    name,
+    input,
+    expected: {
+      kind: "synonym_authority",
+      output: { name: splitName, authority_year: authorityYear },
+    },
+  });
+
+  return {
+    photo_filename: [
+      photoCase("family suffix", "Herbertaceae003.jpg", { family_sci: "Herbertaceae" }, "003.jpg"),
+      photoCase("genus", "Herbertus005.jpg", { genus_sci: "Herbertus" }, "005.jpg"),
+      photoCase("species", "Herbertus dicranus010.jpg", { genus_sci: "Herbertus", species_sci: "Herbertus dicranus" }, "010.jpg"),
+      photoCase("quoted internal apostrophe", "Iris 'a'b'030.jpg", { genus_sci: "Iris", species_sci: "Iris 'a'b'" }, "030.jpg"),
+      photoCase("curly double quotes", "Iris \u201cBlue\u201d030.jpg", { genus_sci: "Iris", species_sci: "Iris 'Blue'" }, "030.jpg"),
+      photoCase("cultivar conversion", "Hosta cv. blue_eyes030.jpg", { genus_sci: "Hosta 'Blue", species_sci: "Hosta 'Blue Eyes'" }, "030.jpg"),
+      photoCase("sex marker", "Herbertus dicranusM010.jpg", { genus_sci: "Herbertus", species_sci: "Herbertus dicranus" }, "M010.jpg"),
+      photoCase("doubtful marker", "Herbertus dicranusYN010.jpg", { genus_sci: "Herbertus", species_sci: "Herbertus dicranus" }, "YN010.jpg"),
+      photoCase("leading hybrid genus", "\u00d7 Gasteraloe030.jpg", { genus_sci: "x Gasteraloe" }, "030.jpg"),
+      photoCase("leading hybrid species", "\u00d7 Gasteraloe beguinii030.jpg", { genus_sci: "x Gasteraloe", species_sci: "x Gasteraloe beguinii" }, "030.jpg"),
+      photoCase("infix hybrid species", "Pinus X pekinensis030.jpg", { genus_sci: "Pinus x", species_sci: "Pinus x pekinensis" }, "030.jpg"),
+      photoCase("family genus species Chinese", "\u9999\u79d1\u9999\u5c5e\u9999\u79cd Canis lupus020.jpg", {
+        genus_sci: "Canis",
+        species_sci: "Canis lupus",
+        family_zh: "\u9999\u79d1",
+        genus_zh: "\u9999\u5c5e",
+        species_zh: "\u9999\u79cd",
+      }, "020.jpg"),
+      photoCase("ke ke shu exception", "\u9999\u79d1\u79d1\u5c5e020.jpg", { genus_zh: "\u9999\u79d1\u79d1\u5c5e" }, "020.jpg"),
+      photoCase("quoted ASCII inside Chinese species", "\u9999\u79d1\u9999\u5c5e\u9999'abc' Gasteraloe 'Wonder'030.jpg", {
+        genus_sci: "Gasteraloe",
+        species_sci: "Gasteraloe 'Wonder'",
+        family_zh: "\u9999\u79d1",
+        genus_zh: "\u9999\u5c5e",
+        species_zh: "\u9999'abc'",
+      }, "030.jpg"),
+      photoCase("parenthesized ASCII inside Chinese species", "\u9999\u79d1\u9999\u5c5e\u9999(abc) Gasteraloe beguinii030.jpg", {
+        genus_sci: "Gasteraloe",
+        species_sci: "Gasteraloe beguinii",
+        family_zh: "\u9999\u79d1",
+        genus_zh: "\u9999\u5c5e",
+        species_zh: "\u9999(abc)",
+      }, "030.jpg"),
+    ],
+    synonym_authority: [
+      synonymCase("parenthesized authority", "Canis lupus (Linnaeus, 1758)", "Canis lupus", "(Linnaeus, 1758)"),
+      synonymCase("lowercase authority prefix", "Canis lupus de Silva, 1900", "Canis lupus", "de Silva, 1900"),
+      synonymCase("de authority", "\u200cPaidia moabitica de Freina, 2004", "\u200cPaidia moabitica", "de Freina, 2004"),
+      synonymCase("apostrophe authority with year", "\u200cSedum eriocarpum subsp. spathulifolium 't Hart, 1995", "\u200cSedum eriocarpum subsp. spathulifolium", "'t Hart, 1995"),
+      synonymCase("apostrophe authority", "Sedum fragrans 't Hart", "Sedum fragrans", "'t Hart"),
+      synonymCase("von authority", "Hippocampus natalensis von Bonde, 1923", "Hippocampus natalensis", "von Bonde, 1923"),
+      synonymCase("van authority", "Hylophilus moxensis van Els, T. Wijpkema, J.T. Wijpkema, Avalos & Montenegro-Avila, 2026", "Hylophilus moxensis", "van Els, T. Wijpkema, J.T. Wijpkema, Avalos & Montenegro-Avila, 2026"),
+    ],
+  };
 }

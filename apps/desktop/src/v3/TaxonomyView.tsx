@@ -32,6 +32,7 @@ import {
   type TaxonomyOperation,
 } from "./api";
 import { EmptyState, SectionHeader, TaxonCard, VirtualList } from "./components";
+import { CodeEditor } from "./CodeEditor";
 
 export function TaxonomySearchView({
   taxonId,
@@ -335,7 +336,7 @@ export function CustomUpdateView() {
           <button className="primary-button" type="button" onClick={() => void execute()}><Play size={13} />Execute</button>
         </>
       } />
-      <div className="code-editor sql-editor"><pre aria-hidden="true">{highlightSql(sql)}</pre><textarea spellCheck={false} value={sql} onChange={(event) => setSql(event.target.value)} /></div>
+      <CodeEditor language="sql" ariaLabel="Custom taxonomy SQL" value={sql} onChange={setSql} />
       <div className="editor-message">{message}</div>
     </div>
   );
@@ -373,9 +374,4 @@ export function TaxonomyHistoryView() {
       )}
     </div>
   );
-}
-
-function highlightSql(value: string) {
-  const keywords = /\b(SELECT|UPDATE|INSERT|DELETE|FROM|WHERE|SET|INTO|VALUES|JOIN|ON|AND|OR|NULL|AS)\b/gi;
-  return value.split(keywords).map((part, index) => /^(SELECT|UPDATE|INSERT|DELETE|FROM|WHERE|SET|INTO|VALUES|JOIN|ON|AND|OR|NULL|AS)$/i.test(part) ? <mark key={index}>{part}</mark> : part);
 }

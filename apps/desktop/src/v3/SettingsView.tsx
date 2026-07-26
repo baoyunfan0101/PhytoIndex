@@ -1,4 +1,13 @@
-import { ArrowDown, ArrowUp, Beaker, Save, Settings2 } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowUp,
+  Beaker,
+  CaseSensitive,
+  MapPinned,
+  Save,
+  SlidersHorizontal,
+  type LucideIcon,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 import {
   errorMessage,
@@ -25,21 +34,33 @@ import {
   type NamingHookKind,
   type NamingHookTestCase,
   type NamingHookTestReport,
+  type NamingHookTestResult,
   type PhotoFilenameFormatSettings,
   type PhotoNameField,
 } from "./api";
 import { SectionHeader, Segmented, VirtualList } from "./components";
+import { CodeEditor } from "./CodeEditor";
 
 type SettingsSection = "General" | "Naming" | "Map" | "Hooks";
+
+const settingsSections: Array<{
+  id: SettingsSection;
+  icon: LucideIcon;
+}> = [
+  { id: "General", icon: SlidersHorizontal },
+  { id: "Naming", icon: CaseSensitive },
+  { id: "Map", icon: MapPinned },
+  { id: "Hooks", icon: Beaker },
+];
 
 export function SettingsView() {
   const [section, setSection] = useState<SettingsSection>("General");
   return (
     <div className="settings-workbench">
       <aside className="settings-nav">
-        {(["General", "Naming", "Map", "Hooks"] as const).map((item) => (
-          <button className={section === item ? "active" : ""} type="button" key={item} onClick={() => setSection(item)}>
-            {item === "Hooks" ? <Beaker size={14} /> : <Settings2 size={14} />}{item}
+        {settingsSections.map(({ id, icon: Icon }) => (
+          <button className={section === id ? "active" : ""} type="button" key={id} onClick={() => setSection(id)}>
+            <Icon size={14} />{id}
           </button>
         ))}
       </aside>
@@ -191,14 +212,29 @@ function HooksSettings() {
   const [message, setMessage] = useState("");
 
   useEffect(() => {
-    Promise.all([getNamingHookSettings(), getNamingHookTemplates(), getNamingHookTestCases()]).then(([settings, nextTemplates, nextCases]) => {
+    let active = true;
+    getNamingHookTemplates().then((nextTemplates) => {
+      if (!active) return;
       setTemplates(nextTemplates);
-      setScripts({
-        photo_filename: settings.photo_filename ?? nextTemplates.photo_filename,
-        synonym_authority: settings.synonym_authority ?? nextTemplates.synonym_authority,
+      setScripts(nextTemplates);
+      return getNamingHookSettings().then((settings) => {
+        if (!active) return;
+        setScripts({
+          photo_filename: settings.photo_filename?.trim() ? settings.photo_filename : nextTemplates.photo_filename,
+          synonym_authority: settings.synonym_authority?.trim() ? settings.synonym_authority : nextTemplates.synonym_authority,
+        });
       });
-      setCases(nextCases);
+    }).catch((nextError) => {
+      if (active) setMessage(errorMessage(nextError));
     });
+    getNamingHookTestCases().then((nextCases) => {
+      if (active) setCases(nextCases);
+    }).catch((nextError) => {
+      if (active) setMessage(errorMessage(nextError));
+    });
+    return () => {
+      active = false;
+    };
   }, []);
 
   async function save() {
@@ -228,25 +264,71 @@ function HooksSettings() {
         setReport(null);
       }} />
       <div className="hook-columns">
-        <div className="code-editor rhai-editor"><pre aria-hidden="true">{scripts[kind]}</pre><textarea spellCheck={false} value={scripts[kind]} onChange={(event) => setScripts({ ...scripts, [kind]: event.target.value })} /></div>
+        <CodeEditor
+          language="rhai"
+          ariaLabel={`${kind} Rhai source`}
+          value={scripts[kind]}
+          onChange={(value) => setScripts({ ...scripts, [kind]: value })}
+        />
         <div className="hook-tests">
           <header><strong>Project tests</strong><button type="button" onClick={() => setCases({ ...cases, [kind]: [...cases[kind], { name: "New test", input: "", expected: { kind, output: {} } }] })}>+ Add</button></header>
           <VirtualList
             items={cases[kind]}
-            rowHeight={104}
+            rowHeight={report ? 252 : 228}
             itemKey={(_, index) => index}
             renderItem={(item, index) => (
               <div className={`hook-test-row${report?.cases[index] && !report.cases[index].passed ? " failed" : ""}`}>
                 <input value={item.name} onChange={(event) => changeCase(cases, setCases, kind, index, { ...item, name: event.target.value })} />
                 <input value={item.input} placeholder="Raw input" onChange={(event) => changeCase(cases, setCases, kind, index, { ...item, input: event.target.value })} />
-                <code>{report?.cases[index] ? JSON.stringify(report.cases[index].actual) : JSON.stringify(item.expected)}</code>
                 <button type="button" onClick={() => setCases({ ...cases, [kind]: cases[kind].filter((_, itemIndex) => itemIndex !== index) })}>Delete</button>
+                <ExpectedEditor
+                  value={item.expected}
+                  testName={item.name}
+                  onChange={(expected) => changeCase(cases, setCases, kind, index, { ...item, expected })}
+                />
+                {report?.cases[index] && <span className="hook-test-actual">Actual: {JSON.stringify(report.cases[index].actual)}</span>}
               </div>
             )}
           />
         </div>
       </div>
       <div className="editor-message">{report ? `${report.passed} passed, ${report.failed} failed` : message}</div>
+    </div>
+  );
+}
+
+function ExpectedEditor({
+  value,
+  testName,
+  onChange,
+}: {
+  value: NamingHookTestResult;
+  testName: string;
+  onChange: (value: NamingHookTestResult) => void;
+}) {
+  const serialized = JSON.stringify(value, null, 2);
+  const [draft, setDraft] = useState(serialized);
+  const [error, setError] = useState("");
+
+  useEffect(() => setDraft(serialized), [serialized]);
+
+  function update(next: string) {
+    setDraft(next);
+    try {
+      const parsed = JSON.parse(next) as NamingHookTestResult;
+      if (!parsed || typeof parsed !== "object" || !("kind" in parsed) || !("output" in parsed)) {
+        throw new Error("Expected a tagged hook result");
+      }
+      setError("");
+      onChange(parsed);
+    } catch {
+      setError("Invalid expected JSON");
+    }
+  }
+
+  return (
+    <div className={`hook-expected${error ? " invalid" : ""}`} title={error}>
+      <CodeEditor language="json" ariaLabel={`${testName} expected output`} value={draft} onChange={update} />
     </div>
   );
 }
