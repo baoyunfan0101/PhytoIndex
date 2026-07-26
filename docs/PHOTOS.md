@@ -827,19 +827,6 @@ Uses the same matching stages, priorities, ordering, and photo filter as
 `search_photo_taxa`, while only loading the minimal autocomplete fields:
 `taxon_id`, `rank`, accepted display names, and matched names.
 
-#### `get_photo_taxon_id`
-
-```rust
-pub fn get_photo_taxon_id(
-    database: &Database,
-    photo_id: i64,
-) -> CoreResult<i64>
-```
-
-Returns the selected taxon ID only when the photo's current logical status is
-`matched`. A missing, `processing`, `ambiguous`, or `unmatched` photo is an
-error.
-
 #### `list_taxon_photos`
 
 ```rust
@@ -971,7 +958,7 @@ strings. Parameter names below are the camel-case keys used in JavaScript
 | `get_mapping_metadata` | none | `MappingMetadata` |
 | `search_photo_taxa` | `query: string`, optional `cursor: string`, optional `limit: number` | `PhotoPage<TaxonSearchResult>` |
 | `suggest_photo_taxa` | `query: string`, optional `limit: number` | `TaxonSuggestion[]` |
-| `get_photo_taxon_id` | `photoId: number` | `number`; missing or non-matched photos are errors |
+| `get_photo_mapping` | `photoId: number` | `PhotoTaxonMapping \| null` |
 | `list_taxon_photos` | `taxonId: number`, optional `cursor: string`, optional `limit: number` | `PhotoPage<Photo>` |
 | `get_photo_taxon_match` | `photoId: number` | `PhotoTaxonMatch` |
 | `select_photo_taxon` | `photoId: number`, `taxonId: number` | `PhotoTaxonMapping` |

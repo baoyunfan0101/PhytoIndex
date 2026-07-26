@@ -1,6 +1,5 @@
 use rusqlite::params;
 
-use super::{PhotoTaxonStatus, get_photo_mapping};
 use crate::models::PhotoPage;
 use crate::naming::normalize_taxonomy_name;
 use crate::photos::{
@@ -72,19 +71,6 @@ pub fn search_photo_taxa(
     };
     let items = results.into_iter().map(|result| result.result).collect();
     Ok(PhotoPage { items, next_cursor })
-}
-
-pub fn get_photo_taxon_id(database: &Database, photo_id: i64) -> CoreResult<i64> {
-    let mapping = get_photo_mapping(database, photo_id)?
-        .ok_or_else(|| CoreError::NotFound(format!("photo {photo_id}")))?;
-    if mapping.status != PhotoTaxonStatus::Matched {
-        return Err(CoreError::InvalidArgument(format!(
-            "photo {photo_id} does not have a current matched taxon"
-        )));
-    }
-    mapping.taxon_id.ok_or_else(|| {
-        CoreError::Consistency(format!("matched photo {photo_id} does not have a taxon ID"))
-    })
 }
 
 pub fn suggest_photo_taxa(
@@ -167,6 +153,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    use crate::mapping::{PhotoTaxonStatus, get_photo_mapping};
 
     fn database() -> (TempDir, Database) {
         let directory = TempDir::new().unwrap();
@@ -203,7 +190,8 @@ mod tests {
                     photo_id, taxon_id, status
                 ) VALUES
                     (1, 11, 'matched'),
-                    (2, 12, 'matched');
+                    (2, 12, 'matched'),
+                    (3, NULL, 'unmatched');
                 INSERT INTO photo_taxon_usage (
                     taxon_id, direct_photo_count, subtree_photo_count
                 ) VALUES
@@ -245,9 +233,13 @@ mod tests {
     #[test]
     fn photo_and_taxon_navigation_use_current_mapping_tree() {
         let (_directory, database) = database();
-        assert_eq!(get_photo_taxon_id(&database, 1).unwrap(), 11);
-        assert!(get_photo_taxon_id(&database, 3).is_err());
-        assert!(get_photo_taxon_id(&database, 999).is_err());
+        let matched = get_photo_mapping(&database, 1).unwrap().unwrap();
+        assert_eq!(matched.status, PhotoTaxonStatus::Matched);
+        assert_eq!(matched.taxon_id, Some(11));
+        let unmatched = get_photo_mapping(&database, 3).unwrap().unwrap();
+        assert_eq!(unmatched.status, PhotoTaxonStatus::Unmatched);
+        assert_eq!(unmatched.taxon_id, None);
+        assert_eq!(get_photo_mapping(&database, 999).unwrap(), None);
         let initial = list_taxon_photos(&database, 10, None, 1).unwrap();
         assert_eq!(initial.items[0].photo_id, 1);
         assert!(initial.next_cursor.is_some());
@@ -260,7 +252,9 @@ mod tests {
             )
             .unwrap();
         drop(connection);
-        assert!(get_photo_taxon_id(&database, 1).is_err());
+        let processing = get_photo_mapping(&database, 1).unwrap().unwrap();
+        assert_eq!(processing.status, PhotoTaxonStatus::Processing);
+        assert_eq!(processing.taxon_id, Some(11));
 
         let current = list_taxon_photos(&database, 10, None, 1).unwrap();
         assert_eq!(current.items[0].photo_id, 2);

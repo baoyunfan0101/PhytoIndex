@@ -23,9 +23,7 @@ pub use name_match::{
     PhotoNameField, PhotoNameMatchSettings, get_photo_name_match_settings,
     set_photo_name_match_settings,
 };
-pub use navigation::{
-    get_photo_taxon_id, list_taxon_photos, search_photo_taxa, suggest_photo_taxa,
-};
+pub use navigation::{list_taxon_photos, search_photo_taxa, suggest_photo_taxa};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]

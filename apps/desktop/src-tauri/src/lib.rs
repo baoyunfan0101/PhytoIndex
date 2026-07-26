@@ -81,7 +81,7 @@ pub fn run() {
             commands::get_mapping_metadata,
             commands::search_photo_taxa,
             commands::suggest_photo_taxa,
-            commands::get_photo_taxon_id,
+            commands::get_photo_mapping,
             commands::list_taxon_photos,
             commands::get_photo_taxon_match,
             commands::select_photo_taxon,
