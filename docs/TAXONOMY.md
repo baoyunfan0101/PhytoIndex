@@ -4,6 +4,9 @@ This document describes the public API exported by
 `phytoindex_core::taxonomy`. The desktop commands are adapters over the same
 types and behavior.
 
+Shared normalization and configurable synonym parsing are documented in
+[the naming backend API](NAMING.md).
+
 All functions return `CoreResult<T>`. Errors include invalid input, missing
 records, database failures, and taxonomy validation failures.
 
@@ -195,24 +198,11 @@ character other than `|`.
 
 ### Scientific-name authority parser
 
-```rust
-pub fn split_scientific_name_authority(
-    value: &str,
-) -> ScientificNameParts
-```
-
-`value` is one scientific-name string from a synonym cell. The return value
-contains `name: String` and `authority_year: Option<String>`, preserving the
-original characters within both parts after trimming the outer input.
-
-The parser starts authority text at the first applicable word:
-
-1. a word containing `(`;
-2. the second word whose first character is uppercase;
-3. an independent `de`, `von`, or `van` word.
-
-This parser is a standalone public interface because its rules can evolve
-independently from the formatted-update workflow.
+Formatted updates use the database-aware synonym parser from
+`phytoindex_core::naming`. It runs the configured Rhai hook or the independent
+built-in parser, then applies shared name normalization. See
+[the naming backend API](NAMING.md) for parameters, return values, and the
+hook contract.
 
 ### Matching and update behavior
 

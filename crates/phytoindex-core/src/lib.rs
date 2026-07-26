@@ -3,6 +3,7 @@ pub mod error;
 pub mod export;
 pub mod mapping;
 pub mod models;
+pub mod naming;
 pub mod photos;
 pub mod taxonomy;
 

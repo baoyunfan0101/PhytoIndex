@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use super::{
     TaxonomyNameType, page::page_limit, view::load_taxon_details, view::load_taxon_summaries,
 };
+use crate::naming::normalize_taxonomy_name;
 use crate::{CoreError, CoreResult, Database};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -479,12 +480,7 @@ fn escape_like(value: &str) -> String {
 }
 
 fn normalize_search_query(value: &str) -> Option<String> {
-    normalize_whitespace(value)
-}
-
-fn normalize_whitespace(value: &str) -> Option<String> {
-    let value = value.split_whitespace().collect::<Vec<_>>().join(" ");
-    (!value.is_empty()).then_some(value)
+    normalize_taxonomy_name(value)
 }
 
 fn quoted_fts_match(value: &str) -> String {

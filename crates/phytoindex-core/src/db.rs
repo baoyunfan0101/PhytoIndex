@@ -143,7 +143,7 @@ CREATE TABLE IF NOT EXISTS photo_taxon_usage (
 CREATE TABLE IF NOT EXISTS photo_mapping_queue (
     photo_id INTEGER PRIMARY KEY,
     reason TEXT NOT NULL,
-    CHECK (reason IN ('refresh', 'taxonomy')),
+    CHECK (reason IN ('refresh', 'taxonomy', 'hook', 'settings')),
     FOREIGN KEY (photo_id) REFERENCES photos(photo_id) ON DELETE CASCADE
 );
 

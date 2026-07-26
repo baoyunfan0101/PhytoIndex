@@ -1,0 +1,125 @@
+mod hooks;
+mod normalize;
+mod photo_filename;
+mod synonym;
+
+use rusqlite::params;
+use serde::{Deserialize, Serialize};
+
+use crate::{CoreResult, Database};
+
+pub use normalize::normalize_taxonomy_name;
+pub use photo_filename::{
+    ParsedPhotoFilename, TaxonomicNameInfo, default_parse_photo_filename, parse_photo_filename,
+};
+pub use synonym::{
+    ScientificNameParts, default_split_scientific_name_authority, split_scientific_name_authority,
+    split_scientific_name_authority_with_database,
+};
+
+pub(crate) use photo_filename::PhotoFilenameParser;
+pub(crate) use synonym::SynonymAuthorityParser;
+
+const PHOTO_FILENAME_HOOK_KEY: &str = "photo_filename_hook";
+const SYNONYM_AUTHORITY_HOOK_KEY: &str = "synonym_authority_hook";
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum NamingHookKind {
+    PhotoFilename,
+    SynonymAuthority,
+}
+
+impl NamingHookKind {
+    fn metadata_key(self) -> &'static str {
+        match self {
+            Self::PhotoFilename => PHOTO_FILENAME_HOOK_KEY,
+            Self::SynonymAuthority => SYNONYM_AUTHORITY_HOOK_KEY,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NamingHookSettings {
+    pub photo_filename: Option<String>,
+    pub synonym_authority: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", content = "output", rename_all = "snake_case")]
+pub enum NamingHookTestResult {
+    PhotoFilename(ParsedPhotoFilename),
+    SynonymAuthority(ScientificNameParts),
+}
+
+pub fn get_naming_hook_settings(database: &Database) -> CoreResult<NamingHookSettings> {
+    let connection = database.connect()?;
+    Ok(NamingHookSettings {
+        photo_filename: hooks::load_script(&connection, PHOTO_FILENAME_HOOK_KEY)?,
+        synonym_authority: hooks::load_script(&connection, SYNONYM_AUTHORITY_HOOK_KEY)?,
+    })
+}
+
+pub fn set_naming_hook(
+    database: &Database,
+    kind: NamingHookKind,
+    script: Option<&str>,
+) -> CoreResult<()> {
+    let script = script.map(str::trim).filter(|value| !value.is_empty());
+    if let Some(script) = script {
+        test_naming_hook(kind, script, hook_sample(kind))?;
+    }
+    let mut connection = database.connect()?;
+    let transaction = connection.transaction()?;
+    if let Some(script) = script {
+        transaction.execute(
+            r#"
+            INSERT INTO app_metadata (metadata_key, metadata_value)
+            VALUES (?, ?)
+            ON CONFLICT(metadata_key) DO UPDATE
+            SET metadata_value = excluded.metadata_value
+            "#,
+            params![kind.metadata_key(), script],
+        )?;
+    } else {
+        transaction.execute(
+            "DELETE FROM app_metadata WHERE metadata_key = ?",
+            [kind.metadata_key()],
+        )?;
+    }
+    if kind == NamingHookKind::PhotoFilename {
+        transaction.execute(
+            r#"
+            INSERT INTO photo_mapping_queue (photo_id, reason)
+            SELECT photo_id, 'hook' FROM photos
+            WHERE true
+            ON CONFLICT(photo_id) DO UPDATE SET reason = excluded.reason
+            "#,
+            [],
+        )?;
+    }
+    transaction.commit()?;
+    Ok(())
+}
+
+pub fn test_naming_hook(
+    kind: NamingHookKind,
+    script: &str,
+    input: &str,
+) -> CoreResult<NamingHookTestResult> {
+    match kind {
+        NamingHookKind::PhotoFilename => Ok(NamingHookTestResult::PhotoFilename(
+            PhotoFilenameParser::from_script(script)?.parse(input)?,
+        )),
+        NamingHookKind::SynonymAuthority => Ok(NamingHookTestResult::SynonymAuthority(
+            SynonymAuthorityParser::from_script(script)?.split(input)?,
+        )),
+    }
+}
+
+fn hook_sample(kind: NamingHookKind) -> &'static str {
+    match kind {
+        NamingHookKind::PhotoFilename => "Canis lupus001.jpg",
+        NamingHookKind::SynonymAuthority => "Canis lycaon Smith, 1900",
+    }
+}

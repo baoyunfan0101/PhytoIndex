@@ -7,6 +7,8 @@ It covers:
   refresh, and rename APIs.
 - `phytoindex_core::mapping`: photo-to-taxon matching and taxon-based photo
   browsing APIs.
+- `phytoindex_core::naming`: shared name normalization and filename hook APIs,
+  documented in [the naming backend API](NAMING.md).
 - Desktop Tauri commands, operation events, and media URLs that expose those
   core APIs.
 
@@ -399,14 +401,33 @@ pub fn rename_photo_from_taxon(
 ) -> CoreResult<Photo>
 ```
 
-Renames one real file to:
+Formats and renames one real file using `PhotoFilenameFormatSettings`. The
+photo must have a current `matched` mapping. The configured filename parser
+supplies the preserved suffix, so serial numbers and the image extension are
+not discarded.
 
-```text
-{accepted scientific name}.{original extension}
+`PhotoFilenameFormatSettings` exposes the six booleans `family_zh`,
+`family_sci`, `genus_zh`, `genus_sci`, `species_zh`, and `species_sci`.
+The default enables only `species_sci`. When the requested rank is absent, the
+formatter moves that selection toward genus and then family. When one language
+is absent at the selected rank, it uses the other language.
+
+```rust
+pub fn get_photo_filename_format_settings(
+    database: &Database,
+) -> CoreResult<PhotoFilenameFormatSettings>
+
+pub fn set_photo_filename_format_settings(
+    database: &Database,
+    settings: &PhotoFilenameFormatSettings,
+) -> CoreResult<()>
+
+pub fn format_photo_filename(
+    info: &TaxonomicNameInfo,
+    suffix: &str,
+    settings: &PhotoFilenameFormatSettings,
+) -> CoreResult<String>
 ```
-
-The photo must have a current `matched` mapping and the selected taxon must
-have an accepted scientific name. Returns the updated `Photo`.
 
 #### `rename_photos_from_taxa`
 
@@ -507,8 +528,8 @@ source row order. The returned archive table has `photo_id` and
 | --- | --- |
 | `processing` | The photo is waiting for background knowledge-base matching. |
 | `unmatched` | Matching found no candidate taxon. |
-| `ambiguous` | Matching found one or more candidates and no taxon has been selected. |
-| `matched` | A candidate taxon has been selected. |
+| `ambiguous` | The highest-priority matching dimension found more than one taxon. |
+| `matched` | Matching found one taxon, or the user selected one ambiguous candidate. |
 | `stale` | The previously selected taxon is no longer valid. |
 
 There is no `resolved_by` field. A selected taxon remains selected after
@@ -677,10 +698,28 @@ pub fn get_photo_taxon_match(
 Returns the current mapping and freshly evaluated candidates. A missing photo
 is an error.
 
-The current filename extractor removes only the final extension. It does not
-replace punctuation or other valid name characters. Candidate lookup reuses
-taxonomy search order: exact, full-name prefix, word prefix, middle, then
-trigram candidates with edit distance.
+The configured filename parser returns six possible names: scientific and
+Chinese names at species, genus, and family ranks. Each scientific value
+matches `sci_name` before `synonym`; each Chinese value matches `zh_name`
+before `zh_alias`. The first configured dimension producing candidates wins.
+One candidate is mapped automatically; several candidates are `ambiguous`.
+
+The default priority is `species_sci`, `species_zh`, `genus_sci`, `genus_zh`,
+`family_sci`, `family_zh`.
+
+```rust
+pub fn get_photo_name_match_settings(
+    database: &Database,
+) -> CoreResult<PhotoNameMatchSettings>
+
+pub fn set_photo_name_match_settings(
+    database: &Database,
+    settings: &PhotoNameMatchSettings,
+) -> CoreResult<()>
+```
+
+`PhotoNameMatchSettings.priority` must contain every `PhotoNameField` exactly
+once. Changing it queues every photo for remapping.
 
 #### `select_photo_taxon`
 
@@ -829,6 +868,16 @@ strings. Parameter names below are the camel-case keys used in JavaScript
 | `get_photo_directory_counts` | `directoryId: number` | `DirectoryEntryCounts` |
 | `refresh_photo_directory` | `directoryId: number` | `{ operation: OperationState }` |
 | `start_photo_mapping` | none | `{ operation: OperationState }` |
+| `parse_photo_filename` | `filename: string` | `ParsedPhotoFilename` |
+| `normalize_taxonomy_name` | `value: string` | `string \| null` |
+| `get_naming_hook_settings` | none | `NamingHookSettings` |
+| `set_naming_hook` | `kind: NamingHookKind`, optional `script: string` | `null` |
+| `test_naming_hook` | `kind: NamingHookKind`, `script: string`, `input: string` | `NamingHookTestResult` |
+| `get_photo_name_match_settings` | none | `PhotoNameMatchSettings` |
+| `set_photo_name_match_settings` | `settings: PhotoNameMatchSettings` | `null` |
+| `get_photo_filename_format_settings` | none | `PhotoFilenameFormatSettings` |
+| `set_photo_filename_format_settings` | `settings: PhotoFilenameFormatSettings` | `null` |
+| `format_photo_filename` | `info: TaxonomicNameInfo`, `suffix: string`, `settings: PhotoFilenameFormatSettings` | `string` |
 | `rename_photo` | `photoId: number`, `newFilename: string` | `Photo` |
 | `rename_photo_from_taxon` | `photoId: number` | `Photo` |
 | `rename_photos_from_taxa` | `photoIds: number[]` | `PhotoRenameOperationResult` |

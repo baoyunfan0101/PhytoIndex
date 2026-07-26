@@ -150,7 +150,7 @@ pub(super) fn load_taxon_summary(
     }))
 }
 
-pub(super) fn load_taxon_summaries(
+pub(crate) fn load_taxon_summaries(
     connection: &Connection,
     taxon_ids: &[i64],
 ) -> CoreResult<Vec<TaxonSummary>> {

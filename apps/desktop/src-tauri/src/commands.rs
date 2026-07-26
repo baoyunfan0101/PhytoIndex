@@ -1,21 +1,27 @@
 use std::path::Path;
 
 use phytoindex_core::mapping::{
-    PhotoMappingListItem, PhotoMappingListStatus, PhotoTaxonItem, PhotoTaxonMapping,
-    PhotoTaxonMatch, PhotoTaxonNode,
+    PhotoMappingListItem, PhotoMappingListStatus, PhotoNameMatchSettings, PhotoTaxonItem,
+    PhotoTaxonMapping, PhotoTaxonMatch, PhotoTaxonNode,
 };
 use phytoindex_core::models::{
     DirectoryEntryCounts, MappingMetadata, OperationInputTable, OperationsStatus, Photo,
     PhotoDirectoryItem, PhotoLibrary, PhotoMetadata, PhotoPage,
 };
-use phytoindex_core::photos::{PhotoOperation, PhotoRenameOperationResult};
+use phytoindex_core::naming::{
+    NamingHookKind, NamingHookSettings, NamingHookTestResult, ParsedPhotoFilename,
+    TaxonomicNameInfo,
+};
+use phytoindex_core::photos::{
+    PhotoFilenameFormatSettings, PhotoOperation, PhotoRenameOperationResult,
+};
 use phytoindex_core::taxonomy::{
     DeleteTaxonNameInput, PromoteTaxonNameInput, TaxonChild, TaxonDetailNode, TaxonInputRow,
     TaxonRowOutcome, TaxonSearchResult, TaxonUpdateInput, TaxonomyBaseMetadata,
     TaxonomyCustomSqlResult, TaxonomyCustomSqlTempTable, TaxonomyOperation,
     TaxonomyOperationResult, TaxonomyPage, TaxonomyPreviewResult,
 };
-use phytoindex_core::{export, mapping, photos, taxonomy};
+use phytoindex_core::{export, mapping, naming, photos, taxonomy};
 use serde_json::{Value, json};
 use tauri::{AppHandle, State};
 
@@ -92,6 +98,81 @@ pub fn start_photo_mapping(app: AppHandle, state: State<'_, AppState>) -> Comman
             serde_json::to_value(result).map_err(error)
         })?;
     Ok(json!({ "operation": operation }))
+}
+
+#[tauri::command]
+pub fn parse_photo_filename(
+    state: State<'_, AppState>,
+    filename: String,
+) -> CommandResult<ParsedPhotoFilename> {
+    naming::parse_photo_filename(&state.database, &filename).map_err(error)
+}
+
+#[tauri::command]
+pub fn normalize_taxonomy_name(value: String) -> Option<String> {
+    naming::normalize_taxonomy_name(&value)
+}
+
+#[tauri::command]
+pub fn get_naming_hook_settings(state: State<'_, AppState>) -> CommandResult<NamingHookSettings> {
+    naming::get_naming_hook_settings(&state.database).map_err(error)
+}
+
+#[tauri::command]
+pub fn set_naming_hook(
+    state: State<'_, AppState>,
+    kind: NamingHookKind,
+    script: Option<String>,
+) -> CommandResult<()> {
+    naming::set_naming_hook(&state.database, kind, script.as_deref()).map_err(error)
+}
+
+#[tauri::command]
+pub fn test_naming_hook(
+    kind: NamingHookKind,
+    script: String,
+    input: String,
+) -> CommandResult<NamingHookTestResult> {
+    naming::test_naming_hook(kind, &script, &input).map_err(error)
+}
+
+#[tauri::command]
+pub fn get_photo_name_match_settings(
+    state: State<'_, AppState>,
+) -> CommandResult<PhotoNameMatchSettings> {
+    mapping::get_photo_name_match_settings(&state.database).map_err(error)
+}
+
+#[tauri::command]
+pub fn set_photo_name_match_settings(
+    state: State<'_, AppState>,
+    settings: PhotoNameMatchSettings,
+) -> CommandResult<()> {
+    mapping::set_photo_name_match_settings(&state.database, &settings).map_err(error)
+}
+
+#[tauri::command]
+pub fn get_photo_filename_format_settings(
+    state: State<'_, AppState>,
+) -> CommandResult<PhotoFilenameFormatSettings> {
+    photos::get_photo_filename_format_settings(&state.database).map_err(error)
+}
+
+#[tauri::command]
+pub fn set_photo_filename_format_settings(
+    state: State<'_, AppState>,
+    settings: PhotoFilenameFormatSettings,
+) -> CommandResult<()> {
+    photos::set_photo_filename_format_settings(&state.database, &settings).map_err(error)
+}
+
+#[tauri::command]
+pub fn format_photo_filename(
+    info: TaxonomicNameInfo,
+    suffix: String,
+    settings: PhotoFilenameFormatSettings,
+) -> CommandResult<String> {
+    photos::format_photo_filename(&info, &suffix, &settings).map_err(error)
 }
 
 #[tauri::command]

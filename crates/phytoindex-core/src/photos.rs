@@ -17,11 +17,16 @@ use crate::models::{
 pub use crate::models::{PhotoDirectoryItem, PhotoPage};
 
 mod media;
+mod naming;
 mod operations;
 mod page;
 
 pub use media::{
     get_or_create_thumbnail, get_photo_metadata, photo_file_path, rebase_thumbnail_paths,
+};
+pub use naming::{
+    PhotoFilenameFormatSettings, format_photo_filename, get_photo_filename_format_settings,
+    set_photo_filename_format_settings,
 };
 pub use operations::{
     PhotoOperation, PhotoOperationInput, PhotoOperationItem, PhotoOperationSource,
@@ -700,15 +705,13 @@ fn taxon_filename(database: &Database, photo_id: i64) -> CoreResult<String> {
     let photo = get_photo(database, photo_id)?
         .ok_or_else(|| CoreError::NotFound(format!("photo {photo_id}")))?;
     let connection = database.connect()?;
-    let scientific_name = connection
+    let taxon_id = connection
         .query_row(
             r#"
-            SELECT taxon_names.name
+            SELECT photo_taxon_mapping.taxon_id
             FROM photo_taxon_mapping
-            JOIN taxon_names USING (taxon_id)
             WHERE photo_taxon_mapping.photo_id = ?1
               AND photo_taxon_mapping.status = 'matched'
-              AND taxon_names.name_type = 1
               AND NOT EXISTS (
                   SELECT 1
                   FROM photo_mapping_queue
@@ -716,19 +719,15 @@ fn taxon_filename(database: &Database, photo_id: i64) -> CoreResult<String> {
               )
             "#,
             [photo_id],
-            |row| row.get::<_, String>(0),
+            |row| row.get::<_, i64>(0),
         )
         .optional()?
         .ok_or_else(|| {
             CoreError::InvalidArgument(format!(
-                "photo {photo_id} must have a matched taxon with an accepted scientific name"
+                "photo {photo_id} must have a current matched taxon"
             ))
         })?;
-    let extension = Path::new(&photo.filename)
-        .extension()
-        .and_then(|value| value.to_str())
-        .ok_or_else(|| CoreError::InvalidArgument("photo filename has no extension".into()))?;
-    Ok(format!("{scientific_name}.{extension}"))
+    naming::filename_for_taxon(&connection, taxon_id, &photo.filename)
 }
 
 fn rename_file(source: &Path, destination: &Path, temporary: &Path) -> CoreResult<()> {
@@ -1416,7 +1415,11 @@ mod tests {
         mapping::select_photo_taxon(&database, photo.photo_id, taxon_id).unwrap();
         mapping::refresh_after_taxonomy_changes(&database, [taxon_id]).unwrap();
         let error = rename_photo_from_taxon(&database, photo.photo_id).unwrap_err();
-        assert!(error.to_string().contains("must have a matched taxon"));
+        assert!(
+            error
+                .to_string()
+                .contains("must have a current matched taxon")
+        );
         mapping::process_pending_photo_matches(&database, &mut progress).unwrap();
 
         let renamed = rename_photo_from_taxon(&database, photo.photo_id).unwrap();

@@ -15,13 +15,13 @@ use rusqlite::{
 };
 use serde::{Deserialize, Serialize};
 
-use super::name_parser::split_scientific_name_authority;
 use super::page::{
     TaxonomyCursor, TaxonomyPage, decode_cursor, encode_cursor, invalid_cursor, page_limit,
 };
 use super::view::{TaxonSummary, load_taxon_summaries, load_taxon_summary};
 use crate::mapping;
 use crate::models::OperationInputTable;
+use crate::naming::{SynonymAuthorityParser, normalize_taxonomy_name};
 use crate::{CoreError, CoreResult, Database};
 
 pub const TAXONOMY_INPUT_COLUMNS: [&str; 13] = [
@@ -386,19 +386,21 @@ fn process_rows(
     transaction: &Transaction<'_>,
     rows: &[TaxonInputRow],
 ) -> CoreResult<Vec<TaxonRowOutcome>> {
+    let synonym_parser = SynonymAuthorityParser::load(transaction)?;
     let mut outcomes = Vec::with_capacity(rows.len());
     for (index, row) in rows.iter().enumerate() {
-        outcomes.push(process_row(transaction, index + 1, row)?);
+        outcomes.push(process_row(transaction, &synonym_parser, index + 1, row)?);
     }
     Ok(outcomes)
 }
 
 fn process_row(
     transaction: &Transaction<'_>,
+    synonym_parser: &SynonymAuthorityParser,
     row_number: usize,
     row: &TaxonInputRow,
 ) -> CoreResult<TaxonRowOutcome> {
-    let normalized = match NormalizedInput::from_row(row) {
+    let normalized = match NormalizedInput::from_row(row, synonym_parser) {
         Ok(value) => value,
         Err(message) => return Ok(failed_outcome(row_number, TaxonRowStatus::Invalid, message)),
     };
@@ -1123,7 +1125,10 @@ struct NormalizedInput {
 }
 
 impl NormalizedInput {
-    fn from_row(row: &TaxonInputRow) -> Result<Self, String> {
+    fn from_row(
+        row: &TaxonInputRow,
+        synonym_parser: &SynonymAuthorityParser,
+    ) -> Result<Self, String> {
         let mut path = [
             normalize_name(row.kingdom.as_deref()),
             normalize_name(row.order.as_deref()),
@@ -1144,17 +1149,18 @@ impl NormalizedInput {
         }
         let target_name = path[target_index].clone().unwrap_or_default();
         let mut seen_scientific_names = HashSet::from([target_name.clone()]);
-        let synonyms = unique_names(&row.synonyms)
-            .into_iter()
-            .filter_map(|raw| {
-                let parts = split_scientific_name_authority(&raw);
-                (!parts.name.is_empty() && seen_scientific_names.insert(parts.name.clone()))
-                    .then_some(ParsedSynonym {
-                        name: parts.name,
-                        authority_year: normalize_text(parts.authority_year.as_deref()),
-                    })
-            })
-            .collect();
+        let mut synonyms = Vec::new();
+        for raw in unique_names(&row.synonyms) {
+            let parts = synonym_parser
+                .split(&raw)
+                .map_err(|error| error.to_string())?;
+            if seen_scientific_names.insert(parts.name.clone()) {
+                synonyms.push(ParsedSynonym {
+                    name: parts.name,
+                    authority_year: normalize_text(parts.authority_year.as_deref()),
+                });
+            }
+        }
         let zh_names = combined_names(row.zh_name.as_deref(), &row.zh_alias);
         let en_names = combined_names(row.en_name.as_deref(), &row.en_alias);
         Ok(Self {
@@ -1220,10 +1226,7 @@ fn normalize_text(value: Option<&str>) -> Option<String> {
 }
 
 pub(super) fn normalize_name(value: Option<&str>) -> Option<String> {
-    value.and_then(|value| {
-        let value = value.split_whitespace().collect::<Vec<_>>().join(" ");
-        (!value.is_empty()).then_some(value)
-    })
+    value.and_then(normalize_taxonomy_name)
 }
 
 fn classify_changes(changes: &[TaxonChange]) -> Vec<TaxonRowStatus> {
@@ -1815,6 +1818,42 @@ mod tests {
         }
         assert!(TaxonomyNameType::from_code(0).is_err());
         assert!(TaxonomyNameType::from_code(7).is_err());
+    }
+
+    #[test]
+    fn formatted_update_uses_the_configured_synonym_hook() {
+        let (_directory, database) = database();
+        crate::naming::set_naming_hook(
+            &database,
+            crate::naming::NamingHookKind::SynonymAuthority,
+            Some(
+                r#"
+                fn split_synonym_authority(value) {
+                    #{ name: "Hooked synonym", authority_year: "custom" }
+                }
+                "#,
+            ),
+        )
+        .unwrap();
+        apply_rows(
+            &database,
+            &[TaxonInputRow {
+                kingdom: Some("Animalia".into()),
+                synonyms: vec!["ignored".into()],
+                ..TaxonInputRow::default()
+            }],
+        )
+        .unwrap();
+        let authority: String = database
+            .connect()
+            .unwrap()
+            .query_row(
+                "SELECT authority_year FROM taxon_names WHERE name = 'Hooked synonym'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(authority, "custom");
     }
 
     #[test]
