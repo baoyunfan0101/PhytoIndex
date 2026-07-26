@@ -19,11 +19,6 @@ and `species`.
 `zh_alias`, `en_name`, and `en_alias`. A taxon has exactly one `sci_name`, and
 may have at most one `zh_name` and one `en_name`.
 
-Database-facing inputs use integer codes in the same order: `1` for
-`sci_name`, `2` for `synonym`, `3` for `zh_name`, `4` for `zh_alias`, `5` for
-`en_name`, and `6` for `en_alias`. API and JSON values remain the string
-names.
-
 `TaxonomyPage<T>` is used by paginated interfaces:
 
 | Field | Type | Description |
@@ -214,9 +209,18 @@ character other than `|`.
 
 ### Scientific-name authority parser
 
+```rust
+pub fn split_scientific_name_authority(
+    value: &str,
+) -> CoreResult<ScientificNameParts>
+```
+
+`value` is the raw scientific-name string. The return value contains the
+parsed `name` and optional `authority_year`.
+
 Formatted updates use the database-aware synonym parser from
-`phytoindex_core::naming`. It runs the configured Rhai hook or the independent
-built-in parser, then applies shared name normalization. See
+`phytoindex_core::naming`. It runs the configured Rhai hook or bundled Rhai
+template, then applies shared name normalization. See
 [the naming backend API](NAMING.md) for parameters, return values, and the
 hook contract.
 
@@ -303,8 +307,9 @@ A `TaxonRowOutcome` contains:
 `multiple_candidates`. A row may contain more than one status.
 
 Each `TaxonChange` contains `kind`, `field`, `old_value`, and `new_value`.
-`kind` serializes as `create_taxon`, `append_name`, `supplement`, or
-`overwrite`.
+`TaxonChangeKind` serializes as `create_taxon`, `append_name`, `supplement`,
+or `overwrite`. `TaxonomyOperationRowLog` is a public alias for
+`TaxonRowOutcome`.
 
 ### `taxonomy_log_csv`
 
@@ -486,8 +491,9 @@ pub fn replace_taxonomy_base_database(
 from the application database and contain valid taxonomy data in the expected
 base-database layout.
 
-Within that external database, `name_type` uses the integer codes listed under
-Common types.
+Within that external database, `name_type` uses `1` for `sci_name`, `2` for
+`synonym`, `3` for `zh_name`, `4` for `zh_alias`, `5` for `en_name`, and `6`
+for `en_alias`. API and JSON values use the string names.
 
 Replacement discards the current taxonomy, taxonomy operation history, and
 mapping state, then imports the external taxon and name IDs. The return value

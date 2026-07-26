@@ -1,8 +1,7 @@
 # Map Backend API
 
-The `phytoindex_core::map` module owns map-photo queries and map settings. All
-settings are stored through the shared internal metadata module; no generic
-metadata command is exposed.
+The `phytoindex_core::map` module owns map-photo queries and map settings.
+All fallible functions return `CoreResult<T>`.
 
 ## Models
 
@@ -40,7 +39,7 @@ the antimeridian.
 | `longitude` | `f64` | Stored photo longitude. |
 | `latitude` | `f64` | Stored photo latitude. |
 
-## Core Interfaces
+## `phytoindex_core::map`
 
 ### `get_map_settings`
 
@@ -59,7 +58,11 @@ pub fn set_map_settings(
 ) -> CoreResult<MapSettings>
 ```
 
-Stores settings and returns the normalized value.
+| Parameter | Description |
+| --- | --- |
+| `settings` | Tile provider and optional provider token to save. |
+
+Returns the normalized saved value. An empty Tianditu token becomes `None`.
 
 ### `list_map_photos`
 
@@ -82,7 +85,7 @@ Only photos with both coordinates are returned. Results are ordered by
 `photo_id`. The opaque cursor is bound to the exact bounds and cannot be reused
 for another viewport.
 
-## Desktop Commands
+## Desktop commands
 
 JavaScript invoke parameters use camel case. Returned object fields use snake
 case.

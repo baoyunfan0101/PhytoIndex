@@ -12,9 +12,6 @@ It covers:
 - Desktop Tauri commands, operation events, and media URLs that expose those
   core APIs.
 
-Database tables and other internal storage details are not part of this
-contract.
-
 The Rust surfaces are imported from:
 
 ```rust
@@ -290,8 +287,8 @@ pub fn refresh_directory(
 
 Returns the changes found among the directory's immediate entries. Child
 directories are indexed but are not recursively scanned. Every newly discovered
-photo enters the mapping queue during its first refresh. New or changed photos
-remain `processing` until taxon matching completes.
+photo becomes `processing` during its first refresh. New or changed photos
+remain in that state until taxon matching completes.
 
 ### Photo read APIs
 
@@ -323,12 +320,10 @@ pub fn search_photos(
 | `cursor` | `None` for the first page, otherwise the previous `next_cursor`. |
 | `limit` | Requested maximum number of photos. |
 
-Combines filename matches with photos assigned to matching taxa. The taxonomy
-search relation is joined directly to the current matched mapping relation; it
-is not first materialized as a bounded taxon ID list. Taxon matches include
-photos on descendant taxa. Duplicate photos are removed and results are
-ordered by `photo_id`. Blank input returns an empty page. The cursor is bound
-to the normalized query.
+Combines filename matches with photos assigned to matching taxa. Taxon matches
+include photos on descendant taxa. Duplicate photos are removed and results
+are ordered by `photo_id`. Blank input returns an empty page. The cursor is
+bound to the normalized query.
 
 This is the backend source for a general-search PhotoSet. PhotoSet itself is a
 frontend window concept and is not stored by the backend.
@@ -350,10 +345,8 @@ pub fn search_photos_by_filename(
 | `cursor` | `None` for the first page, otherwise the previous page's `next_cursor`. |
 | `limit` | Requested maximum number of photos. |
 
-Returns matching photos ordered by `photo_id`. Queries of at least three
-characters use the filename search index; shorter queries retain literal
-substring behavior. An empty query returns an empty page. The cursor is bound
-to the normalized query.
+Returns case-insensitive substring matches ordered by `photo_id`. An empty
+query returns an empty page. The cursor is bound to the normalized query.
 
 #### `photo_file_path`
 
@@ -470,6 +463,12 @@ pub fn format_photo_filename(
 ) -> CoreResult<String>
 ```
 
+| Function | Parameters | Return |
+| --- | --- | --- |
+| `get_photo_filename_format_settings` | `database`: project database | Current six-field filename format settings. |
+| `set_photo_filename_format_settings` | `database`; `settings`: complete six-field settings | `()` after validation and save. |
+| `format_photo_filename` | `info`: parsed six-dimensional names; `suffix`: preserved filename suffix; `settings`: fields to include | Formatted filename. |
+
 #### `rename_photos_from_taxa`
 
 ```rust
@@ -488,9 +487,23 @@ successful earlier and later renames remain applied. All changing rows share
 the returned `operation_id`. If every row fails or needs no change,
 `operation_id` is `None`.
 
-`rename_photos_in_directory_from_taxa` accepts a directory ID and an
-`include_descendants` flag. It resolves only photos with a current `matched`
-mapping and then uses the same operation interface.
+#### `rename_photos_in_directory_from_taxa`
+
+```rust
+pub fn rename_photos_in_directory_from_taxa(
+    database: &Database,
+    directory_id: i64,
+    include_descendants: bool,
+) -> CoreResult<PhotoRenameOperationResult>
+```
+
+| Parameter | Description |
+| --- | --- |
+| `directory_id` | Directory whose photos are considered. |
+| `include_descendants` | Whether to include photos in descendant directories. |
+
+Only photos with a current `matched` mapping are renamed. The return value has
+the same per-row and operation semantics as `rename_photos_from_taxa`.
 
 ### Rename history APIs
 
@@ -575,13 +588,10 @@ source row order. The returned archive table has `photo_id` and
 There is no `resolved_by` field. A selected taxon remains selected after
 rematching only while it is still a current candidate.
 
-Only `matched`, `ambiguous`, and `unmatched` are stored mapping states.
-`processing` is synthesized while the photo has an entry in
-`photo_mapping_queue`.
-
-A photo is currently `matched` only when its stored status is `matched` and it
-has no entry in `photo_mapping_queue`. Every public mapping, navigation,
-taxonomy-browse, search, count, and rename API follows this definition.
+`matched`, `ambiguous`, and `unmatched` are stable results. `processing` is a
+temporary state and takes precedence over any previous result. A processing
+photo is excluded from matched-only navigation, taxonomy browsing, search,
+counts, and rename operations until matching completes.
 
 ### `PhotoTaxonMapping`
 
@@ -610,9 +620,8 @@ that selection is being revalidated.
 | `matched_names` | `Vec<PhotoMatchedName>` | Taxonomy names responsible for this candidate. |
 | `accepted_names` | `TaxonDisplayNames` | Current `sci_name`, `en_name`, and `zh_name`. |
 
-Candidates and matched-name snapshots are persisted only for stored
-`ambiguous` mappings. They are replaced atomically by each automatic mapping
-run and removed when the mapping becomes `matched` or `unmatched`.
+Candidates and matched-name snapshots are available only for `ambiguous`
+mappings. A later automatic or manual result replaces them.
 
 ### `PhotoTaxonMatch`
 
@@ -663,7 +672,7 @@ Accepted values are:
 - `processing`
 
 A photo waiting for matching belongs to `processing`, regardless of its
-previous stored status.
+previous stable result.
 
 ### `PhotoMappingListItem`
 
@@ -692,6 +701,14 @@ The four photo-status counts are mutually exclusive.
 | `changed` | `usize` | Mapping states changed by this run. |
 | `pending` | `i64` | Photos still waiting for matching. |
 
+### `PhotoNameField` and `PhotoNameMatchSettings`
+
+`PhotoNameField` serializes as `species_sci`, `species_zh`, `genus_sci`,
+`genus_zh`, `family_sci`, or `family_zh`.
+
+`PhotoNameMatchSettings` contains `priority: Vec<PhotoNameField>`. The list
+must contain all six fields exactly once and is evaluated from first to last.
+
 ## `phytoindex_core::mapping`
 
 Every function below takes `database: &Database`.
@@ -715,8 +732,13 @@ pub fn get_photo_mapping(
 ) -> CoreResult<Option<PhotoTaxonMapping>>
 ```
 
-Returns the photo's current logical mapping, including synthesized
-`processing`, or `None` when the photo does not exist.
+| Parameter | Description |
+| --- | --- |
+| `photo_id` | Photo whose current mapping is requested. |
+
+Returns the photo's current logical mapping, including `processing`, or
+`None` when the photo does not exist. A photo that exists but has no mapping
+state is reported as a consistency error.
 
 #### `get_photo_taxon_match`
 
@@ -745,19 +767,31 @@ candidate is mapped automatically; several candidates are persisted with an
 The default priority is `species_sci`, `species_zh`, `genus_sci`, `genus_zh`,
 `family_sci`, `family_zh`.
 
+#### `get_photo_name_match_settings`
+
 ```rust
 pub fn get_photo_name_match_settings(
     database: &Database,
 ) -> CoreResult<PhotoNameMatchSettings>
+```
 
+Returns the six matching fields in their current priority order.
+
+#### `set_photo_name_match_settings`
+
+```rust
 pub fn set_photo_name_match_settings(
     database: &Database,
     settings: &PhotoNameMatchSettings,
 ) -> CoreResult<()>
 ```
 
-`PhotoNameMatchSettings.priority` must contain every `PhotoNameField` exactly
-once. Changing it queues every photo for remapping.
+| Parameter | Description |
+| --- | --- |
+| `settings` | Priority list containing every `PhotoNameField` exactly once. |
+
+Returns `()` after saving the settings. Changing the priority marks every
+photo as `processing` for automatic remapping.
 
 #### `select_photo_taxon`
 
@@ -786,9 +820,13 @@ pub fn clear_photo_mapping(
 ) -> CoreResult<PhotoTaxonMapping>
 ```
 
+| Parameter | Description |
+| --- | --- |
+| `photo_id` | Photo whose binding is removed. |
+
 Removes the current taxon binding and records the photo as `unmatched`.
-Persisted candidates and any queue entry are removed. A missing photo is an
-error.
+Candidates and pending automatic remapping are cancelled. Returns the new
+mapping. A missing photo is an error.
 
 #### `set_photo_mapping`
 
@@ -800,9 +838,14 @@ pub fn set_photo_mapping(
 ) -> CoreResult<PhotoTaxonMapping>
 ```
 
+| Parameter | Description |
+| --- | --- |
+| `photo_id` | Photo whose binding is assigned or replaced. |
+| `taxon_id` | Existing taxon to bind. |
+
 Forces the photo to `matched` with any existing taxon. The taxon does not need
-to be an automatic candidate. This also replaces an existing binding and
-removes persisted candidates and any queue entry.
+to be an automatic candidate. Returns the new mapping and cancels candidates
+and pending automatic remapping.
 
 #### `remap_photo`
 
@@ -813,9 +856,13 @@ pub fn remap_photo(
 ) -> CoreResult<PhotoTaxonMatch>
 ```
 
+| Parameter | Description |
+| --- | --- |
+| `photo_id` | Photo to match immediately. |
+
 Runs the configured filename parser and six-field matching engine for one
-photo, clears its queue entry, and returns the resulting mapping. Persisted
-candidates are included when the result is `ambiguous`.
+photo and returns the resulting mapping. Candidates are included when the
+result is `ambiguous`.
 
 #### `process_pending_photo_matches`
 
@@ -854,9 +901,8 @@ pub fn search_photo_taxa(
 Uses the taxonomy search matching stages, priorities, summaries, details, and
 matched-name output unchanged. The additional filter requires
 `subtree_photo_count > 0`, so a result has a matched photo on itself or a
-descendant. An empty query returns an empty page. The cursor is bound to the
-normalized query and the last ranked search key, so later pages use keyset
-pagination rather than rebuilding and discarding every preceding result.
+descendant. An empty query returns an empty page. The opaque cursor is bound
+to the normalized query and continues the same ranked result order.
 
 #### `suggest_photo_taxa`
 
@@ -975,8 +1021,8 @@ pub fn search_photos_by_mapping_status(
 | `cursor` | `None` for the first page, otherwise the previous page's `next_cursor`. |
 | `limit` | Requested maximum number of photos. |
 
-For `matched`, this uses the same combined filename and taxonomy search
-relation as `search_photos`, constrained to current matched photos. Other
+For `matched`, the query uses the same combined filename and taxonomy behavior
+as `search_photos`, then restricts results to current matched photos. Other
 statuses search filenames only. Results are ordered by `photo_id`; the cursor
 is bound to both the normalized query and status.
 

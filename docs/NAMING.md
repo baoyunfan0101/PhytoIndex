@@ -1,8 +1,7 @@
 # Naming Backend API
 
 This document describes `phytoindex_core::naming`, the public boundary for
-taxonomy-name normalization and user-configurable Rhai hooks. Internal script
-engine and metadata storage details are not part of the contract.
+taxonomy-name normalization and user-configurable Rhai hooks.
 
 All fallible Rust functions return `CoreResult<T>`.
 
@@ -11,6 +10,10 @@ All fallible Rust functions return `CoreResult<T>`.
 ```rust
 pub fn normalize_taxonomy_name(value: &str) -> Option<String>
 ```
+
+| Parameter | Description |
+| --- | --- |
+| `value` | Taxonomy name to normalize. |
 
 Returns `None` for an empty value. Otherwise it trims outer whitespace,
 collapses whitespace, normalizes supported quote marks, changes a standalone
@@ -49,6 +52,11 @@ pub fn parse_photo_filename(
 ) -> CoreResult<ParsedPhotoFilename>
 ```
 
+| Function | Parameters | Return |
+| --- | --- | --- |
+| `default_parse_photo_filename` | `filename`: original filename | Parsed six-dimensional names and preserved suffix from the bundled hook. |
+| `parse_photo_filename` | `database`: project database; `filename`: original filename | Parsed names and suffix from the project's effective hook. |
+
 `default_parse_photo_filename` always executes the bundled Rhai template.
 `parse_photo_filename` uses the configured photo hook when present and
 otherwise executes the same template.
@@ -81,6 +89,12 @@ pub fn split_scientific_name_authority_with_database(
     value: &str,
 ) -> CoreResult<ScientificNameParts>
 ```
+
+| Function | Parameters | Return |
+| --- | --- | --- |
+| `default_split_scientific_name_authority` | `value`: raw scientific-name string | Name and optional authority from the bundled hook. |
+| `split_scientific_name_authority` | `value`: raw scientific-name string | Same result as the bundled hook. |
+| `split_scientific_name_authority_with_database` | `database`: project database; `value`: raw scientific-name string | Name and optional authority from the project's effective hook. |
 
 The first two functions execute the bundled Rhai template. The database-aware
 function uses the configured synonym hook when present and otherwise executes
@@ -157,6 +171,10 @@ discarded.
 
 ## Templates and hook settings
 
+`NamingHookTemplates` has `photo_filename` and `synonym_authority` string
+fields. `NamingHookSettings` has the same fields as optional strings; `None`
+means the bundled template is active.
+
 ```rust
 pub fn get_naming_hook_template(
     kind: NamingHookKind,
@@ -187,21 +205,33 @@ by the backend and editable starting points for users.
 
 `NamingHookSettings` contains optional `photo_filename` and
 `synonym_authority` scripts. Passing `None` or an empty script restores the
-built-in template. `set_naming_hook` compiles and executes a sample before
-saving. Changing the photo hook queues every photo for remapping. Operational
-photo matching compiles the effective script once before the queued-photo
-batch loop and reuses it across every page in that mapping run. Formatted
-updates likewise compile once and reuse the parser for all rows.
-
-Function calls use `CallFnOptions::eval_ast(false)`, so the AST is not
-re-evaluated for each input. Hook scripts must therefore keep executable logic
-inside their hook functions instead of relying on top-level statements to
-initialize scope values.
+built-in template. `set_naming_hook` validates the script before saving it.
+Changing the photo hook marks every photo as `processing` for remapping. Hook
+scripts must keep executable logic inside their hook functions instead of
+relying on top-level statements to initialize scope values.
 
 `test_naming_hook` does not save the script. Its tagged return value contains
 either `ParsedPhotoFilename` or `ScientificNameParts`.
 
+| Function | Parameters | Return |
+| --- | --- | --- |
+| `get_naming_hook_template` | `kind`: requested hook kind | Bundled Rhai source for that kind. |
+| `get_naming_hook_templates` | none | Bundled source for both hook kinds. |
+| `get_naming_hook_settings` | `database`: project database | Optional saved scripts for both hook kinds. |
+| `set_naming_hook` | `database`; `kind`; optional `script` | `()` after validation and save; `None` or empty restores the default. |
+| `test_naming_hook` | `kind`; unsaved `script`; raw `input` | Tagged parsed result without saving the script. |
+
 ## Project test cases
+
+The public test models are:
+
+| Type | Fields | Description |
+| --- | --- | --- |
+| `NamingHookTestResult` | tagged `kind` and `output` | A photo-filename or synonym-authority output. |
+| `NamingHookTestCase` | `name`, `input`, `expected` | One named raw input and its expected tagged output. |
+| `NamingHookTestCases` | `photo_filename`, `synonym_authority` | Project cases grouped by hook kind. |
+| `NamingHookCaseResult` | `name`, `input`, `expected`, `actual`, `passed`, `error` | Actual outcome for one case. |
+| `NamingHookTestReport` | `kind`, `passed`, `failed`, `cases` | Complete test run result. |
 
 ```rust
 pub fn get_naming_hook_test_cases(
@@ -223,14 +253,20 @@ pub fn run_naming_hook_tests(
 
 `NamingHookTestCases` contains the project test cases for both hook kinds.
 Each `NamingHookTestCase` has `name`, raw `input`, and tagged `expected`
-output. Cases are stored as JSON in project metadata. New projects include
-the bundled photo filename golden cases and synonym-authority golden cases.
+output. New projects include the bundled photo filename golden cases and
+synonym-authority golden cases.
 
 `run_naming_hook_tests` uses the supplied unsaved script when `script` is
 `Some`; `None` uses the project's effective saved or default script. It
-compiles that script once, executes every stored case in order, and returns
-passed and failed counts. Every `NamingHookCaseResult` includes `expected`,
-optional `actual`, `passed`, and an optional execution `error`.
+executes every project case in order and returns passed and failed counts.
+Every `NamingHookCaseResult` includes `expected`, optional `actual`, `passed`,
+and an optional execution `error`.
+
+| Function | Parameters | Return |
+| --- | --- | --- |
+| `get_naming_hook_test_cases` | `database`: project database | Test cases grouped by hook kind. |
+| `set_naming_hook_test_cases` | `database`; `kind`; ordered `cases` | `()` after replacing that kind's project cases. |
+| `run_naming_hook_tests` | `database`; `kind`; optional unsaved `script` | Per-case results plus passed and failed counts. |
 
 ## Desktop commands
 
