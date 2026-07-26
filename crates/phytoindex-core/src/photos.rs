@@ -341,6 +341,7 @@ fn refresh_directory_locked(database: &Database, directory_id: i64) -> CoreResul
     let transaction = connection.transaction()?;
     let existing_directories = direct_directories(&transaction, directory_id)?;
     let existing_photos = direct_photos(&transaction, directory_id)?;
+    let photos_with_mapping_state = direct_photos_with_mapping_state(&transaction, directory_id)?;
     let scanned_directory_names = scanned_directories
         .iter()
         .map(|value| value.name.as_str())
@@ -408,6 +409,9 @@ fn refresh_directory_locked(database: &Database, directory_id: i64) -> CoreResul
                 if photo.file_size == entry.file_size
                     && photo.modified_at_ns == entry.modified_at_ns =>
             {
+                if !photos_with_mapping_state.contains(&photo.photo_id) {
+                    changed_photo_ids.push(photo.photo_id);
+                }
                 unchanged += 1;
             }
             Some(photo) => {
@@ -850,6 +854,27 @@ fn direct_photos(
         .collect())
 }
 
+fn direct_photos_with_mapping_state(
+    transaction: &Transaction<'_>,
+    directory_id: i64,
+) -> CoreResult<HashSet<i64>> {
+    let mut statement = transaction.prepare(
+        r#"
+        SELECT photos.photo_id
+        FROM photos
+        LEFT JOIN photo_taxon_mapping USING (photo_id)
+        LEFT JOIN photo_mapping_queue USING (photo_id)
+        WHERE photos.directory_id = ?
+          AND (
+              photo_taxon_mapping.photo_id IS NOT NULL
+              OR photo_mapping_queue.photo_id IS NOT NULL
+          )
+        "#,
+    )?;
+    let rows = statement.query_map([directory_id], |row| row.get::<_, i64>(0))?;
+    Ok(rows.collect::<Result<HashSet<_>, _>>()?)
+}
+
 fn insert_photo(transaction: &Transaction<'_>, photo: &NewPhoto) -> CoreResult<i64> {
     transaction.execute(
         r#"
@@ -1021,6 +1046,36 @@ mod tests {
         refresh_directory(&database, nested_directory_id).unwrap();
         assert_eq!(list_photos(&database).unwrap().len(), 2);
         assert_eq!(get_photo_count(&database).unwrap(), 2);
+    }
+
+    #[test]
+    fn refresh_queues_a_photo_without_mapping_state() {
+        let data = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("photo.jpg"), b"photo").unwrap();
+        let database = Database::open(data.path().join("vividarium.db")).unwrap();
+        let library = open_library(&database, root.path().to_str().unwrap()).unwrap();
+        refresh_directory(&database, library.root_directory_id).unwrap();
+        let photo = list_photos(&database).unwrap().remove(0);
+        database
+            .connect()
+            .unwrap()
+            .execute(
+                "DELETE FROM photo_mapping_queue WHERE photo_id = ?",
+                [photo.photo_id],
+            )
+            .unwrap();
+
+        let result = refresh_directory(&database, library.root_directory_id).unwrap();
+
+        assert_eq!(result.unchanged, 1);
+        assert_eq!(
+            mapping::get_photo_mapping(&database, photo.photo_id)
+                .unwrap()
+                .unwrap()
+                .status,
+            mapping::PhotoTaxonStatus::Processing
+        );
     }
 
     #[test]
@@ -1263,7 +1318,7 @@ mod tests {
         let data = tempfile::tempdir().unwrap();
         let root = tempfile::tempdir().unwrap();
         fs::write(root.path().join("mapped.jpg"), b"mapped").unwrap();
-        fs::write(root.path().join("unmapped.png"), b"unmapped").unwrap();
+        fs::write(root.path().join("processing.png"), b"processing").unwrap();
         let database = Database::open(data.path().join("vividarium.db")).unwrap();
         let library = open_library(&database, root.path().to_str().unwrap()).unwrap();
         refresh_directory(&database, library.root_directory_id).unwrap();
@@ -1309,7 +1364,7 @@ mod tests {
         assert_eq!(result.rows[0].photo_id, mapped_photo.photo_id);
         assert_eq!(result.rows[0].status, PhotoRenameRowStatus::Applied);
         assert!(root.path().join("Canis lupus.jpg").is_file());
-        assert!(root.path().join("unmapped.png").is_file());
+        assert!(root.path().join("processing.png").is_file());
     }
 
     #[test]

@@ -34,7 +34,6 @@ pub enum PhotoTaxonStatus {
     Unmatched,
     Ambiguous,
     Processing,
-    Stale,
 }
 
 impl PhotoTaxonStatus {
@@ -44,7 +43,6 @@ impl PhotoTaxonStatus {
             Self::Unmatched => "unmatched",
             Self::Ambiguous => "ambiguous",
             Self::Processing => "processing",
-            Self::Stale => "stale",
         }
     }
 
@@ -54,7 +52,6 @@ impl PhotoTaxonStatus {
             "unmatched" => Ok(Self::Unmatched),
             "ambiguous" => Ok(Self::Ambiguous),
             "processing" => Ok(Self::Processing),
-            "stale" => Ok(Self::Stale),
             _ => Err(CoreError::InvalidArgument(format!(
                 "invalid photo taxon status: {value}"
             ))),
@@ -118,8 +115,6 @@ pub enum PhotoMappingListStatus {
     Unmatched,
     Ambiguous,
     Processing,
-    Stale,
-    Unmapped,
 }
 
 impl PhotoMappingListStatus {
@@ -129,8 +124,6 @@ impl PhotoMappingListStatus {
             Self::Unmatched => "unmatched",
             Self::Ambiguous => "ambiguous",
             Self::Processing => "processing",
-            Self::Stale => "stale",
-            Self::Unmapped => "unmapped",
         }
     }
 }
@@ -138,7 +131,7 @@ impl PhotoMappingListStatus {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PhotoMappingListItem {
     pub photo: Photo,
-    pub mapping: Option<PhotoTaxonMapping>,
+    pub mapping: PhotoTaxonMapping,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -157,7 +150,17 @@ pub fn get_metadata(database: &Database) -> CoreResult<MappingMetadata> {
     let connection = database.connect()?;
     let count = |status: &str| -> CoreResult<i64> {
         Ok(connection.query_row(
-            "SELECT COUNT(*) FROM photo_taxon_mapping WHERE status = ?",
+            r#"
+            SELECT COUNT(*)
+            FROM photo_taxon_mapping
+            WHERE status = ?
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM photo_mapping_queue
+                  WHERE photo_mapping_queue.photo_id =
+                        photo_taxon_mapping.photo_id
+              )
+            "#,
             [status],
             |row| row.get(0),
         )?)
@@ -466,21 +469,6 @@ pub fn list_photos_by_mapping_status(
                 SqlValue::Integer(fetch_limit as i64),
             ],
         ),
-        PhotoMappingListStatus::Unmapped => (
-            r#"
-            LEFT JOIN photo_mapping_queue ON photo_mapping_queue.photo_id = photos.photo_id
-            LEFT JOIN photo_taxon_mapping ON photo_taxon_mapping.photo_id = photos.photo_id
-            "#,
-            r#"
-            photo_mapping_queue.photo_id IS NULL
-            AND photo_taxon_mapping.photo_id IS NULL
-            AND photos.photo_id > ?
-            "#,
-            vec![
-                SqlValue::Integer(after_photo_id),
-                SqlValue::Integer(fetch_limit as i64),
-            ],
-        ),
         status => (
             r#"
             LEFT JOIN photo_mapping_queue ON photo_mapping_queue.photo_id = photos.photo_id
@@ -503,12 +491,11 @@ pub fn list_photos_by_mapping_status(
     let rows = statement.query_map(params_from_iter(values), |row| {
         let photo = crate::db::photo_from_row(row)?;
         let mapping = match status {
-            PhotoMappingListStatus::Unmapped => None,
-            PhotoMappingListStatus::Processing => Some(PhotoTaxonMapping {
+            PhotoMappingListStatus::Processing => PhotoTaxonMapping {
                 photo_id: photo.photo_id,
                 taxon_id: row.get("mapping_taxon_id")?,
                 status: PhotoTaxonStatus::Processing,
-            }),
+            },
             _ => {
                 let stored_status = row.get::<_, String>("mapping_status")?;
                 let stored_status =
@@ -519,11 +506,11 @@ pub fn list_photos_by_mapping_status(
                             Box::new(error),
                         )
                     })?;
-                Some(PhotoTaxonMapping {
+                PhotoTaxonMapping {
                     photo_id: photo.photo_id,
                     taxon_id: row.get("mapping_taxon_id")?,
                     status: stored_status,
-                })
+                }
             }
         };
         Ok(PhotoMappingListItem { photo, mapping })
@@ -1647,6 +1634,16 @@ mod tests {
 
         crate::taxonomy::delete_taxon(&database, taxon_id).unwrap();
 
+        let connection = database.connect().unwrap();
+        let stored_mapping_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM photo_taxon_mapping WHERE photo_id = ?",
+                [photo.photo_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored_mapping_count, 0);
+        drop(connection);
         assert_eq!(
             get_photo_mapping(&database, photo.photo_id)
                 .unwrap()
@@ -1913,7 +1910,6 @@ mod tests {
         let processing_photo_id = insert_test_photo(&connection, directory_id, "processing.jpg");
         let first_unmatched_id = insert_test_photo(&connection, directory_id, "unmatched-1.jpg");
         let second_unmatched_id = insert_test_photo(&connection, directory_id, "unmatched-2.jpg");
-        let unmapped_photo_id = insert_test_photo(&connection, directory_id, "unmapped.jpg");
         for photo_id in [processing_photo_id, first_unmatched_id, second_unmatched_id] {
             connection
                 .execute(
@@ -1940,14 +1936,11 @@ mod tests {
             list_photos_by_mapping_status(&database, PhotoMappingListStatus::Unmatched, None, 1)
                 .unwrap();
         assert_eq!(first.items[0].photo.photo_id, first_unmatched_id);
-        assert_eq!(
-            first.items[0].mapping.as_ref().unwrap().status,
-            PhotoTaxonStatus::Unmatched
-        );
+        assert_eq!(first.items[0].mapping.status, PhotoTaxonStatus::Unmatched);
         assert!(first.next_cursor.is_some());
         let error = list_photos_by_mapping_status(
             &database,
-            PhotoMappingListStatus::Unmapped,
+            PhotoMappingListStatus::Processing,
             first.next_cursor.as_deref(),
             1,
         )
@@ -1969,15 +1962,12 @@ mod tests {
         assert_eq!(processing.items.len(), 1);
         assert_eq!(processing.items[0].photo.photo_id, processing_photo_id);
         assert_eq!(
-            processing.items[0].mapping.as_ref().unwrap().status,
+            processing.items[0].mapping.status,
             PhotoTaxonStatus::Processing
         );
-        let unmapped =
-            list_photos_by_mapping_status(&database, PhotoMappingListStatus::Unmapped, None, 10)
-                .unwrap();
-        assert_eq!(unmapped.items.len(), 1);
-        assert_eq!(unmapped.items[0].photo.photo_id, unmapped_photo_id);
-        assert_eq!(unmapped.items[0].mapping, None);
+        let metadata = get_metadata(&database).unwrap();
+        assert_eq!(metadata.unmatched_photo_count, 2);
+        assert_eq!(metadata.processing_photo_count, 1);
     }
 
     #[test]

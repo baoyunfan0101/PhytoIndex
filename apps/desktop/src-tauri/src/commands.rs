@@ -595,7 +595,7 @@ pub fn suggest_photo_taxa(
 }
 
 #[tauri::command]
-pub fn get_photo_taxon_id(state: State<'_, AppState>, photo_id: i64) -> CommandResult<Option<i64>> {
+pub fn get_photo_taxon_id(state: State<'_, AppState>, photo_id: i64) -> CommandResult<i64> {
     mapping::get_photo_taxon_id(&state.database, photo_id).map_err(error)
 }
 

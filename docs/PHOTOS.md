@@ -289,8 +289,9 @@ pub fn refresh_directory(
 | `directory_id` | Directory to compare with the real filesystem. |
 
 Returns the changes found among the directory's immediate entries. Child
-directories are indexed but are not recursively scanned. New or changed photos
-become `processing` until taxon matching completes.
+directories are indexed but are not recursively scanned. Every newly discovered
+photo enters the mapping queue during its first refresh. New or changed photos
+remain `processing` until taxon matching completes.
 
 ### Photo read APIs
 
@@ -570,10 +571,13 @@ source row order. The returned archive table has `photo_id` and
 | `unmatched` | Matching found no candidate taxon. |
 | `ambiguous` | The highest-priority matching dimension found more than one taxon. |
 | `matched` | Matching found one taxon, or the user selected one ambiguous candidate. |
-| `stale` | The previously selected taxon is no longer valid. |
 
 There is no `resolved_by` field. A selected taxon remains selected after
 rematching only while it is still a current candidate.
+
+Only `matched`, `ambiguous`, and `unmatched` are stored mapping states.
+`processing` is synthesized while the photo has an entry in
+`photo_mapping_queue`.
 
 ### `PhotoTaxonMapping`
 
@@ -649,11 +653,8 @@ Accepted values are:
 - `unmatched`
 - `ambiguous`
 - `processing`
-- `stale`
-- `unmapped`
 
-`unmapped` means the photo has neither a current mapping nor pending matching
-work. A photo waiting for matching belongs to `processing`, regardless of its
+A photo waiting for matching belongs to `processing`, regardless of its
 previous stored status.
 
 ### `PhotoMappingListItem`
@@ -661,21 +662,19 @@ previous stored status.
 | Field | Type | Description |
 | --- | --- | --- |
 | `photo` | `Photo` | Photo in the requested logical status. |
-| `mapping` | `Option<PhotoTaxonMapping>` | Mapping state, or `null` for `unmapped`. |
+| `mapping` | `PhotoTaxonMapping` | Current logical mapping state. |
 
 ### `MappingMetadata`
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `mapped_photo_count` | `i64` | Number of stored `matched` mappings. |
-| `unmatched_photo_count` | `i64` | Number of stored `unmatched` mappings. |
-| `ambiguous_photo_count` | `i64` | Number of stored `ambiguous` mappings. |
+| `mapped_photo_count` | `i64` | Number of current `matched` mappings. |
+| `unmatched_photo_count` | `i64` | Number of current `unmatched` mappings. |
+| `ambiguous_photo_count` | `i64` | Number of current `ambiguous` mappings. |
 | `processing_photo_count` | `i64` | Number of photos waiting for matching. |
 | `mapping_taxa_count` | `i64` | Number of non-empty taxon nodes in the photo taxonomy view. |
 
-Stored-status counts can overlap `processing_photo_count` while an existing
-mapping is being revalidated. Use `list_photos_by_mapping_status` when mutually
-exclusive logical status membership is required.
+The four photo-status counts are mutually exclusive.
 
 ### `PhotoMappingRunResult`
 
@@ -709,7 +708,7 @@ pub fn get_photo_mapping(
 ```
 
 Returns the photo's current logical mapping, including synthesized
-`processing`, or `None` when the photo has no mapping state or does not exist.
+`processing`, or `None` when the photo does not exist.
 
 #### `get_photo_taxon_match`
 
@@ -830,12 +829,12 @@ Uses the same matching stages, priorities, ordering, and photo filter as
 pub fn get_photo_taxon_id(
     database: &Database,
     photo_id: i64,
-) -> CoreResult<Option<i64>>
+) -> CoreResult<i64>
 ```
 
-Returns the selected taxon ID for a matched photo. While that mapping is being
-revalidated, the previous selected ID remains available. Returns `None` for an
-unmatched, ambiguous, stale, or missing photo.
+Returns the selected taxon ID only when the photo's current logical status is
+`matched`. A missing, `processing`, `ambiguous`, or `unmatched` photo is an
+error.
 
 #### `list_taxon_photos`
 
@@ -968,7 +967,7 @@ strings. Parameter names below are the camel-case keys used in JavaScript
 | `get_mapping_metadata` | none | `MappingMetadata` |
 | `search_photo_taxa` | `query: string`, optional `cursor: string`, optional `limit: number` | `PhotoPage<TaxonSearchResult>` |
 | `suggest_photo_taxa` | `query: string`, optional `limit: number` | `TaxonSuggestion[]` |
-| `get_photo_taxon_id` | `photoId: number` | `number \| null` |
+| `get_photo_taxon_id` | `photoId: number` | `number`; missing or non-matched photos are errors |
 | `list_taxon_photos` | `taxonId: number`, optional `cursor: string`, optional `limit: number` | `PhotoPage<Photo>` |
 | `get_photo_taxon_match` | `photoId: number` | `PhotoTaxonMatch` |
 | `select_photo_taxon` | `photoId: number`, `taxonId: number` | `PhotoTaxonMapping` |

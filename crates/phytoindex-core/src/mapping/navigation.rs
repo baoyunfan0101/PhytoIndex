@@ -74,15 +74,17 @@ pub fn search_photo_taxa(
     Ok(PhotoPage { items, next_cursor })
 }
 
-pub fn get_photo_taxon_id(database: &Database, photo_id: i64) -> CoreResult<Option<i64>> {
-    Ok(get_photo_mapping(database, photo_id)?
-        .filter(|mapping| {
-            matches!(
-                mapping.status,
-                PhotoTaxonStatus::Matched | PhotoTaxonStatus::Processing
-            )
-        })
-        .and_then(|mapping| mapping.taxon_id))
+pub fn get_photo_taxon_id(database: &Database, photo_id: i64) -> CoreResult<i64> {
+    let mapping = get_photo_mapping(database, photo_id)?
+        .ok_or_else(|| CoreError::NotFound(format!("photo {photo_id}")))?;
+    if mapping.status != PhotoTaxonStatus::Matched {
+        return Err(CoreError::InvalidArgument(format!(
+            "photo {photo_id} does not have a current matched taxon"
+        )));
+    }
+    mapping.taxon_id.ok_or_else(|| {
+        CoreError::Consistency(format!("matched photo {photo_id} does not have a taxon ID"))
+    })
 }
 
 pub fn suggest_photo_taxa(
@@ -243,9 +245,9 @@ mod tests {
     #[test]
     fn photo_and_taxon_navigation_use_current_mapping_tree() {
         let (_directory, database) = database();
-        assert_eq!(get_photo_taxon_id(&database, 1).unwrap(), Some(11));
-        assert_eq!(get_photo_taxon_id(&database, 3).unwrap(), None);
-        assert_eq!(get_photo_taxon_id(&database, 999).unwrap(), None);
+        assert_eq!(get_photo_taxon_id(&database, 1).unwrap(), 11);
+        assert!(get_photo_taxon_id(&database, 3).is_err());
+        assert!(get_photo_taxon_id(&database, 999).is_err());
 
         let connection = database.connect().unwrap();
         connection
@@ -255,7 +257,7 @@ mod tests {
             )
             .unwrap();
         drop(connection);
-        assert_eq!(get_photo_taxon_id(&database, 1).unwrap(), Some(11));
+        assert!(get_photo_taxon_id(&database, 1).is_err());
 
         let first = list_taxon_photos(&database, 10, None, 1).unwrap();
         assert_eq!(first.items[0].photo_id, 1);

@@ -132,7 +132,7 @@ CREATE TABLE IF NOT EXISTS photo_taxon_mapping (
     photo_id INTEGER PRIMARY KEY,
     taxon_id INTEGER,
     status TEXT NOT NULL,
-    CHECK (status IN ('matched', 'unmatched', 'ambiguous', 'processing', 'stale')),
+    CHECK (status IN ('matched', 'unmatched', 'ambiguous')),
     CHECK ((status = 'matched' AND taxon_id IS NOT NULL)
         OR (status != 'matched' AND taxon_id IS NULL)),
     FOREIGN KEY (photo_id) REFERENCES photos(photo_id) ON DELETE CASCADE,
@@ -200,8 +200,7 @@ BEFORE DELETE ON taxa BEGIN
     FROM photo_taxon_mapping
     WHERE taxon_id = old.taxon_id
     ON CONFLICT(photo_id) DO UPDATE SET reason = excluded.reason;
-    UPDATE photo_taxon_mapping
-    SET taxon_id = NULL, status = 'stale'
+    DELETE FROM photo_taxon_mapping
     WHERE taxon_id = old.taxon_id;
 END;
 
@@ -381,6 +380,23 @@ mod tests {
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
         assert_eq!(triggers, ["taxa_bd_photo_mapping"]);
+        let mapping_schema: String = connection
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'photo_taxon_mapping'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(mapping_schema.contains("CHECK (status IN ('matched', 'unmatched', 'ambiguous'))"));
+        assert!(!mapping_schema.contains("'processing'"));
+        let delete_trigger_schema: String = connection
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'taxa_bd_photo_mapping'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(delete_trigger_schema.contains("DELETE FROM photo_taxon_mapping"));
         let name_columns = table_columns(&connection, "taxon_names");
         assert_eq!(
             name_columns,
