@@ -5,12 +5,14 @@ import {
   displayTaxon,
   errorMessage,
   getPhotoTaxonMatch,
+  getTaxonDetailNode,
   searchTaxa,
   selectPhotoTaxon,
   setPhotoMapping,
   type Photo,
   type PhotoTaxonMatch,
   type TaxonSearchResult,
+  type TaxonSummary,
 } from "./api";
 import { Busy, EmptyState, MappingBadge, PhotoStage, TaxonCard, VirtualList } from "./components";
 
@@ -24,6 +26,7 @@ export function MappingEditor({
   onChanged?: () => void;
 }) {
   const [match, setMatch] = useState<PhotoTaxonMatch | null>(null);
+  const [mappedTaxon, setMappedTaxon] = useState<TaxonSummary | null>(null);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<TaxonSearchResult[]>([]);
   const [loading, setLoading] = useState(true);
@@ -34,7 +37,13 @@ export function MappingEditor({
     setLoading(true);
     setError("");
     try {
-      setMatch(await getPhotoTaxonMatch(photo.photo_id));
+      const nextMatch = await getPhotoTaxonMatch(photo.photo_id);
+      setMatch(nextMatch);
+      if (nextMatch.mapping.status === "matched" && nextMatch.mapping.taxon_id !== null) {
+        setMappedTaxon((await getTaxonDetailNode(nextMatch.mapping.taxon_id)).summary);
+      } else {
+        setMappedTaxon(null);
+      }
     } catch (nextError) {
       setError(errorMessage(nextError));
     } finally {
@@ -72,11 +81,6 @@ export function MappingEditor({
     }
   }
 
-  const mappedTaxon =
-    match?.mapping.taxon_id !== null
-      ? results.find((item) => item.summary.taxon_id === match?.mapping.taxon_id)?.summary ?? null
-      : null;
-
   return (
     <div className={`mapping-editor${embedded ? " embedded" : ""}`}>
       <div className="editor-photo-column">
@@ -96,7 +100,10 @@ export function MappingEditor({
             <Busy label="Loading mapping" />
           ) : match?.mapping.status === "matched" ? (
             <div className="current-mapping-card">
-              <div><span>Taxon</span><strong>{match.mapping.taxon_id}</strong></div>
+              <div>
+                <span>{mappedTaxon?.rank ?? "Taxon"}</span>
+                <strong>{mappedTaxon ? displayTaxon(mappedTaxon) : match.mapping.taxon_id}</strong>
+              </div>
               <button className="secondary-button" type="button" disabled={Boolean(busy)} onClick={() => void mutate("Clearing", () => clearPhotoMapping(photo.photo_id))}>
                 <Link2Off size={13} /> Clear mapping
               </button>

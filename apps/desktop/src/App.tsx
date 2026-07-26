@@ -226,8 +226,8 @@ function TabBody({
   if (tab.kind === "map") return <PhotoMapView handlers={handlers} />;
   if (tab.kind === "photo-history") return <PhotoHistoryView onStatus={onStatus} />;
   if (tab.kind === "mapping") return <MappingView onStatus={onStatus} handlers={handlers} />;
-  if (tab.kind === "taxonomy-search") return <TaxonomySearchView onOpenTaxon={handlers.openTaxon} onOpenPhotos={(taxonId, label) => openTab({ id: `taxon-photos:${taxonId}`, kind: "taxon-photos", title: label, taxonId })} />;
-  if (tab.kind === "taxon-detail") return <TaxonomySearchView taxonId={tab.taxonId} onOpenTaxon={handlers.openTaxon} onOpenPhotos={(taxonId, label) => openTab({ id: `taxon-photos:${taxonId}`, kind: "taxon-photos", title: label, taxonId })} />;
+  if (tab.kind === "taxonomy-search") return <TaxonomySearchView onOpenPhotos={(taxonId, label) => openTab({ id: `taxon-photos:${taxonId}`, kind: "taxon-photos", title: label, taxonId })} />;
+  if (tab.kind === "taxon-detail") return <TaxonomySearchView taxonId={tab.taxonId} onOpenPhotos={(taxonId, label) => openTab({ id: `taxon-photos:${taxonId}`, kind: "taxon-photos", title: label, taxonId })} />;
   if (tab.kind === "formatted-update") return <FormattedUpdateView />;
   if (tab.kind === "custom-update") return <CustomUpdateView />;
   if (tab.kind === "taxonomy-history") return <TaxonomyHistoryView />;

@@ -35,11 +35,9 @@ import { EmptyState, SectionHeader, TaxonCard, VirtualList } from "./components"
 
 export function TaxonomySearchView({
   taxonId,
-  onOpenTaxon,
   onOpenPhotos,
 }: {
   taxonId?: number;
-  onOpenTaxon: (taxonId: number) => void;
   onOpenPhotos: (taxonId: number, label: string) => void;
 }) {
   const [query, setQuery] = useState("");
@@ -90,6 +88,17 @@ export function TaxonomySearchView({
       setNode({ ...node, children: page });
     }
     setExpanded(!expanded);
+  }
+
+  async function navigateTo(nextTaxonId: number) {
+    try {
+      const next = await getTaxonDetailNode(nextTaxonId);
+      setNode(next);
+      setSelected({ summary: next.summary, detail: next.detail, matches: [] });
+      setExpanded(false);
+    } catch (nextError) {
+      setError(errorMessage(nextError));
+    }
   }
 
   const visible = selected ? [selected, ...(expanded && node ? node.children.items.map((child) => ({
@@ -149,7 +158,7 @@ export function TaxonomySearchView({
                   child={index > 0}
                   expanded={expanded}
                   onToggleChildren={() => void toggleChildren()}
-                  onOpenTaxon={onOpenTaxon}
+                  onOpenTaxon={(nextTaxonId) => void navigateTo(nextTaxonId)}
                   onOpenPhotos={onOpenPhotos}
                 />
               )}
