@@ -1,6 +1,6 @@
-# Building and Releasing PhytoIndex
+# Building and Releasing Vividarium
 
-This guide describes the complete release process for PhytoIndex `v3.0.0`.
+This guide describes the complete release process for Vividarium `v3.0.0`.
 
 ## Release Matrix
 
@@ -80,23 +80,23 @@ From the repository root:
 
 ```bash
 codesign --verify --deep --strict --verbose=2 \
-  target/aarch64-apple-darwin/release/bundle/macos/PhytoIndex.app
+  target/aarch64-apple-darwin/release/bundle/macos/Vividarium.app
 
 hdiutil verify \
-  target/aarch64-apple-darwin/release/bundle/dmg/PhytoIndex_3.0.0_aarch64.dmg
+  target/aarch64-apple-darwin/release/bundle/dmg/Vividarium_3.0.0_aarch64.dmg
 
 shasum -a 256 \
-  target/aarch64-apple-darwin/release/bundle/dmg/PhytoIndex_3.0.0_aarch64.dmg
+  target/aarch64-apple-darwin/release/bundle/dmg/Vividarium_3.0.0_aarch64.dmg
 ```
 
 Gatekeeper assessment is expected to reject this private build because it is not notarized.
 
 ### Install on another Mac
 
-1. Open the DMG and drag PhytoIndex into Applications.
-2. Try to open PhytoIndex once.
+1. Open the DMG and drag Vividarium into Applications.
+2. Try to open Vividarium once.
 3. Open System Settings, then Privacy and Security.
-4. Find the blocked PhytoIndex message and select Open Anyway.
+4. Find the blocked Vividarium message and select Open Anyway.
 5. Confirm with the local account password.
 
 The exception is stored on that Mac and does not need to be repeated for each launch.
@@ -130,12 +130,12 @@ cargo tauri build --target x86_64-pc-windows-msvc --bundles nsis
 
 Only the NSIS installer is built. MSI and WiX are intentionally not part of the release process.
 
-The installer uses the WebView2 download bootstrapper. If WebView2 is absent, installation requires internet access and installs it automatically. After installation, PhytoIndex can run offline.
+The installer uses the WebView2 download bootstrapper. If WebView2 is absent, installation requires internet access and installs it automatically. After installation, Vividarium can run offline.
 
 ### Verify
 
 ```powershell
-$Installer = "target\x86_64-pc-windows-msvc\release\bundle\nsis\PhytoIndex_3.0.0_x64-setup.exe"
+$Installer = "target\x86_64-pc-windows-msvc\release\bundle\nsis\Vividarium_3.0.0_x64-setup.exe"
 
 Get-FileHash $Installer -Algorithm SHA256
 Get-AuthenticodeSignature $Installer
@@ -147,7 +147,7 @@ Test the installer on a clean Windows 10 or Windows 11 virtual machine with no R
 
 ### Install on another Windows computer
 
-1. Run `PhytoIndex_3.0.0_x64-setup.exe`.
+1. Run `Vividarium_3.0.0_x64-setup.exe`.
 2. If SmartScreen appears, select More info.
 3. Select Run anyway.
 4. Allow the installer to download WebView2 if requested.
@@ -192,14 +192,14 @@ npm run build
 Create and push the release tag:
 
 ```bash
-git tag -a v3.0.0 -m "PhytoIndex v3.0.0"
+git tag -a v3.0.0 -m "Vividarium v3.0.0"
 git push origin v3.0.0
 ```
 
 The workflow creates the `v3.0.0` GitHub release and uploads:
 
-- `PhytoIndex_3.0.0_aarch64.dmg`
-- `PhytoIndex_3.0.0_x64-setup.exe`
+- `Vividarium_3.0.0_aarch64.dmg`
+- `Vividarium_3.0.0_x64-setup.exe`
 - Signed updater artifacts and signature files
 - `latest.json`, which the installed application uses to discover updates
 

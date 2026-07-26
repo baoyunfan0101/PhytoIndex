@@ -1,17 +1,17 @@
-# PhytoIndex
+# Vividarium
 
-PhytoIndex is a local-first desktop application for indexing plant photos. It scans photo folders, imports a taxonomy workbook, maps photos to taxa, and provides photo, taxonomy, and map browsers.
+Vividarium is a local-first desktop application for indexing biological photos, managing a taxonomy knowledge base, and mapping photos to taxa.
 
 Current development version: `v3.0.0`
 
-PhytoIndex is a Tauri 2 desktop application. The user interface uses React and TypeScript, while application services, SQLite access, file scanning, and imports run in Rust.
+Vividarium is a Tauri 2 desktop application. The user interface uses React and TypeScript, while application services, SQLite access, file scanning, and imports run in Rust.
 
 ## Supported Platforms
 
 | Platform | Minimum system | Release artifact | First launch |
 | --- | --- | --- | --- |
-| macOS Apple Silicon | macOS 11 | `PhytoIndex_3.0.0_aarch64.dmg` | Allow the app in Privacy and Security |
-| Windows x64 | Windows 10 or 11 | `PhytoIndex_3.0.0_x64-setup.exe` | Confirm the SmartScreen warning |
+| macOS Apple Silicon | macOS 11 | `Vividarium_3.0.0_aarch64.dmg` | Allow the app in Privacy and Security |
+| Windows x64 | Windows 10 or 11 | `Vividarium_3.0.0_x64-setup.exe` | Confirm the SmartScreen warning |
 
 Release builds do not require Python, Node.js, Rust, a database server, or other development tools on the destination computer. Windows downloads WebView2 during installation only when the runtime is missing.
 
@@ -20,12 +20,12 @@ Packages and signed in-app updates are available from [GitHub Releases](https://
 ## Features
 
 - Open and index one local photo root at a time.
-- Import plant taxonomy data from an Excel workbook.
-- Map indexed photos to taxa using the existing filename convention.
+- Replace the taxonomy base database and apply structured taxonomy updates.
+- Map indexed photos to taxa through configurable six-field filename matching.
 - Browse large photo collections with cursor-based pagination.
 - Browse and search the photographed taxonomy tree.
 - Display GPS-enabled photos on a MapLibre map with OpenStreetMap or Tianditu tiles.
-- Export module tables as UTF-8 CSV files.
+- Export taxonomy rebase inputs and photo rename audit operations as UTF-8 CSV files.
 - Keep photos, thumbnails, and the SQLite database on the local computer.
 
 ## Architecture

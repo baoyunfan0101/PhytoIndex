@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to PhytoIndex are documented in this file.
+All notable changes to Vividarium are documented in this file.
 
 ## [3.0.0] - Unreleased
 
