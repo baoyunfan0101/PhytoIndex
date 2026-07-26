@@ -322,10 +322,12 @@ pub fn search_photos(
 | `cursor` | `None` for the first page, otherwise the previous `next_cursor`. |
 | `limit` | Requested maximum number of photos. |
 
-Combines filename matches with photos assigned to taxa returned by the
-photo-filtered taxonomy search. Taxon matches include photos on descendant
-taxa. Duplicate photos are removed and results are ordered by `photo_id`.
-Blank input returns an empty page. The cursor is bound to the normalized query.
+Combines filename matches with photos assigned to matching taxa. The taxonomy
+search relation is joined directly to `photo_taxon_mapping`; it is not first
+materialized as a bounded taxon ID list. Taxon matches include photos on
+descendant taxa. Duplicate photos are removed and results are ordered by
+`photo_id`. Blank input returns an empty page. The cursor is bound to the
+normalized query.
 
 This is the backend source for a general-search PhotoSet. PhotoSet itself is a
 frontend window concept and is not stored by the backend.
@@ -805,7 +807,8 @@ Uses the taxonomy search matching stages, priorities, summaries, details, and
 matched-name output unchanged. The additional filter requires
 `subtree_photo_count > 0`, so a result has a matched photo on itself or a
 descendant. An empty query returns an empty page. The cursor is bound to the
-normalized query.
+normalized query and the last ranked search key, so later pages use keyset
+pagination rather than rebuilding and discarding every preceding result.
 
 #### `suggest_photo_taxa`
 

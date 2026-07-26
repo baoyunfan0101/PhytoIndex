@@ -27,8 +27,8 @@ pub use name_parser::{ScientificNameParts, split_scientific_name_authority};
 pub use page::TaxonomyPage;
 pub use query::{TaxonNameMatch, TaxonSearchResult, TaxonSuggestion, search_taxa, suggest_taxa};
 pub(crate) use query::{
-    search_taxa_with_photos_connection, search_taxon_ids_with_photos_connection,
-    suggest_taxa_with_photos_connection,
+    TaxonSearchCursorKey, search_taxa_page_with_photos_connection,
+    suggest_taxa_with_photos_connection, taxon_search_relation,
 };
 pub(crate) use view::load_taxon_summaries;
 pub use view::{

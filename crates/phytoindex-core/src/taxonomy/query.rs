@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use rusqlite::{Connection, params_from_iter, types::Value as SqlValue};
+use rusqlite::{Connection, functions::FunctionFlags, params_from_iter, types::Value as SqlValue};
 use serde::{Deserialize, Serialize};
 
 use super::{
@@ -9,7 +9,7 @@ use super::{
 use crate::naming::normalize_taxonomy_name;
 use crate::{CoreError, CoreResult, Database};
 
-const PHOTO_SEARCH_TAXON_LIMIT: usize = 5_000;
+const FUZZY_MATCH_LEVEL: i64 = 4;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TaxonNameMatch {
@@ -33,6 +33,26 @@ pub struct TaxonSuggestion {
     pub matches: Vec<TaxonNameMatch>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct TaxonSearchCursorKey {
+    pub(crate) match_level: i64,
+    pub(crate) edit_distance: i64,
+    pub(crate) sort_name: String,
+    pub(crate) name_type_priority: i64,
+    pub(crate) taxon_id: i64,
+}
+
+#[derive(Debug)]
+pub(crate) struct RankedTaxonSearchResult {
+    pub(crate) result: TaxonSearchResult,
+    pub(crate) key: TaxonSearchCursorKey,
+}
+
+pub(crate) struct TaxonSearchRelation {
+    pub(crate) cte_sql: String,
+    pub(crate) params: Vec<SqlValue>,
+}
+
 pub fn search_taxa(
     database: &Database,
     query: &str,
@@ -47,15 +67,21 @@ pub(crate) fn search_taxa_with_connection(
     query: &str,
     limit: usize,
 ) -> CoreResult<Vec<TaxonSearchResult>> {
-    search_taxa_with_filter(connection, query, page_limit(limit), false)
+    Ok(
+        search_taxa_with_filter(connection, query, None, page_limit(limit), false)?
+            .into_iter()
+            .map(|result| result.result)
+            .collect(),
+    )
 }
 
-pub(crate) fn search_taxa_with_photos_connection(
+pub(crate) fn search_taxa_page_with_photos_connection(
     connection: &Connection,
     query: &str,
+    after: Option<&TaxonSearchCursorKey>,
     limit: usize,
-) -> CoreResult<Vec<TaxonSearchResult>> {
-    search_taxa_with_filter(connection, query, limit, true)
+) -> CoreResult<Vec<RankedTaxonSearchResult>> {
+    search_taxa_with_filter(connection, query, after, limit, true)
 }
 
 pub fn suggest_taxa(
@@ -74,54 +100,64 @@ pub(crate) fn suggest_taxa_with_photos_connection(
     suggest_taxa_with_filter(connection, query, page_limit(limit), true)
 }
 
-pub(crate) fn search_taxon_ids_with_photos_connection(
+pub(crate) fn taxon_search_relation(
     connection: &Connection,
     query: &str,
-) -> CoreResult<Vec<i64>> {
+) -> CoreResult<TaxonSearchRelation> {
     let Some(query) = normalize_search_query(query) else {
-        return Ok(Vec::new());
+        return Ok(empty_taxon_search_relation());
     };
-    Ok(search_taxon_ids(
-        connection,
-        &SearchQuery::new(&query),
-        PHOTO_SEARCH_TAXON_LIMIT,
-        true,
-    )?
-    .taxon_ids)
+    register_search_functions(connection)?;
+    Ok(build_taxon_search_relation(&SearchQuery::new(&query)))
 }
 
 fn search_taxa_with_filter(
     connection: &Connection,
     query: &str,
+    after: Option<&TaxonSearchCursorKey>,
     limit: usize,
     require_photos: bool,
-) -> CoreResult<Vec<TaxonSearchResult>> {
+) -> CoreResult<Vec<RankedTaxonSearchResult>> {
     let Some(query) = normalize_search_query(query) else {
         return Ok(Vec::new());
     };
     let search = SearchQuery::new(&query);
-    let search_matches = search_taxon_ids(connection, &search, limit, require_photos)?;
-    let ids = search_matches.taxon_ids;
+    let search_matches = search_ranked_taxa(connection, &search, after, limit, require_photos)?;
+    let ids = search_matches
+        .iter()
+        .map(|matched| matched.key.taxon_id)
+        .collect::<Vec<_>>();
     let summaries = load_taxon_summaries(connection, &ids)?;
     let details = load_taxon_details(connection, &ids)?;
-    let matches_by_id =
-        load_name_matches_for_taxa(connection, &ids, &search, &search_matches.fuzzy_name_ids)?;
+    let fuzzy_taxon_ids = search_matches
+        .iter()
+        .filter(|matched| matched.key.match_level == FUZZY_MATCH_LEVEL)
+        .map(|matched| matched.key.taxon_id)
+        .collect::<HashSet<_>>();
+    let matches_by_id = load_name_matches_for_taxa(connection, &ids, &search, &fuzzy_taxon_ids)?;
     if summaries.len() != ids.len() || details.len() != ids.len() {
         return Err(CoreError::InvalidArgument(
             "matched taxon no longer exists".into(),
         ));
     }
-    ids.into_iter()
+    search_matches
+        .into_iter()
         .zip(summaries)
         .zip(details)
-        .map(|((taxon_id, summary), detail)| {
-            Ok(TaxonSearchResult {
-                summary,
-                detail,
-                matches: matches_by_id.get(&taxon_id).cloned().unwrap_or_default(),
+        .map(|((matched, summary), detail)| {
+            Ok(RankedTaxonSearchResult {
+                result: TaxonSearchResult {
+                    summary,
+                    detail,
+                    matches: matches_by_id
+                        .get(&matched.key.taxon_id)
+                        .cloned()
+                        .unwrap_or_default(),
+                },
+                key: matched.key,
             })
         })
-        .collect::<CoreResult<Vec<_>>>()
+        .collect()
 }
 
 fn suggest_taxa_with_filter(
@@ -134,11 +170,18 @@ fn suggest_taxa_with_filter(
         return Ok(Vec::new());
     };
     let search = SearchQuery::new(&query);
-    let search_matches = search_taxon_ids(connection, &search, limit, require_photos)?;
-    let ids = search_matches.taxon_ids;
+    let search_matches = search_ranked_taxa(connection, &search, None, limit, require_photos)?;
+    let ids = search_matches
+        .iter()
+        .map(|matched| matched.key.taxon_id)
+        .collect::<Vec<_>>();
     let mut suggestions = load_suggestions(connection, &ids)?;
-    let matches_by_id =
-        load_name_matches_for_taxa(connection, &ids, &search, &search_matches.fuzzy_name_ids)?;
+    let fuzzy_taxon_ids = search_matches
+        .iter()
+        .filter(|matched| matched.key.match_level == FUZZY_MATCH_LEVEL)
+        .map(|matched| matched.key.taxon_id)
+        .collect::<HashSet<_>>();
+    let matches_by_id = load_name_matches_for_taxa(connection, &ids, &search, &fuzzy_taxon_ids)?;
     for suggestion in &mut suggestions {
         suggestion.matches = matches_by_id
             .get(&suggestion.taxon_id)
@@ -235,336 +278,262 @@ impl SearchQuery {
 }
 
 #[derive(Debug)]
-struct SearchMatches {
-    taxon_ids: Vec<i64>,
-    fuzzy_name_ids: HashSet<i64>,
+struct RankedTaxonMatch {
+    key: TaxonSearchCursorKey,
 }
 
-fn search_taxon_ids(
+fn search_ranked_taxa(
     connection: &Connection,
     search: &SearchQuery,
+    after: Option<&TaxonSearchCursorKey>,
     limit: usize,
     require_photos: bool,
-) -> CoreResult<SearchMatches> {
-    let mut ids = Vec::new();
-    let mut seen = HashSet::new();
-    let mut fuzzy_name_ids = HashSet::new();
-    append_exact_matches(
-        connection,
-        search,
-        limit,
-        require_photos,
-        &mut ids,
-        &mut seen,
-    )?;
-    if ids.len() >= limit {
-        return Ok(SearchMatches {
-            taxon_ids: ids,
-            fuzzy_name_ids,
-        });
-    }
-    append_full_prefix_matches(
-        connection,
-        search,
-        limit,
-        require_photos,
-        &mut ids,
-        &mut seen,
-    )?;
-    if ids.len() >= limit {
-        return Ok(SearchMatches {
-            taxon_ids: ids,
-            fuzzy_name_ids,
-        });
-    }
-    if let Some(query) = search.word_prefix_match.as_ref() {
-        append_fts_matches(
-            connection,
-            query,
-            limit,
-            require_photos,
-            &mut ids,
-            &mut seen,
-        )?;
-    }
-    if ids.len() >= limit {
-        return Ok(SearchMatches {
-            taxon_ids: ids,
-            fuzzy_name_ids,
-        });
-    }
-    if let Some(query) = search.contains_match.as_ref() {
-        append_fts_matches(
-            connection,
-            query,
-            limit,
-            require_photos,
-            &mut ids,
-            &mut seen,
-        )?;
-    }
-    if ids.len() < limit {
-        append_fuzzy_matches(
-            connection,
-            search,
-            limit,
-            require_photos,
-            &mut ids,
-            &mut seen,
-            &mut fuzzy_name_ids,
-        )?;
-    }
-    Ok(SearchMatches {
-        taxon_ids: ids,
-        fuzzy_name_ids,
-    })
-}
-
-fn append_exact_matches(
-    connection: &Connection,
-    search: &SearchQuery,
-    limit: usize,
-    require_photos: bool,
-    ids: &mut Vec<i64>,
-    seen: &mut HashSet<i64>,
-) -> CoreResult<()> {
-    let remaining = limit.saturating_sub(ids.len());
-    if remaining == 0 {
-        return Ok(());
-    }
-    let photo_filter = photo_filter("taxon_names", require_photos);
+) -> CoreResult<Vec<RankedTaxonMatch>> {
+    register_search_functions(connection)?;
+    let mut relation = build_taxon_search_relation(search);
+    let photo_filter = photo_filter("ranked_taxa", require_photos);
+    let cursor_filter = if let Some(after) = after {
+        relation.params.extend([
+            SqlValue::Integer(after.match_level),
+            SqlValue::Integer(after.edit_distance),
+            SqlValue::Text(after.sort_name.clone()),
+            SqlValue::Integer(after.name_type_priority),
+            SqlValue::Integer(after.taxon_id),
+        ]);
+        r#"
+        AND (
+            ranked_taxa.match_level,
+            ranked_taxa.edit_distance,
+            ranked_taxa.sort_name,
+            ranked_taxa.name_type_priority,
+            ranked_taxa.taxon_id
+        ) > (?, ?, ?, ?, ?)
+        "#
+    } else {
+        ""
+    };
+    relation.params.push(SqlValue::Integer(limit as i64));
     let sql = format!(
         r#"
-        SELECT taxon_id
+        WITH {ctes}
+        SELECT taxon_id, match_level, edit_distance, sort_name,
+               name_type_priority
+        FROM ranked_taxa
+        WHERE 1 = 1
+          {photo_filter}
+          {cursor_filter}
+        ORDER BY match_level, edit_distance, sort_name,
+                 name_type_priority, taxon_id
+        LIMIT ?
+        "#,
+        ctes = relation.cte_sql,
+    );
+    let mut statement = connection.prepare(&sql)?;
+    let rows = statement.query_map(params_from_iter(relation.params), |row| {
+        Ok(RankedTaxonMatch {
+            key: TaxonSearchCursorKey {
+                taxon_id: row.get(0)?,
+                match_level: row.get(1)?,
+                edit_distance: row.get(2)?,
+                sort_name: row.get(3)?,
+                name_type_priority: row.get(4)?,
+            },
+        })
+    })?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
+fn build_taxon_search_relation(search: &SearchQuery) -> TaxonSearchRelation {
+    let mut candidates = Vec::new();
+    let mut params = Vec::new();
+    candidates.push(
+        r#"
+        SELECT name_id, taxon_id, 0 AS match_level, 0 AS edit_distance,
+               normalized_name AS sort_name,
+               CASE name_type WHEN 1 THEN 0 WHEN 2 THEN 1 ELSE 2 END
+                   AS name_type_priority
         FROM taxon_names
         WHERE normalized_name = ?
-          {photo_filter}
-        GROUP BY taxon_id
-        ORDER BY MIN(CASE name_type WHEN 1 THEN 0 WHEN 2 THEN 1 ELSE 2 END), taxon_id
-        LIMIT ?
         "#
+        .to_string(),
     );
-    append_query_ids(
-        connection,
-        &sql,
-        vec![
-            SqlValue::Text(search.normalized.clone()),
-            SqlValue::Integer(remaining as i64),
-        ],
-        ids,
-        seen,
-    )
-}
+    params.push(SqlValue::Text(search.normalized.clone()));
 
-fn append_full_prefix_matches(
-    connection: &Connection,
-    search: &SearchQuery,
-    limit: usize,
-    require_photos: bool,
-    ids: &mut Vec<i64>,
-    seen: &mut HashSet<i64>,
-) -> CoreResult<()> {
-    let remaining = limit.saturating_sub(ids.len());
-    if remaining == 0 {
-        return Ok(());
-    }
-    let (exclusion_sql, mut values) = exclusion_clause("taxon_names", seen);
-    let photo_filter = photo_filter("taxon_names", require_photos);
-    let sql = format!(
+    candidates.push(
         r#"
-        SELECT taxon_id
+        SELECT name_id, taxon_id, 1 AS match_level, 0 AS edit_distance,
+               normalized_name AS sort_name,
+               CASE name_type WHEN 1 THEN 0 WHEN 2 THEN 1 ELSE 2 END
+                   AS name_type_priority
         FROM taxon_names
         WHERE normalized_name >= ?
           AND normalized_name < ?
           AND normalized_name != ?
-          {exclusion_sql}
-          {photo_filter}
-        GROUP BY taxon_id
-        ORDER BY MIN(normalized_name),
-                 MIN(CASE name_type WHEN 1 THEN 0 WHEN 2 THEN 1 ELSE 2 END),
-                 taxon_id
-        LIMIT ?
         "#
+        .to_string(),
     );
-    let mut params = vec![
+    params.extend([
         SqlValue::Text(search.normalized.clone()),
         SqlValue::Text(search.prefix_upper.clone()),
         SqlValue::Text(search.normalized.clone()),
-    ];
-    params.append(&mut values);
-    params.push(SqlValue::Integer(remaining as i64));
-    append_query_ids(connection, &sql, params, ids, seen)
-}
+    ]);
 
-fn append_fts_matches(
-    connection: &Connection,
-    query: &str,
-    limit: usize,
-    require_photos: bool,
-    ids: &mut Vec<i64>,
-    seen: &mut HashSet<i64>,
-) -> CoreResult<()> {
-    let remaining = limit.saturating_sub(ids.len());
-    if remaining == 0 {
-        return Ok(());
-    }
-    let (exclusion_sql, mut values) = exclusion_clause("taxon_names", seen);
-    let photo_filter = photo_filter("taxon_names", require_photos);
-    let sql = format!(
-        r#"
-        SELECT taxon_names.taxon_id
-        FROM taxon_names_fts
-        JOIN taxon_names ON taxon_names.name_id = taxon_names_fts.rowid
-        WHERE taxon_names_fts MATCH ?
-          {exclusion_sql}
-          {photo_filter}
-        GROUP BY taxon_names.taxon_id
-        ORDER BY MIN(taxon_names.normalized_name),
-                 MIN(CASE taxon_names.name_type
-                     WHEN 1 THEN 0 WHEN 2 THEN 1 ELSE 2 END),
-                 taxon_names.taxon_id
-        LIMIT ?
-        "#
-    );
-    let mut params = vec![SqlValue::Text(query.to_string())];
-    params.append(&mut values);
-    params.push(SqlValue::Integer(remaining as i64));
-    append_query_ids(connection, &sql, params, ids, seen)
-}
-
-#[derive(Debug)]
-struct FuzzyNameCandidate {
-    name_id: i64,
-    taxon_id: i64,
-    name_type: i64,
-    normalized_name: String,
-    edit_distance: usize,
-}
-
-fn append_fuzzy_matches(
-    connection: &Connection,
-    search: &SearchQuery,
-    limit: usize,
-    require_photos: bool,
-    ids: &mut Vec<i64>,
-    seen: &mut HashSet<i64>,
-    fuzzy_name_ids: &mut HashSet<i64>,
-) -> CoreResult<()> {
-    let Some(query) = search.fuzzy_match.as_ref() else {
-        return Ok(());
-    };
-    let remaining = limit.saturating_sub(ids.len());
-    if remaining == 0 {
-        return Ok(());
+    if let Some(query) = search.word_prefix_match.as_ref() {
+        candidates.push(
+            r#"
+            SELECT taxon_names.name_id, taxon_names.taxon_id,
+                   2 AS match_level, 0 AS edit_distance,
+                   taxon_names.normalized_name AS sort_name,
+                   CASE taxon_names.name_type
+                       WHEN 1 THEN 0 WHEN 2 THEN 1 ELSE 2 END
+                       AS name_type_priority
+            FROM taxon_names_fts
+            JOIN taxon_names ON taxon_names.name_id = taxon_names_fts.rowid
+            WHERE taxon_names_fts MATCH ?
+              AND NOT (
+                  taxon_names.normalized_name >= ?
+                  AND taxon_names.normalized_name < ?
+              )
+            "#
+            .to_string(),
+        );
+        params.extend([
+            SqlValue::Text(query.clone()),
+            SqlValue::Text(search.normalized.clone()),
+            SqlValue::Text(search.prefix_upper.clone()),
+        ]);
     }
 
-    let candidate_limit = remaining.saturating_mul(20).clamp(100, 5_000);
-    let (exclusion_sql, mut values) = exclusion_clause("taxon_names", seen);
-    let photo_filter = photo_filter("taxon_names", require_photos);
-    let sql = format!(
-        r#"
-        SELECT taxon_names.name_id,
-               taxon_names.taxon_id,
-               taxon_names.name_type,
-               taxon_names.normalized_name
-        FROM taxon_names_fts
-        JOIN taxon_names ON taxon_names.name_id = taxon_names_fts.rowid
-        WHERE taxon_names_fts MATCH ?
-          {exclusion_sql}
-          {photo_filter}
-        ORDER BY bm25(taxon_names_fts),
-                 taxon_names.normalized_name,
-                 CASE taxon_names.name_type
-                     WHEN 1 THEN 0 WHEN 2 THEN 1 ELSE 2 END,
-                 taxon_names.taxon_id
-        LIMIT ?
-        "#
-    );
-    let mut params = vec![SqlValue::Text(query.clone())];
-    params.append(&mut values);
-    params.push(SqlValue::Integer(candidate_limit as i64));
-
-    let mut statement = connection.prepare(&sql)?;
-    let rows = statement.query_map(params_from_iter(params), |row| {
-        Ok(FuzzyNameCandidate {
-            name_id: row.get(0)?,
-            taxon_id: row.get(1)?,
-            name_type: row.get(2)?,
-            normalized_name: row.get(3)?,
-            edit_distance: 0,
-        })
-    })?;
-    let mut candidates = rows.collect::<Result<Vec<_>, _>>()?;
-    candidates.retain_mut(|candidate| {
-        let Some(distance) = edit_distance_with_limit(
-            &search.normalized,
-            &candidate.normalized_name,
-            search.fuzzy_max_distance,
-        ) else {
-            return false;
+    if let Some(query) = search.contains_match.as_ref() {
+        let word_exclusion = if search.word_prefix_like_pattern.is_some() {
+            "AND taxon_names.normalized_name NOT LIKE ? ESCAPE '\\'"
+        } else {
+            ""
         };
-        candidate.edit_distance = distance;
-        true
-    });
-    candidates.sort_by(|left, right| {
-        left.edit_distance
-            .cmp(&right.edit_distance)
-            .then_with(|| {
-                name_type_priority(left.name_type).cmp(&name_type_priority(right.name_type))
-            })
-            .then_with(|| left.normalized_name.cmp(&right.normalized_name))
-            .then_with(|| left.taxon_id.cmp(&right.taxon_id))
-            .then_with(|| left.name_id.cmp(&right.name_id))
-    });
+        candidates.push(format!(
+            r#"
+            SELECT taxon_names.name_id, taxon_names.taxon_id,
+                   3 AS match_level, 0 AS edit_distance,
+                   taxon_names.normalized_name AS sort_name,
+                   CASE taxon_names.name_type
+                       WHEN 1 THEN 0 WHEN 2 THEN 1 ELSE 2 END
+                       AS name_type_priority
+            FROM taxon_names_fts
+            JOIN taxon_names ON taxon_names.name_id = taxon_names_fts.rowid
+            WHERE taxon_names_fts MATCH ?
+              AND NOT (
+                  taxon_names.normalized_name >= ?
+                  AND taxon_names.normalized_name < ?
+              )
+              {word_exclusion}
+            "#
+        ));
+        params.extend([
+            SqlValue::Text(query.clone()),
+            SqlValue::Text(search.normalized.clone()),
+            SqlValue::Text(search.prefix_upper.clone()),
+        ]);
+        if let Some(pattern) = search.word_prefix_like_pattern.as_ref() {
+            params.push(SqlValue::Text(pattern.clone()));
+        }
+    }
 
-    let mut selected_taxa = HashSet::new();
-    for candidate in &candidates {
-        if ids.len() >= limit {
-            break;
-        }
-        if seen.insert(candidate.taxon_id) {
-            ids.push(candidate.taxon_id);
-            selected_taxa.insert(candidate.taxon_id);
-        }
+    if let (Some(query), Some(contains_pattern)) = (
+        search.fuzzy_match.as_ref(),
+        search.contains_like_pattern.as_ref(),
+    ) {
+        candidates.push(
+            r#"
+            SELECT taxon_names.name_id, taxon_names.taxon_id,
+                   4 AS match_level,
+                   taxonomy_edit_distance(
+                       taxon_names.normalized_name, ?, ?
+                   ) AS edit_distance,
+                   taxon_names.normalized_name AS sort_name,
+                   CASE taxon_names.name_type
+                       WHEN 1 THEN 0 WHEN 2 THEN 1 ELSE 2 END
+                       AS name_type_priority
+            FROM taxon_names_fts
+            JOIN taxon_names ON taxon_names.name_id = taxon_names_fts.rowid
+            WHERE taxon_names_fts MATCH ?
+              AND taxonomy_edit_distance(
+                  taxon_names.normalized_name, ?, ?
+              ) IS NOT NULL
+              AND taxon_names.normalized_name NOT LIKE ? ESCAPE '\'
+            "#
+            .to_string(),
+        );
+        params.extend([
+            SqlValue::Text(search.normalized.clone()),
+            SqlValue::Integer(search.fuzzy_max_distance as i64),
+            SqlValue::Text(query.clone()),
+            SqlValue::Text(search.normalized.clone()),
+            SqlValue::Integer(search.fuzzy_max_distance as i64),
+            SqlValue::Text(contains_pattern.clone()),
+        ]);
     }
-    for candidate in candidates {
-        if selected_taxa.contains(&candidate.taxon_id) {
-            fuzzy_name_ids.insert(candidate.name_id);
-        }
+
+    TaxonSearchRelation {
+        cte_sql: format!(
+            r#"
+            search_name_candidates AS (
+                {}
+            ),
+            ranked_search_names AS (
+                SELECT name_id, taxon_id, match_level, edit_distance,
+                       sort_name, name_type_priority,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY taxon_id
+                           ORDER BY match_level, edit_distance, sort_name,
+                                    name_type_priority, name_id
+                       ) AS name_rank
+                FROM search_name_candidates
+            ),
+            ranked_taxa AS (
+                SELECT name_id, taxon_id, match_level, edit_distance,
+                       sort_name, name_type_priority
+                FROM ranked_search_names
+                WHERE name_rank = 1
+            )
+            "#,
+            candidates.join("\nUNION ALL\n")
+        ),
+        params,
     }
-    Ok(())
 }
 
-fn append_query_ids(
-    connection: &Connection,
-    sql: &str,
-    params: Vec<SqlValue>,
-    ids: &mut Vec<i64>,
-    seen: &mut HashSet<i64>,
-) -> CoreResult<()> {
-    let mut statement = connection.prepare(sql)?;
-    let rows = statement.query_map(params_from_iter(params), |row| row.get::<_, i64>(0))?;
-    for row in rows {
-        let taxon_id = row?;
-        if seen.insert(taxon_id) {
-            ids.push(taxon_id);
-        }
+fn empty_taxon_search_relation() -> TaxonSearchRelation {
+    TaxonSearchRelation {
+        cte_sql: r#"
+            ranked_taxa(
+                name_id, taxon_id, match_level, edit_distance,
+                sort_name, name_type_priority
+            ) AS (
+                SELECT NULL, NULL, NULL, NULL, NULL, NULL
+                WHERE 0
+            )
+        "#
+        .to_string(),
+        params: Vec::new(),
     }
-    Ok(())
 }
 
-fn exclusion_clause(table_name: &str, seen: &HashSet<i64>) -> (String, Vec<SqlValue>) {
-    if seen.is_empty() {
-        return (String::new(), Vec::new());
-    }
-    let placeholders = vec!["?"; seen.len()].join(", ");
-    let mut values = seen.iter().copied().collect::<Vec<_>>();
-    values.sort_unstable();
-    let values = values.into_iter().map(SqlValue::Integer).collect();
-    (
-        format!("AND {table_name}.taxon_id NOT IN ({placeholders})"),
-        values,
-    )
+fn register_search_functions(connection: &Connection) -> CoreResult<()> {
+    connection.create_scalar_function(
+        "taxonomy_edit_distance",
+        3,
+        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
+        |context| {
+            let left = context.get::<String>(0)?;
+            let right = context.get::<String>(1)?;
+            let limit = context.get::<i64>(2)?;
+            Ok(
+                edit_distance_with_limit(&left, &right, limit.max(0) as usize)
+                    .map(|distance| distance as i64),
+            )
+        },
+    )?;
+    Ok(())
 }
 
 fn photo_filter(table_name: &str, require_photos: bool) -> String {
@@ -587,7 +556,7 @@ fn load_name_matches_for_taxa(
     connection: &Connection,
     taxon_ids: &[i64],
     search: &SearchQuery,
-    fuzzy_name_ids: &HashSet<i64>,
+    fuzzy_taxon_ids: &HashSet<i64>,
 ) -> CoreResult<HashMap<i64, Vec<TaxonNameMatch>>> {
     if taxon_ids.is_empty() {
         return Ok(HashMap::new());
@@ -615,12 +584,23 @@ fn load_name_matches_for_taxa(
         conditions.push("taxon_names.name LIKE ? ESCAPE '\\'".to_string());
         query_params.push(SqlValue::Text(pattern.clone()));
     }
-    if !fuzzy_name_ids.is_empty() {
-        let placeholders = vec!["?"; fuzzy_name_ids.len()].join(", ");
-        conditions.push(format!("taxon_names.name_id IN ({placeholders})"));
-        let mut name_ids = fuzzy_name_ids.iter().copied().collect::<Vec<_>>();
-        name_ids.sort_unstable();
-        query_params.extend(name_ids.into_iter().map(SqlValue::Integer));
+    if !fuzzy_taxon_ids.is_empty() {
+        let placeholders = vec!["?"; fuzzy_taxon_ids.len()].join(", ");
+        conditions.push(format!(
+            r#"
+            (
+                taxon_names.taxon_id IN ({placeholders})
+                AND taxonomy_edit_distance(
+                    taxon_names.normalized_name, ?, ?
+                ) IS NOT NULL
+            )
+            "#
+        ));
+        let mut taxon_ids = fuzzy_taxon_ids.iter().copied().collect::<Vec<_>>();
+        taxon_ids.sort_unstable();
+        query_params.extend(taxon_ids.into_iter().map(SqlValue::Integer));
+        query_params.push(SqlValue::Text(search.normalized.clone()));
+        query_params.push(SqlValue::Integer(search.fuzzy_max_distance as i64));
     }
     let conditions = conditions.join(" OR ");
     let sql = format!(
@@ -660,14 +640,6 @@ fn load_name_matches_for_taxa(
         matches_by_id.entry(taxon_id).or_default().push(name_match);
     }
     Ok(matches_by_id)
-}
-
-fn name_type_priority(value: i64) -> usize {
-    match value {
-        1 => 0,
-        2 => 1,
-        _ => 2,
-    }
 }
 
 fn escape_like(value: &str) -> String {
@@ -776,5 +748,58 @@ mod tests {
         assert_eq!(suggestions[0].names.sci_name.as_deref(), Some("Canis"));
         assert_eq!(suggestions[0].names.zh_name.as_deref(), Some("Dogs"));
         assert_eq!(suggestions[0].matches[0].name, "Canis");
+    }
+
+    #[test]
+    fn ranked_search_cursor_continues_across_match_levels() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = Database::open(directory.path().join("test.db")).unwrap();
+        let connection = database.connect().unwrap();
+        connection
+            .execute_batch(
+                r#"
+                INSERT INTO taxa (taxon_id, parent_taxon_id, rank) VALUES
+                    (10, NULL, 5),
+                    (11, NULL, 5),
+                    (12, NULL, 5),
+                    (13, NULL, 5),
+                    (14, NULL, 5);
+                INSERT INTO taxon_names (taxon_id, name_type, name) VALUES
+                    (10, 1, 'Canis'),
+                    (11, 1, 'Canis lupus'),
+                    (12, 1, 'Great Canis wolf'),
+                    (13, 1, 'Toucanis'),
+                    (14, 1, 'Canos');
+                "#,
+            )
+            .unwrap();
+        let search = SearchQuery::new("Canis");
+
+        let first = search_ranked_taxa(&connection, &search, None, 2, false).unwrap();
+        assert_eq!(
+            first
+                .iter()
+                .map(|result| result.key.match_level)
+                .collect::<Vec<_>>(),
+            vec![0, 1]
+        );
+        let second =
+            search_ranked_taxa(&connection, &search, Some(&first[1].key), 2, false).unwrap();
+        assert_eq!(
+            second
+                .iter()
+                .map(|result| result.key.match_level)
+                .collect::<Vec<_>>(),
+            vec![2, 3]
+        );
+        let third =
+            search_ranked_taxa(&connection, &search, Some(&second[1].key), 2, false).unwrap();
+        assert_eq!(
+            third
+                .iter()
+                .map(|result| (result.key.taxon_id, result.key.match_level))
+                .collect::<Vec<_>>(),
+            vec![(14, FUZZY_MATCH_LEVEL)]
+        );
     }
 }

@@ -47,7 +47,11 @@ pub(crate) enum PhotoCursor {
     },
     TaxonSearch {
         query: String,
-        offset: usize,
+        match_level: i64,
+        edit_distance: i64,
+        sort_name: String,
+        name_type_priority: i64,
+        taxon_id: i64,
     },
     TaxonPhotos {
         taxon_id: i64,

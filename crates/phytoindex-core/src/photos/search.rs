@@ -107,46 +107,29 @@ pub fn search_photos(
     };
     let limit = photo_page_limit(limit);
     let connection = database.connect()?;
-    let taxon_ids = crate::taxonomy::search_taxon_ids_with_photos_connection(&connection, &query)?;
-    connection.execute_batch(
-        r#"
-        CREATE TEMP TABLE IF NOT EXISTS temp_photo_search_taxa (
-            taxon_id INTEGER PRIMARY KEY
-        );
-        DELETE FROM temp_photo_search_taxa;
-        "#,
-    )?;
-    {
-        let mut insert =
-            connection.prepare("INSERT INTO temp_photo_search_taxa (taxon_id) VALUES (?)")?;
-        for taxon_id in taxon_ids {
-            insert.execute([taxon_id])?;
-        }
-    }
+    let taxonomy_relation = crate::taxonomy::taxon_search_relation(&connection, &query)?;
     let filename_match = if query.chars().count() >= 3 {
-        "SELECT rowid FROM photo_filenames_fts WHERE photo_filenames_fts MATCH ?1"
+        "SELECT rowid FROM photo_filenames_fts WHERE photo_filenames_fts MATCH ?"
     } else {
-        "SELECT photo_id FROM photos WHERE filename LIKE ?1 ESCAPE '\\'"
+        "SELECT photo_id FROM photos WHERE filename LIKE ? ESCAPE '\\'"
     };
     let filename_value = if query.chars().count() >= 3 {
         quoted_fts_match(&query)
     } else {
         format!("%{}%", escape_like(&query))
     };
-    let mut parameters = vec![
-        SqlValue::Text(filename_value),
-        SqlValue::Integer(after_photo_id),
-    ];
+    let mut parameters = taxonomy_relation.params;
+    parameters.push(SqlValue::Text(filename_value));
+    parameters.push(SqlValue::Integer(after_photo_id));
+    let after_parameter = parameters.len();
     parameters.push(SqlValue::Integer(limit as i64 + 1));
     let limit_parameter = parameters.len();
     let sql = crate::photos::photo_select(&format!(
         r#"
         JOIN (
-            WITH RECURSIVE matched_taxa(taxon_id) AS (
-                SELECT taxon_id FROM temp_photo_search_taxa
-            ),
+            WITH RECURSIVE {taxonomy_ctes},
             descendants(taxon_id) AS (
-                SELECT taxon_id FROM matched_taxa
+                SELECT taxon_id FROM ranked_taxa
                 UNION
                 SELECT taxa.taxon_id
                 FROM taxa
@@ -163,10 +146,11 @@ pub fn search_photos(
             )
             SELECT photo_id FROM matched_photos
         ) AS search_matches ON search_matches.photo_id = photos.photo_id
-        WHERE photos.photo_id > ?2
+        WHERE photos.photo_id > ?{after_parameter}
         ORDER BY photos.photo_id
         LIMIT ?{limit_parameter}
-        "#
+        "#,
+        taxonomy_ctes = taxonomy_relation.cte_sql,
     ));
     let mut statement = connection.prepare(&sql)?;
     let rows = statement.query_map(params_from_iter(parameters), crate::db::photo_from_row)?;
@@ -310,5 +294,70 @@ mod tests {
         assert_eq!(second.items[0].photo_id, 3);
         assert!(second.next_cursor.is_none());
         assert!(search_photos(&database, "felis", first.next_cursor.as_deref(), 2).is_err());
+    }
+
+    #[test]
+    fn general_search_does_not_cap_matching_taxa() {
+        let (_directory, database) = database();
+        let connection = database.connect().unwrap();
+        connection
+            .execute_batch(
+                r#"
+                CREATE TEMP TABLE test_sequence (
+                    value INTEGER PRIMARY KEY
+                );
+                WITH digits(value) AS (
+                    VALUES (0), (1), (2), (3), (4),
+                           (5), (6), (7), (8), (9)
+                )
+                INSERT INTO test_sequence(value)
+                SELECT ones.value
+                     + tens.value * 10
+                     + hundreds.value * 100
+                     + thousands.value * 1000
+                FROM digits AS ones
+                CROSS JOIN digits AS tens
+                CROSS JOIN digits AS hundreds
+                CROSS JOIN digits AS thousands
+                WHERE ones.value
+                    + tens.value * 10
+                    + hundreds.value * 100
+                    + thousands.value * 1000
+                    BETWEEN 1 AND 5001;
+
+                INSERT INTO taxa (taxon_id, parent_taxon_id, rank)
+                SELECT 20000 + value, NULL, 5
+                FROM test_sequence;
+                INSERT INTO taxon_names (taxon_id, name_type, name)
+                SELECT 20000 + value, 1,
+                       'Limitprobe ' || printf('%04d', value)
+                FROM test_sequence;
+                INSERT INTO photos (
+                    photo_id, directory_id, filename, file_size, modified_at_ns
+                )
+                SELECT 10000 + value, 1,
+                       'photo' || printf('%04d', value) || '.jpg', 1, 1
+                FROM test_sequence;
+                INSERT INTO photo_taxon_mapping (photo_id, taxon_id, status)
+                SELECT 10000 + value, 20000 + value, 'matched'
+                FROM test_sequence;
+                INSERT INTO photo_taxon_usage (
+                    taxon_id, direct_photo_count, subtree_photo_count
+                )
+                SELECT 20000 + value, 1, 1
+                FROM test_sequence;
+                "#,
+            )
+            .unwrap();
+        drop(connection);
+        let cursor = encode_photo_cursor(&PhotoCursor::GeneralSearch {
+            query: "limitprobe".into(),
+            photo_id: 15000,
+        })
+        .unwrap();
+
+        let page = search_photos(&database, "limitprobe", Some(&cursor), 1).unwrap();
+
+        assert_eq!(page.items[0].photo_id, 15001);
     }
 }

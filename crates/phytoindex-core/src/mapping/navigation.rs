@@ -7,8 +7,8 @@ use crate::photos::{
     PhotoCursor, decode_photo_cursor, encode_photo_cursor, invalid_photo_cursor, photo_page_limit,
 };
 use crate::taxonomy::{
-    TaxonSearchResult, TaxonSuggestion, search_taxa_with_photos_connection,
-    suggest_taxa_with_photos_connection,
+    TaxonSearchCursorKey, TaxonSearchResult, TaxonSuggestion,
+    search_taxa_page_with_photos_connection, suggest_taxa_with_photos_connection,
 };
 use crate::{CoreError, CoreResult, Database};
 
@@ -27,35 +27,50 @@ pub fn search_photo_taxa(
             next_cursor: None,
         });
     };
-    let offset = match decode_photo_cursor(cursor)? {
-        None => 0,
+    let after = match decode_photo_cursor(cursor)? {
+        None => None,
         Some(PhotoCursor::TaxonSearch {
             query: cursor_query,
-            offset,
-        }) if cursor_query == query => offset,
+            match_level,
+            edit_distance,
+            sort_name,
+            name_type_priority,
+            taxon_id,
+        }) if cursor_query == query => Some(TaxonSearchCursorKey {
+            match_level,
+            edit_distance,
+            sort_name,
+            name_type_priority,
+            taxon_id,
+        }),
         Some(_) => return Err(invalid_photo_cursor()),
     };
     let limit = photo_page_limit(limit);
-    let fetch_limit = offset
-        .checked_add(limit)
-        .and_then(|value| value.checked_add(1))
-        .ok_or_else(invalid_photo_cursor)?;
     let connection = database.connect()?;
-    let results = search_taxa_with_photos_connection(&connection, &query, fetch_limit)?;
-    let mut items = results
-        .into_iter()
-        .skip(offset)
-        .take(limit + 1)
-        .collect::<Vec<_>>();
-    let next_cursor = if items.len() > limit {
-        items.pop();
-        Some(encode_photo_cursor(&PhotoCursor::TaxonSearch {
-            query,
-            offset: offset + items.len(),
-        })?)
+    let mut results =
+        search_taxa_page_with_photos_connection(&connection, &query, after.as_ref(), limit + 1)?;
+    let has_more = results.len() > limit;
+    if has_more {
+        results.pop();
+    }
+    let next_cursor = if has_more {
+        results
+            .last()
+            .map(|result| {
+                encode_photo_cursor(&PhotoCursor::TaxonSearch {
+                    query,
+                    match_level: result.key.match_level,
+                    edit_distance: result.key.edit_distance,
+                    sort_name: result.key.sort_name.clone(),
+                    name_type_priority: result.key.name_type_priority,
+                    taxon_id: result.key.taxon_id,
+                })
+            })
+            .transpose()?
     } else {
         None
     };
+    let items = results.into_iter().map(|result| result.result).collect();
     Ok(PhotoPage { items, next_cursor })
 }
 
