@@ -216,20 +216,21 @@ pub fn get_photo_mapping(
             status: PhotoTaxonStatus::Processing,
         }))
     } else {
-        Ok(stored)
+        stored.map(Some).ok_or_else(|| {
+            CoreError::Consistency(format!(
+                "photo {photo_id} has neither a mapping nor a mapping queue entry"
+            ))
+        })
     }
 }
 
 pub fn get_photo_taxon_match(database: &Database, photo_id: i64) -> CoreResult<PhotoTaxonMatch> {
+    let mapping = get_photo_mapping(database, photo_id)?
+        .ok_or_else(|| CoreError::NotFound(format!("photo {photo_id}")))?;
     let photo = photos::get_photo(database, photo_id)?
         .ok_or_else(|| CoreError::NotFound(format!("photo {photo_id}")))?;
     let connection = database.connect()?;
     let results = match_photo_taxa(&connection, &photo.filename)?;
-    let mapping = get_photo_mapping(database, photo_id)?.unwrap_or(PhotoTaxonMapping {
-        photo_id,
-        taxon_id: resolved_taxon_id(&results),
-        status: resolved_status(&results),
-    });
     Ok(PhotoTaxonMatch {
         mapping,
         candidates: results,
@@ -1606,6 +1607,36 @@ mod tests {
         let database = Database::open(data.path().join("vividarium.db")).unwrap();
 
         assert_eq!(get_photo_mapping(&database, 404).unwrap(), None);
+    }
+
+    #[test]
+    fn rejects_a_photo_without_mapping_state() {
+        let data = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("Canis lupus.jpg"), b"photo").unwrap();
+        let database = Database::open(data.path().join("vividarium.db")).unwrap();
+        let library = open_library(&database, root.path().to_str().unwrap()).unwrap();
+        refresh_directory(&database, library.root_directory_id).unwrap();
+        let photo = photos::list_photos(&database).unwrap().remove(0);
+        database
+            .connect()
+            .unwrap()
+            .execute(
+                "DELETE FROM photo_mapping_queue WHERE photo_id = ?",
+                [photo.photo_id],
+            )
+            .unwrap();
+
+        let mapping_error = get_photo_mapping(&database, photo.photo_id).unwrap_err();
+        assert!(matches!(mapping_error, CoreError::Consistency(_)));
+        assert!(
+            mapping_error
+                .to_string()
+                .contains("neither a mapping nor a mapping queue entry")
+        );
+
+        let match_error = get_photo_taxon_match(&database, photo.photo_id).unwrap_err();
+        assert!(matches!(match_error, CoreError::Consistency(_)));
     }
 
     #[test]
