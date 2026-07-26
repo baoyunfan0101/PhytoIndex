@@ -1300,11 +1300,11 @@ fn describe_changes(changes: &[TaxonChange]) -> String {
 }
 
 pub fn get_taxonomy_name_separator(database: &Database) -> CoreResult<String> {
-    database.connect()?.query_row(
-        "SELECT metadata_value FROM app_metadata WHERE metadata_key = 'taxonomy_name_separator'",
-        [],
-        |row| row.get(0),
-    ).map_err(Into::into)
+    Ok(crate::metadata::get_raw(
+        &database.connect()?,
+        crate::metadata::MetadataKey::TaxonomyNameSeparator,
+    )?
+    .unwrap_or_else(|| ";".to_string()))
 }
 
 pub fn set_taxonomy_name_separator(database: &Database, separator: &str) -> CoreResult<()> {
@@ -1319,15 +1319,11 @@ pub fn set_taxonomy_name_separator(database: &Database, separator: &str) -> Core
             "name separator must be one non-whitespace character other than '|'".into(),
         ));
     }
-    database.connect()?.execute(
-        r#"
-        INSERT INTO app_metadata(metadata_key, metadata_value)
-        VALUES ('taxonomy_name_separator', ?)
-        ON CONFLICT(metadata_key) DO UPDATE SET metadata_value = excluded.metadata_value
-        "#,
-        [separator],
-    )?;
-    Ok(())
+    crate::metadata::set_raw(
+        &database.connect()?,
+        crate::metadata::MetadataKey::TaxonomyNameSeparator,
+        separator,
+    )
 }
 
 pub fn taxonomy_formatted_update_template() -> CoreResult<String> {

@@ -5,9 +5,9 @@ mod synonym;
 mod templates;
 mod testing;
 
-use rusqlite::params;
 use serde::{Deserialize, Serialize};
 
+use crate::metadata::{self, MetadataKey};
 use crate::{CoreResult, Database};
 
 pub use normalize::normalize_taxonomy_name;
@@ -31,9 +31,6 @@ pub(crate) use photo_filename::PhotoFilenameParser;
 pub(crate) use synonym::SynonymAuthorityParser;
 pub(crate) use testing::seed_default_test_cases;
 
-const PHOTO_FILENAME_HOOK_KEY: &str = "photo_filename_hook";
-const SYNONYM_AUTHORITY_HOOK_KEY: &str = "synonym_authority_hook";
-
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum NamingHookKind {
@@ -42,10 +39,10 @@ pub enum NamingHookKind {
 }
 
 impl NamingHookKind {
-    fn metadata_key(self) -> &'static str {
+    pub(crate) const fn metadata_key(self) -> MetadataKey {
         match self {
-            Self::PhotoFilename => PHOTO_FILENAME_HOOK_KEY,
-            Self::SynonymAuthority => SYNONYM_AUTHORITY_HOOK_KEY,
+            Self::PhotoFilename => MetadataKey::PhotoFilenameHook,
+            Self::SynonymAuthority => MetadataKey::SynonymAuthorityHook,
         }
     }
 }
@@ -59,8 +56,8 @@ pub struct NamingHookSettings {
 pub fn get_naming_hook_settings(database: &Database) -> CoreResult<NamingHookSettings> {
     let connection = database.connect()?;
     Ok(NamingHookSettings {
-        photo_filename: hooks::load_script(&connection, PHOTO_FILENAME_HOOK_KEY)?,
-        synonym_authority: hooks::load_script(&connection, SYNONYM_AUTHORITY_HOOK_KEY)?,
+        photo_filename: hooks::load_script(&connection, MetadataKey::PhotoFilenameHook)?,
+        synonym_authority: hooks::load_script(&connection, MetadataKey::SynonymAuthorityHook)?,
     })
 }
 
@@ -76,20 +73,9 @@ pub fn set_naming_hook(
     let mut connection = database.connect()?;
     let transaction = connection.transaction()?;
     if let Some(script) = script {
-        transaction.execute(
-            r#"
-            INSERT INTO app_metadata (metadata_key, metadata_value)
-            VALUES (?, ?)
-            ON CONFLICT(metadata_key) DO UPDATE
-            SET metadata_value = excluded.metadata_value
-            "#,
-            params![kind.metadata_key(), script],
-        )?;
+        metadata::set_raw(&transaction, kind.metadata_key(), script)?;
     } else {
-        transaction.execute(
-            "DELETE FROM app_metadata WHERE metadata_key = ?",
-            [kind.metadata_key()],
-        )?;
+        metadata::remove(&transaction, kind.metadata_key())?;
     }
     if kind == NamingHookKind::PhotoFilename {
         transaction.execute(

@@ -100,15 +100,6 @@ pub struct OperationInputTable {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProgressUpdate {
-    pub module: String,
-    pub task_id: String,
-    pub processed: u64,
-    pub total: Option<u64>,
-    pub message: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PhotoSyncResult {
     pub directory_id: i64,
     pub inserted: usize,
@@ -117,14 +108,4 @@ pub struct PhotoSyncResult {
     pub deleted: usize,
     pub directories_inserted: usize,
     pub directories_deleted: usize,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MappingSyncResult {
-    pub processed: usize,
-    pub mapped: usize,
-    pub unmapped: usize,
-    pub ambiguous: usize,
-    pub unmapped_photos: Vec<Photo>,
-    pub orphan_mappings_deleted: usize,
 }

@@ -39,6 +39,7 @@ crates/
   phytoindex-core/          Rust domain services, SQLite, scanning, and imports
 docs/
   BUILDING.md               Local and GitHub release instructions
+  MAP.md                    Map query and settings backend API
   PHOTOS.md                 Photos library backend API
   TAXONOMY.md               Taxonomy knowledge base backend API
   UPDATING.md               Application update backend API
@@ -55,6 +56,8 @@ The React application calls typed Rust commands through Tauri IPC. Original phot
 See [docs/TAXONOMY.md](docs/TAXONOMY.md) for the public taxonomy knowledge base backend models, Rust APIs, and Tauri commands.
 
 See [docs/PHOTOS.md](docs/PHOTOS.md) for the public photos library, automatic taxonomy mapping, and sparse taxonomy browsing backend APIs.
+
+See [docs/MAP.md](docs/MAP.md) for map-photo pagination and map-provider settings.
 
 See [docs/UPDATING.md](docs/UPDATING.md) for the application update backend commands, models, and release endpoint.
 

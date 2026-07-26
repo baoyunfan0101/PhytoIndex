@@ -6,7 +6,10 @@ use crate::naming::normalize_taxonomy_name;
 use crate::photos::{
     PhotoCursor, decode_photo_cursor, encode_photo_cursor, invalid_photo_cursor, photo_page_limit,
 };
-use crate::taxonomy::{TaxonSearchResult, search_taxa_with_photos_connection};
+use crate::taxonomy::{
+    TaxonSearchResult, TaxonSuggestion, search_taxa_with_photos_connection,
+    suggest_taxa_with_photos_connection,
+};
 use crate::{CoreError, CoreResult, Database};
 
 pub fn search_photo_taxa(
@@ -67,15 +70,23 @@ pub fn get_photo_taxon_id(database: &Database, photo_id: i64) -> CoreResult<Opti
         .and_then(|mapping| mapping.taxon_id))
 }
 
-pub fn list_taxon_photo_ids(
+pub fn suggest_photo_taxa(
+    database: &Database,
+    query: &str,
+    limit: usize,
+) -> CoreResult<Vec<TaxonSuggestion>> {
+    suggest_taxa_with_photos_connection(&database.connect()?, query, limit)
+}
+
+pub fn list_taxon_photos(
     database: &Database,
     taxon_id: i64,
     cursor: Option<&str>,
     limit: usize,
-) -> CoreResult<PhotoPage<i64>> {
+) -> CoreResult<PhotoPage<crate::models::Photo>> {
     let after_photo_id = match decode_photo_cursor(cursor)? {
         None => 0,
-        Some(PhotoCursor::TaxonPhotoIds {
+        Some(PhotoCursor::TaxonPhotos {
             taxon_id: cursor_taxon_id,
             photo_id,
         }) if cursor_taxon_id == taxon_id => photo_id,
@@ -91,36 +102,40 @@ pub fn list_taxon_photo_ids(
         return Err(CoreError::NotFound(format!("taxon {taxon_id}")));
     }
     let limit = photo_page_limit(limit);
-    let mut statement = connection.prepare(
+    let sql = crate::photos::photo_select(
         r#"
-        WITH RECURSIVE descendants(taxon_id) AS (
-            SELECT taxon_id FROM taxa WHERE taxon_id = ?1
-            UNION ALL
-            SELECT child.taxon_id
-            FROM taxa AS child
-            JOIN descendants ON child.parent_taxon_id = descendants.taxon_id
-        )
-        SELECT photo_taxon_mapping.photo_id
-        FROM photo_taxon_mapping
-        JOIN descendants USING (taxon_id)
+        JOIN photo_taxon_mapping ON photo_taxon_mapping.photo_id = photos.photo_id
         WHERE photo_taxon_mapping.status = 'matched'
           AND photo_taxon_mapping.photo_id > ?2
-        ORDER BY photo_taxon_mapping.photo_id
+          AND photo_taxon_mapping.taxon_id IN (
+              WITH RECURSIVE descendants(taxon_id) AS (
+                  SELECT taxon_id FROM taxa WHERE taxon_id = ?1
+                  UNION ALL
+                  SELECT child.taxon_id
+                  FROM taxa AS child
+                  JOIN descendants
+                    ON child.parent_taxon_id = descendants.taxon_id
+              )
+              SELECT taxon_id FROM descendants
+          )
+        ORDER BY photos.photo_id
         LIMIT ?3
         "#,
+    );
+    let mut statement = connection.prepare(&sql)?;
+    let rows = statement.query_map(
+        params![taxon_id, after_photo_id, limit as i64 + 1],
+        crate::db::photo_from_row,
     )?;
-    let rows = statement.query_map(params![taxon_id, after_photo_id, limit as i64 + 1], |row| {
-        row.get::<_, i64>(0)
-    })?;
     let mut items = rows.collect::<Result<Vec<_>, _>>()?;
     let next_cursor = if items.len() > limit {
         items.pop();
         items
             .last()
-            .map(|photo_id| {
-                encode_photo_cursor(&PhotoCursor::TaxonPhotoIds {
+            .map(|photo| {
+                encode_photo_cursor(&PhotoCursor::TaxonPhotos {
                     taxon_id,
-                    photo_id: *photo_id,
+                    photo_id: photo.photo_id,
                 })
             })
             .transpose()?
@@ -197,6 +212,17 @@ mod tests {
         let ancestor = search_photo_taxa(&database, "Animalia", None, 50).unwrap();
         assert_eq!(ancestor.items.len(), 1);
         assert_eq!(ancestor.items[0].summary.taxon_id, 10);
+
+        let suggestions = suggest_photo_taxa(&database, "idae", 10).unwrap();
+        assert_eq!(
+            suggestions
+                .iter()
+                .map(|suggestion| suggestion.taxon_id)
+                .collect::<Vec<_>>(),
+            vec![11, 12]
+        );
+        assert_eq!(suggestions[0].names.sci_name.as_deref(), Some("Canidae"));
+        assert_eq!(suggestions[0].matches[0].name, "Canidae");
     }
 
     #[test]
@@ -216,12 +242,12 @@ mod tests {
         drop(connection);
         assert_eq!(get_photo_taxon_id(&database, 1).unwrap(), Some(11));
 
-        let first = list_taxon_photo_ids(&database, 10, None, 1).unwrap();
-        assert_eq!(first.items, vec![1]);
-        let second = list_taxon_photo_ids(&database, 10, first.next_cursor.as_deref(), 1).unwrap();
-        assert_eq!(second.items, vec![2]);
+        let first = list_taxon_photos(&database, 10, None, 1).unwrap();
+        assert_eq!(first.items[0].photo_id, 1);
+        let second = list_taxon_photos(&database, 10, first.next_cursor.as_deref(), 1).unwrap();
+        assert_eq!(second.items[0].photo_id, 2);
         assert!(second.next_cursor.is_none());
-        assert!(list_taxon_photo_ids(&database, 11, first.next_cursor.as_deref(), 1).is_err());
-        assert!(list_taxon_photo_ids(&database, 999, None, 1).is_err());
+        assert!(list_taxon_photos(&database, 11, first.next_cursor.as_deref(), 1).is_err());
+        assert!(list_taxon_photos(&database, 999, None, 1).is_err());
     }
 }

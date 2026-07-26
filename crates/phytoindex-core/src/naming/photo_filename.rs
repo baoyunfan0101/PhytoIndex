@@ -3,9 +3,9 @@ use serde::{Deserialize, Serialize};
 use super::hooks::{CompiledHook, load_script};
 use super::normalize_taxonomy_name;
 use super::templates::PHOTO_FILENAME_TEMPLATE;
+use crate::metadata::MetadataKey;
 use crate::{CoreError, CoreResult, Database};
 
-const HOOK_KEY: &str = "photo_filename_hook";
 const HOOK_FUNCTION: &str = "parse_photo_filename";
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -43,7 +43,7 @@ pub(crate) struct PhotoFilenameParser {
 
 impl PhotoFilenameParser {
     pub(crate) fn load(connection: &rusqlite::Connection) -> CoreResult<Self> {
-        let script = load_script(connection, HOOK_KEY)?;
+        let script = load_script(connection, MetadataKey::PhotoFilenameHook)?;
         Self::from_script(script.as_deref().unwrap_or(PHOTO_FILENAME_TEMPLATE))
     }
 

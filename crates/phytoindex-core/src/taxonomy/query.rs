@@ -9,6 +9,8 @@ use super::{
 use crate::naming::normalize_taxonomy_name;
 use crate::{CoreError, CoreResult, Database};
 
+const PHOTO_SEARCH_TAXON_LIMIT: usize = 5_000;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TaxonNameMatch {
     pub name_id: i64,
@@ -20,6 +22,14 @@ pub struct TaxonNameMatch {
 pub struct TaxonSearchResult {
     pub summary: super::TaxonSummary,
     pub detail: super::TaxonDetail,
+    pub matches: Vec<TaxonNameMatch>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TaxonSuggestion {
+    pub taxon_id: i64,
+    pub rank: super::TaxonRank,
+    pub names: super::TaxonDisplayNames,
     pub matches: Vec<TaxonNameMatch>,
 }
 
@@ -46,6 +56,38 @@ pub(crate) fn search_taxa_with_photos_connection(
     limit: usize,
 ) -> CoreResult<Vec<TaxonSearchResult>> {
     search_taxa_with_filter(connection, query, limit, true)
+}
+
+pub fn suggest_taxa(
+    database: &Database,
+    query: &str,
+    limit: usize,
+) -> CoreResult<Vec<TaxonSuggestion>> {
+    suggest_taxa_with_filter(&database.connect()?, query, page_limit(limit), false)
+}
+
+pub(crate) fn suggest_taxa_with_photos_connection(
+    connection: &Connection,
+    query: &str,
+    limit: usize,
+) -> CoreResult<Vec<TaxonSuggestion>> {
+    suggest_taxa_with_filter(connection, query, page_limit(limit), true)
+}
+
+pub(crate) fn search_taxon_ids_with_photos_connection(
+    connection: &Connection,
+    query: &str,
+) -> CoreResult<Vec<i64>> {
+    let Some(query) = normalize_search_query(query) else {
+        return Ok(Vec::new());
+    };
+    Ok(search_taxon_ids(
+        connection,
+        &SearchQuery::new(&query),
+        PHOTO_SEARCH_TAXON_LIMIT,
+        true,
+    )?
+    .taxon_ids)
 }
 
 fn search_taxa_with_filter(
@@ -80,6 +122,86 @@ fn search_taxa_with_filter(
             })
         })
         .collect::<CoreResult<Vec<_>>>()
+}
+
+fn suggest_taxa_with_filter(
+    connection: &Connection,
+    query: &str,
+    limit: usize,
+    require_photos: bool,
+) -> CoreResult<Vec<TaxonSuggestion>> {
+    let Some(query) = normalize_search_query(query) else {
+        return Ok(Vec::new());
+    };
+    let search = SearchQuery::new(&query);
+    let search_matches = search_taxon_ids(connection, &search, limit, require_photos)?;
+    let ids = search_matches.taxon_ids;
+    let mut suggestions = load_suggestions(connection, &ids)?;
+    let matches_by_id =
+        load_name_matches_for_taxa(connection, &ids, &search, &search_matches.fuzzy_name_ids)?;
+    for suggestion in &mut suggestions {
+        suggestion.matches = matches_by_id
+            .get(&suggestion.taxon_id)
+            .cloned()
+            .unwrap_or_default();
+    }
+    Ok(suggestions)
+}
+
+fn load_suggestions(
+    connection: &Connection,
+    taxon_ids: &[i64],
+) -> CoreResult<Vec<TaxonSuggestion>> {
+    if taxon_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let values_clause = taxon_ids
+        .iter()
+        .map(|_| "(?, ?)")
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut values = Vec::with_capacity(taxon_ids.len() * 2);
+    for (sort_order, taxon_id) in taxon_ids.iter().enumerate() {
+        values.push(SqlValue::Integer(*taxon_id));
+        values.push(SqlValue::Integer(sort_order as i64));
+    }
+    let sql = format!(
+        r#"
+        WITH input(taxon_id, sort_order) AS (VALUES {values_clause})
+        SELECT taxa.taxon_id, taxa.rank,
+               MAX(CASE WHEN taxon_names.name_type = 1 THEN taxon_names.name END),
+               MAX(CASE WHEN taxon_names.name_type = 3 THEN taxon_names.name END),
+               MAX(CASE WHEN taxon_names.name_type = 5 THEN taxon_names.name END)
+        FROM input
+        JOIN taxa USING (taxon_id)
+        LEFT JOIN taxon_names
+          ON taxon_names.taxon_id = taxa.taxon_id
+         AND taxon_names.name_type IN (1, 3, 5)
+        GROUP BY input.sort_order, taxa.taxon_id, taxa.rank
+        ORDER BY input.sort_order
+        "#
+    );
+    let mut statement = connection.prepare(&sql)?;
+    let rows = statement.query_map(params_from_iter(values), |row| {
+        let rank = super::TaxonRank::from_code(row.get::<_, i64>(1)?).map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(
+                1,
+                rusqlite::types::Type::Integer,
+                error.to_string().into(),
+            )
+        })?;
+        Ok(TaxonSuggestion {
+            taxon_id: row.get(0)?,
+            rank,
+            names: super::TaxonDisplayNames {
+                sci_name: row.get(2)?,
+                zh_name: row.get(3)?,
+                en_name: row.get(4)?,
+            },
+            matches: Vec::new(),
+        })
+    })?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }
 
 #[derive(Debug, Clone)]
@@ -611,4 +733,48 @@ fn edit_distance_with_limit(left: &str, right: &str, limit: usize) -> Option<usi
         std::mem::swap(&mut previous, &mut current);
     }
     (previous[right.len()] <= limit).then_some(previous[right.len()])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn suggestions_share_search_order_and_only_load_compact_fields() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = Database::open(directory.path().join("test.db")).unwrap();
+        database
+            .connect()
+            .unwrap()
+            .execute_batch(
+                r#"
+                INSERT INTO taxa (taxon_id, parent_taxon_id, rank) VALUES
+                    (1, NULL, 4),
+                    (2, NULL, 4);
+                INSERT INTO taxon_names (taxon_id, name_type, name) VALUES
+                    (1, 1, 'Canis'),
+                    (1, 3, 'Dogs'),
+                    (2, 1, 'Lycaon'),
+                    (2, 2, 'Canis');
+                "#,
+            )
+            .unwrap();
+
+        let search_ids = search_taxa(&database, "Canis", 10)
+            .unwrap()
+            .into_iter()
+            .map(|result| result.summary.taxon_id)
+            .collect::<Vec<_>>();
+        let suggestions = suggest_taxa(&database, "Canis", 10).unwrap();
+        assert_eq!(
+            suggestions
+                .iter()
+                .map(|suggestion| suggestion.taxon_id)
+                .collect::<Vec<_>>(),
+            search_ids
+        );
+        assert_eq!(suggestions[0].names.sci_name.as_deref(), Some("Canis"));
+        assert_eq!(suggestions[0].names.zh_name.as_deref(), Some("Dogs"));
+        assert_eq!(suggestions[0].matches[0].name, "Canis");
+    }
 }

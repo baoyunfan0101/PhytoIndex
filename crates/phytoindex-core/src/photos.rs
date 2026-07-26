@@ -39,7 +39,7 @@ pub(crate) use page::{
     PhotoCursor, PhotoPageSection, decode_photo_cursor, encode_photo_cursor, invalid_photo_cursor,
     photo_page_limit,
 };
-pub use search::search_photos_by_filename;
+pub use search::{search_photos, search_photos_by_filename};
 
 const IMAGE_EXTENSIONS: &[&str] = &[
     "arw", "bmp", "cr2", "cr3", "dng", "gif", "heic", "jpeg", "jpg", "nef", "png", "raf", "rw2",
@@ -184,7 +184,8 @@ pub fn get_photo(database: &Database, photo_id: i64) -> CoreResult<Option<Photo>
         .map_err(Into::into)
 }
 
-pub fn list_photos(database: &Database) -> CoreResult<Vec<Photo>> {
+#[cfg(test)]
+pub(crate) fn list_photos(database: &Database) -> CoreResult<Vec<Photo>> {
     let connection = database.connect()?;
     let mut statement = connection.prepare(&photo_select("ORDER BY photos.photo_id"))?;
     let rows = statement.query_map([], photo_from_row)?;
@@ -773,13 +774,18 @@ fn rename_file(source: &Path, destination: &Path, temporary: &Path) -> CoreResul
     Ok(())
 }
 
-fn photo_select(suffix: &str) -> String {
+pub(crate) fn photo_select(suffix: &str) -> String {
+    photo_select_with("", suffix)
+}
+
+pub(crate) fn photo_select_with(extra_columns: &str, suffix: &str) -> String {
     format!(
         r#"
         SELECT photos.photo_id, photos.directory_id,
                CASE WHEN photo_directories.relative_path = '' THEN photos.filename
                     ELSE photo_directories.relative_path || '/' || photos.filename END AS relative_path,
                photos.filename, photos.file_size, photos.modified_at_ns, photos.thumbnail_path
+               {extra_columns}
         FROM photos
         JOIN photo_directories ON photo_directories.directory_id = photos.directory_id
         {suffix}

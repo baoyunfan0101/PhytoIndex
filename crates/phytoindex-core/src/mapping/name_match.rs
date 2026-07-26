@@ -1,13 +1,11 @@
 use std::collections::HashSet;
 
-use rusqlite::params;
 use serde::{Deserialize, Serialize};
 
+use crate::metadata::{self, MetadataKey};
 use crate::naming::TaxonomicNameInfo;
 use crate::taxonomy::{TaxonRank, TaxonomyNameType};
 use crate::{CoreError, CoreResult, Database};
-
-const METADATA_KEY: &str = "photo_name_match_settings";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
@@ -83,18 +81,9 @@ pub fn set_photo_name_match_settings(
     settings: &PhotoNameMatchSettings,
 ) -> CoreResult<()> {
     validate(settings)?;
-    let value = serde_json::to_string(settings)
-        .map_err(|error| CoreError::InvalidArgument(error.to_string()))?;
     let mut connection = database.connect()?;
     let transaction = connection.transaction()?;
-    transaction.execute(
-        r#"
-        INSERT INTO app_metadata (metadata_key, metadata_value)
-        VALUES (?, ?)
-        ON CONFLICT(metadata_key) DO UPDATE SET metadata_value = excluded.metadata_value
-        "#,
-        params![METADATA_KEY, value],
-    )?;
+    metadata::set_json(&transaction, MetadataKey::PhotoNameMatchSettings, settings)?;
     transaction.execute(
         r#"
         INSERT INTO photo_mapping_queue (photo_id, reason)
@@ -109,21 +98,8 @@ pub fn set_photo_name_match_settings(
 }
 
 pub(crate) fn load(connection: &rusqlite::Connection) -> CoreResult<PhotoNameMatchSettings> {
-    use rusqlite::OptionalExtension;
-
-    let value = connection
-        .query_row(
-            "SELECT metadata_value FROM app_metadata WHERE metadata_key = ?",
-            [METADATA_KEY],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()?;
-    let settings = match value {
-        Some(value) => serde_json::from_str(&value).map_err(|error| {
-            CoreError::InvalidArgument(format!("invalid match settings: {error}"))
-        })?,
-        None => PhotoNameMatchSettings::default(),
-    };
+    let settings =
+        metadata::get_json(connection, MetadataKey::PhotoNameMatchSettings)?.unwrap_or_default();
     validate(&settings)?;
     Ok(settings)
 }

@@ -37,11 +37,19 @@ pub(crate) enum PhotoCursor {
         query: String,
         photo_id: i64,
     },
+    GeneralSearch {
+        query: String,
+        photo_id: i64,
+    },
+    MapPhotos {
+        bounds: Option<[u64; 4]>,
+        photo_id: i64,
+    },
     TaxonSearch {
         query: String,
         offset: usize,
     },
-    TaxonPhotoIds {
+    TaxonPhotos {
         taxon_id: i64,
         photo_id: i64,
     },

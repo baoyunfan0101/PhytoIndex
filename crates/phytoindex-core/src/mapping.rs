@@ -6,15 +6,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::db::Database;
 use crate::error::{CoreError, CoreResult};
-use crate::models::{MappingMetadata, MappingSyncResult, Photo, PhotoPage};
+use crate::models::{MappingMetadata, Photo, PhotoPage};
 use crate::naming::PhotoFilenameParser;
 use crate::photos::{
     self, PhotoCursor, PhotoPageSection, decode_photo_cursor, encode_photo_cursor,
     invalid_photo_cursor, photo_page_limit,
 };
 use crate::taxonomy::{
-    TaxonDisplayNames, TaxonRank, TaxonSearchResult, TaxonSummary, TaxonomyNameType,
-    load_taxon_summaries, search_taxa,
+    TaxonDisplayNames, TaxonRank, TaxonSummary, TaxonomyNameType, load_taxon_summaries,
 };
 
 mod name_match;
@@ -24,7 +23,9 @@ pub use name_match::{
     PhotoNameField, PhotoNameMatchSettings, get_photo_name_match_settings,
     set_photo_name_match_settings,
 };
-pub use navigation::{get_photo_taxon_id, list_taxon_photo_ids, search_photo_taxa};
+pub use navigation::{
+    get_photo_taxon_id, list_taxon_photos, search_photo_taxa, suggest_photo_taxa,
+};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -601,43 +602,6 @@ fn load_photos_for_taxon(
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }
 
-pub fn suggest(
-    database: &Database,
-    query: &str,
-    mode: &str,
-    limit: usize,
-) -> CoreResult<Vec<TaxonSearchResult>> {
-    let results = search_taxa(database, query, limit)?;
-    Ok(results
-        .into_iter()
-        .filter(|result| {
-            mode != "binomial"
-                || result.matches.iter().any(|value| {
-                    matches!(
-                        value.name_type,
-                        TaxonomyNameType::SciName | TaxonomyNameType::Synonym
-                    )
-                })
-        })
-        .collect())
-}
-
-pub fn rebuild_mapping(database: &Database) -> CoreResult<MappingSyncResult> {
-    let photos = photos::list_photos(database)?;
-    let ids = photos
-        .iter()
-        .map(|photo| photo.photo_id)
-        .collect::<Vec<_>>();
-    let mut connection = database.connect()?;
-    let transaction = connection.transaction()?;
-    transaction.execute("DELETE FROM photo_taxon_usage", [])?;
-    transaction.execute("DELETE FROM photo_taxon_mapping", [])?;
-    transaction.execute("DELETE FROM photo_mapping_queue", [])?;
-    remap_photo_ids(&transaction, &ids)?;
-    transaction.commit()?;
-    mapping_result(database, photos)
-}
-
 pub(crate) fn refresh_after_taxonomy_changes(
     database: &Database,
     taxon_ids: impl IntoIterator<Item = i64>,
@@ -879,40 +843,6 @@ pub(crate) fn remove_directory_mappings(
     let photo_ids = rows.collect::<Result<Vec<_>, _>>()?;
     drop(statement);
     remove_photo_mappings(transaction, &photo_ids)
-}
-
-fn mapping_result(database: &Database, photos: Vec<Photo>) -> CoreResult<MappingSyncResult> {
-    let connection = database.connect()?;
-    let mapped = connection.query_row(
-        "SELECT COUNT(*) FROM photo_taxon_mapping WHERE status = 'matched'",
-        [],
-        |row| row.get::<_, i64>(0),
-    )? as usize;
-    let ambiguous = connection.query_row(
-        "SELECT COUNT(*) FROM photo_taxon_mapping WHERE status = 'ambiguous'",
-        [],
-        |row| row.get::<_, i64>(0),
-    )? as usize;
-    let unmapped_ids = {
-        let mut statement = connection.prepare(
-            "SELECT photo_id FROM photo_taxon_mapping WHERE status = 'unmatched' ORDER BY photo_id",
-        )?;
-        let rows = statement.query_map([], |row| row.get::<_, i64>(0))?;
-        rows.collect::<Result<BTreeSet<_>, _>>()?
-    };
-    let unmapped_photos = photos
-        .iter()
-        .filter(|photo| unmapped_ids.contains(&photo.photo_id))
-        .cloned()
-        .collect::<Vec<_>>();
-    Ok(MappingSyncResult {
-        processed: photos.len(),
-        mapped,
-        unmapped: unmapped_photos.len(),
-        ambiguous,
-        unmapped_photos,
-        orphan_mappings_deleted: 0,
-    })
 }
 
 fn load_usage_taxon(

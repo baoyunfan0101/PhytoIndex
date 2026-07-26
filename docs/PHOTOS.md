@@ -305,14 +305,30 @@ pub fn get_photo(
 
 Returns the indexed photo, or `None` when the ID does not exist.
 
-#### `list_photos`
+#### `search_photos`
 
 ```rust
-pub fn list_photos(database: &Database) -> CoreResult<Vec<Photo>>
+pub fn search_photos(
+    database: &Database,
+    query: &str,
+    cursor: Option<&str>,
+    limit: usize,
+) -> CoreResult<PhotoPage<Photo>>
 ```
 
-Returns every indexed photo ordered by `photo_id`. Interactive views should use
-the cursor-based directory, taxon, or mapping-status APIs instead.
+| Parameter | Description |
+| --- | --- |
+| `query` | Text matched against filenames and taxonomy names. |
+| `cursor` | `None` for the first page, otherwise the previous `next_cursor`. |
+| `limit` | Requested maximum number of photos. |
+
+Combines filename matches with photos assigned to taxa returned by the
+photo-filtered taxonomy search. Taxon matches include photos on descendant
+taxa. Duplicate photos are removed and results are ordered by `photo_id`.
+Blank input returns an empty page. The cursor is bound to the normalized query.
+
+This is the backend source for a general-search PhotoSet. PhotoSet itself is a
+frontend window concept and is not stored by the backend.
 
 #### `search_photos_by_filename`
 
@@ -667,17 +683,6 @@ exclusive logical status membership is required.
 | `changed` | `usize` | Mapping states changed by this run. |
 | `pending` | `i64` | Photos still waiting for matching. |
 
-### `MappingSyncResult`
-
-| Field | Type | Description |
-| --- | --- | --- |
-| `processed` | `usize` | Photos evaluated by the rebuild. |
-| `mapped` | `usize` | Photos ending in `matched`. |
-| `unmapped` | `usize` | Photos ending in `unmatched`. |
-| `ambiguous` | `usize` | Photos ending in `ambiguous`. |
-| `unmapped_photos` | `Vec<Photo>` | Photos ending in `unmatched`. |
-| `orphan_mappings_deleted` | `usize` | Obsolete mapping rows removed by the operation. |
-
 ## `phytoindex_core::mapping`
 
 Every function below takes `database: &Database`.
@@ -777,17 +782,6 @@ pub fn process_pending_photo_matches(
 
 Processes photos waiting for filename matching and returns the run summary.
 
-#### `rebuild_mapping`
-
-```rust
-pub fn rebuild_mapping(
-    database: &Database,
-) -> CoreResult<MappingSyncResult>
-```
-
-Re-evaluates every indexed photo and replaces existing mapping results. Returns
-the complete rebuild summary.
-
 ### Taxon-based browsing
 
 #### `search_photo_taxa`
@@ -813,6 +807,20 @@ matched-name output unchanged. The additional filter requires
 descendant. An empty query returns an empty page. The cursor is bound to the
 normalized query.
 
+#### `suggest_photo_taxa`
+
+```rust
+pub fn suggest_photo_taxa(
+    database: &Database,
+    query: &str,
+    limit: usize,
+) -> CoreResult<Vec<TaxonSuggestion>>
+```
+
+Uses the same matching stages, priorities, ordering, and photo filter as
+`search_photo_taxa`, while only loading the minimal autocomplete fields:
+`taxon_id`, `rank`, accepted display names, and matched names.
+
 #### `get_photo_taxon_id`
 
 ```rust
@@ -826,26 +834,27 @@ Returns the selected taxon ID for a matched photo. While that mapping is being
 revalidated, the previous selected ID remains available. Returns `None` for an
 unmatched, ambiguous, stale, or missing photo.
 
-#### `list_taxon_photo_ids`
+#### `list_taxon_photos`
 
 ```rust
-pub fn list_taxon_photo_ids(
+pub fn list_taxon_photos(
     database: &Database,
     taxon_id: i64,
     cursor: Option<&str>,
     limit: usize,
-) -> CoreResult<PhotoPage<i64>>
+) -> CoreResult<PhotoPage<Photo>>
 ```
 
 | Parameter | Description |
 | --- | --- |
 | `taxon_id` | Root of the selected taxonomy subtree. |
 | `cursor` | `None` for the first page, otherwise the previous page's `next_cursor`. |
-| `limit` | Requested maximum number of photo IDs. |
+| `limit` | Requested maximum number of photos. |
 
-Returns IDs of matched photos assigned to the requested taxon or any
-descendant, ordered by `photo_id`. A missing taxon is an error. The cursor is
-bound to `taxon_id`.
+Returns matched photos assigned to the requested taxon or any descendant,
+ordered by `photo_id`. A missing taxon is an error. The cursor is bound to
+`taxon_id`. This directly supplies the PhotoSet opened from a knowledge-base
+taxon without per-photo lookup calls.
 
 #### `get_photo_taxon_node`
 
@@ -909,28 +918,6 @@ pub fn list_photos_by_mapping_status(
 
 Returns photos in the requested logical status ordered by `photo_id`.
 
-### Taxon suggestions
-
-#### `suggest`
-
-```rust
-pub fn suggest(
-    database: &Database,
-    query: &str,
-    mode: &str,
-    limit: usize,
-) -> CoreResult<Vec<TaxonSearchResult>>
-```
-
-| Parameter | Description |
-| --- | --- |
-| `query` | Text passed to taxonomy search. |
-| `mode` | Use `binomial` to retain only results matched by a scientific name; other values keep all name kinds. |
-| `limit` | Maximum requested taxonomy search results. |
-
-Returns the same `TaxonSearchResult` model as taxonomy search, including the
-taxon summary and the names that matched the query.
-
 ## Desktop interface
 
 The desktop adapter supplies the current database and converts core errors to
@@ -970,35 +957,36 @@ strings. Parameter names below are the camel-case keys used in JavaScript
 | `get_photo_operation` | `operationId: number` | `PhotoOperation` |
 | `revert_photo_operation` | `operationId: number` | `null` |
 | `export_photo_operation_inputs` | `operationIds: number[]` | `OperationInputTable` |
-| `get_all_photos` | none | `Photo[]` |
 | `get_photo` | `photoId: number` | `Photo` |
+| `search_photos` | `query: string`, optional `cursor: string`, optional `limit: number` | `PhotoPage<Photo>` |
 | `search_photos_by_filename` | `query: string`, optional `cursor: string`, optional `limit: number` | `PhotoPage<Photo>` |
 | `get_photo_availability` | `photoId: number` | `{ available: boolean, error: string \| null }` |
 | `get_photo_metadata` | `photoId: number` | `PhotoMetadata` |
 | `get_mapping_metadata` | none | `MappingMetadata` |
 | `search_photo_taxa` | `query: string`, optional `cursor: string`, optional `limit: number` | `PhotoPage<TaxonSearchResult>` |
+| `suggest_photo_taxa` | `query: string`, optional `limit: number` | `TaxonSuggestion[]` |
 | `get_photo_taxon_id` | `photoId: number` | `number \| null` |
-| `list_taxon_photo_ids` | `taxonId: number`, optional `cursor: string`, optional `limit: number` | `PhotoPage<number>` |
+| `list_taxon_photos` | `taxonId: number`, optional `cursor: string`, optional `limit: number` | `PhotoPage<Photo>` |
 | `get_photo_taxon_match` | `photoId: number` | `PhotoTaxonMatch` |
 | `select_photo_taxon` | `photoId: number`, `taxonId: number` | `PhotoTaxonMapping` |
 | `get_photo_taxon_node` | optional `taxonId: number`, optional `showEmpty: boolean` | `PhotoTaxonNode` |
 | `browse_photo_taxon` | optional `taxonId: number`, optional `showEmpty: boolean`, optional `includeDescendants: boolean`, optional `cursor: string`, optional `limit: number` | `PhotoPage<PhotoTaxonItem>` |
 | `list_photos_by_mapping_status` | `status: PhotoMappingListStatus`, optional `cursor: string`, optional `limit: number` | `PhotoPage<PhotoMappingListItem>` |
-| `suggest_mapping_taxa` | `query: string`, `mode: string` | `TaxonSearchResult[]` |
 | `get_operations_status` | none | `Record<string, OperationState>` |
 
 Desktop defaults:
 
 - `browse_photo_directory.limit = 50`
+- `search_photos.limit = 50`
 - `search_photos_by_filename.limit = 50`
 - Photo operation list limits default to `50`
 - `search_photo_taxa.limit = 50`
-- `list_taxon_photo_ids.limit = 50`
+- `suggest_photo_taxa.limit = 10`
+- `list_taxon_photos.limit = 50`
 - `browse_photo_taxon.limit = 50`
 - `browse_photo_taxon.show_empty = false`
 - `browse_photo_taxon.include_descendants = true`
 - `list_photos_by_mapping_status.limit = 50`
-- `suggest_mapping_taxa` requests at most 10 taxonomy results
 
 `refresh_photo_directory` and `start_photo_mapping` schedule background work
 and return immediately. Their `OperationState` has:

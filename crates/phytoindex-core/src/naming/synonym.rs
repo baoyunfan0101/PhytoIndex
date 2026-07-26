@@ -3,9 +3,9 @@ use serde::{Deserialize, Serialize};
 use super::hooks::{CompiledHook, load_script};
 use super::normalize_taxonomy_name;
 use super::templates::SYNONYM_AUTHORITY_TEMPLATE;
+use crate::metadata::MetadataKey;
 use crate::{CoreError, CoreResult, Database};
 
-const HOOK_KEY: &str = "synonym_authority_hook";
 const HOOK_FUNCTION: &str = "split_synonym_authority";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -35,7 +35,7 @@ pub(crate) struct SynonymAuthorityParser {
 
 impl SynonymAuthorityParser {
     pub(crate) fn load(connection: &rusqlite::Connection) -> CoreResult<Self> {
-        let script = load_script(connection, HOOK_KEY)?;
+        let script = load_script(connection, MetadataKey::SynonymAuthorityHook)?;
         Self::from_script(script.as_deref().unwrap_or(SYNONYM_AUTHORITY_TEMPLATE))
     }
 

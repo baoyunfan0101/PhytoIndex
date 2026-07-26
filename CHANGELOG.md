@@ -8,10 +8,18 @@ All notable changes to PhytoIndex are documented in this file.
 
 - Added signed in-app update checks and installation from Vividarium GitHub Releases.
 - Added release metadata and updater artifacts to the desktop release workflow.
+- Added lightweight taxonomy autocomplete for complete and photo-filtered searches.
+- Added cursor-paged map-photo queries and backend map-provider settings.
+- Added cursor-paged PhotoSet sources for combined photo search and taxon photos.
 
 ### Changed
 
 - Kept the SQLite schema version at `2`; databases with other schema versions remain incompatible.
+- Centralized application metadata storage behind one internal module.
+
+### Removed
+
+- Removed unpaged all-photo loading, legacy mapping suggestions, photo-ID-only taxon pages, and generic raw-table export commands.
 
 ## [2.1.0] - 2026-07-12
 

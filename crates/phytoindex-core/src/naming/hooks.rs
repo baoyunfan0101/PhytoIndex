@@ -2,6 +2,7 @@ use rhai::{AST, CallFnOptions, Dynamic, Engine, ImmutableString, Scope};
 use serde::de::DeserializeOwned;
 
 use super::normalize_taxonomy_name;
+use crate::metadata::{self, MetadataKey};
 use crate::{CoreError, CoreResult};
 
 #[cfg(test)]
@@ -66,18 +67,9 @@ pub(crate) fn take_compile_count() -> usize {
 
 pub(super) fn load_script(
     connection: &rusqlite::Connection,
-    key: &str,
+    key: MetadataKey,
 ) -> CoreResult<Option<String>> {
-    use rusqlite::OptionalExtension;
-
-    connection
-        .query_row(
-            "SELECT metadata_value FROM app_metadata WHERE metadata_key = ?",
-            [key],
-            |row| row.get(0),
-        )
-        .optional()
-        .map_err(Into::into)
+    metadata::get_raw(connection, key)
 }
 
 fn invalid_hook(message: String) -> CoreError {

@@ -48,6 +48,7 @@ The public read models are:
 | `TaxonNamesDetail` | `sci_name`, `synonyms`, `zh_name`, `zh_aliases`, `en_name`, `en_aliases` | Names grouped by type. |
 | `TaxonDetail` | `taxon_id`, `rank`, `parent_taxon_id`, `geological_range`, `names` | Complete editable taxon data. |
 | `TaxonDetailNode` | `summary`, `detail`, `children` | Detail view with the first or requested child page. |
+| `TaxonSuggestion` | `taxon_id`, `rank`, `names`, `matches` | Minimal autocomplete result without detail or breadcrumb data. |
 
 ### `get_taxon_summary`
 
@@ -124,6 +125,21 @@ Each `TaxonSearchResult` contains:
 
 `TaxonNameMatch` contains `name_id`, `name_type`, and `name`. Results prefer
 exact and prefix matches before broader and fuzzy matches.
+
+### `suggest_taxa`
+
+```rust
+pub fn suggest_taxa(
+    database: &Database,
+    query: &str,
+    limit: usize,
+) -> CoreResult<Vec<TaxonSuggestion>>
+```
+
+Uses the same normalization, matching stages, priorities, result order, and
+matched-name rules as `search_taxa`. It only loads `taxon_id`, `rank`, accepted
+display names, and matched names. Blank input returns an empty list and `limit`
+is clamped to `1..=500`.
 
 ## Formatted input
 
@@ -493,6 +509,7 @@ taxonomy commands are:
 | Command | Explicit parameters | Return value |
 | --- | --- | --- |
 | `search_taxa` | `query: String`, `limit: Option<usize>` | `Vec<TaxonSearchResult>` |
+| `suggest_taxa` | `query: String`, `limit: Option<usize>` | `Vec<TaxonSuggestion>` |
 | `get_taxon_detail_node` | `taxon_id: i64`, `children_cursor: Option<String>`, `children_limit: Option<usize>` | `TaxonDetailNode`; missing taxa are errors |
 | `list_taxon_children` | `taxon_id: i64`, `cursor: Option<String>`, `limit: Option<usize>` | `TaxonomyPage<TaxonChild>` |
 | `update_taxon` | `input: TaxonUpdateInput` | `TaxonomyOperationResult` |
@@ -514,4 +531,5 @@ taxonomy commands are:
 | `get_taxonomy_base_metadata` | none | `Option<TaxonomyBaseMetadata>` |
 | `replace_taxonomy_base_database` | `source_path: String` | Asynchronous operation handle; final result contains replacement and mapping results |
 
-Optional desktop page limits default to `50`.
+Optional desktop page limits default to `50`. The autocomplete limit defaults
+to `10`.

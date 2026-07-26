@@ -1,10 +1,8 @@
-use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
+use crate::metadata::{self, MetadataKey};
 use crate::naming::{PhotoFilenameParser, TaxonomicNameInfo};
 use crate::{CoreError, CoreResult, Database};
-
-const METADATA_KEY: &str = "photo_filename_format_settings";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
@@ -45,17 +43,11 @@ pub fn set_photo_filename_format_settings(
             "at least one photo filename field must be enabled".into(),
         ));
     }
-    let value = serde_json::to_string(settings)
-        .map_err(|error| CoreError::InvalidArgument(error.to_string()))?;
-    database.connect()?.execute(
-        r#"
-        INSERT INTO app_metadata (metadata_key, metadata_value)
-        VALUES (?, ?)
-        ON CONFLICT(metadata_key) DO UPDATE SET metadata_value = excluded.metadata_value
-        "#,
-        params![METADATA_KEY, value],
-    )?;
-    Ok(())
+    metadata::set_json(
+        &database.connect()?,
+        MetadataKey::PhotoFilenameFormatSettings,
+        settings,
+    )
 }
 
 pub fn format_photo_filename(
@@ -134,19 +126,9 @@ pub(super) fn filename_for_taxon(
 }
 
 fn load_settings(connection: &rusqlite::Connection) -> CoreResult<PhotoFilenameFormatSettings> {
-    let value = connection
-        .query_row(
-            "SELECT metadata_value FROM app_metadata WHERE metadata_key = ?",
-            [METADATA_KEY],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()?;
-    let settings = match value {
-        Some(value) => serde_json::from_str(&value).map_err(|error| {
-            CoreError::InvalidArgument(format!("invalid photo filename settings: {error}"))
-        })?,
-        None => PhotoFilenameFormatSettings::default(),
-    };
+    let settings: PhotoFilenameFormatSettings =
+        metadata::get_json(connection, MetadataKey::PhotoFilenameFormatSettings)?
+            .unwrap_or_default();
     if !settings.any_enabled() {
         return Err(CoreError::InvalidArgument(
             "at least one photo filename field must be enabled".into(),

@@ -48,6 +48,11 @@ impl Database {
         match version {
             0 => {
                 connection.execute_batch(SCHEMA)?;
+                crate::metadata::insert_raw_if_missing(
+                    &connection,
+                    crate::metadata::MetadataKey::TaxonomyNameSeparator,
+                    ";",
+                )?;
                 crate::naming::seed_default_test_cases(&connection)?;
             }
             SCHEMA_VERSION => {}
@@ -261,10 +266,6 @@ CREATE TABLE IF NOT EXISTS app_metadata (
     metadata_value TEXT NOT NULL
 );
 
-INSERT INTO app_metadata(metadata_key, metadata_value)
-VALUES ('taxonomy_name_separator', ';')
-ON CONFLICT(metadata_key) DO NOTHING;
-
 CREATE UNIQUE INDEX IF NOT EXISTS idx_taxon_names_one_sci_name
     ON taxon_names(taxon_id) WHERE name_type = 1;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_taxon_names_one_zh_name
@@ -285,6 +286,8 @@ CREATE INDEX IF NOT EXISTS idx_photo_directories_parent_name
     ON photo_directories(parent_directory_id, name, directory_id);
 CREATE INDEX IF NOT EXISTS idx_photos_directory_filename
     ON photos(directory_id, filename, photo_id);
+CREATE INDEX IF NOT EXISTS idx_photo_metadata_coordinates
+    ON photo_metadata(latitude, longitude, photo_id);
 CREATE INDEX IF NOT EXISTS idx_photo_taxon_mapping_taxon
     ON photo_taxon_mapping(taxon_id, photo_id);
 CREATE INDEX IF NOT EXISTS idx_photo_taxon_mapping_status

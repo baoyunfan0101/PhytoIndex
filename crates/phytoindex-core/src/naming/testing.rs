@@ -1,14 +1,11 @@
-use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
 use super::{
     NamingHookKind, ParsedPhotoFilename, PhotoFilenameParser, ScientificNameParts,
     SynonymAuthorityParser, TaxonomicNameInfo,
 };
+use crate::metadata::{self, MetadataKey};
 use crate::{CoreError, CoreResult, Database};
-
-pub(crate) const PHOTO_FILENAME_TESTS_KEY: &str = "photo_filename_hook_tests";
-pub(crate) const SYNONYM_AUTHORITY_TESTS_KEY: &str = "synonym_authority_hook_tests";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", content = "output", rename_all = "snake_case")]
@@ -71,18 +68,7 @@ pub fn set_naming_hook_test_cases(
     cases: &[NamingHookTestCase],
 ) -> CoreResult<()> {
     validate_cases(kind, cases)?;
-    let value = serde_json::to_string(cases)
-        .map_err(|error| CoreError::InvalidArgument(format!("invalid hook tests: {error}")))?;
-    database.connect()?.execute(
-        r#"
-        INSERT INTO app_metadata (metadata_key, metadata_value)
-        VALUES (?, ?)
-        ON CONFLICT(metadata_key) DO UPDATE
-        SET metadata_value = excluded.metadata_value
-        "#,
-        params![tests_metadata_key(kind), value],
-    )?;
-    Ok(())
+    metadata::set_json(&database.connect()?, tests_metadata_key(kind), &cases)
 }
 
 pub fn test_naming_hook(
@@ -387,15 +373,10 @@ pub(crate) fn seed_default_test_cases(connection: &rusqlite::Connection) -> Core
         NamingHookKind::PhotoFilename,
         NamingHookKind::SynonymAuthority,
     ] {
-        let value = serde_json::to_string(&default_test_cases(kind))
-            .map_err(|error| CoreError::InvalidArgument(format!("invalid hook tests: {error}")))?;
-        connection.execute(
-            r#"
-            INSERT INTO app_metadata (metadata_key, metadata_value)
-            VALUES (?, ?)
-            ON CONFLICT(metadata_key) DO NOTHING
-            "#,
-            params![tests_metadata_key(kind), value],
+        metadata::insert_json_if_missing(
+            connection,
+            tests_metadata_key(kind),
+            &default_test_cases(kind),
         )?;
     }
     Ok(())
@@ -405,18 +386,8 @@ fn load_cases(
     connection: &rusqlite::Connection,
     kind: NamingHookKind,
 ) -> CoreResult<Vec<NamingHookTestCase>> {
-    let value = connection
-        .query_row(
-            "SELECT metadata_value FROM app_metadata WHERE metadata_key = ?",
-            [tests_metadata_key(kind)],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()?;
-    let cases = match value {
-        Some(value) => serde_json::from_str(&value)
-            .map_err(|error| CoreError::InvalidArgument(format!("invalid hook tests: {error}")))?,
-        None => default_test_cases(kind),
-    };
+    let cases = metadata::get_json(connection, tests_metadata_key(kind))?
+        .unwrap_or_else(|| default_test_cases(kind));
     validate_cases(kind, &cases)?;
     Ok(cases)
 }
@@ -439,10 +410,10 @@ fn validate_cases(kind: NamingHookKind, cases: &[NamingHookTestCase]) -> CoreRes
     Ok(())
 }
 
-fn tests_metadata_key(kind: NamingHookKind) -> &'static str {
+fn tests_metadata_key(kind: NamingHookKind) -> MetadataKey {
     match kind {
-        NamingHookKind::PhotoFilename => PHOTO_FILENAME_TESTS_KEY,
-        NamingHookKind::SynonymAuthority => SYNONYM_AUTHORITY_TESTS_KEY,
+        NamingHookKind::PhotoFilename => MetadataKey::PhotoFilenameHookTests,
+        NamingHookKind::SynonymAuthority => MetadataKey::SynonymAuthorityHookTests,
     }
 }
 

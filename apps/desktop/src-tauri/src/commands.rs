@@ -18,11 +18,14 @@ use phytoindex_core::photos::{
 };
 use phytoindex_core::taxonomy::{
     DeleteTaxonNameInput, PromoteTaxonNameInput, TaxonChild, TaxonDetailNode, TaxonInputRow,
-    TaxonRowOutcome, TaxonSearchResult, TaxonUpdateInput, TaxonomyBaseMetadata,
+    TaxonRowOutcome, TaxonSearchResult, TaxonSuggestion, TaxonUpdateInput, TaxonomyBaseMetadata,
     TaxonomyCustomSqlResult, TaxonomyCustomSqlTempTable, TaxonomyOperation,
     TaxonomyOperationResult, TaxonomyPage, TaxonomyPreviewResult,
 };
-use phytoindex_core::{export, mapping, naming, photos, taxonomy};
+use phytoindex_core::{
+    map::{self, MapBounds, MapPhoto, MapSettings},
+    mapping, naming, photos, taxonomy,
+};
 use serde_json::{Value, json};
 use tauri::{AppHandle, State, ipc::Channel};
 
@@ -299,15 +302,26 @@ pub fn export_photo_operation_inputs(
 }
 
 #[tauri::command]
-pub fn get_all_photos(state: State<'_, AppState>) -> CommandResult<Vec<Photo>> {
-    photos::list_photos(&state.database).map_err(error)
-}
-
-#[tauri::command]
 pub fn get_photo(state: State<'_, AppState>, photo_id: i64) -> CommandResult<Photo> {
     photos::get_photo(&state.database, photo_id)
         .map_err(error)?
         .ok_or_else(|| format!("photo {photo_id} not found"))
+}
+
+#[tauri::command]
+pub fn search_photos(
+    state: State<'_, AppState>,
+    query: String,
+    cursor: Option<String>,
+    limit: Option<usize>,
+) -> CommandResult<PhotoPage<Photo>> {
+    photos::search_photos(
+        &state.database,
+        &query,
+        cursor.as_deref(),
+        limit.unwrap_or(50),
+    )
+    .map_err(error)
 }
 
 #[tauri::command]
@@ -349,6 +363,15 @@ pub fn search_taxa(
     limit: Option<usize>,
 ) -> CommandResult<Vec<TaxonSearchResult>> {
     taxonomy::search_taxa(&state.database, &query, limit.unwrap_or(50)).map_err(error)
+}
+
+#[tauri::command]
+pub fn suggest_taxa(
+    state: State<'_, AppState>,
+    query: String,
+    limit: Option<usize>,
+) -> CommandResult<Vec<TaxonSuggestion>> {
+    taxonomy::suggest_taxa(&state.database, &query, limit.unwrap_or(10)).map_err(error)
 }
 
 #[tauri::command]
@@ -561,18 +584,27 @@ pub fn search_photo_taxa(
 }
 
 #[tauri::command]
+pub fn suggest_photo_taxa(
+    state: State<'_, AppState>,
+    query: String,
+    limit: Option<usize>,
+) -> CommandResult<Vec<TaxonSuggestion>> {
+    mapping::suggest_photo_taxa(&state.database, &query, limit.unwrap_or(10)).map_err(error)
+}
+
+#[tauri::command]
 pub fn get_photo_taxon_id(state: State<'_, AppState>, photo_id: i64) -> CommandResult<Option<i64>> {
     mapping::get_photo_taxon_id(&state.database, photo_id).map_err(error)
 }
 
 #[tauri::command]
-pub fn list_taxon_photo_ids(
+pub fn list_taxon_photos(
     state: State<'_, AppState>,
     taxon_id: i64,
     cursor: Option<String>,
     limit: Option<usize>,
-) -> CommandResult<PhotoPage<i64>> {
-    mapping::list_taxon_photo_ids(
+) -> CommandResult<PhotoPage<Photo>> {
+    mapping::list_taxon_photos(
         &state.database,
         taxon_id,
         cursor.as_deref(),
@@ -645,28 +677,37 @@ pub fn list_photos_by_mapping_status(
 }
 
 #[tauri::command]
-pub fn suggest_mapping_taxa(
+pub fn get_map_settings(state: State<'_, AppState>) -> CommandResult<MapSettings> {
+    map::get_map_settings(&state.database).map_err(error)
+}
+
+#[tauri::command]
+pub fn set_map_settings(
     state: State<'_, AppState>,
-    query: String,
-    mode: String,
-) -> CommandResult<Vec<TaxonSearchResult>> {
-    mapping::suggest(&state.database, &query, &mode, 10).map_err(error)
+    settings: MapSettings,
+) -> CommandResult<MapSettings> {
+    map::set_map_settings(&state.database, settings).map_err(error)
+}
+
+#[tauri::command]
+pub fn list_map_photos(
+    state: State<'_, AppState>,
+    bounds: Option<MapBounds>,
+    cursor: Option<String>,
+    limit: Option<usize>,
+) -> CommandResult<PhotoPage<MapPhoto>> {
+    map::list_map_photos(
+        &state.database,
+        bounds,
+        cursor.as_deref(),
+        limit.unwrap_or(500),
+    )
+    .map_err(error)
 }
 
 #[tauri::command]
 pub fn get_operations_status(state: State<'_, AppState>) -> OperationsStatus {
     state.operations.status()
-}
-
-#[tauri::command]
-pub fn export_table(
-    state: State<'_, AppState>,
-    table_name: String,
-    output_path: String,
-) -> CommandResult<Value> {
-    let exported = export::export_table(&state.database, &table_name, Path::new(&output_path))
-        .map_err(error)?;
-    Ok(json!({ "exported": exported, "output_path": output_path }))
 }
 
 fn error(error: impl ToString) -> String {
