@@ -46,7 +46,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   border-right: 1px solid var(--line);
   background: var(--activity);
 }
-.brand-button, .activity-button {
+.activity-button {
   position: relative;
   display: grid;
   place-items: center;
@@ -57,8 +57,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   color: #999;
   background: transparent;
 }
-.brand-button { height: 38px; margin-bottom: 2px; }
-.brand-button img { width: 26px; height: 26px; border-radius: 6px; }
 .activity-button:hover { color: #e6e6e6; background: #222; }
 .activity-button.active { color: #fff; }
 .activity-button.active::before {

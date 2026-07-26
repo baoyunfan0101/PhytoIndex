@@ -1,21 +1,19 @@
 import {
   ArrowRightLeft,
   Braces,
-  Clock3,
   Database,
   FileClock,
-  FolderTree,
+  FolderOpen,
+  HardDrive,
   History,
-  Images,
+  ListTree,
   Map,
   Search,
   Settings,
   TableProperties,
-  TreeDeciduous,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
-import appIconUrl from "../src-tauri/icons/icon.png";
+import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import {
   getPhotoLibrary,
   listTaxonPhotos,
@@ -75,8 +73,8 @@ type AppTab = {
 const initialTab: AppTab = { id: "folders", kind: "folders", title: "Folders" };
 
 const photoItems: Array<[TabKind, string, IconComponent]> = [
-  ["folders", "Folders", FolderTree],
-  ["photo-taxonomy", "Photo taxonomy", TreeDeciduous],
+  ["folders", "Folders", FolderOpen],
+  ["photo-taxonomy", "Photo hierarchy", ListTree],
   ["map", "Map", Map],
   ["photo-history", "Rename history", History],
 ];
@@ -95,6 +93,8 @@ export function App() {
   const [searchQuery, setSearchQuery] = useState("");
   const [suggestions, setSuggestions] = useState<TaxonSuggestion[]>([]);
   const [status, setStatus] = useState("Ready");
+  const searchRef = useRef<HTMLDivElement>(null);
+  const searchToggleRef = useRef<HTMLButtonElement>(null);
   const active = tabs.find((tab) => tab.id === activeId) ?? tabs[0];
 
   useEffect(() => {
@@ -110,6 +110,17 @@ export function App() {
     const timer = window.setTimeout(() => void suggestPhotoTaxa(value).then(setSuggestions), 140);
     return () => window.clearTimeout(timer);
   }, [searchOpen, searchQuery]);
+
+  useEffect(() => {
+    if (!searchOpen) return;
+    const closeSearch = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (searchRef.current?.contains(target) || searchToggleRef.current?.contains(target)) return;
+      setSearchOpen(false);
+    };
+    window.addEventListener("pointerdown", closeSearch);
+    return () => window.removeEventListener("pointerdown", closeSearch);
+  }, [searchOpen]);
 
   function openTab(tab: AppTab, singleton = false) {
     const existing = tabs.find((item) => item.id === tab.id || (singleton && item.kind === tab.kind));
@@ -160,8 +171,7 @@ export function App() {
   return (
     <div className="desktop-shell">
       <aside className="activity-bar">
-        <button className="brand-button" type="button" title="Vividarium" onClick={() => openModule("folders", "Folders")}><img src={appIconUrl} alt="Vividarium" /></button>
-        <ActivityButton icon={Search} label="Search photos" active={searchOpen} onClick={() => setSearchOpen((current) => !current)} />
+        <ActivityButton buttonRef={searchToggleRef} icon={Search} label="Search photos" active={searchOpen} onClick={() => setSearchOpen((current) => !current)} />
         <div className="activity-divider" />
         {photoItems.map(([kind, label, icon]) => <ActivityButton key={kind} icon={icon} label={label} active={active?.kind === kind} onClick={() => openModule(kind, label)} />)}
         <div className="activity-divider" />
@@ -174,7 +184,7 @@ export function App() {
       <div className="desktop-main">
         <header className="app-topbar">
           <button className="root-button" type="button" onClick={() => void chooseRoot()} title={root || "Open photo root"}>
-            <FolderTree size={14} /><span>{root || "Open photo root"}</span>
+            <HardDrive size={14} /><span>{root || "Open photo root"}</span>
           </button>
           <div className="tab-strip">
             {tabs.map((tab) => (
@@ -188,7 +198,7 @@ export function App() {
             ))}
           </div>
           {searchOpen && (
-            <div className="global-search">
+            <div className="global-search" ref={searchRef}>
               <label><Search size={15} /><input autoFocus value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} onKeyDown={(event) => {
                 if (event.key === "Enter") submitSearch();
                 if (event.key === "Escape") setSearchOpen(false);
@@ -275,11 +285,13 @@ function ActivityButton({
   label,
   active,
   onClick,
+  buttonRef,
 }: {
   icon: IconComponent;
   label: string;
   active: boolean;
   onClick: () => void;
+  buttonRef?: RefObject<HTMLButtonElement>;
 }) {
-  return <button className={`activity-button${active ? " active" : ""}`} type="button" title={label} aria-label={label} onClick={onClick}><Icon size={19} /></button>;
+  return <button ref={buttonRef} className={`activity-button${active ? " active" : ""}`} type="button" title={label} aria-label={label} onClick={onClick}><Icon size={19} /></button>;
 }
