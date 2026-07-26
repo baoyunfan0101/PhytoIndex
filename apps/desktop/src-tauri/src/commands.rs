@@ -351,6 +351,15 @@ pub fn get_photo_availability(state: State<'_, AppState>, photo_id: i64) -> Comm
 }
 
 #[tauri::command]
+pub fn reveal_photo_in_file_manager(
+    state: State<'_, AppState>,
+    photo_id: i64,
+) -> CommandResult<()> {
+    let path = photos::photo_file_path(&state.database, photo_id).map_err(error)?;
+    crate::file_manager::reveal(&path)
+}
+
+#[tauri::command]
 pub fn get_photo_metadata(
     state: State<'_, AppState>,
     photo_id: i64,

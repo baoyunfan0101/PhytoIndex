@@ -1069,6 +1069,7 @@ strings. Parameter names below are the camel-case keys used in JavaScript
 | `search_photos` | `query: string`, optional `cursor: string`, optional `limit: number` | `PhotoPage<Photo>` |
 | `search_photos_by_filename` | `query: string`, optional `cursor: string`, optional `limit: number` | `PhotoPage<Photo>` |
 | `get_photo_availability` | `photoId: number` | `{ available: boolean, error: string \| null }` |
+| `reveal_photo_in_file_manager` | `photoId: number` | `null` |
 | `get_photo_metadata` | `photoId: number` | `PhotoMetadata` |
 | `get_mapping_metadata` | none | `MappingMetadata` |
 | `search_photo_taxa` | `query: string`, optional `cursor: string`, optional `limit: number` | `PhotoPage<TaxonSearchResult>` |
@@ -1100,6 +1101,11 @@ Desktop defaults:
 - `browse_photo_taxon.include_descendants = true`
 - `list_photos_by_mapping_status.limit = 50`
 - `search_photos_by_mapping_status.limit = 50`
+
+`reveal_photo_in_file_manager` validates that the indexed photo still exists
+under the active library root, then selects it in Finder on macOS or Explorer
+on Windows. It returns an error when the photo is unavailable, the system file
+manager cannot be started, or the platform is unsupported.
 
 `refresh_photo_directory` and `start_photo_mapping` schedule background work
 and return immediately. Their `OperationState` has:
