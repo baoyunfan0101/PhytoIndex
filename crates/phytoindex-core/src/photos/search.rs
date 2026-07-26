@@ -139,10 +139,9 @@ pub fn search_photos(
             matched_photos(photo_id) AS (
                 {filename_match}
                 UNION
-                SELECT photo_taxon_mapping.photo_id
-                FROM photo_taxon_mapping
+                SELECT current_photo_taxon_mapping.photo_id
+                FROM current_photo_taxon_mapping
                 JOIN descendants USING (taxon_id)
-                WHERE photo_taxon_mapping.status = 'matched'
             )
             SELECT photo_id FROM matched_photos
         ) AS search_matches ON search_matches.photo_id = photos.photo_id
@@ -294,6 +293,23 @@ mod tests {
         assert_eq!(second.items[0].photo_id, 3);
         assert!(second.next_cursor.is_none());
         assert!(search_photos(&database, "felis", first.next_cursor.as_deref(), 2).is_err());
+        database
+            .connect()
+            .unwrap()
+            .execute(
+                "INSERT INTO photo_mapping_queue (photo_id, reason) VALUES (1, 'refresh')",
+                [],
+            )
+            .unwrap();
+        let current = search_photos(&database, "canidae", None, 10).unwrap();
+        assert_eq!(
+            current
+                .items
+                .iter()
+                .map(|photo| photo.photo_id)
+                .collect::<Vec<_>>(),
+            vec![2]
+        );
     }
 
     #[test]

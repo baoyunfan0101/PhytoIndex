@@ -544,9 +544,9 @@ fn photo_filter(table_name: &str, require_photos: bool) -> String {
         r#"
         AND EXISTS (
             SELECT 1
-            FROM photo_taxon_usage
-            WHERE photo_taxon_usage.taxon_id = {table_name}.taxon_id
-              AND photo_taxon_usage.subtree_photo_count > 0
+            FROM current_photo_taxon_usage
+            WHERE current_photo_taxon_usage.taxon_id = {table_name}.taxon_id
+              AND current_photo_taxon_usage.subtree_photo_count > 0
         )
         "#
     )

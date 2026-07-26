@@ -121,10 +121,10 @@ pub fn list_taxon_photos(
     let limit = photo_page_limit(limit);
     let sql = crate::photos::photo_select(
         r#"
-        JOIN photo_taxon_mapping ON photo_taxon_mapping.photo_id = photos.photo_id
-        WHERE photo_taxon_mapping.status = 'matched'
-          AND photo_taxon_mapping.photo_id > ?2
-          AND photo_taxon_mapping.taxon_id IN (
+        JOIN current_photo_taxon_mapping
+          ON current_photo_taxon_mapping.photo_id = photos.photo_id
+        WHERE current_photo_taxon_mapping.photo_id > ?2
+          AND current_photo_taxon_mapping.taxon_id IN (
               WITH RECURSIVE descendants(taxon_id) AS (
                   SELECT taxon_id FROM taxa WHERE taxon_id = ?1
                   UNION ALL
@@ -248,6 +248,9 @@ mod tests {
         assert_eq!(get_photo_taxon_id(&database, 1).unwrap(), 11);
         assert!(get_photo_taxon_id(&database, 3).is_err());
         assert!(get_photo_taxon_id(&database, 999).is_err());
+        let initial = list_taxon_photos(&database, 10, None, 1).unwrap();
+        assert_eq!(initial.items[0].photo_id, 1);
+        assert!(initial.next_cursor.is_some());
 
         let connection = database.connect().unwrap();
         connection
@@ -259,12 +262,27 @@ mod tests {
         drop(connection);
         assert!(get_photo_taxon_id(&database, 1).is_err());
 
-        let first = list_taxon_photos(&database, 10, None, 1).unwrap();
-        assert_eq!(first.items[0].photo_id, 1);
-        let second = list_taxon_photos(&database, 10, first.next_cursor.as_deref(), 1).unwrap();
-        assert_eq!(second.items[0].photo_id, 2);
-        assert!(second.next_cursor.is_none());
-        assert!(list_taxon_photos(&database, 11, first.next_cursor.as_deref(), 1).is_err());
+        let current = list_taxon_photos(&database, 10, None, 1).unwrap();
+        assert_eq!(current.items[0].photo_id, 2);
+        assert!(current.next_cursor.is_none());
+        assert!(
+            list_taxon_photos(&database, 11, None, 1)
+                .unwrap()
+                .items
+                .is_empty()
+        );
+        assert!(list_taxon_photos(&database, 11, initial.next_cursor.as_deref(), 1).is_err());
+        assert!(
+            search_photo_taxa(&database, "Canidae", None, 10)
+                .unwrap()
+                .items
+                .is_empty()
+        );
+        assert!(
+            suggest_photo_taxa(&database, "Canidae", 10)
+                .unwrap()
+                .is_empty()
+        );
         assert!(list_taxon_photos(&database, 999, None, 1).is_err());
     }
 }

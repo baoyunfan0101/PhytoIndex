@@ -493,7 +493,11 @@ fn is_allowed_custom_sql_read(
         || (accessor == Some("taxa_bd_photo_mapping")
             && matches!(
                 table_name,
-                "photo_mapping_queue" | "photo_taxon_mapping" | "photos"
+                "photo_mapping_queue"
+                    | "photo_taxon_mapping"
+                    | "photo_taxon_usage"
+                    | "photos"
+                    | "taxa"
             ))
         || is_taxa_delete_foreign_key_access(deletes_taxa, accessor, table_name)
 }
@@ -506,7 +510,10 @@ fn is_allowed_custom_sql_write(
     is_taxonomy_session_table(table_name)
         || (accessor.is_some() && table_name.starts_with("taxon_names_fts"))
         || (accessor == Some("taxa_bd_photo_mapping")
-            && matches!(table_name, "photo_mapping_queue" | "photo_taxon_mapping"))
+            && matches!(
+                table_name,
+                "photo_mapping_queue" | "photo_taxon_mapping" | "photo_taxon_usage"
+            ))
         || is_taxa_delete_foreign_key_access(deletes_taxa, accessor, table_name)
 }
 
@@ -716,5 +723,73 @@ mod tests {
                 )
                 .unwrap()
         );
+    }
+
+    #[test]
+    fn custom_taxon_delete_queues_old_matches() {
+        let (_directory, database) = database();
+        let connection = database.connect().unwrap();
+        connection
+            .execute("INSERT INTO taxa (rank) VALUES (5)", [])
+            .unwrap();
+        let taxon_id = connection.last_insert_rowid();
+        connection
+            .execute(
+                r#"
+                INSERT INTO taxon_names (taxon_id, name_type, name)
+                VALUES (?, 1, 'Felis catus')
+                "#,
+                [taxon_id],
+            )
+            .unwrap();
+        connection
+            .execute_batch(
+                r#"
+                INSERT INTO photo_directories (
+                    directory_id, parent_directory_id, name, relative_path
+                ) VALUES (1, NULL, '', '');
+                INSERT INTO photos (
+                    photo_id, directory_id, filename, file_size, modified_at_ns
+                ) VALUES (1, 1, 'Felis catus.jpg', 1, 1);
+                "#,
+            )
+            .unwrap();
+        connection
+            .execute(
+                r#"
+                INSERT INTO photo_taxon_mapping (photo_id, taxon_id, status)
+                VALUES (1, ?, 'matched')
+                "#,
+                [taxon_id],
+            )
+            .unwrap();
+        connection
+            .execute(
+                r#"
+                INSERT INTO photo_taxon_usage (
+                    taxon_id, direct_photo_count, subtree_photo_count
+                ) VALUES (?, 1, 1)
+                "#,
+                [taxon_id],
+            )
+            .unwrap();
+        drop(connection);
+
+        execute_custom_taxonomy_sql(
+            &database,
+            &format!("DELETE FROM taxa WHERE taxon_id = {taxon_id}"),
+            None,
+        )
+        .unwrap();
+
+        let connection = database.connect().unwrap();
+        let queued: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM photo_mapping_queue WHERE photo_id = 1)",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(queued);
     }
 }

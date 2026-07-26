@@ -579,6 +579,10 @@ Only `matched`, `ambiguous`, and `unmatched` are stored mapping states.
 `processing` is synthesized while the photo has an entry in
 `photo_mapping_queue`.
 
+A photo is currently `matched` only when its stored status is `matched` and it
+has no entry in `photo_mapping_queue`. Every public mapping, navigation,
+taxonomy-browse, search, count, and rename API follows this definition.
+
 ### `PhotoTaxonMapping`
 
 | Field | Type | Description |

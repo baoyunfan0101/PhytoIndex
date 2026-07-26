@@ -200,9 +200,77 @@ BEFORE DELETE ON taxa BEGIN
     FROM photo_taxon_mapping
     WHERE taxon_id = old.taxon_id
     ON CONFLICT(photo_id) DO UPDATE SET reason = excluded.reason;
+    UPDATE photo_taxon_usage
+    SET direct_photo_count = direct_photo_count
+            - CASE WHEN taxon_id = old.taxon_id THEN (
+                SELECT COUNT(*)
+                FROM photo_taxon_mapping
+                WHERE taxon_id = old.taxon_id
+                  AND status = 'matched'
+              ) ELSE 0 END,
+        subtree_photo_count = subtree_photo_count - (
+            SELECT COUNT(*)
+            FROM photo_taxon_mapping
+            WHERE taxon_id = old.taxon_id
+              AND status = 'matched'
+        )
+    WHERE taxon_id IN (
+        WITH RECURSIVE ancestors(taxon_id) AS (
+            SELECT old.taxon_id
+            UNION ALL
+            SELECT taxa.parent_taxon_id
+            FROM taxa
+            JOIN ancestors ON taxa.taxon_id = ancestors.taxon_id
+            WHERE taxa.parent_taxon_id IS NOT NULL
+        )
+        SELECT taxon_id FROM ancestors
+    );
+    DELETE FROM photo_taxon_usage
+    WHERE direct_photo_count = 0 AND subtree_photo_count = 0;
     DELETE FROM photo_taxon_mapping
     WHERE taxon_id = old.taxon_id;
 END;
+
+CREATE VIEW IF NOT EXISTS current_photo_taxon_mapping AS
+SELECT photo_taxon_mapping.photo_id, photo_taxon_mapping.taxon_id
+FROM photo_taxon_mapping
+WHERE photo_taxon_mapping.status = 'matched'
+  AND NOT EXISTS (
+      SELECT 1
+      FROM photo_mapping_queue
+      WHERE photo_mapping_queue.photo_id = photo_taxon_mapping.photo_id
+  );
+
+CREATE VIEW IF NOT EXISTS current_photo_taxon_usage AS
+WITH RECURSIVE queued_taxon_paths(direct_taxon_id, taxon_id) AS (
+    SELECT photo_taxon_mapping.taxon_id, photo_taxon_mapping.taxon_id
+    FROM photo_taxon_mapping
+    JOIN photo_mapping_queue USING (photo_id)
+    WHERE photo_taxon_mapping.status = 'matched'
+    UNION ALL
+    SELECT queued_taxon_paths.direct_taxon_id, taxa.parent_taxon_id
+    FROM queued_taxon_paths
+    JOIN taxa ON taxa.taxon_id = queued_taxon_paths.taxon_id
+    WHERE taxa.parent_taxon_id IS NOT NULL
+),
+queued_taxon_counts AS (
+    SELECT taxon_id,
+           SUM(direct_taxon_id = taxon_id) AS direct_photo_count,
+           COUNT(*) AS subtree_photo_count
+    FROM queued_taxon_paths
+    GROUP BY taxon_id
+)
+SELECT photo_taxon_usage.taxon_id,
+       photo_taxon_usage.direct_photo_count
+           - COALESCE(queued_taxon_counts.direct_photo_count, 0)
+           AS direct_photo_count,
+       photo_taxon_usage.subtree_photo_count
+           - COALESCE(queued_taxon_counts.subtree_photo_count, 0)
+           AS subtree_photo_count
+FROM photo_taxon_usage
+LEFT JOIN queued_taxon_counts USING (taxon_id)
+WHERE photo_taxon_usage.subtree_photo_count
+      > COALESCE(queued_taxon_counts.subtree_photo_count, 0);
 
 CREATE TABLE IF NOT EXISTS taxon_names (
     name_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -515,6 +583,51 @@ mod tests {
             [taxon_id],
         );
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn queued_mappings_are_not_current_matches_or_usage() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = Database::open(directory.path().join("vividarium.db")).unwrap();
+        let connection = database.connect().unwrap();
+        connection
+            .execute_batch(
+                r#"
+                INSERT INTO photo_directories (
+                    directory_id, parent_directory_id, name, relative_path
+                ) VALUES (1, NULL, '', '');
+                INSERT INTO photos (
+                    photo_id, directory_id, filename, file_size, modified_at_ns
+                ) VALUES (1, 1, 'photo.jpg', 1, 1);
+                INSERT INTO taxa (taxon_id, parent_taxon_id, rank)
+                VALUES (1, NULL, 5);
+                INSERT INTO photo_taxon_mapping (photo_id, taxon_id, status)
+                VALUES (1, 1, 'matched');
+                INSERT INTO photo_taxon_usage (
+                    taxon_id, direct_photo_count, subtree_photo_count
+                ) VALUES (1, 1, 1);
+                "#,
+            )
+            .unwrap();
+        let current_count = |view: &str| -> i64 {
+            connection
+                .query_row(&format!("SELECT COUNT(*) FROM {view}"), [], |row| {
+                    row.get(0)
+                })
+                .unwrap()
+        };
+        assert_eq!(current_count("current_photo_taxon_mapping"), 1);
+        assert_eq!(current_count("current_photo_taxon_usage"), 1);
+
+        connection
+            .execute(
+                "INSERT INTO photo_mapping_queue (photo_id, reason) VALUES (1, 'refresh')",
+                [],
+            )
+            .unwrap();
+
+        assert_eq!(current_count("current_photo_taxon_mapping"), 0);
+        assert_eq!(current_count("current_photo_taxon_usage"), 0);
     }
 
     #[test]

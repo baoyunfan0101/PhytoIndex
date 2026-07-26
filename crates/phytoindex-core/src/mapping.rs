@@ -166,7 +166,7 @@ pub fn get_metadata(database: &Database) -> CoreResult<MappingMetadata> {
         )?)
     };
     let mapping_taxa_count = connection.query_row(
-        "SELECT COUNT(*) FROM photo_taxon_usage WHERE subtree_photo_count > 0",
+        "SELECT COUNT(*) FROM current_photo_taxon_usage WHERE subtree_photo_count > 0",
         [],
         |row| row.get(0),
     )?;
@@ -300,7 +300,7 @@ pub fn get_photo_taxon_node(
             .ok_or_else(|| CoreError::NotFound(format!("photo taxon node {taxon_id}")))?,
         None => {
             let subtree_photo_count = connection.query_row(
-                "SELECT COUNT(*) FROM photo_taxon_mapping WHERE status = 'matched'",
+                "SELECT COUNT(*) FROM current_photo_taxon_mapping",
                 [],
                 |row| row.get(0),
             )?;
@@ -543,7 +543,8 @@ fn load_photos_for_taxon(
     let suffix = match (taxon_id, include_descendants) {
         (Some(_), true) => {
             r#"
-            JOIN photo_taxon_mapping ON photo_taxon_mapping.photo_id = photos.photo_id
+            JOIN current_photo_taxon_mapping
+              ON current_photo_taxon_mapping.photo_id = photos.photo_id
             JOIN (
                 WITH RECURSIVE descendants(taxon_id) AS (
                     SELECT taxon_id FROM taxa WHERE taxon_id = ?1
@@ -553,23 +554,26 @@ fn load_photos_for_taxon(
                     JOIN descendants ON child.parent_taxon_id = descendants.taxon_id
                 )
                 SELECT taxon_id FROM descendants
-            ) AS selected_taxa ON selected_taxa.taxon_id = photo_taxon_mapping.taxon_id
-            WHERE photo_taxon_mapping.status = 'matched' AND photos.photo_id > ?2
+            ) AS selected_taxa
+              ON selected_taxa.taxon_id = current_photo_taxon_mapping.taxon_id
+            WHERE photos.photo_id > ?2
             ORDER BY photos.photo_id LIMIT ?3
         "#
         }
         (Some(_), false) => {
             r#"
-            JOIN photo_taxon_mapping ON photo_taxon_mapping.photo_id = photos.photo_id
-            WHERE photo_taxon_mapping.status = 'matched'
-              AND photo_taxon_mapping.taxon_id = ?1 AND photos.photo_id > ?2
+            JOIN current_photo_taxon_mapping
+              ON current_photo_taxon_mapping.photo_id = photos.photo_id
+            WHERE current_photo_taxon_mapping.taxon_id = ?1
+              AND photos.photo_id > ?2
             ORDER BY photos.photo_id LIMIT ?3
         "#
         }
         (None, _) => {
             r#"
-            JOIN photo_taxon_mapping ON photo_taxon_mapping.photo_id = photos.photo_id
-            WHERE photo_taxon_mapping.status = 'matched' AND photos.photo_id > ?2
+            JOIN current_photo_taxon_mapping
+              ON current_photo_taxon_mapping.photo_id = photos.photo_id
+            WHERE photos.photo_id > ?2
             ORDER BY photos.photo_id LIMIT ?3
         "#
         }
@@ -901,7 +905,7 @@ fn usage_taxon_select() -> &'static str {
            COALESCE(photo_taxon_usage.direct_photo_count, 0) AS direct_photo_count,
            COALESCE(photo_taxon_usage.subtree_photo_count, 0) AS subtree_photo_count
     FROM taxa
-    LEFT JOIN photo_taxon_usage USING (taxon_id)
+    LEFT JOIN current_photo_taxon_usage AS photo_taxon_usage USING (taxon_id)
     "#
 }
 
@@ -1612,7 +1616,14 @@ mod tests {
         let database = Database::open(data.path().join("vividarium.db")).unwrap();
         let connection = database.connect().unwrap();
         connection
-            .execute("INSERT INTO taxa (rank) VALUES (5)", [])
+            .execute("INSERT INTO taxa (rank) VALUES (4)", [])
+            .unwrap();
+        let parent_taxon_id = connection.last_insert_rowid();
+        connection
+            .execute(
+                "INSERT INTO taxa (parent_taxon_id, rank) VALUES (?, 5)",
+                [parent_taxon_id],
+            )
             .unwrap();
         let taxon_id = connection.last_insert_rowid();
         connection
@@ -1631,6 +1642,12 @@ mod tests {
         let mut progress = |_: u64, _: Option<u64>, _: &str| {};
         process_pending_photo_matches(&database, &mut progress).unwrap();
         select_photo_taxon(&database, photo.photo_id, taxon_id).unwrap();
+        assert_eq!(
+            get_photo_taxon_node(&database, Some(parent_taxon_id), false)
+                .unwrap()
+                .subtree_photo_count,
+            1
+        );
 
         crate::taxonomy::delete_taxon(&database, taxon_id).unwrap();
 
@@ -1644,6 +1661,13 @@ mod tests {
             .unwrap();
         assert_eq!(stored_mapping_count, 0);
         drop(connection);
+        assert!(get_photo_taxon_node(&database, Some(parent_taxon_id), false).is_err());
+        assert_eq!(
+            get_photo_taxon_node(&database, Some(parent_taxon_id), true)
+                .unwrap()
+                .subtree_photo_count,
+            0
+        );
         assert_eq!(
             get_photo_mapping(&database, photo.photo_id)
                 .unwrap()
@@ -1861,6 +1885,23 @@ mod tests {
                 .all(|item| matches!(item, PhotoTaxonItem::Taxon { .. }))
         );
         assert!(first.next_cursor.is_some());
+        database
+            .connect()
+            .unwrap()
+            .execute(
+                "INSERT INTO photo_mapping_queue (photo_id, reason) VALUES (?, 'refresh')",
+                [first_photo_id],
+            )
+            .unwrap();
+        let current_node = get_photo_taxon_node(&database, Some(parent_taxon_id), false).unwrap();
+        assert_eq!(current_node.taxon.as_ref().unwrap().direct_photo_count, 1);
+        assert_eq!(current_node.subtree_photo_count, 1);
+        assert_eq!(
+            get_photo_taxon_node(&database, None, false)
+                .unwrap()
+                .subtree_photo_count,
+            1
+        );
         let error = browse_photo_taxon(
             &database,
             Some(child_taxon_ids[0]),
@@ -1881,12 +1922,13 @@ mod tests {
             2,
         )
         .unwrap();
-        assert_eq!(second.items.len(), 2);
-        assert!(
-            second
-                .items
-                .iter()
-                .all(|item| matches!(item, PhotoTaxonItem::Photo { .. }))
+        assert_eq!(
+            second.items,
+            vec![PhotoTaxonItem::Photo {
+                photo: photos::get_photo(&database, second_photo_id)
+                    .unwrap()
+                    .unwrap()
+            }]
         );
         assert_eq!(second.next_cursor, None);
     }

@@ -580,25 +580,15 @@ pub fn rename_photos_in_directory_from_taxa(
         SELECT photos.photo_id
         FROM photos
         JOIN directories USING (directory_id)
-        JOIN photo_taxon_mapping USING (photo_id)
-        WHERE photo_taxon_mapping.status = 'matched'
-          AND NOT EXISTS (
-              SELECT 1 FROM photo_mapping_queue
-              WHERE photo_mapping_queue.photo_id = photos.photo_id
-          )
+        JOIN current_photo_taxon_mapping USING (photo_id)
         ORDER BY photos.directory_id, photos.filename, photos.photo_id
         "#
     } else {
         r#"
         SELECT photos.photo_id
         FROM photos
-        JOIN photo_taxon_mapping USING (photo_id)
+        JOIN current_photo_taxon_mapping USING (photo_id)
         WHERE photos.directory_id = ?1
-          AND photo_taxon_mapping.status = 'matched'
-          AND NOT EXISTS (
-              SELECT 1 FROM photo_mapping_queue
-              WHERE photo_mapping_queue.photo_id = photos.photo_id
-          )
         ORDER BY photos.filename, photos.photo_id
         "#
     };
@@ -715,15 +705,9 @@ fn taxon_filename(database: &Database, photo_id: i64) -> CoreResult<String> {
     let taxon_id = connection
         .query_row(
             r#"
-            SELECT photo_taxon_mapping.taxon_id
-            FROM photo_taxon_mapping
-            WHERE photo_taxon_mapping.photo_id = ?1
-              AND photo_taxon_mapping.status = 'matched'
-              AND NOT EXISTS (
-                  SELECT 1
-                  FROM photo_mapping_queue
-                  WHERE photo_mapping_queue.photo_id = ?1
-              )
+            SELECT taxon_id
+            FROM current_photo_taxon_mapping
+            WHERE photo_id = ?1
             "#,
             [photo_id],
             |row| row.get::<_, i64>(0),
