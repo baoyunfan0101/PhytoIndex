@@ -13,7 +13,7 @@ pub fn normalize_taxonomy_name(value: &str) -> Option<String>
 ```
 
 Returns `None` for an empty value. Otherwise it trims outer whitespace,
-collapses whitespace, normalizes supported apostrophes, changes a standalone
+collapses whitespace, normalizes supported quote marks, changes a standalone
 hybrid `X` or multiplication sign to `x`, replaces underscores with spaces,
 and converts `cv.` notation to single-quoted cultivar notation.
 
@@ -54,10 +54,13 @@ pub fn parse_photo_filename(
 otherwise uses the built-in parser.
 
 The built-in parser treats the first unquoted digit or extension-style period
-as the suffix boundary. A period followed by a space remains part of the name.
-It derives family, genus, and species scientific fields from the normalized
-scientific portion. Chinese rank suffixes may populate the Chinese fields.
-Applications with other filename conventions should configure the hook.
+as the suffix boundary. A period followed by a space remains part of the name,
+and apostrophes within one quoted name do not close that name. Legacy curly
+single and double quotes become `'`. It derives family, genus, and species
+scientific fields from the normalized scientific portion, including leading
+hybrid genera. Chinese rank suffixes and quoted or parenthesized Chinese-name
+segments may populate the Chinese fields. Applications with other filename
+conventions should configure the hook.
 
 ## Synonym authority information
 
