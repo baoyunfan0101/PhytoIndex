@@ -133,7 +133,10 @@ It returns:
 ```
 
 The `value` parameter is the exact synonym string supplied by the caller. It
-is not trimmed, normalized, or deduplicated before the hook runs.
+is not trimmed, normalized, deduplicated, or filtered before the hook runs.
+This includes empty and whitespace-only synonym entries. The bundled template
+returns an empty name for those entries, which post-hook validation rejects;
+a custom hook may map them to another result.
 `authority_year` may be `()`. Hook name outputs always pass through
 `normalize_taxonomy_name`, after which duplicate names are discarded.
 

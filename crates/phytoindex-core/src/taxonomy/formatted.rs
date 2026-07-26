@@ -1150,7 +1150,7 @@ impl NormalizedInput {
         let target_name = path[target_index].clone().unwrap_or_default();
         let mut seen_scientific_names = HashSet::from([target_name.clone()]);
         let mut synonyms = Vec::new();
-        for raw in row.synonyms.iter().filter(|value| !value.trim().is_empty()) {
+        for raw in &row.synonyms {
             let parts = synonym_parser
                 .split(raw)
                 .map_err(|error| error.to_string())?;
@@ -1380,7 +1380,6 @@ pub fn parse_taxonomy_input_csv(
             let raw_multiple = || {
                 value
                     .split(separator)
-                    .filter(|value| !value.trim().is_empty())
                     .map(str::to_string)
                     .collect::<Vec<_>>()
             };
@@ -1838,6 +1837,8 @@ mod tests {
                 fn split_synonym_authority(value) {
                     if value == "  Raw_synonym  " {
                         #{ name: value, authority_year: "raw" }
+                    } else if value == "   " {
+                        #{ name: "Whitespace input", authority_year: "raw" }
                     } else {
                         #{ name: "Wrong input", authority_year: "normalized" }
                     }
@@ -1846,22 +1847,33 @@ mod tests {
             ),
         )
         .unwrap();
-        let rows =
-            parse_taxonomy_input_csv(&database, "kingdom|synonyms\nAnimalia|  Raw_synonym  \n")
-                .unwrap();
-        assert_eq!(rows[0].synonyms, vec!["  Raw_synonym  "]);
+        let rows = parse_taxonomy_input_csv(
+            &database,
+            "kingdom|synonyms\nAnimalia|  Raw_synonym  ;   \n",
+        )
+        .unwrap();
+        assert_eq!(rows[0].synonyms, vec!["  Raw_synonym  ", "   "]);
         apply_rows(&database, &rows).unwrap();
-        let (name, authority): (String, String) = database
-            .connect()
-            .unwrap()
-            .query_row(
-                "SELECT name, authority_year FROM taxon_names WHERE name_type = 2",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+        let connection = database.connect().unwrap();
+        let mut statement = connection
+            .prepare(
+                "SELECT name, authority_year FROM taxon_names WHERE name_type = 2 ORDER BY name",
             )
             .unwrap();
-        assert_eq!(name, "Raw synonym");
-        assert_eq!(authority, "raw");
+        let names = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(
+            names,
+            vec![
+                ("Raw synonym".into(), "raw".into()),
+                ("Whitespace input".into(), "raw".into()),
+            ]
+        );
     }
 
     #[test]
