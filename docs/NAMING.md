@@ -132,8 +132,10 @@ It returns:
 #{ name: "Canis lupus", authority_year: "Linnaeus, 1758" }
 ```
 
+The `value` parameter is the exact synonym string supplied by the caller. It
+is not trimmed, normalized, or deduplicated before the hook runs.
 `authority_year` may be `()`. Hook name outputs always pass through
-`normalize_taxonomy_name`.
+`normalize_taxonomy_name`, after which duplicate names are discarded.
 
 Hooks have no application-provided file, network, or database functions.
 Execution limits include 20,000 operations, 32 call levels, bounded expression

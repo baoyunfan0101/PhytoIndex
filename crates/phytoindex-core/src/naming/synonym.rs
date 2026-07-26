@@ -149,7 +149,12 @@ mod tests {
         let parser = SynonymAuthorityParser::from_script(
             r#"
             fn split_synonym_authority(value) {
-                #{ name: value, authority_year: "custom" }
+                let authority = if value == "  Canis   lupus  " {
+                    "raw"
+                } else {
+                    "changed"
+                };
+                #{ name: value, authority_year: authority }
             }
             "#,
         )
@@ -158,7 +163,7 @@ mod tests {
             parser.split("  Canis   lupus  ").unwrap(),
             ScientificNameParts {
                 name: "Canis lupus".into(),
-                authority_year: Some("custom".into()),
+                authority_year: Some("raw".into()),
             }
         );
     }

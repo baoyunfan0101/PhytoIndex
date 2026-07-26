@@ -1150,9 +1150,9 @@ impl NormalizedInput {
         let target_name = path[target_index].clone().unwrap_or_default();
         let mut seen_scientific_names = HashSet::from([target_name.clone()]);
         let mut synonyms = Vec::new();
-        for raw in unique_names(&row.synonyms) {
+        for raw in row.synonyms.iter().filter(|value| !value.trim().is_empty()) {
             let parts = synonym_parser
-                .split(&raw)
+                .split(raw)
                 .map_err(|error| error.to_string())?;
             if seen_scientific_names.insert(parts.name.clone()) {
                 synonyms.push(ParsedSynonym {
@@ -1371,10 +1371,17 @@ pub fn parse_taxonomy_input_csv(
         let mut row = TaxonInputRow::default();
         for (header, value) in headers.iter().zip(record.iter()) {
             let scalar = || normalize_text(Some(value));
-            let multiple = || {
+            let normalized_multiple = || {
                 value
                     .split(separator)
                     .filter_map(|value| normalize_name(Some(value)))
+                    .collect::<Vec<_>>()
+            };
+            let raw_multiple = || {
+                value
+                    .split(separator)
+                    .filter(|value| !value.trim().is_empty())
+                    .map(str::to_string)
                     .collect::<Vec<_>>()
             };
             match header {
@@ -1384,11 +1391,11 @@ pub fn parse_taxonomy_input_csv(
                 "genus" => row.genus = scalar(),
                 "species" => row.species = scalar(),
                 "authority_year" => row.authority_year = scalar(),
-                "synonyms" => row.synonyms = multiple(),
+                "synonyms" => row.synonyms = raw_multiple(),
                 "zh_name" => row.zh_name = scalar(),
-                "zh_alias" => row.zh_alias = multiple(),
+                "zh_alias" => row.zh_alias = normalized_multiple(),
                 "en_name" => row.en_name = scalar(),
-                "en_alias" => row.en_alias = multiple(),
+                "en_alias" => row.en_alias = normalized_multiple(),
                 "geological_range" => row.geological_range = scalar(),
                 "source" => row.source = scalar(),
                 _ => {}
@@ -1829,31 +1836,32 @@ mod tests {
             Some(
                 r#"
                 fn split_synonym_authority(value) {
-                    #{ name: "Hooked synonym", authority_year: "custom" }
+                    if value == "  Raw_synonym  " {
+                        #{ name: value, authority_year: "raw" }
+                    } else {
+                        #{ name: "Wrong input", authority_year: "normalized" }
+                    }
                 }
                 "#,
             ),
         )
         .unwrap();
-        apply_rows(
-            &database,
-            &[TaxonInputRow {
-                kingdom: Some("Animalia".into()),
-                synonyms: vec!["ignored".into()],
-                ..TaxonInputRow::default()
-            }],
-        )
-        .unwrap();
-        let authority: String = database
+        let rows =
+            parse_taxonomy_input_csv(&database, "kingdom|synonyms\nAnimalia|  Raw_synonym  \n")
+                .unwrap();
+        assert_eq!(rows[0].synonyms, vec!["  Raw_synonym  "]);
+        apply_rows(&database, &rows).unwrap();
+        let (name, authority): (String, String) = database
             .connect()
             .unwrap()
             .query_row(
-                "SELECT authority_year FROM taxon_names WHERE name = 'Hooked synonym'",
+                "SELECT name, authority_year FROM taxon_names WHERE name_type = 2",
                 [],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .unwrap();
-        assert_eq!(authority, "custom");
+        assert_eq!(name, "Raw synonym");
+        assert_eq!(authority, "raw");
     }
 
     #[test]
