@@ -18,11 +18,13 @@ use crate::taxonomy::{
 };
 
 mod name_match;
+mod navigation;
 
 pub use name_match::{
     PhotoNameField, PhotoNameMatchSettings, get_photo_name_match_settings,
     set_photo_name_match_settings,
 };
+pub use navigation::{get_photo_taxon_id, list_taxon_photo_ids, search_photo_taxa};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -218,7 +220,7 @@ pub fn get_photo_taxon_match(database: &Database, photo_id: i64) -> CoreResult<P
     let photo = photos::get_photo(database, photo_id)?
         .ok_or_else(|| CoreError::NotFound(format!("photo {photo_id}")))?;
     let connection = database.connect()?;
-    let results = search_photo_taxa(&connection, &photo.filename)?;
+    let results = match_photo_taxa(&connection, &photo.filename)?;
     let mapping = get_photo_mapping(database, photo_id)?.unwrap_or(PhotoTaxonMapping {
         photo_id,
         taxon_id: resolved_taxon_id(&results),
@@ -239,7 +241,7 @@ pub fn select_photo_taxon(
         .ok_or_else(|| CoreError::NotFound(format!("photo {photo_id}")))?;
     let mut connection = database.connect()?;
     let transaction = connection.transaction()?;
-    let results = search_photo_taxa(&transaction, &photo.filename)?;
+    let results = match_photo_taxa(&transaction, &photo.filename)?;
     if !results
         .iter()
         .any(|result| result.summary.taxon_id == taxon_id)
@@ -778,7 +780,7 @@ fn remap_photo_ids_with(
     let mut changed = 0usize;
     for (photo_id, filename) in photos {
         let results =
-            search_photo_taxa_with(transaction, filename_parser, match_settings, &filename)?;
+            match_photo_taxa_with(transaction, filename_parser, match_settings, &filename)?;
         let old_mapping = old_mappings.get(&photo_id).copied();
         let old_taxon_id = old_mapping.and_then(|(taxon_id, status)| {
             (status == PhotoTaxonStatus::Matched)
@@ -1040,16 +1042,16 @@ fn photo_mapping_query(joins: &str, filter: &str) -> String {
     )
 }
 
-fn search_photo_taxa(
+fn match_photo_taxa(
     connection: &rusqlite::Connection,
     filename: &str,
 ) -> CoreResult<Vec<PhotoTaxonCandidate>> {
     let filename_parser = PhotoFilenameParser::load(connection)?;
     let match_settings = name_match::load(connection)?;
-    search_photo_taxa_with(connection, &filename_parser, &match_settings, filename)
+    match_photo_taxa_with(connection, &filename_parser, &match_settings, filename)
 }
 
-fn search_photo_taxa_with(
+fn match_photo_taxa_with(
     connection: &rusqlite::Connection,
     filename_parser: &PhotoFilenameParser,
     settings: &PhotoNameMatchSettings,

@@ -314,6 +314,28 @@ pub fn list_photos(database: &Database) -> CoreResult<Vec<Photo>>
 Returns every indexed photo ordered by `photo_id`. Interactive views should use
 the cursor-based directory, taxon, or mapping-status APIs instead.
 
+#### `search_photos_by_filename`
+
+```rust
+pub fn search_photos_by_filename(
+    database: &Database,
+    query: &str,
+    cursor: Option<&str>,
+    limit: usize,
+) -> CoreResult<PhotoPage<Photo>>
+```
+
+| Parameter | Description |
+| --- | --- |
+| `query` | Case-insensitive text contained in `filename`. Leading and trailing whitespace is ignored. |
+| `cursor` | `None` for the first page, otherwise the previous page's `next_cursor`. |
+| `limit` | Requested maximum number of photos. |
+
+Returns matching photos ordered by `photo_id`. Queries of at least three
+characters use the filename search index; shorter queries retain literal
+substring behavior. An empty query returns an empty page. The cursor is bound
+to the normalized query.
+
 #### `photo_file_path`
 
 ```rust
@@ -768,6 +790,63 @@ the complete rebuild summary.
 
 ### Taxon-based browsing
 
+#### `search_photo_taxa`
+
+```rust
+pub fn search_photo_taxa(
+    database: &Database,
+    query: &str,
+    cursor: Option<&str>,
+    limit: usize,
+) -> CoreResult<PhotoPage<TaxonSearchResult>>
+```
+
+| Parameter | Description |
+| --- | --- |
+| `query` | Taxonomy name query. |
+| `cursor` | `None` for the first page, otherwise the previous page's `next_cursor`. |
+| `limit` | Requested maximum number of taxa. |
+
+Uses the taxonomy search matching stages, priorities, summaries, details, and
+matched-name output unchanged. The additional filter requires
+`subtree_photo_count > 0`, so a result has a matched photo on itself or a
+descendant. An empty query returns an empty page. The cursor is bound to the
+normalized query.
+
+#### `get_photo_taxon_id`
+
+```rust
+pub fn get_photo_taxon_id(
+    database: &Database,
+    photo_id: i64,
+) -> CoreResult<Option<i64>>
+```
+
+Returns the selected taxon ID for a matched photo. While that mapping is being
+revalidated, the previous selected ID remains available. Returns `None` for an
+unmatched, ambiguous, stale, or missing photo.
+
+#### `list_taxon_photo_ids`
+
+```rust
+pub fn list_taxon_photo_ids(
+    database: &Database,
+    taxon_id: i64,
+    cursor: Option<&str>,
+    limit: usize,
+) -> CoreResult<PhotoPage<i64>>
+```
+
+| Parameter | Description |
+| --- | --- |
+| `taxon_id` | Root of the selected taxonomy subtree. |
+| `cursor` | `None` for the first page, otherwise the previous page's `next_cursor`. |
+| `limit` | Requested maximum number of photo IDs. |
+
+Returns IDs of matched photos assigned to the requested taxon or any
+descendant, ordered by `photo_id`. A missing taxon is an error. The cursor is
+bound to `taxon_id`.
+
 #### `get_photo_taxon_node`
 
 ```rust
@@ -893,9 +972,13 @@ strings. Parameter names below are the camel-case keys used in JavaScript
 | `export_photo_operation_inputs` | `operationIds: number[]` | `OperationInputTable` |
 | `get_all_photos` | none | `Photo[]` |
 | `get_photo` | `photoId: number` | `Photo` |
+| `search_photos_by_filename` | `query: string`, optional `cursor: string`, optional `limit: number` | `PhotoPage<Photo>` |
 | `get_photo_availability` | `photoId: number` | `{ available: boolean, error: string \| null }` |
 | `get_photo_metadata` | `photoId: number` | `PhotoMetadata` |
 | `get_mapping_metadata` | none | `MappingMetadata` |
+| `search_photo_taxa` | `query: string`, optional `cursor: string`, optional `limit: number` | `PhotoPage<TaxonSearchResult>` |
+| `get_photo_taxon_id` | `photoId: number` | `number \| null` |
+| `list_taxon_photo_ids` | `taxonId: number`, optional `cursor: string`, optional `limit: number` | `PhotoPage<number>` |
 | `get_photo_taxon_match` | `photoId: number` | `PhotoTaxonMatch` |
 | `select_photo_taxon` | `photoId: number`, `taxonId: number` | `PhotoTaxonMapping` |
 | `get_photo_taxon_node` | optional `taxonId: number`, optional `showEmpty: boolean` | `PhotoTaxonNode` |
@@ -907,7 +990,10 @@ strings. Parameter names below are the camel-case keys used in JavaScript
 Desktop defaults:
 
 - `browse_photo_directory.limit = 50`
+- `search_photos_by_filename.limit = 50`
 - Photo operation list limits default to `50`
+- `search_photo_taxa.limit = 50`
+- `list_taxon_photo_ids.limit = 50`
 - `browse_photo_taxon.limit = 50`
 - `browse_photo_taxon.show_empty = false`
 - `browse_photo_taxon.include_descendants = true`

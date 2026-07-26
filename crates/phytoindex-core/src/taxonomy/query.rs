@@ -37,12 +37,28 @@ pub(crate) fn search_taxa_with_connection(
     query: &str,
     limit: usize,
 ) -> CoreResult<Vec<TaxonSearchResult>> {
+    search_taxa_with_filter(connection, query, page_limit(limit), false)
+}
+
+pub(crate) fn search_taxa_with_photos_connection(
+    connection: &Connection,
+    query: &str,
+    limit: usize,
+) -> CoreResult<Vec<TaxonSearchResult>> {
+    search_taxa_with_filter(connection, query, limit, true)
+}
+
+fn search_taxa_with_filter(
+    connection: &Connection,
+    query: &str,
+    limit: usize,
+    require_photos: bool,
+) -> CoreResult<Vec<TaxonSearchResult>> {
     let Some(query) = normalize_search_query(query) else {
         return Ok(Vec::new());
     };
-    let limit = page_limit(limit);
     let search = SearchQuery::new(&query);
-    let search_matches = search_taxon_ids(connection, &search, limit)?;
+    let search_matches = search_taxon_ids(connection, &search, limit, require_photos)?;
     let ids = search_matches.taxon_ids;
     let summaries = load_taxon_summaries(connection, &ids)?;
     let details = load_taxon_details(connection, &ids)?;
@@ -106,18 +122,33 @@ fn search_taxon_ids(
     connection: &Connection,
     search: &SearchQuery,
     limit: usize,
+    require_photos: bool,
 ) -> CoreResult<SearchMatches> {
     let mut ids = Vec::new();
     let mut seen = HashSet::new();
     let mut fuzzy_name_ids = HashSet::new();
-    append_exact_matches(connection, search, limit, &mut ids, &mut seen)?;
+    append_exact_matches(
+        connection,
+        search,
+        limit,
+        require_photos,
+        &mut ids,
+        &mut seen,
+    )?;
     if ids.len() >= limit {
         return Ok(SearchMatches {
             taxon_ids: ids,
             fuzzy_name_ids,
         });
     }
-    append_full_prefix_matches(connection, search, limit, &mut ids, &mut seen)?;
+    append_full_prefix_matches(
+        connection,
+        search,
+        limit,
+        require_photos,
+        &mut ids,
+        &mut seen,
+    )?;
     if ids.len() >= limit {
         return Ok(SearchMatches {
             taxon_ids: ids,
@@ -125,7 +156,14 @@ fn search_taxon_ids(
         });
     }
     if let Some(query) = search.word_prefix_match.as_ref() {
-        append_fts_matches(connection, query, limit, &mut ids, &mut seen)?;
+        append_fts_matches(
+            connection,
+            query,
+            limit,
+            require_photos,
+            &mut ids,
+            &mut seen,
+        )?;
     }
     if ids.len() >= limit {
         return Ok(SearchMatches {
@@ -134,13 +172,21 @@ fn search_taxon_ids(
         });
     }
     if let Some(query) = search.contains_match.as_ref() {
-        append_fts_matches(connection, query, limit, &mut ids, &mut seen)?;
+        append_fts_matches(
+            connection,
+            query,
+            limit,
+            require_photos,
+            &mut ids,
+            &mut seen,
+        )?;
     }
     if ids.len() < limit {
         append_fuzzy_matches(
             connection,
             search,
             limit,
+            require_photos,
             &mut ids,
             &mut seen,
             &mut fuzzy_name_ids,
@@ -156,6 +202,7 @@ fn append_exact_matches(
     connection: &Connection,
     search: &SearchQuery,
     limit: usize,
+    require_photos: bool,
     ids: &mut Vec<i64>,
     seen: &mut HashSet<i64>,
 ) -> CoreResult<()> {
@@ -163,17 +210,21 @@ fn append_exact_matches(
     if remaining == 0 {
         return Ok(());
     }
-    let sql = r#"
+    let photo_filter = photo_filter("taxon_names", require_photos);
+    let sql = format!(
+        r#"
         SELECT taxon_id
         FROM taxon_names
         WHERE normalized_name = ?
+          {photo_filter}
         GROUP BY taxon_id
         ORDER BY MIN(CASE name_type WHEN 1 THEN 0 WHEN 2 THEN 1 ELSE 2 END), taxon_id
         LIMIT ?
-        "#;
+        "#
+    );
     append_query_ids(
         connection,
-        sql,
+        &sql,
         vec![
             SqlValue::Text(search.normalized.clone()),
             SqlValue::Integer(remaining as i64),
@@ -187,6 +238,7 @@ fn append_full_prefix_matches(
     connection: &Connection,
     search: &SearchQuery,
     limit: usize,
+    require_photos: bool,
     ids: &mut Vec<i64>,
     seen: &mut HashSet<i64>,
 ) -> CoreResult<()> {
@@ -195,6 +247,7 @@ fn append_full_prefix_matches(
         return Ok(());
     }
     let (exclusion_sql, mut values) = exclusion_clause("taxon_names", seen);
+    let photo_filter = photo_filter("taxon_names", require_photos);
     let sql = format!(
         r#"
         SELECT taxon_id
@@ -203,6 +256,7 @@ fn append_full_prefix_matches(
           AND normalized_name < ?
           AND normalized_name != ?
           {exclusion_sql}
+          {photo_filter}
         GROUP BY taxon_id
         ORDER BY MIN(normalized_name),
                  MIN(CASE name_type WHEN 1 THEN 0 WHEN 2 THEN 1 ELSE 2 END),
@@ -224,6 +278,7 @@ fn append_fts_matches(
     connection: &Connection,
     query: &str,
     limit: usize,
+    require_photos: bool,
     ids: &mut Vec<i64>,
     seen: &mut HashSet<i64>,
 ) -> CoreResult<()> {
@@ -232,6 +287,7 @@ fn append_fts_matches(
         return Ok(());
     }
     let (exclusion_sql, mut values) = exclusion_clause("taxon_names", seen);
+    let photo_filter = photo_filter("taxon_names", require_photos);
     let sql = format!(
         r#"
         SELECT taxon_names.taxon_id
@@ -239,6 +295,7 @@ fn append_fts_matches(
         JOIN taxon_names ON taxon_names.name_id = taxon_names_fts.rowid
         WHERE taxon_names_fts MATCH ?
           {exclusion_sql}
+          {photo_filter}
         GROUP BY taxon_names.taxon_id
         ORDER BY MIN(taxon_names.normalized_name),
                  MIN(CASE taxon_names.name_type
@@ -266,6 +323,7 @@ fn append_fuzzy_matches(
     connection: &Connection,
     search: &SearchQuery,
     limit: usize,
+    require_photos: bool,
     ids: &mut Vec<i64>,
     seen: &mut HashSet<i64>,
     fuzzy_name_ids: &mut HashSet<i64>,
@@ -280,6 +338,7 @@ fn append_fuzzy_matches(
 
     let candidate_limit = remaining.saturating_mul(20).clamp(100, 5_000);
     let (exclusion_sql, mut values) = exclusion_clause("taxon_names", seen);
+    let photo_filter = photo_filter("taxon_names", require_photos);
     let sql = format!(
         r#"
         SELECT taxon_names.name_id,
@@ -290,6 +349,7 @@ fn append_fuzzy_matches(
         JOIN taxon_names ON taxon_names.name_id = taxon_names_fts.rowid
         WHERE taxon_names_fts MATCH ?
           {exclusion_sql}
+          {photo_filter}
         ORDER BY bm25(taxon_names_fts),
                  taxon_names.normalized_name,
                  CASE taxon_names.name_type
@@ -382,6 +442,22 @@ fn exclusion_clause(table_name: &str, seen: &HashSet<i64>) -> (String, Vec<SqlVa
     (
         format!("AND {table_name}.taxon_id NOT IN ({placeholders})"),
         values,
+    )
+}
+
+fn photo_filter(table_name: &str, require_photos: bool) -> String {
+    if !require_photos {
+        return String::new();
+    }
+    format!(
+        r#"
+        AND EXISTS (
+            SELECT 1
+            FROM photo_taxon_usage
+            WHERE photo_taxon_usage.taxon_id = {table_name}.taxon_id
+              AND photo_taxon_usage.subtree_photo_count > 0
+        )
+        "#
     )
 }
 

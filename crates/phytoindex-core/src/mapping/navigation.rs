@@ -1,0 +1,227 @@
+use rusqlite::params;
+
+use super::{PhotoTaxonStatus, get_photo_mapping};
+use crate::models::PhotoPage;
+use crate::naming::normalize_taxonomy_name;
+use crate::photos::{
+    PhotoCursor, decode_photo_cursor, encode_photo_cursor, invalid_photo_cursor, photo_page_limit,
+};
+use crate::taxonomy::{TaxonSearchResult, search_taxa_with_photos_connection};
+use crate::{CoreError, CoreResult, Database};
+
+pub fn search_photo_taxa(
+    database: &Database,
+    query: &str,
+    cursor: Option<&str>,
+    limit: usize,
+) -> CoreResult<PhotoPage<TaxonSearchResult>> {
+    let Some(query) = normalize_taxonomy_name(query) else {
+        if cursor.is_some_and(|value| !value.is_empty()) {
+            return Err(invalid_photo_cursor());
+        }
+        return Ok(PhotoPage {
+            items: Vec::new(),
+            next_cursor: None,
+        });
+    };
+    let offset = match decode_photo_cursor(cursor)? {
+        None => 0,
+        Some(PhotoCursor::TaxonSearch {
+            query: cursor_query,
+            offset,
+        }) if cursor_query == query => offset,
+        Some(_) => return Err(invalid_photo_cursor()),
+    };
+    let limit = photo_page_limit(limit);
+    let fetch_limit = offset
+        .checked_add(limit)
+        .and_then(|value| value.checked_add(1))
+        .ok_or_else(invalid_photo_cursor)?;
+    let connection = database.connect()?;
+    let results = search_taxa_with_photos_connection(&connection, &query, fetch_limit)?;
+    let mut items = results
+        .into_iter()
+        .skip(offset)
+        .take(limit + 1)
+        .collect::<Vec<_>>();
+    let next_cursor = if items.len() > limit {
+        items.pop();
+        Some(encode_photo_cursor(&PhotoCursor::TaxonSearch {
+            query,
+            offset: offset + items.len(),
+        })?)
+    } else {
+        None
+    };
+    Ok(PhotoPage { items, next_cursor })
+}
+
+pub fn get_photo_taxon_id(database: &Database, photo_id: i64) -> CoreResult<Option<i64>> {
+    Ok(get_photo_mapping(database, photo_id)?
+        .filter(|mapping| {
+            matches!(
+                mapping.status,
+                PhotoTaxonStatus::Matched | PhotoTaxonStatus::Processing
+            )
+        })
+        .and_then(|mapping| mapping.taxon_id))
+}
+
+pub fn list_taxon_photo_ids(
+    database: &Database,
+    taxon_id: i64,
+    cursor: Option<&str>,
+    limit: usize,
+) -> CoreResult<PhotoPage<i64>> {
+    let after_photo_id = match decode_photo_cursor(cursor)? {
+        None => 0,
+        Some(PhotoCursor::TaxonPhotoIds {
+            taxon_id: cursor_taxon_id,
+            photo_id,
+        }) if cursor_taxon_id == taxon_id => photo_id,
+        Some(_) => return Err(invalid_photo_cursor()),
+    };
+    let connection = database.connect()?;
+    let exists = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM taxa WHERE taxon_id = ?)",
+        [taxon_id],
+        |row| row.get::<_, bool>(0),
+    )?;
+    if !exists {
+        return Err(CoreError::NotFound(format!("taxon {taxon_id}")));
+    }
+    let limit = photo_page_limit(limit);
+    let mut statement = connection.prepare(
+        r#"
+        WITH RECURSIVE descendants(taxon_id) AS (
+            SELECT taxon_id FROM taxa WHERE taxon_id = ?1
+            UNION ALL
+            SELECT child.taxon_id
+            FROM taxa AS child
+            JOIN descendants ON child.parent_taxon_id = descendants.taxon_id
+        )
+        SELECT photo_taxon_mapping.photo_id
+        FROM photo_taxon_mapping
+        JOIN descendants USING (taxon_id)
+        WHERE photo_taxon_mapping.status = 'matched'
+          AND photo_taxon_mapping.photo_id > ?2
+        ORDER BY photo_taxon_mapping.photo_id
+        LIMIT ?3
+        "#,
+    )?;
+    let rows = statement.query_map(params![taxon_id, after_photo_id, limit as i64 + 1], |row| {
+        row.get::<_, i64>(0)
+    })?;
+    let mut items = rows.collect::<Result<Vec<_>, _>>()?;
+    let next_cursor = if items.len() > limit {
+        items.pop();
+        items
+            .last()
+            .map(|photo_id| {
+                encode_photo_cursor(&PhotoCursor::TaxonPhotoIds {
+                    taxon_id,
+                    photo_id: *photo_id,
+                })
+            })
+            .transpose()?
+    } else {
+        None
+    };
+    Ok(PhotoPage { items, next_cursor })
+}
+
+#[cfg(test)]
+mod tests {
+    use tempfile::TempDir;
+
+    use super::*;
+
+    fn database() -> (TempDir, Database) {
+        let directory = TempDir::new().unwrap();
+        let database = Database::open(directory.path().join("test.db")).unwrap();
+        let connection = database.connect().unwrap();
+        connection
+            .execute_batch(
+                r#"
+                INSERT INTO photo_library (library_id, root_path)
+                VALUES (1, '/photos');
+                INSERT INTO photo_directories (
+                    directory_id, parent_directory_id, name, relative_path
+                ) VALUES (1, NULL, '', '');
+                INSERT INTO photos (
+                    photo_id, directory_id, filename, file_size, modified_at_ns
+                ) VALUES
+                    (1, 1, 'Canis001.jpg', 1, 1),
+                    (2, 1, 'Felis002.jpg', 1, 1),
+                    (3, 1, 'Unknown003.jpg', 1, 1);
+
+                INSERT INTO taxa (taxon_id, parent_taxon_id, rank) VALUES
+                    (10, NULL, 1),
+                    (11, 10, 3),
+                    (12, 10, 3),
+                    (13, 10, 3);
+                INSERT INTO taxon_names (
+                    taxon_id, name_type, name
+                ) VALUES
+                    (10, 1, 'Animalia'),
+                    (11, 1, 'Canidae'),
+                    (12, 1, 'Felidae'),
+                    (13, 1, 'Hominidae');
+                INSERT INTO photo_taxon_mapping (
+                    photo_id, taxon_id, status
+                ) VALUES
+                    (1, 11, 'matched'),
+                    (2, 12, 'matched');
+                INSERT INTO photo_taxon_usage (
+                    taxon_id, direct_photo_count, subtree_photo_count
+                ) VALUES
+                    (10, 0, 2),
+                    (11, 1, 1),
+                    (12, 1, 1);
+                "#,
+            )
+            .unwrap();
+        (directory, database)
+    }
+
+    #[test]
+    fn taxonomy_search_filters_empty_taxa_and_pages_results() {
+        let (_directory, database) = database();
+        let first = search_photo_taxa(&database, "idae", None, 1).unwrap();
+        assert_eq!(first.items[0].summary.taxon_id, 11);
+        let second = search_photo_taxa(&database, "idae", first.next_cursor.as_deref(), 1).unwrap();
+        assert_eq!(second.items[0].summary.taxon_id, 12);
+        assert!(second.next_cursor.is_none());
+        assert!(search_photo_taxa(&database, "Animalia", first.next_cursor.as_deref(), 1).is_err());
+
+        let ancestor = search_photo_taxa(&database, "Animalia", None, 50).unwrap();
+        assert_eq!(ancestor.items.len(), 1);
+        assert_eq!(ancestor.items[0].summary.taxon_id, 10);
+    }
+
+    #[test]
+    fn photo_and_taxon_navigation_use_current_mapping_tree() {
+        let (_directory, database) = database();
+        assert_eq!(get_photo_taxon_id(&database, 1).unwrap(), Some(11));
+        assert_eq!(get_photo_taxon_id(&database, 3).unwrap(), None);
+        assert_eq!(get_photo_taxon_id(&database, 999).unwrap(), None);
+
+        let connection = database.connect().unwrap();
+        connection
+            .execute(
+                "INSERT INTO photo_mapping_queue (photo_id, reason) VALUES (1, 'refresh')",
+                [],
+            )
+            .unwrap();
+        drop(connection);
+        assert_eq!(get_photo_taxon_id(&database, 1).unwrap(), Some(11));
+
+        let first = list_taxon_photo_ids(&database, 10, None, 1).unwrap();
+        assert_eq!(first.items, vec![1]);
+        let second = list_taxon_photo_ids(&database, 10, first.next_cursor.as_deref(), 1).unwrap();
+        assert_eq!(second.items, vec![2]);
+        assert!(second.next_cursor.is_none());
+        assert!(list_taxon_photo_ids(&database, 11, first.next_cursor.as_deref(), 1).is_err());
+        assert!(list_taxon_photo_ids(&database, 999, None, 1).is_err());
+    }
+}

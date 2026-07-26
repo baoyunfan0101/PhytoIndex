@@ -288,6 +288,22 @@ pub fn get_photo(state: State<'_, AppState>, photo_id: i64) -> CommandResult<Pho
 }
 
 #[tauri::command]
+pub fn search_photos_by_filename(
+    state: State<'_, AppState>,
+    query: String,
+    cursor: Option<String>,
+    limit: Option<usize>,
+) -> CommandResult<PhotoPage<Photo>> {
+    photos::search_photos_by_filename(
+        &state.database,
+        &query,
+        cursor.as_deref(),
+        limit.unwrap_or(50),
+    )
+    .map_err(error)
+}
+
+#[tauri::command]
 pub fn get_photo_availability(state: State<'_, AppState>, photo_id: i64) -> CommandResult<Value> {
     Ok(match photos::photo_file_path(&state.database, photo_id) {
         Ok(_) => json!({ "available": true, "error": null }),
@@ -503,6 +519,43 @@ pub fn replace_taxonomy_base_database(
 #[tauri::command]
 pub fn get_mapping_metadata(state: State<'_, AppState>) -> CommandResult<MappingMetadata> {
     mapping::get_metadata(&state.database).map_err(error)
+}
+
+#[tauri::command]
+pub fn search_photo_taxa(
+    state: State<'_, AppState>,
+    query: String,
+    cursor: Option<String>,
+    limit: Option<usize>,
+) -> CommandResult<PhotoPage<TaxonSearchResult>> {
+    mapping::search_photo_taxa(
+        &state.database,
+        &query,
+        cursor.as_deref(),
+        limit.unwrap_or(50),
+    )
+    .map_err(error)
+}
+
+#[tauri::command]
+pub fn get_photo_taxon_id(state: State<'_, AppState>, photo_id: i64) -> CommandResult<Option<i64>> {
+    mapping::get_photo_taxon_id(&state.database, photo_id).map_err(error)
+}
+
+#[tauri::command]
+pub fn list_taxon_photo_ids(
+    state: State<'_, AppState>,
+    taxon_id: i64,
+    cursor: Option<String>,
+    limit: Option<usize>,
+) -> CommandResult<PhotoPage<i64>> {
+    mapping::list_taxon_photo_ids(
+        &state.database,
+        taxon_id,
+        cursor.as_deref(),
+        limit.unwrap_or(50),
+    )
+    .map_err(error)
 }
 
 #[tauri::command]

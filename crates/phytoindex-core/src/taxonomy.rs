@@ -25,6 +25,7 @@ pub use formatted::{
 };
 pub use name_parser::{ScientificNameParts, split_scientific_name_authority};
 pub use page::TaxonomyPage;
+pub(crate) use query::search_taxa_with_photos_connection;
 pub use query::{TaxonNameMatch, TaxonSearchResult, search_taxa};
 pub(crate) use view::load_taxon_summaries;
 pub use view::{

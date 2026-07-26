@@ -33,6 +33,18 @@ pub(crate) enum PhotoCursor {
         status: String,
         photo_id: i64,
     },
+    FilenameSearch {
+        query: String,
+        photo_id: i64,
+    },
+    TaxonSearch {
+        query: String,
+        offset: usize,
+    },
+    TaxonPhotoIds {
+        taxon_id: i64,
+        photo_id: i64,
+    },
     Operations {
         operation_id: i64,
     },

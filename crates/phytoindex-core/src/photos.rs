@@ -20,6 +20,7 @@ mod media;
 mod naming;
 mod operations;
 mod page;
+mod search;
 
 pub use media::{
     get_or_create_thumbnail, get_photo_metadata, photo_file_path, rebase_thumbnail_paths,
@@ -38,6 +39,7 @@ pub(crate) use page::{
     PhotoCursor, PhotoPageSection, decode_photo_cursor, encode_photo_cursor, invalid_photo_cursor,
     photo_page_limit,
 };
+pub use search::search_photos_by_filename;
 
 const IMAGE_EXTENSIONS: &[&str] = &[
     "arw", "bmp", "cr2", "cr3", "dng", "gif", "heic", "jpeg", "jpg", "nef", "png", "raf", "rw2",
