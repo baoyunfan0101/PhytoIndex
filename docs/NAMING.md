@@ -189,8 +189,14 @@ by the backend and editable starting points for users.
 `synonym_authority` scripts. Passing `None` or an empty script restores the
 built-in template. `set_naming_hook` compiles and executes a sample before
 saving. Changing the photo hook queues every photo for remapping. Operational
-photo matching and formatted updates compile the effective script once and
-reuse it for all inputs in that operation.
+photo matching compiles the effective script once before the queued-photo
+batch loop and reuses it across every page in that mapping run. Formatted
+updates likewise compile once and reuse the parser for all rows.
+
+Function calls use `CallFnOptions::eval_ast(false)`, so the AST is not
+re-evaluated for each input. Hook scripts must therefore keep executable logic
+inside their hook functions instead of relying on top-level statements to
+initialize scope values.
 
 `test_naming_hook` does not save the script. Its tagged return value contains
 either `ParsedPhotoFilename` or `ScientificNameParts`.

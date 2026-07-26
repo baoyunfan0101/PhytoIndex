@@ -25,6 +25,8 @@ pub use testing::{
     set_naming_hook_test_cases, test_naming_hook,
 };
 
+#[cfg(test)]
+pub(crate) use hooks::take_compile_count as take_hook_compile_count;
 pub(crate) use photo_filename::PhotoFilenameParser;
 pub(crate) use synonym::SynonymAuthorityParser;
 

@@ -702,6 +702,8 @@ pub fn process_pending_photo_matches(
     progress: &mut MappingProgressCallback<'_>,
 ) -> CoreResult<PhotoMappingRunResult> {
     let connection = database.connect()?;
+    let filename_parser = PhotoFilenameParser::load(&connection)?;
+    let match_settings = name_match::load(&connection)?;
     let total = connection.query_row("SELECT COUNT(*) FROM photo_mapping_queue", [], |row| {
         row.get::<_, i64>(0)
     })?;
@@ -731,7 +733,8 @@ pub fn process_pending_photo_matches(
         if photo_ids.is_empty() {
             break;
         }
-        changed += remap_photo_ids(&transaction, &photo_ids)?;
+        changed +=
+            remap_photo_ids_with(&transaction, &photo_ids, &filename_parser, &match_settings)?;
         delete_queued_photo_ids(&transaction, &photo_ids)?;
         transaction.commit()?;
         processed += photo_ids.len();
@@ -755,15 +758,27 @@ pub(crate) fn remap_photo_ids(
     if photo_ids.is_empty() {
         return Ok(0);
     }
-    let photos = load_photo_names(transaction, photo_ids)?;
-    let old_mappings = load_mappings(transaction, photo_ids)?;
     let filename_parser = PhotoFilenameParser::load(transaction)?;
     let match_settings = name_match::load(transaction)?;
+    remap_photo_ids_with(transaction, photo_ids, &filename_parser, &match_settings)
+}
+
+fn remap_photo_ids_with(
+    transaction: &Transaction<'_>,
+    photo_ids: &[i64],
+    filename_parser: &PhotoFilenameParser,
+    match_settings: &PhotoNameMatchSettings,
+) -> CoreResult<usize> {
+    if photo_ids.is_empty() {
+        return Ok(0);
+    }
+    let photos = load_photo_names(transaction, photo_ids)?;
+    let old_mappings = load_mappings(transaction, photo_ids)?;
     let mut direct_deltas = BTreeMap::<i64, i64>::new();
     let mut changed = 0usize;
     for (photo_id, filename) in photos {
         let results =
-            search_photo_taxa_with(transaction, &filename_parser, &match_settings, &filename)?;
+            search_photo_taxa_with(transaction, filename_parser, match_settings, &filename)?;
         let old_mapping = old_mappings.get(&photo_id).copied();
         let old_taxon_id = old_mapping.and_then(|(taxon_id, status)| {
             (status == PhotoTaxonStatus::Matched)
@@ -1371,7 +1386,7 @@ fn delete_queued_photo_ids(transaction: &Transaction<'_>, photo_ids: &[i64]) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::naming::{NamingHookKind, set_naming_hook};
+    use crate::naming::{NamingHookKind, set_naming_hook, take_hook_compile_count};
     use crate::photos::{open_library, refresh_directory};
     use crate::taxonomy::{
         TaxonInputRow, TaxonUpdateInput, apply_rows, execute_custom_taxonomy_sql, update_taxon,
@@ -1394,6 +1409,36 @@ mod tests {
             )
             .unwrap();
         connection.last_insert_rowid()
+    }
+
+    #[test]
+    fn one_mapping_run_compiles_the_hook_once_across_batches() {
+        let data = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let database = Database::open(data.path().join("vividarium.db")).unwrap();
+        let library = open_library(&database, root.path().to_str().unwrap()).unwrap();
+        let connection = database.connect().unwrap();
+        for index in 0..PHOTO_MAPPING_BATCH_SIZE + 1 {
+            let photo_id = insert_test_photo(
+                &connection,
+                library.root_directory_id,
+                &format!("Unknown {index}.jpg"),
+            );
+            connection
+                .execute(
+                    "INSERT INTO photo_mapping_queue (photo_id, reason) VALUES (?, 'refresh')",
+                    [photo_id],
+                )
+                .unwrap();
+        }
+        drop(connection);
+
+        take_hook_compile_count();
+        let mut progress = |_: u64, _: Option<u64>, _: &str| {};
+        let result = process_pending_photo_matches(&database, &mut progress).unwrap();
+
+        assert_eq!(result.processed, PHOTO_MAPPING_BATCH_SIZE + 1);
+        assert_eq!(take_hook_compile_count(), 1);
     }
 
     #[test]

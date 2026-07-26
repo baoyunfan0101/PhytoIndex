@@ -1378,10 +1378,14 @@ pub fn parse_taxonomy_input_csv(
                     .collect::<Vec<_>>()
             };
             let raw_multiple = || {
-                value
-                    .split(separator)
-                    .map(str::to_string)
-                    .collect::<Vec<_>>()
+                if value.is_empty() {
+                    Vec::new()
+                } else {
+                    value
+                        .split(separator)
+                        .map(str::to_string)
+                        .collect::<Vec<_>>()
+                }
             };
             match header {
                 "kingdom" => row.kingdom = scalar(),
@@ -1874,6 +1878,14 @@ mod tests {
                 ("Whitespace input".into(), "raw".into()),
             ]
         );
+    }
+
+    #[test]
+    fn empty_synonym_cell_is_an_empty_list() {
+        let (_directory, database) = database();
+        let rows = parse_taxonomy_input_csv(&database, "kingdom|synonyms\nAnimalia|\n").unwrap();
+
+        assert!(rows[0].synonyms.is_empty());
     }
 
     #[test]
