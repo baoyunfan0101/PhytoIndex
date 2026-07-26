@@ -1,6 +1,7 @@
-use rhai::{AST, Dynamic, Engine, Scope};
+use rhai::{AST, Dynamic, Engine, ImmutableString, Scope};
 use serde::de::DeserializeOwned;
 
+use super::normalize_taxonomy_name;
 use crate::{CoreError, CoreResult};
 
 pub(super) struct CompiledHook {
@@ -24,6 +25,11 @@ impl CompiledHook {
         engine.set_max_string_size(16_384);
         engine.set_max_array_size(64);
         engine.set_max_map_size(32);
+        engine.register_fn("normalize_name", |value: ImmutableString| {
+            normalize_taxonomy_name(&value).unwrap_or_default()
+        });
+        engine.register_fn("is_uppercase", char::is_uppercase);
+        engine.register_fn("is_whitespace", char::is_whitespace);
         let ast = engine
             .compile(script)
             .map_err(|error| invalid_hook(error.to_string()))?;

@@ -9,7 +9,8 @@ use phytoindex_core::models::{
     PhotoDirectoryItem, PhotoLibrary, PhotoMetadata, PhotoPage,
 };
 use phytoindex_core::naming::{
-    NamingHookKind, NamingHookSettings, NamingHookTestResult, ParsedPhotoFilename,
+    NamingHookKind, NamingHookSettings, NamingHookTemplates, NamingHookTestCase,
+    NamingHookTestCases, NamingHookTestReport, NamingHookTestResult, ParsedPhotoFilename,
     TaxonomicNameInfo,
 };
 use phytoindex_core::photos::{
@@ -119,6 +120,11 @@ pub fn get_naming_hook_settings(state: State<'_, AppState>) -> CommandResult<Nam
 }
 
 #[tauri::command]
+pub fn get_naming_hook_templates() -> NamingHookTemplates {
+    naming::get_naming_hook_templates()
+}
+
+#[tauri::command]
 pub fn set_naming_hook(
     state: State<'_, AppState>,
     kind: NamingHookKind,
@@ -134,6 +140,31 @@ pub fn test_naming_hook(
     input: String,
 ) -> CommandResult<NamingHookTestResult> {
     naming::test_naming_hook(kind, &script, &input).map_err(error)
+}
+
+#[tauri::command]
+pub fn get_naming_hook_test_cases(
+    state: State<'_, AppState>,
+) -> CommandResult<NamingHookTestCases> {
+    naming::get_naming_hook_test_cases(&state.database).map_err(error)
+}
+
+#[tauri::command]
+pub fn set_naming_hook_test_cases(
+    state: State<'_, AppState>,
+    kind: NamingHookKind,
+    cases: Vec<NamingHookTestCase>,
+) -> CommandResult<()> {
+    naming::set_naming_hook_test_cases(&state.database, kind, &cases).map_err(error)
+}
+
+#[tauri::command]
+pub fn run_naming_hook_tests(
+    state: State<'_, AppState>,
+    kind: NamingHookKind,
+    script: Option<String>,
+) -> CommandResult<NamingHookTestReport> {
+    naming::run_naming_hook_tests(&state.database, kind, script.as_deref()).map_err(error)
 }
 
 #[tauri::command]

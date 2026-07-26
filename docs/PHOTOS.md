@@ -872,8 +872,12 @@ strings. Parameter names below are the camel-case keys used in JavaScript
 | `parse_photo_filename` | `filename: string` | `ParsedPhotoFilename` |
 | `normalize_taxonomy_name` | `value: string` | `string \| null` |
 | `get_naming_hook_settings` | none | `NamingHookSettings` |
+| `get_naming_hook_templates` | none | `NamingHookTemplates` |
 | `set_naming_hook` | `kind: NamingHookKind`, optional `script: string` | `null` |
 | `test_naming_hook` | `kind: NamingHookKind`, `script: string`, `input: string` | `NamingHookTestResult` |
+| `get_naming_hook_test_cases` | none | `NamingHookTestCases` |
+| `set_naming_hook_test_cases` | `kind: NamingHookKind`, `cases: NamingHookTestCase[]` | `null` |
+| `run_naming_hook_tests` | `kind: NamingHookKind`, optional `script: string` | `NamingHookTestReport` |
 | `get_photo_name_match_settings` | none | `PhotoNameMatchSettings` |
 | `set_photo_name_match_settings` | `settings: PhotoNameMatchSettings` | `null` |
 | `get_photo_filename_format_settings` | none | `PhotoFilenameFormatSettings` |

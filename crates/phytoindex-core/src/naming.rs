@@ -2,6 +2,8 @@ mod hooks;
 mod normalize;
 mod photo_filename;
 mod synonym;
+mod templates;
+mod testing;
 
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
@@ -15,6 +17,12 @@ pub use photo_filename::{
 pub use synonym::{
     ScientificNameParts, default_split_scientific_name_authority, split_scientific_name_authority,
     split_scientific_name_authority_with_database,
+};
+pub use templates::{NamingHookTemplates, get_naming_hook_template, get_naming_hook_templates};
+pub use testing::{
+    NamingHookCaseResult, NamingHookTestCase, NamingHookTestCases, NamingHookTestReport,
+    NamingHookTestResult, get_naming_hook_test_cases, run_naming_hook_tests,
+    set_naming_hook_test_cases, test_naming_hook,
 };
 
 pub(crate) use photo_filename::PhotoFilenameParser;
@@ -43,13 +51,6 @@ impl NamingHookKind {
 pub struct NamingHookSettings {
     pub photo_filename: Option<String>,
     pub synonym_authority: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "kind", content = "output", rename_all = "snake_case")]
-pub enum NamingHookTestResult {
-    PhotoFilename(ParsedPhotoFilename),
-    SynonymAuthority(ScientificNameParts),
 }
 
 pub fn get_naming_hook_settings(database: &Database) -> CoreResult<NamingHookSettings> {
@@ -100,21 +101,6 @@ pub fn set_naming_hook(
     }
     transaction.commit()?;
     Ok(())
-}
-
-pub fn test_naming_hook(
-    kind: NamingHookKind,
-    script: &str,
-    input: &str,
-) -> CoreResult<NamingHookTestResult> {
-    match kind {
-        NamingHookKind::PhotoFilename => Ok(NamingHookTestResult::PhotoFilename(
-            PhotoFilenameParser::from_script(script)?.parse(input)?,
-        )),
-        NamingHookKind::SynonymAuthority => Ok(NamingHookTestResult::SynonymAuthority(
-            SynonymAuthorityParser::from_script(script)?.split(input)?,
-        )),
-    }
 }
 
 fn hook_sample(kind: NamingHookKind) -> &'static str {

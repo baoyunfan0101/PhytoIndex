@@ -49,11 +49,11 @@ pub fn parse_photo_filename(
 ) -> CoreResult<ParsedPhotoFilename>
 ```
 
-`default_parse_photo_filename` always uses the built-in parser.
+`default_parse_photo_filename` always executes the bundled Rhai template.
 `parse_photo_filename` uses the configured photo hook when present and
-otherwise uses the built-in parser.
+otherwise executes the same template.
 
-The built-in parser treats the first unquoted digit or extension-style period
+The bundled template treats the first unquoted digit or extension-style period
 as the suffix boundary. A period followed by a space remains part of the name,
 and apostrophes within one quoted name do not close that name. Legacy curly
 single and double quotes become `'`. It derives family, genus, and species
@@ -70,11 +70,11 @@ conventions should configure the hook.
 ```rust
 pub fn default_split_scientific_name_authority(
     value: &str,
-) -> ScientificNameParts
+) -> CoreResult<ScientificNameParts>
 
 pub fn split_scientific_name_authority(
     value: &str,
-) -> ScientificNameParts
+) -> CoreResult<ScientificNameParts>
 
 pub fn split_scientific_name_authority_with_database(
     database: &Database,
@@ -82,11 +82,11 @@ pub fn split_scientific_name_authority_with_database(
 ) -> CoreResult<ScientificNameParts>
 ```
 
-The first two functions expose the built-in behavior. The database-aware
-function uses the configured synonym hook when present. Formatted updates use
-the database-aware behavior.
+The first two functions execute the bundled Rhai template. The database-aware
+function uses the configured synonym hook when present and otherwise executes
+the same template. Formatted updates use the database-aware behavior.
 
-The built-in parser starts authority text at the first applicable word:
+The bundled template starts authority text at the first applicable word:
 
 1. a word containing `(`;
 2. the second word whose first character is uppercase;
@@ -137,15 +137,30 @@ is not trimmed, normalized, or deduplicated before the hook runs.
 `authority_year` may be `()`. Hook name outputs always pass through
 `normalize_taxonomy_name`, after which duplicate names are discarded.
 
-Hooks have no application-provided file, network, or database functions.
+Hooks have no file, network, or database functions. The engine provides
+`normalize_name(value)`, `is_uppercase(character)`, and
+`is_whitespace(character)` helpers used by the bundled templates.
+
+| Helper | Parameter | Return |
+| --- | --- | --- |
+| `normalize_name` | `value: string` | Normalized string, or `""` for an empty name. |
+| `is_uppercase` | `character: char` | Whether the character is uppercase. |
+| `is_whitespace` | `character: char` | Whether the character is whitespace. |
+
 Execution limits include 20,000 operations, 32 call levels, bounded expression
 depth, 64 KiB scripts, 16 functions, 64 variables, 16 KiB strings,
 64-element arrays, and 32-property maps. Script print and debug output is
 discarded.
 
-## Hook settings
+## Templates and hook settings
 
 ```rust
+pub fn get_naming_hook_template(
+    kind: NamingHookKind,
+) -> &'static str
+
+pub fn get_naming_hook_templates() -> NamingHookTemplates
+
 pub fn get_naming_hook_settings(
     database: &Database,
 ) -> CoreResult<NamingHookSettings>
@@ -163,13 +178,50 @@ pub fn test_naming_hook(
 ) -> CoreResult<NamingHookTestResult>
 ```
 
+`NamingHookTemplates` contains the bundled `photo_filename` and
+`synonym_authority` Rhai scripts. These scripts are both the defaults executed
+by the backend and editable starting points for users.
+
 `NamingHookSettings` contains optional `photo_filename` and
 `synonym_authority` scripts. Passing `None` or an empty script restores the
-built-in behavior. `set_naming_hook` compiles and executes a sample before
-saving. Changing the photo hook queues every photo for remapping.
+built-in template. `set_naming_hook` compiles and executes a sample before
+saving. Changing the photo hook queues every photo for remapping. Operational
+photo matching and formatted updates compile the effective script once and
+reuse it for all inputs in that operation.
 
 `test_naming_hook` does not save the script. Its tagged return value contains
 either `ParsedPhotoFilename` or `ScientificNameParts`.
+
+## Project test cases
+
+```rust
+pub fn get_naming_hook_test_cases(
+    database: &Database,
+) -> CoreResult<NamingHookTestCases>
+
+pub fn set_naming_hook_test_cases(
+    database: &Database,
+    kind: NamingHookKind,
+    cases: &[NamingHookTestCase],
+) -> CoreResult<()>
+
+pub fn run_naming_hook_tests(
+    database: &Database,
+    kind: NamingHookKind,
+    script: Option<&str>,
+) -> CoreResult<NamingHookTestReport>
+```
+
+`NamingHookTestCases` contains the project test cases for both hook kinds.
+Each `NamingHookTestCase` has `name`, raw `input`, and tagged `expected`
+output. Cases are stored as JSON in project metadata. New projects include
+prepared cases for both templates.
+
+`run_naming_hook_tests` uses the supplied unsaved script when `script` is
+`Some`; `None` uses the project's effective saved or default script. It
+compiles that script once, executes every stored case in order, and returns
+passed and failed counts. Every `NamingHookCaseResult` includes `expected`,
+optional `actual`, `passed`, and an optional execution `error`.
 
 ## Desktop commands
 
@@ -178,5 +230,9 @@ either `ParsedPhotoFilename` or `ScientificNameParts`.
 | `normalize_taxonomy_name` | `value: string` | `string \| null` |
 | `parse_photo_filename` | `filename: string` | `ParsedPhotoFilename` |
 | `get_naming_hook_settings` | none | `NamingHookSettings` |
+| `get_naming_hook_templates` | none | `NamingHookTemplates` |
 | `set_naming_hook` | `kind: NamingHookKind`, optional `script: string` | `null` |
 | `test_naming_hook` | `kind: NamingHookKind`, `script: string`, `input: string` | `NamingHookTestResult` |
+| `get_naming_hook_test_cases` | none | `NamingHookTestCases` |
+| `set_naming_hook_test_cases` | `kind: NamingHookKind`, `cases: NamingHookTestCase[]` | `null` |
+| `run_naming_hook_tests` | `kind: NamingHookKind`, optional `script: string` | `NamingHookTestReport` |

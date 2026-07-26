@@ -262,6 +262,20 @@ INSERT INTO app_metadata(metadata_key, metadata_value)
 VALUES ('taxonomy_name_separator', ';')
 ON CONFLICT(metadata_key) DO NOTHING;
 
+INSERT INTO app_metadata(metadata_key, metadata_value)
+VALUES (
+    'photo_filename_hook_tests',
+    '[{"name":"species and suffix","input":"Canis lupus001.jpg","expected":{"kind":"photo_filename","output":{"info":{"family_sci":null,"genus_sci":"Canis","species_sci":"Canis lupus","family_zh":null,"genus_zh":null,"species_zh":null},"suffix":"001.jpg"}}},{"name":"hybrid genus","input":"\u00d7 Gasteraloe030.jpg","expected":{"kind":"photo_filename","output":{"info":{"family_sci":null,"genus_sci":"x Gasteraloe","species_sci":null,"family_zh":null,"genus_zh":null,"species_zh":null},"suffix":"030.jpg"}}}]'
+)
+ON CONFLICT(metadata_key) DO NOTHING;
+
+INSERT INTO app_metadata(metadata_key, metadata_value)
+VALUES (
+    'synonym_authority_hook_tests',
+    '[{"name":"parenthesized authority","input":"Canis lupus (Linnaeus, 1758)","expected":{"kind":"synonym_authority","output":{"name":"Canis lupus","authority_year":"(Linnaeus, 1758)"}}},{"name":"lowercase authority prefix","input":"Canis lupus de Silva, 1900","expected":{"kind":"synonym_authority","output":{"name":"Canis lupus","authority_year":"de Silva, 1900"}}}]'
+)
+ON CONFLICT(metadata_key) DO NOTHING;
+
 CREATE UNIQUE INDEX IF NOT EXISTS idx_taxon_names_one_sci_name
     ON taxon_names(taxon_id) WHERE name_type = 1;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_taxon_names_one_zh_name
@@ -349,6 +363,16 @@ mod tests {
                 )
                 .unwrap();
             assert!(exists, "missing table {table}");
+        }
+        for key in ["photo_filename_hook_tests", "synonym_authority_hook_tests"] {
+            let value: String = connection
+                .query_row(
+                    "SELECT metadata_value FROM app_metadata WHERE metadata_key = ?",
+                    [key],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(value.starts_with('['), "missing metadata {key}");
         }
         let triggers = connection
             .prepare(
