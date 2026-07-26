@@ -62,6 +62,10 @@ fn normalize_output(mut output: ScientificNameParts) -> CoreResult<ScientificNam
 }
 
 #[cfg(test)]
+#[path = "synonym_golden.rs"]
+mod golden_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

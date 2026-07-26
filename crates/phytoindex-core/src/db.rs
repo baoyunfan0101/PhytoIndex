@@ -46,7 +46,10 @@ impl Database {
         let connection = self.connect()?;
         let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
         match version {
-            0 => connection.execute_batch(SCHEMA)?,
+            0 => {
+                connection.execute_batch(SCHEMA)?;
+                crate::naming::seed_default_test_cases(&connection)?;
+            }
             SCHEMA_VERSION => {}
             _ => {
                 return Err(CoreError::InvalidArgument(format!(
@@ -260,20 +263,6 @@ CREATE TABLE IF NOT EXISTS app_metadata (
 
 INSERT INTO app_metadata(metadata_key, metadata_value)
 VALUES ('taxonomy_name_separator', ';')
-ON CONFLICT(metadata_key) DO NOTHING;
-
-INSERT INTO app_metadata(metadata_key, metadata_value)
-VALUES (
-    'photo_filename_hook_tests',
-    '[{"name":"species and suffix","input":"Canis lupus001.jpg","expected":{"kind":"photo_filename","output":{"info":{"family_sci":null,"genus_sci":"Canis","species_sci":"Canis lupus","family_zh":null,"genus_zh":null,"species_zh":null},"suffix":"001.jpg"}}},{"name":"hybrid genus","input":"\u00d7 Gasteraloe030.jpg","expected":{"kind":"photo_filename","output":{"info":{"family_sci":null,"genus_sci":"x Gasteraloe","species_sci":null,"family_zh":null,"genus_zh":null,"species_zh":null},"suffix":"030.jpg"}}}]'
-)
-ON CONFLICT(metadata_key) DO NOTHING;
-
-INSERT INTO app_metadata(metadata_key, metadata_value)
-VALUES (
-    'synonym_authority_hook_tests',
-    '[{"name":"parenthesized authority","input":"Canis lupus (Linnaeus, 1758)","expected":{"kind":"synonym_authority","output":{"name":"Canis lupus","authority_year":"(Linnaeus, 1758)"}}},{"name":"lowercase authority prefix","input":"Canis lupus de Silva, 1900","expected":{"kind":"synonym_authority","output":{"name":"Canis lupus","authority_year":"de Silva, 1900"}}}]'
-)
 ON CONFLICT(metadata_key) DO NOTHING;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_taxon_names_one_sci_name

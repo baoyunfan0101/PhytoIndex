@@ -29,6 +29,7 @@ pub use testing::{
 pub(crate) use hooks::take_compile_count as take_hook_compile_count;
 pub(crate) use photo_filename::PhotoFilenameParser;
 pub(crate) use synonym::SynonymAuthorityParser;
+pub(crate) use testing::seed_default_test_cases;
 
 const PHOTO_FILENAME_HOOK_KEY: &str = "photo_filename_hook";
 const SYNONYM_AUTHORITY_HOOK_KEY: &str = "synonym_authority_hook";

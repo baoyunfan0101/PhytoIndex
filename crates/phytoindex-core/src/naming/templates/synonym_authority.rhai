@@ -23,6 +23,7 @@ fn split_synonym_authority(input) {
         }
         let word = value.sub_string(start, index - start);
         let matched = word.contains("(")
+            || word == "'t"
             || word == "de"
             || word == "von"
             || word == "van";

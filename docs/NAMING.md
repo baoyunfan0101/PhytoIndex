@@ -224,7 +224,7 @@ pub fn run_naming_hook_tests(
 `NamingHookTestCases` contains the project test cases for both hook kinds.
 Each `NamingHookTestCase` has `name`, raw `input`, and tagged `expected`
 output. Cases are stored as JSON in project metadata. New projects include
-prepared cases for both templates.
+the bundled photo filename golden cases and synonym-authority golden cases.
 
 `run_naming_hook_tests` uses the supplied unsaved script when `script` is
 `Some`; `None` uses the project's effective saved or default script. It

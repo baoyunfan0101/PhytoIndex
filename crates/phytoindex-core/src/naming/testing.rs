@@ -142,50 +142,263 @@ pub fn run_naming_hook_tests(
 
 pub(crate) fn default_test_cases(kind: NamingHookKind) -> Vec<NamingHookTestCase> {
     match kind {
-        NamingHookKind::PhotoFilename => vec![
-            NamingHookTestCase {
-                name: "species and suffix".into(),
-                input: "Canis lupus001.jpg".into(),
-                expected: NamingHookTestResult::PhotoFilename(ParsedPhotoFilename {
-                    info: TaxonomicNameInfo {
-                        genus_sci: Some("Canis".into()),
-                        species_sci: Some("Canis lupus".into()),
-                        ..TaxonomicNameInfo::default()
-                    },
-                    suffix: "001.jpg".into(),
-                }),
-            },
-            NamingHookTestCase {
-                name: "hybrid genus".into(),
-                input: "\u{00d7} Gasteraloe030.jpg".into(),
-                expected: NamingHookTestResult::PhotoFilename(ParsedPhotoFilename {
-                    info: TaxonomicNameInfo {
-                        genus_sci: Some("x Gasteraloe".into()),
-                        ..TaxonomicNameInfo::default()
-                    },
-                    suffix: "030.jpg".into(),
-                }),
-            },
-        ],
+        NamingHookKind::PhotoFilename => default_photo_filename_test_cases(),
         NamingHookKind::SynonymAuthority => vec![
-            NamingHookTestCase {
-                name: "parenthesized authority".into(),
-                input: "Canis lupus (Linnaeus, 1758)".into(),
-                expected: NamingHookTestResult::SynonymAuthority(ScientificNameParts {
-                    name: "Canis lupus".into(),
-                    authority_year: Some("(Linnaeus, 1758)".into()),
-                }),
-            },
-            NamingHookTestCase {
-                name: "lowercase authority prefix".into(),
-                input: "Canis lupus de Silva, 1900".into(),
-                expected: NamingHookTestResult::SynonymAuthority(ScientificNameParts {
-                    name: "Canis lupus".into(),
-                    authority_year: Some("de Silva, 1900".into()),
-                }),
-            },
+            synonym_authority_test_case(
+                "parenthesized authority",
+                "Canis lupus (Linnaeus, 1758)",
+                "Canis lupus",
+                "(Linnaeus, 1758)",
+            ),
+            synonym_authority_test_case(
+                "lowercase authority prefix",
+                "Canis lupus de Silva, 1900",
+                "Canis lupus",
+                "de Silva, 1900",
+            ),
+            synonym_authority_test_case(
+                "de authority",
+                "\u{200c}Paidia moabitica de Freina, 2004",
+                "\u{200c}Paidia moabitica",
+                "de Freina, 2004",
+            ),
+            synonym_authority_test_case(
+                "apostrophe authority with year",
+                "\u{200c}Sedum eriocarpum subsp. spathulifolium 't Hart, 1995",
+                "\u{200c}Sedum eriocarpum subsp. spathulifolium",
+                "'t Hart, 1995",
+            ),
+            synonym_authority_test_case(
+                "apostrophe authority",
+                "Sedum fragrans 't Hart",
+                "Sedum fragrans",
+                "'t Hart",
+            ),
+            synonym_authority_test_case(
+                "von authority",
+                "Hippocampus natalensis von Bonde, 1923",
+                "Hippocampus natalensis",
+                "von Bonde, 1923",
+            ),
+            synonym_authority_test_case(
+                "van authority",
+                "Hylophilus moxensis van Els, T. Wijpkema, J.T. Wijpkema, Avalos & Montenegro-Avila, 2026",
+                "Hylophilus moxensis",
+                "van Els, T. Wijpkema, J.T. Wijpkema, Avalos & Montenegro-Avila, 2026",
+            ),
         ],
     }
+}
+
+fn default_photo_filename_test_cases() -> Vec<NamingHookTestCase> {
+    vec![
+        photo_filename_test_case(
+            "family suffix",
+            "Herbertaceae003.jpg",
+            TaxonomicNameInfo {
+                family_sci: Some("Herbertaceae".into()),
+                ..TaxonomicNameInfo::default()
+            },
+            "003.jpg",
+        ),
+        photo_filename_test_case(
+            "genus",
+            "Herbertus005.jpg",
+            TaxonomicNameInfo {
+                genus_sci: Some("Herbertus".into()),
+                ..TaxonomicNameInfo::default()
+            },
+            "005.jpg",
+        ),
+        photo_filename_test_case(
+            "species",
+            "Herbertus dicranus010.jpg",
+            TaxonomicNameInfo {
+                genus_sci: Some("Herbertus".into()),
+                species_sci: Some("Herbertus dicranus".into()),
+                ..TaxonomicNameInfo::default()
+            },
+            "010.jpg",
+        ),
+        photo_filename_test_case(
+            "quoted internal apostrophe",
+            "Iris 'a'b'030.jpg",
+            TaxonomicNameInfo {
+                genus_sci: Some("Iris".into()),
+                species_sci: Some("Iris 'a'b'".into()),
+                ..TaxonomicNameInfo::default()
+            },
+            "030.jpg",
+        ),
+        photo_filename_test_case(
+            "curly double quotes",
+            "Iris \u{201c}Blue\u{201d}030.jpg",
+            TaxonomicNameInfo {
+                genus_sci: Some("Iris".into()),
+                species_sci: Some("Iris 'Blue'".into()),
+                ..TaxonomicNameInfo::default()
+            },
+            "030.jpg",
+        ),
+        photo_filename_test_case(
+            "cultivar conversion",
+            "Hosta cv. blue_eyes030.jpg",
+            TaxonomicNameInfo {
+                genus_sci: Some("Hosta 'Blue".into()),
+                species_sci: Some("Hosta 'Blue Eyes'".into()),
+                ..TaxonomicNameInfo::default()
+            },
+            "030.jpg",
+        ),
+        photo_filename_test_case(
+            "sex marker",
+            "Herbertus dicranusM010.jpg",
+            TaxonomicNameInfo {
+                genus_sci: Some("Herbertus".into()),
+                species_sci: Some("Herbertus dicranus".into()),
+                ..TaxonomicNameInfo::default()
+            },
+            "M010.jpg",
+        ),
+        photo_filename_test_case(
+            "doubtful marker",
+            "Herbertus dicranusYN010.jpg",
+            TaxonomicNameInfo {
+                genus_sci: Some("Herbertus".into()),
+                species_sci: Some("Herbertus dicranus".into()),
+                ..TaxonomicNameInfo::default()
+            },
+            "YN010.jpg",
+        ),
+        photo_filename_test_case(
+            "leading hybrid genus",
+            "\u{00d7} Gasteraloe030.jpg",
+            TaxonomicNameInfo {
+                genus_sci: Some("x Gasteraloe".into()),
+                ..TaxonomicNameInfo::default()
+            },
+            "030.jpg",
+        ),
+        photo_filename_test_case(
+            "leading hybrid species",
+            "\u{00d7} Gasteraloe beguinii030.jpg",
+            TaxonomicNameInfo {
+                genus_sci: Some("x Gasteraloe".into()),
+                species_sci: Some("x Gasteraloe beguinii".into()),
+                ..TaxonomicNameInfo::default()
+            },
+            "030.jpg",
+        ),
+        photo_filename_test_case(
+            "infix hybrid species",
+            "Pinus X pekinensis030.jpg",
+            TaxonomicNameInfo {
+                genus_sci: Some("Pinus x".into()),
+                species_sci: Some("Pinus x pekinensis".into()),
+                ..TaxonomicNameInfo::default()
+            },
+            "030.jpg",
+        ),
+        photo_filename_test_case(
+            "family genus species Chinese",
+            "\u{9999}\u{79d1}\u{9999}\u{5c5e}\u{9999}\u{79cd} Canis lupus020.jpg",
+            TaxonomicNameInfo {
+                genus_sci: Some("Canis".into()),
+                species_sci: Some("Canis lupus".into()),
+                family_zh: Some("\u{9999}\u{79d1}".into()),
+                genus_zh: Some("\u{9999}\u{5c5e}".into()),
+                species_zh: Some("\u{9999}\u{79cd}".into()),
+                ..TaxonomicNameInfo::default()
+            },
+            "020.jpg",
+        ),
+        photo_filename_test_case(
+            "ke ke shu exception",
+            "\u{9999}\u{79d1}\u{79d1}\u{5c5e}020.jpg",
+            TaxonomicNameInfo {
+                genus_zh: Some("\u{9999}\u{79d1}\u{79d1}\u{5c5e}".into()),
+                ..TaxonomicNameInfo::default()
+            },
+            "020.jpg",
+        ),
+        photo_filename_test_case(
+            "quoted ASCII inside Chinese species",
+            "\u{9999}\u{79d1}\u{9999}\u{5c5e}\u{9999}'abc' Gasteraloe 'Wonder'030.jpg",
+            TaxonomicNameInfo {
+                genus_sci: Some("Gasteraloe".into()),
+                species_sci: Some("Gasteraloe 'Wonder'".into()),
+                family_zh: Some("\u{9999}\u{79d1}".into()),
+                genus_zh: Some("\u{9999}\u{5c5e}".into()),
+                species_zh: Some("\u{9999}'abc'".into()),
+                ..TaxonomicNameInfo::default()
+            },
+            "030.jpg",
+        ),
+        photo_filename_test_case(
+            "parenthesized ASCII inside Chinese species",
+            "\u{9999}\u{79d1}\u{9999}\u{5c5e}\u{9999}(abc) Gasteraloe beguinii030.jpg",
+            TaxonomicNameInfo {
+                genus_sci: Some("Gasteraloe".into()),
+                species_sci: Some("Gasteraloe beguinii".into()),
+                family_zh: Some("\u{9999}\u{79d1}".into()),
+                genus_zh: Some("\u{9999}\u{5c5e}".into()),
+                species_zh: Some("\u{9999}(abc)".into()),
+                ..TaxonomicNameInfo::default()
+            },
+            "030.jpg",
+        ),
+    ]
+}
+
+fn photo_filename_test_case(
+    name: &str,
+    input: &str,
+    info: TaxonomicNameInfo,
+    suffix: &str,
+) -> NamingHookTestCase {
+    NamingHookTestCase {
+        name: name.into(),
+        input: input.into(),
+        expected: NamingHookTestResult::PhotoFilename(ParsedPhotoFilename {
+            info,
+            suffix: suffix.into(),
+        }),
+    }
+}
+
+fn synonym_authority_test_case(
+    case_name: &str,
+    input: &str,
+    name: &str,
+    authority_year: &str,
+) -> NamingHookTestCase {
+    NamingHookTestCase {
+        name: case_name.into(),
+        input: input.into(),
+        expected: NamingHookTestResult::SynonymAuthority(ScientificNameParts {
+            name: name.into(),
+            authority_year: Some(authority_year.into()),
+        }),
+    }
+}
+
+pub(crate) fn seed_default_test_cases(connection: &rusqlite::Connection) -> CoreResult<()> {
+    for kind in [
+        NamingHookKind::PhotoFilename,
+        NamingHookKind::SynonymAuthority,
+    ] {
+        let value = serde_json::to_string(&default_test_cases(kind))
+            .map_err(|error| CoreError::InvalidArgument(format!("invalid hook tests: {error}")))?;
+        connection.execute(
+            r#"
+            INSERT INTO app_metadata (metadata_key, metadata_value)
+            VALUES (?, ?)
+            ON CONFLICT(metadata_key) DO NOTHING
+            "#,
+            params![tests_metadata_key(kind), value],
+        )?;
+    }
+    Ok(())
 }
 
 fn load_cases(
@@ -289,13 +502,18 @@ mod tests {
             NamingHookKind::PhotoFilename,
             NamingHookKind::SynonymAuthority,
         ] {
+            let expected_count = default_test_cases(kind).len();
             let report =
                 run_naming_hook_tests(&database, kind, Some(get_naming_hook_template(kind)))
                     .unwrap();
             assert_eq!(report.failed, 0);
-            assert_eq!(report.passed, 2);
+            assert_eq!(report.passed, expected_count);
             assert!(report.cases.iter().all(|case| case.actual.is_some()));
         }
+
+        let saved = get_naming_hook_test_cases(&database).unwrap();
+        assert_eq!(saved.photo_filename.len(), 15);
+        assert_eq!(saved.synonym_authority.len(), 7);
     }
 
     #[test]
