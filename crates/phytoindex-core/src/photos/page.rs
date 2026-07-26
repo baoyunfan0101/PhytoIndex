@@ -33,16 +33,36 @@ pub(crate) enum PhotoCursor {
         status: String,
         photo_id: i64,
     },
-    OperationBatches {
-        created_at: String,
-        batch_id: i64,
+    MappingStatusSearch {
+        status: String,
+        query: String,
+        photo_id: i64,
+    },
+    FilenameSearch {
+        query: String,
+        photo_id: i64,
+    },
+    GeneralSearch {
+        query: String,
+        photo_id: i64,
+    },
+    MapPhotos {
+        bounds: Option<[u64; 4]>,
+        photo_id: i64,
+    },
+    TaxonSearch {
+        query: String,
+        match_level: i64,
+        edit_distance: i64,
+        sort_name: String,
+        name_type_priority: i64,
+        taxon_id: i64,
+    },
+    TaxonPhotos {
+        taxon_id: i64,
+        photo_id: i64,
     },
     Operations {
-        operation_id: i64,
-    },
-    BatchOperations {
-        batch_id: i64,
-        row_number: usize,
         operation_id: i64,
     },
 }

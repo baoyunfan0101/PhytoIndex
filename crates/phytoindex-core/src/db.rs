@@ -8,6 +8,7 @@ use crate::error::{CoreError, CoreResult};
 use crate::models::Photo;
 
 const SCHEMA_VERSION: i64 = 2;
+pub(crate) const LOCAL_TAXON_ID_FLOOR: i64 = 8_000_000_000_000_000;
 
 #[derive(Debug, Clone)]
 pub struct Database {
@@ -45,65 +46,24 @@ impl Database {
         let connection = self.connect()?;
         let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
         match version {
-            0 => connection.execute_batch(SCHEMA)?,
-            SCHEMA_VERSION => {
-                validate_photo_schema(&connection)?;
-                migrate_taxon_name_index(&connection)?;
+            0 => {
                 connection.execute_batch(SCHEMA)?;
+                crate::metadata::insert_raw_if_missing(
+                    &connection,
+                    crate::metadata::MetadataKey::TaxonomyNameSeparator,
+                    ";",
+                )?;
+                crate::naming::seed_default_test_cases(&connection)?;
             }
-            1 => {
-                return Err(CoreError::InvalidArgument(
-                    "legacy database schema is not supported; open a new vividarium.db".into(),
-                ));
-            }
+            SCHEMA_VERSION => {}
             _ => {
                 return Err(CoreError::InvalidArgument(format!(
-                    "unsupported database schema version: {version}"
+                    "unsupported database schema version: {version}; expected {SCHEMA_VERSION}"
                 )));
             }
         }
         Ok(())
     }
-}
-
-fn migrate_taxon_name_index(connection: &Connection) -> CoreResult<()> {
-    let mut statement = connection.prepare("PRAGMA table_xinfo(taxon_names)")?;
-    let columns = statement
-        .query_map([], |row| row.get::<_, String>(1))?
-        .collect::<Result<Vec<_>, _>>()?;
-    if columns.iter().any(|column| column == "name_search")
-        && !columns.iter().any(|column| column == "normalized_name")
-    {
-        connection.execute_batch(
-            r#"
-            ALTER TABLE taxon_names RENAME COLUMN name_search TO normalized_name;
-            "#,
-        )?;
-    }
-    Ok(())
-}
-
-fn validate_photo_schema(connection: &Connection) -> CoreResult<()> {
-    let mut statement = connection.prepare("PRAGMA table_info(photos)")?;
-    let columns = statement
-        .query_map([], |row| row.get::<_, String>(1))?
-        .collect::<Result<Vec<_>, _>>()?;
-    if !columns.is_empty()
-        && columns
-            != [
-                "photo_id",
-                "directory_id",
-                "filename",
-                "file_size",
-                "modified_at_ns",
-                "thumbnail_path",
-            ]
-    {
-        return Err(CoreError::InvalidArgument(
-            "legacy photos schema is not supported; open a new vividarium.db".into(),
-        ));
-    }
-    Ok(())
 }
 
 const SCHEMA: &str = r#"
@@ -172,12 +132,51 @@ CREATE TABLE IF NOT EXISTS photo_taxon_mapping (
     photo_id INTEGER PRIMARY KEY,
     taxon_id INTEGER,
     status TEXT NOT NULL,
-    CHECK (status IN ('matched', 'unmatched', 'ambiguous', 'processing', 'stale')),
+    CHECK (status IN ('matched', 'unmatched', 'ambiguous')),
     CHECK ((status = 'matched' AND taxon_id IS NOT NULL)
         OR (status != 'matched' AND taxon_id IS NULL)),
     FOREIGN KEY (photo_id) REFERENCES photos(photo_id) ON DELETE CASCADE,
     FOREIGN KEY (taxon_id) REFERENCES taxa(taxon_id) ON DELETE SET NULL
 );
+
+CREATE TABLE IF NOT EXISTS photo_taxon_candidates (
+    photo_id INTEGER NOT NULL,
+    taxon_id INTEGER NOT NULL,
+    PRIMARY KEY (photo_id, taxon_id),
+    FOREIGN KEY (photo_id)
+        REFERENCES photo_taxon_mapping(photo_id) ON DELETE CASCADE,
+    FOREIGN KEY (taxon_id) REFERENCES taxa(taxon_id) ON DELETE CASCADE
+) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS photo_taxon_candidate_names (
+    photo_id INTEGER NOT NULL,
+    taxon_id INTEGER NOT NULL,
+    name_id INTEGER NOT NULL,
+    name_type INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    PRIMARY KEY (photo_id, taxon_id, name_id),
+    CHECK (name_type BETWEEN 1 AND 6),
+    CHECK (length(trim(name)) > 0),
+    FOREIGN KEY (photo_id, taxon_id)
+        REFERENCES photo_taxon_candidates(photo_id, taxon_id) ON DELETE CASCADE
+) WITHOUT ROWID;
+
+CREATE TRIGGER IF NOT EXISTS photo_taxon_candidates_bi
+BEFORE INSERT ON photo_taxon_candidates
+WHEN NOT EXISTS (
+    SELECT 1
+    FROM photo_taxon_mapping
+    WHERE photo_id = new.photo_id
+      AND status = 'ambiguous'
+) BEGIN
+    SELECT RAISE(ABORT, 'photo candidates require an ambiguous mapping');
+END;
+
+CREATE TRIGGER IF NOT EXISTS photo_taxon_mapping_au_candidates
+AFTER UPDATE OF status ON photo_taxon_mapping
+WHEN new.status != 'ambiguous' BEGIN
+    DELETE FROM photo_taxon_candidates WHERE photo_id = new.photo_id;
+END;
 
 CREATE TABLE IF NOT EXISTS photo_taxon_usage (
     taxon_id INTEGER PRIMARY KEY,
@@ -191,38 +190,31 @@ CREATE TABLE IF NOT EXISTS photo_taxon_usage (
 CREATE TABLE IF NOT EXISTS photo_mapping_queue (
     photo_id INTEGER PRIMARY KEY,
     reason TEXT NOT NULL,
-    CHECK (reason IN ('refresh', 'taxonomy')),
+    CHECK (reason IN ('refresh', 'taxonomy', 'hook', 'settings')),
     FOREIGN KEY (photo_id) REFERENCES photos(photo_id) ON DELETE CASCADE
-);
-
-CREATE TABLE IF NOT EXISTS photo_operation_batches (
-    batch_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    source TEXT NOT NULL,
-    root_path TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CHECK (source IN ('manual_rename', 'taxon_rename', 'taxon_batch_rename'))
 );
 
 CREATE TABLE IF NOT EXISTS photo_operations (
     operation_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    batch_id INTEGER NOT NULL,
+    source TEXT NOT NULL,
+    root_path TEXT NOT NULL,
+    input_json TEXT NOT NULL,
+    applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (source IN ('manual_rename', 'taxon_rename', 'taxon_selection_rename'))
+);
+
+CREATE TABLE IF NOT EXISTS photo_operation_items (
+    operation_id INTEGER NOT NULL,
     row_number INTEGER NOT NULL,
-    status TEXT NOT NULL,
     photo_id INTEGER NOT NULL,
     directory_relative_path TEXT NOT NULL,
     old_filename TEXT NOT NULL,
     new_filename TEXT NOT NULL,
-    applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    reverted_at TEXT,
-    UNIQUE (batch_id, row_number),
-    CHECK (status IN ('applied', 'reverted')),
+    PRIMARY KEY (operation_id, row_number),
     CHECK (row_number > 0),
     CHECK (old_filename <> new_filename),
-    FOREIGN KEY (batch_id) REFERENCES photo_operation_batches(batch_id) ON DELETE RESTRICT
+    FOREIGN KEY (operation_id) REFERENCES photo_operations(operation_id) ON DELETE CASCADE
 );
-
-DROP TABLE IF EXISTS photo_mapping_state;
-DROP TRIGGER IF EXISTS taxa_photo_mapping_bd;
 
 CREATE TABLE IF NOT EXISTS taxa (
     taxon_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -233,31 +225,110 @@ CREATE TABLE IF NOT EXISTS taxa (
     FOREIGN KEY (parent_taxon_id) REFERENCES taxa(taxon_id) ON DELETE RESTRICT
 );
 
+INSERT INTO sqlite_sequence(name, seq)
+SELECT 'taxa', 8000000000000000
+WHERE NOT EXISTS (SELECT 1 FROM sqlite_sequence WHERE name = 'taxa');
+UPDATE sqlite_sequence
+SET seq = max(seq, 8000000000000000)
+WHERE name = 'taxa';
+
 CREATE TRIGGER IF NOT EXISTS taxa_bd_photo_mapping
 BEFORE DELETE ON taxa BEGIN
     INSERT INTO photo_mapping_queue (photo_id, reason)
-    SELECT photo_id, 'taxonomy'
-    FROM photo_taxon_mapping
-    WHERE taxon_id = old.taxon_id
+    SELECT affected.photo_id, 'taxonomy'
+    FROM (
+        SELECT photo_id
+        FROM photo_taxon_mapping
+        WHERE taxon_id = old.taxon_id
+        UNION
+        SELECT photo_id
+        FROM photo_taxon_candidates
+        WHERE taxon_id = old.taxon_id
+    ) AS affected
+    WHERE true
     ON CONFLICT(photo_id) DO UPDATE SET reason = excluded.reason;
-    UPDATE photo_taxon_mapping
-    SET taxon_id = NULL, status = 'stale'
+    UPDATE photo_taxon_usage
+    SET direct_photo_count = direct_photo_count
+            - CASE WHEN taxon_id = old.taxon_id THEN (
+                SELECT COUNT(*)
+                FROM photo_taxon_mapping
+                WHERE taxon_id = old.taxon_id
+                  AND status = 'matched'
+              ) ELSE 0 END,
+        subtree_photo_count = subtree_photo_count - (
+            SELECT COUNT(*)
+            FROM photo_taxon_mapping
+            WHERE taxon_id = old.taxon_id
+              AND status = 'matched'
+        )
+    WHERE taxon_id IN (
+        WITH RECURSIVE ancestors(taxon_id) AS (
+            SELECT old.taxon_id
+            UNION ALL
+            SELECT taxa.parent_taxon_id
+            FROM taxa
+            JOIN ancestors ON taxa.taxon_id = ancestors.taxon_id
+            WHERE taxa.parent_taxon_id IS NOT NULL
+        )
+        SELECT taxon_id FROM ancestors
+    );
+    DELETE FROM photo_taxon_usage
+    WHERE direct_photo_count = 0 AND subtree_photo_count = 0;
+    DELETE FROM photo_taxon_mapping
     WHERE taxon_id = old.taxon_id;
 END;
+
+CREATE VIEW IF NOT EXISTS current_photo_taxon_mapping AS
+SELECT photo_taxon_mapping.photo_id, photo_taxon_mapping.taxon_id
+FROM photo_taxon_mapping
+WHERE photo_taxon_mapping.status = 'matched'
+  AND NOT EXISTS (
+      SELECT 1
+      FROM photo_mapping_queue
+      WHERE photo_mapping_queue.photo_id = photo_taxon_mapping.photo_id
+  );
+
+CREATE VIEW IF NOT EXISTS current_photo_taxon_usage AS
+WITH RECURSIVE queued_taxon_paths(direct_taxon_id, taxon_id) AS (
+    SELECT photo_taxon_mapping.taxon_id, photo_taxon_mapping.taxon_id
+    FROM photo_taxon_mapping
+    JOIN photo_mapping_queue USING (photo_id)
+    WHERE photo_taxon_mapping.status = 'matched'
+    UNION ALL
+    SELECT queued_taxon_paths.direct_taxon_id, taxa.parent_taxon_id
+    FROM queued_taxon_paths
+    JOIN taxa ON taxa.taxon_id = queued_taxon_paths.taxon_id
+    WHERE taxa.parent_taxon_id IS NOT NULL
+),
+queued_taxon_counts AS (
+    SELECT taxon_id,
+           SUM(direct_taxon_id = taxon_id) AS direct_photo_count,
+           COUNT(*) AS subtree_photo_count
+    FROM queued_taxon_paths
+    GROUP BY taxon_id
+)
+SELECT photo_taxon_usage.taxon_id,
+       photo_taxon_usage.direct_photo_count
+           - COALESCE(queued_taxon_counts.direct_photo_count, 0)
+           AS direct_photo_count,
+       photo_taxon_usage.subtree_photo_count
+           - COALESCE(queued_taxon_counts.subtree_photo_count, 0)
+           AS subtree_photo_count
+FROM photo_taxon_usage
+LEFT JOIN queued_taxon_counts USING (taxon_id)
+WHERE photo_taxon_usage.subtree_photo_count
+      > COALESCE(queued_taxon_counts.subtree_photo_count, 0);
 
 CREATE TABLE IF NOT EXISTS taxon_names (
     name_id INTEGER PRIMARY KEY AUTOINCREMENT,
     taxon_id INTEGER NOT NULL,
-    name_kind INTEGER NOT NULL,
+    name_type INTEGER NOT NULL,
     name TEXT NOT NULL,
     normalized_name TEXT GENERATED ALWAYS AS (lower(name)) STORED,
-    is_accepted INTEGER NOT NULL DEFAULT 0,
     authority_year TEXT,
-    category TEXT,
     source TEXT,
-    UNIQUE (taxon_id, name_kind, name),
-    CHECK (name_kind IN (1, 2, 3)),
-    CHECK (is_accepted IN (0, 1)),
+    UNIQUE (taxon_id, name_type, name),
+    CHECK (name_type BETWEEN 1 AND 6),
     CHECK (length(trim(name)) > 0),
     FOREIGN KEY (taxon_id) REFERENCES taxa(taxon_id) ON DELETE CASCADE
 );
@@ -284,70 +355,67 @@ CREATE TRIGGER IF NOT EXISTS taxon_names_au AFTER UPDATE OF name ON taxon_names 
     INSERT INTO taxon_names_fts(rowid, name) VALUES (new.name_id, new.name);
 END;
 
-CREATE TABLE IF NOT EXISTS taxon_identifiers (
-    taxon_id INTEGER NOT NULL,
-    source TEXT NOT NULL,
-    external_id TEXT NOT NULL,
-    PRIMARY KEY (source, external_id),
-    FOREIGN KEY (taxon_id) REFERENCES taxa(taxon_id) ON DELETE CASCADE
-);
-
-CREATE TABLE IF NOT EXISTS taxonomy_operation_batches (
-    batch_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    context_json TEXT NOT NULL,
-    input_json TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
 CREATE TABLE IF NOT EXISTS taxonomy_operations (
     operation_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    batch_id INTEGER NOT NULL,
-    row_number INTEGER NOT NULL,
-    status TEXT NOT NULL,
+    source TEXT NOT NULL,
+    input_json TEXT NOT NULL,
+    result_json TEXT NOT NULL,
     changeset_blob BLOB NOT NULL,
     applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    reverted_at TEXT,
-    UNIQUE (batch_id, row_number),
-    CHECK (status IN ('applied', 'reverted')),
-    FOREIGN KEY (batch_id) REFERENCES taxonomy_operation_batches(batch_id) ON DELETE RESTRICT
+    CHECK (source = 'formatted_update')
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_taxon_names_one_accepted
-    ON taxon_names(taxon_id, name_kind) WHERE is_accepted = 1;
+CREATE TABLE IF NOT EXISTS taxonomy_base_metadata (
+    metadata_id INTEGER PRIMARY KEY CHECK (metadata_id = 1),
+    source_path TEXT NOT NULL,
+    taxa_count INTEGER NOT NULL,
+    taxon_names_count INTEGER NOT NULL,
+    imported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (taxa_count >= 0),
+    CHECK (taxon_names_count >= 0)
+);
+
+CREATE TABLE IF NOT EXISTS app_metadata (
+    metadata_key TEXT PRIMARY KEY,
+    metadata_value TEXT NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_taxon_names_one_sci_name
+    ON taxon_names(taxon_id) WHERE name_type = 1;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_taxon_names_one_zh_name
+    ON taxon_names(taxon_id) WHERE name_type = 3;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_taxon_names_one_en_name
+    ON taxon_names(taxon_id) WHERE name_type = 5;
 CREATE INDEX IF NOT EXISTS idx_taxa_parent ON taxa(parent_taxon_id);
 CREATE INDEX IF NOT EXISTS idx_taxa_parent_rank_id ON taxa(parent_taxon_id, rank, taxon_id);
 CREATE INDEX IF NOT EXISTS idx_taxa_rank ON taxa(rank);
-CREATE INDEX IF NOT EXISTS idx_taxon_names_kind_name ON taxon_names(name_kind, name);
-CREATE INDEX IF NOT EXISTS idx_taxon_names_kind_taxon ON taxon_names(name_kind, taxon_id);
+CREATE INDEX IF NOT EXISTS idx_taxon_names_type_name ON taxon_names(name_type, name);
+CREATE INDEX IF NOT EXISTS idx_taxon_names_type_taxon ON taxon_names(name_type, taxon_id);
 CREATE INDEX IF NOT EXISTS idx_taxon_names_name ON taxon_names(name);
 CREATE INDEX IF NOT EXISTS idx_taxon_names_name_search
     ON taxon_names(normalized_name, taxon_id);
-CREATE INDEX IF NOT EXISTS idx_taxon_identifiers_taxon ON taxon_identifiers(taxon_id);
-CREATE INDEX IF NOT EXISTS idx_taxonomy_operations_batch
-    ON taxonomy_operations(batch_id, row_number);
-CREATE INDEX IF NOT EXISTS idx_taxonomy_operations_batch_page
-    ON taxonomy_operations(batch_id, row_number, operation_id);
-CREATE INDEX IF NOT EXISTS idx_taxonomy_operation_batches_created
-    ON taxonomy_operation_batches(created_at DESC, batch_id DESC);
+CREATE INDEX IF NOT EXISTS idx_taxonomy_operations_applied
+    ON taxonomy_operations(applied_at DESC, operation_id DESC);
 CREATE INDEX IF NOT EXISTS idx_photo_directories_parent_name
     ON photo_directories(parent_directory_id, name, directory_id);
 CREATE INDEX IF NOT EXISTS idx_photos_directory_filename
     ON photos(directory_id, filename, photo_id);
+CREATE INDEX IF NOT EXISTS idx_photo_metadata_coordinates
+    ON photo_metadata(latitude, longitude, photo_id);
 CREATE INDEX IF NOT EXISTS idx_photo_taxon_mapping_taxon
     ON photo_taxon_mapping(taxon_id, photo_id);
 CREATE INDEX IF NOT EXISTS idx_photo_taxon_mapping_status
     ON photo_taxon_mapping(status, photo_id);
+CREATE INDEX IF NOT EXISTS idx_photo_taxon_candidates_taxon
+    ON photo_taxon_candidates(taxon_id, photo_id);
 CREATE INDEX IF NOT EXISTS idx_photo_taxon_usage_subtree
     ON photo_taxon_usage(subtree_photo_count, taxon_id);
 CREATE INDEX IF NOT EXISTS idx_photo_mapping_queue_reason
     ON photo_mapping_queue(reason, photo_id);
-CREATE INDEX IF NOT EXISTS idx_photo_operations_batch_page
-    ON photo_operations(batch_id, row_number, operation_id);
-CREATE INDEX IF NOT EXISTS idx_photo_operation_batches_created
-    ON photo_operation_batches(created_at DESC, batch_id DESC);
-
-DROP VIEW IF EXISTS taxa_display;
-DROP TABLE IF EXISTS taxa_metadata;
+CREATE INDEX IF NOT EXISTS idx_photo_operation_items_photo
+    ON photo_operation_items(photo_id, operation_id);
+CREATE INDEX IF NOT EXISTS idx_photo_operations_applied
+    ON photo_operations(applied_at DESC, operation_id DESC);
 
 PRAGMA user_version = 2;
 "#;
@@ -369,7 +437,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn initializes_the_version_two_schema() {
+    fn initializes_the_current_schema() {
         let directory = tempfile::tempdir().unwrap();
         let database = Database::open(directory.path().join("vividarium.db")).unwrap();
         let connection = database.connect().unwrap();
@@ -384,16 +452,18 @@ mod tests {
             "photo_metadata",
             "photo_filenames_fts",
             "photo_taxon_mapping",
+            "photo_taxon_candidates",
+            "photo_taxon_candidate_names",
             "photo_taxon_usage",
             "photo_mapping_queue",
-            "photo_operation_batches",
             "photo_operations",
+            "photo_operation_items",
             "taxa",
             "taxon_names",
             "taxon_names_fts",
-            "taxon_identifiers",
-            "taxonomy_operation_batches",
             "taxonomy_operations",
+            "taxonomy_base_metadata",
+            "app_metadata",
         ] {
             let exists: bool = connection
                 .query_row(
@@ -404,15 +474,15 @@ mod tests {
                 .unwrap();
             assert!(exists, "missing table {table}");
         }
-        for legacy_object in ["taxa_metadata", "taxa_display"] {
-            let exists: bool = connection
+        for key in ["photo_filename_hook_tests", "synonym_authority_hook_tests"] {
+            let value: String = connection
                 .query_row(
-                    "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name = ?)",
-                    [legacy_object],
+                    "SELECT metadata_value FROM app_metadata WHERE metadata_key = ?",
+                    [key],
                     |row| row.get(0),
                 )
                 .unwrap();
-            assert!(!exists, "unexpected legacy object {legacy_object}");
+            assert!(value.starts_with('['), "missing metadata {key}");
         }
         let triggers = connection
             .prepare(
@@ -429,22 +499,72 @@ mod tests {
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
         assert_eq!(triggers, ["taxa_bd_photo_mapping"]);
+        let mapping_schema: String = connection
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'photo_taxon_mapping'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(mapping_schema.contains("CHECK (status IN ('matched', 'unmatched', 'ambiguous'))"));
+        assert!(!mapping_schema.contains("'processing'"));
+        let delete_trigger_schema: String = connection
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'taxa_bd_photo_mapping'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(delete_trigger_schema.contains("DELETE FROM photo_taxon_mapping"));
         let name_columns = table_columns(&connection, "taxon_names");
         assert_eq!(
             name_columns,
             [
                 "name_id",
                 "taxon_id",
-                "name_kind",
+                "name_type",
                 "name",
-                "is_accepted",
                 "authority_year",
-                "category",
                 "source"
             ]
         );
         let name_columns = table_xcolumns(&connection, "taxon_names");
         assert!(name_columns.contains(&"normalized_name".to_string()));
+        let name_type_storage: String = connection
+            .query_row(
+                "SELECT type FROM pragma_table_info('taxon_names') WHERE name = 'name_type'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(name_type_storage, "INTEGER");
+        let taxon_names_schema: String = connection
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'taxon_names'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(taxon_names_schema.contains("name_type INTEGER NOT NULL"));
+        assert!(taxon_names_schema.contains("CHECK (name_type BETWEEN 1 AND 6)"));
+        assert!(!taxon_names_schema.contains("name_type TEXT"));
+        for (index_name, name_type) in [
+            ("idx_taxon_names_one_sci_name", 1),
+            ("idx_taxon_names_one_zh_name", 3),
+            ("idx_taxon_names_one_en_name", 5),
+        ] {
+            let index_schema: String = connection
+                .query_row(
+                    "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?",
+                    [index_name],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(
+                index_schema.contains(&format!("WHERE name_type = {name_type}")),
+                "index {index_name} does not use integer name_type {name_type}"
+            );
+        }
         let photo_columns = table_columns(&connection, "photos");
         assert_eq!(
             photo_columns,
@@ -457,80 +577,45 @@ mod tests {
                 "thumbnail_path",
             ]
         );
-        let batch_columns = table_columns(&connection, "taxonomy_operation_batches");
-        assert_eq!(
-            batch_columns,
-            ["batch_id", "context_json", "input_json", "created_at"]
-        );
         let operation_columns = table_columns(&connection, "taxonomy_operations");
         assert_eq!(
             operation_columns,
             [
                 "operation_id",
-                "batch_id",
-                "row_number",
-                "status",
+                "source",
+                "input_json",
+                "result_json",
                 "changeset_blob",
                 "applied_at",
-                "reverted_at",
             ]
-        );
-        let batch_columns = table_columns(&connection, "photo_operation_batches");
-        assert_eq!(
-            batch_columns,
-            ["batch_id", "source", "root_path", "created_at"]
         );
         let operation_columns = table_columns(&connection, "photo_operations");
         assert_eq!(
             operation_columns,
             [
                 "operation_id",
-                "batch_id",
+                "source",
+                "root_path",
+                "input_json",
+                "applied_at",
+            ]
+        );
+        let item_columns = table_columns(&connection, "photo_operation_items");
+        assert_eq!(
+            item_columns,
+            [
+                "operation_id",
                 "row_number",
-                "status",
                 "photo_id",
                 "directory_relative_path",
                 "old_filename",
                 "new_filename",
-                "applied_at",
-                "reverted_at",
             ]
         );
     }
 
     #[test]
-    fn removes_legacy_taxonomy_objects_on_reopen() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("vividarium.db");
-        let database = Database::open(&path).unwrap();
-        let connection = database.connect().unwrap();
-        connection
-            .execute_batch(
-                r#"
-                CREATE TABLE taxa_metadata (knowledge_base_path TEXT);
-                CREATE VIEW taxa_display AS SELECT taxon_id FROM taxa;
-                "#,
-            )
-            .unwrap();
-        drop(connection);
-        drop(database);
-
-        let database = Database::open(path).unwrap();
-        let connection = database.connect().unwrap();
-        for legacy_object in ["taxa_metadata", "taxa_display"] {
-            let exists: bool = connection
-                .query_row(
-                    "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name = ?)",
-                    [legacy_object],
-                    |row| row.get(0),
-                )
-                .unwrap();
-            assert!(!exists, "unexpected legacy object {legacy_object}");
-        }
-    }
-
-    #[test]
-    fn rejects_a_second_accepted_name_of_the_same_kind() {
+    fn rejects_a_second_sci_name() {
         let directory = tempfile::tempdir().unwrap();
         let database = Database::open(directory.path().join("vividarium.db")).unwrap();
         let connection = database.connect().unwrap();
@@ -540,85 +625,166 @@ mod tests {
         let taxon_id = connection.last_insert_rowid();
         connection
             .execute(
-                "INSERT INTO taxon_names (taxon_id, name_kind, name, is_accepted) VALUES (?, 1, 'A a', 1)",
+                "INSERT INTO taxon_names (taxon_id, name_type, name) VALUES (?, 1, 'A a')",
                 [taxon_id],
             )
             .unwrap();
         let result = connection.execute(
-            "INSERT INTO taxon_names (taxon_id, name_kind, name, is_accepted) VALUES (?, 1, 'A b', 1)",
+            "INSERT INTO taxon_names (taxon_id, name_type, name) VALUES (?, 1, 'A b')",
             [taxon_id],
         );
         assert!(result.is_err());
     }
 
     #[test]
-    fn refuses_to_open_legacy_schema_versions() {
+    fn queued_mappings_are_not_current_matches_or_usage() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("phytoindex.db");
-        let connection = Connection::open(&path).unwrap();
-        connection
-            .execute_batch("PRAGMA user_version = 1;")
-            .unwrap();
-        drop(connection);
-        let error = Database::open(path).unwrap_err();
-        assert!(error.to_string().contains("legacy database schema"));
-    }
-
-    #[test]
-    fn refuses_the_legacy_photos_layout_at_version_two() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("phytoindex.db");
-        let connection = Connection::open(&path).unwrap();
-        connection
-            .execute_batch(
-                r#"
-                CREATE TABLE photos (
-                    photo_id INTEGER PRIMARY KEY,
-                    root TEXT NOT NULL,
-                    relative_path TEXT NOT NULL,
-                    filename TEXT NOT NULL
-                );
-                PRAGMA user_version = 2;
-                "#,
-            )
-            .unwrap();
-        drop(connection);
-        let error = Database::open(path).unwrap_err();
-        assert!(error.to_string().contains("legacy photos schema"));
-    }
-
-    #[test]
-    fn renames_the_version_two_taxon_name_index_in_place() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("phytoindex.db");
-        let database = Database::open(&path).unwrap();
+        let database = Database::open(directory.path().join("vividarium.db")).unwrap();
         let connection = database.connect().unwrap();
         connection
             .execute_batch(
                 r#"
-                DROP INDEX idx_taxon_names_name_search;
-                ALTER TABLE taxon_names RENAME COLUMN normalized_name TO name_search;
-                CREATE INDEX idx_taxon_names_name_search
-                    ON taxon_names(name_search, taxon_id);
+                INSERT INTO photo_directories (
+                    directory_id, parent_directory_id, name, relative_path
+                ) VALUES (1, NULL, '', '');
+                INSERT INTO photos (
+                    photo_id, directory_id, filename, file_size, modified_at_ns
+                ) VALUES (1, 1, 'photo.jpg', 1, 1);
+                INSERT INTO taxa (taxon_id, parent_taxon_id, rank)
+                VALUES (1, NULL, 5);
+                INSERT INTO photo_taxon_mapping (photo_id, taxon_id, status)
+                VALUES (1, 1, 'matched');
+                INSERT INTO photo_taxon_usage (
+                    taxon_id, direct_photo_count, subtree_photo_count
+                ) VALUES (1, 1, 1);
                 "#,
             )
             .unwrap();
-        drop(connection);
-        drop(database);
+        let current_count = |view: &str| -> i64 {
+            connection
+                .query_row(&format!("SELECT COUNT(*) FROM {view}"), [], |row| {
+                    row.get(0)
+                })
+                .unwrap()
+        };
+        assert_eq!(current_count("current_photo_taxon_mapping"), 1);
+        assert_eq!(current_count("current_photo_taxon_usage"), 1);
 
-        let database = Database::open(path).unwrap();
-        let connection = database.connect().unwrap();
-        let columns = table_xcolumns(&connection, "taxon_names");
-        assert!(columns.contains(&"normalized_name".to_string()));
-        assert!(!columns.contains(&"name_search".to_string()));
-        let index_exists: bool = connection
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_taxon_names_name_search')",
+        connection
+            .execute(
+                "INSERT INTO photo_mapping_queue (photo_id, reason) VALUES (1, 'refresh')",
                 [],
-                |row| row.get(0),
             )
             .unwrap();
-        assert!(index_exists);
+
+        assert_eq!(current_count("current_photo_taxon_mapping"), 0);
+        assert_eq!(current_count("current_photo_taxon_usage"), 0);
+    }
+
+    #[test]
+    fn ambiguous_candidates_are_constrained_and_follow_taxon_deletion() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = Database::open(directory.path().join("vividarium.db")).unwrap();
+        let connection = database.connect().unwrap();
+        connection
+            .execute_batch(
+                r#"
+                INSERT INTO photo_directories (
+                    directory_id, parent_directory_id, name, relative_path
+                ) VALUES (1, NULL, '', '');
+                INSERT INTO photos (
+                    photo_id, directory_id, filename, file_size, modified_at_ns
+                ) VALUES (1, 1, 'ambiguous.jpg', 1, 1);
+                INSERT INTO taxa (taxon_id, rank) VALUES (1, 5), (2, 5);
+                INSERT INTO taxon_names (name_id, taxon_id, name_type, name)
+                VALUES (1, 1, 1, 'Shared'), (2, 2, 1, 'Shared');
+                INSERT INTO photo_taxon_mapping (photo_id, taxon_id, status)
+                VALUES (1, NULL, 'ambiguous');
+                INSERT INTO photo_taxon_candidates (photo_id, taxon_id)
+                VALUES (1, 1), (1, 2);
+                INSERT INTO photo_taxon_candidate_names (
+                    photo_id, taxon_id, name_id, name_type, name
+                )
+                VALUES (1, 1, 1, 1, 'Shared'), (1, 2, 2, 1, 'Shared');
+                "#,
+            )
+            .unwrap();
+        connection
+            .execute(
+                "UPDATE photo_taxon_mapping SET status = 'unmatched' WHERE photo_id = 1",
+                [],
+            )
+            .unwrap();
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM photo_taxon_candidates", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap(),
+            0
+        );
+        assert!(
+            connection
+                .execute(
+                    "INSERT INTO photo_taxon_candidates (photo_id, taxon_id) VALUES (1, 1)",
+                    [],
+                )
+                .is_err()
+        );
+        connection
+            .execute_batch(
+                r#"
+                UPDATE photo_taxon_mapping
+                SET status = 'ambiguous'
+                WHERE photo_id = 1;
+                INSERT INTO photo_taxon_candidates (photo_id, taxon_id)
+                VALUES (1, 1), (1, 2);
+                INSERT INTO photo_taxon_candidate_names (
+                    photo_id, taxon_id, name_id, name_type, name
+                )
+                VALUES (1, 1, 1, 1, 'Shared'), (1, 2, 2, 1, 'Shared');
+                DELETE FROM taxa WHERE taxon_id = 1;
+                "#,
+            )
+            .unwrap();
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT taxon_id FROM photo_taxon_candidates WHERE photo_id = 1",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            2
+        );
+        assert!(
+            connection
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM photo_mapping_queue WHERE photo_id = 1)",
+                    [],
+                    |row| row.get::<_, bool>(0),
+                )
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn refuses_to_open_different_schema_versions() {
+        for version in [1, 3] {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("phytoindex.db");
+            let connection = Connection::open(&path).unwrap();
+            connection
+                .execute_batch(&format!("PRAGMA user_version = {version};"))
+                .unwrap();
+            drop(connection);
+            let error = Database::open(path).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("unsupported database schema version")
+            );
+        }
     }
 
     fn table_columns(connection: &Connection, table: &str) -> Vec<String> {

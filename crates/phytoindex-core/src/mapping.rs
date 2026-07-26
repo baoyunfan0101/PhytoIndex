@@ -1,20 +1,35 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use rusqlite::types::Value as SqlValue;
-use rusqlite::{OptionalExtension, Transaction, params, params_from_iter};
+use rusqlite::{Transaction, params, params_from_iter};
 use serde::{Deserialize, Serialize};
 
 use crate::db::Database;
 use crate::error::{CoreError, CoreResult};
-use crate::models::{MappingMetadata, MappingSyncResult, Photo, PhotoPage};
-use crate::photos::{
-    self, PhotoCursor, PhotoPageSection, decode_photo_cursor, encode_photo_cursor,
-    invalid_photo_cursor, photo_page_limit,
-};
+use crate::models::Photo;
+use crate::naming::PhotoFilenameParser;
 use crate::taxonomy::{
-    TaxonDisplayNames, TaxonRank, TaxonSearchResult, TaxonSummary, TaxonomyNameKind, search_taxa,
-    search_taxa_with_connection,
+    TaxonDisplayNames, TaxonRank, TaxonSummary, TaxonomyNameType, load_taxon_summaries,
 };
+
+mod actions;
+mod candidates;
+mod name_match;
+mod navigation;
+mod status;
+mod tree;
+
+pub use actions::{
+    clear_photo_mapping, get_metadata, get_photo_mapping, get_photo_taxon_match, remap_photo,
+    select_photo_taxon, set_photo_mapping,
+};
+pub use name_match::{
+    PhotoNameField, PhotoNameMatchSettings, get_photo_name_match_settings,
+    set_photo_name_match_settings,
+};
+pub use navigation::{list_taxon_photos, search_photo_taxa, suggest_photo_taxa};
+pub use status::{list_photos_by_mapping_status, search_photos_by_mapping_status};
+pub use tree::{browse_photo_taxon, get_photo_taxon_node};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -23,7 +38,6 @@ pub enum PhotoTaxonStatus {
     Unmatched,
     Ambiguous,
     Processing,
-    Stale,
 }
 
 impl PhotoTaxonStatus {
@@ -33,7 +47,6 @@ impl PhotoTaxonStatus {
             Self::Unmatched => "unmatched",
             Self::Ambiguous => "ambiguous",
             Self::Processing => "processing",
-            Self::Stale => "stale",
         }
     }
 
@@ -43,7 +56,6 @@ impl PhotoTaxonStatus {
             "unmatched" => Ok(Self::Unmatched),
             "ambiguous" => Ok(Self::Ambiguous),
             "processing" => Ok(Self::Processing),
-            "stale" => Ok(Self::Stale),
             _ => Err(CoreError::InvalidArgument(format!(
                 "invalid photo taxon status: {value}"
             ))),
@@ -61,9 +73,8 @@ pub struct PhotoTaxonMapping {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PhotoMatchedName {
     pub name_id: i64,
-    pub name_kind: TaxonomyNameKind,
+    pub name_type: TaxonomyNameType,
     pub name: String,
-    pub is_accepted: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -108,8 +119,6 @@ pub enum PhotoMappingListStatus {
     Unmatched,
     Ambiguous,
     Processing,
-    Stale,
-    Unmapped,
 }
 
 impl PhotoMappingListStatus {
@@ -119,8 +128,6 @@ impl PhotoMappingListStatus {
             Self::Unmatched => "unmatched",
             Self::Ambiguous => "ambiguous",
             Self::Processing => "processing",
-            Self::Stale => "stale",
-            Self::Unmapped => "unmapped",
         }
     }
 }
@@ -128,7 +135,7 @@ impl PhotoMappingListStatus {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PhotoMappingListItem {
     pub photo: Photo,
-    pub mapping: Option<PhotoTaxonMapping>,
+    pub mapping: PhotoTaxonMapping,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -142,491 +149,6 @@ const PHOTO_TAXON_CANDIDATE_LIMIT: usize = 500;
 const PHOTO_MAPPING_BATCH_SIZE: usize = 200;
 
 pub type MappingProgressCallback<'a> = dyn FnMut(u64, Option<u64>, &str) + Send + 'a;
-
-pub fn get_metadata(database: &Database) -> CoreResult<MappingMetadata> {
-    let connection = database.connect()?;
-    let count = |status: &str| -> CoreResult<i64> {
-        Ok(connection.query_row(
-            "SELECT COUNT(*) FROM photo_taxon_mapping WHERE status = ?",
-            [status],
-            |row| row.get(0),
-        )?)
-    };
-    let mapping_taxa_count = connection.query_row(
-        "SELECT COUNT(*) FROM photo_taxon_usage WHERE subtree_photo_count > 0",
-        [],
-        |row| row.get(0),
-    )?;
-    let processing_photo_count =
-        connection.query_row("SELECT COUNT(*) FROM photo_mapping_queue", [], |row| {
-            row.get(0)
-        })?;
-    Ok(MappingMetadata {
-        mapped_photo_count: count("matched")?,
-        unmatched_photo_count: count("unmatched")?,
-        ambiguous_photo_count: count("ambiguous")?,
-        processing_photo_count,
-        mapping_taxa_count,
-    })
-}
-
-pub fn get_photo_mapping(
-    database: &Database,
-    photo_id: i64,
-) -> CoreResult<Option<PhotoTaxonMapping>> {
-    let connection = database.connect()?;
-    let stored = connection
-        .query_row(
-            "SELECT photo_id, taxon_id, status FROM photo_taxon_mapping WHERE photo_id = ?",
-            [photo_id],
-            mapping_from_row,
-        )
-        .optional()?;
-    if stored.is_none()
-        && !connection.query_row(
-            "SELECT EXISTS(SELECT 1 FROM photos WHERE photo_id = ?)",
-            [photo_id],
-            |row| row.get::<_, bool>(0),
-        )?
-    {
-        return Ok(None);
-    }
-    let processing = connection.query_row(
-        "SELECT EXISTS(SELECT 1 FROM photo_mapping_queue WHERE photo_id = ?)",
-        [photo_id],
-        |row| row.get::<_, bool>(0),
-    )?;
-    if processing {
-        Ok(Some(PhotoTaxonMapping {
-            photo_id,
-            taxon_id: stored.and_then(|mapping| mapping.taxon_id),
-            status: PhotoTaxonStatus::Processing,
-        }))
-    } else {
-        Ok(stored)
-    }
-}
-
-pub fn get_photo_taxon_match(database: &Database, photo_id: i64) -> CoreResult<PhotoTaxonMatch> {
-    let photo = photos::get_photo(database, photo_id)?
-        .ok_or_else(|| CoreError::NotFound(format!("photo {photo_id}")))?;
-    let connection = database.connect()?;
-    let results = search_photo_taxa(&connection, &photo.filename)?;
-    let mapping = get_photo_mapping(database, photo_id)?.unwrap_or(PhotoTaxonMapping {
-        photo_id,
-        taxon_id: None,
-        status: unresolved_status(&results),
-    });
-    let candidates = results.into_iter().map(photo_candidate).collect();
-    Ok(PhotoTaxonMatch {
-        mapping,
-        candidates,
-    })
-}
-
-pub fn select_photo_taxon(
-    database: &Database,
-    photo_id: i64,
-    taxon_id: i64,
-) -> CoreResult<PhotoTaxonMapping> {
-    let photo = photos::get_photo(database, photo_id)?
-        .ok_or_else(|| CoreError::NotFound(format!("photo {photo_id}")))?;
-    let mut connection = database.connect()?;
-    let transaction = connection.transaction()?;
-    let results = search_photo_taxa(&transaction, &photo.filename)?;
-    if !results
-        .iter()
-        .any(|result| result.summary.taxon_id == taxon_id)
-    {
-        return Err(CoreError::InvalidArgument(format!(
-            "taxon {taxon_id} is not a filename candidate for photo {photo_id}"
-        )));
-    }
-    let old_taxon_id = transaction
-        .query_row(
-            r#"
-            SELECT taxon_id FROM photo_taxon_mapping
-            WHERE photo_id = ? AND status = 'matched'
-            "#,
-            [photo_id],
-            |row| row.get::<_, i64>(0),
-        )
-        .optional()?;
-    transaction.execute(
-        r#"
-        INSERT INTO photo_taxon_mapping (photo_id, taxon_id, status)
-        VALUES (?, ?, 'matched')
-        ON CONFLICT(photo_id) DO UPDATE SET taxon_id = excluded.taxon_id, status = 'matched'
-        "#,
-        params![photo_id, taxon_id],
-    )?;
-    if old_taxon_id != Some(taxon_id) {
-        let mut deltas = BTreeMap::new();
-        if let Some(old_taxon_id) = old_taxon_id {
-            deltas.insert(old_taxon_id, -1);
-        }
-        *deltas.entry(taxon_id).or_default() += 1;
-        apply_usage_deltas(&transaction, &deltas)?;
-    }
-    delete_queued_photo_ids(&transaction, &[photo_id])?;
-    transaction.commit()?;
-    Ok(PhotoTaxonMapping {
-        photo_id,
-        taxon_id: Some(taxon_id),
-        status: PhotoTaxonStatus::Matched,
-    })
-}
-
-pub fn get_photo_taxon_node(
-    database: &Database,
-    taxon_id: Option<i64>,
-    show_empty: bool,
-) -> CoreResult<PhotoTaxonNode> {
-    let connection = database.connect()?;
-    let taxon = match taxon_id {
-        Some(taxon_id) => load_usage_taxon(&connection, taxon_id, show_empty)?
-            .ok_or_else(|| CoreError::NotFound(format!("photo taxon node {taxon_id}")))?,
-        None => {
-            let subtree_photo_count = connection.query_row(
-                "SELECT COUNT(*) FROM photo_taxon_mapping WHERE status = 'matched'",
-                [],
-                |row| row.get(0),
-            )?;
-            return Ok(PhotoTaxonNode {
-                taxon: None,
-                subtree_photo_count,
-            });
-        }
-    };
-    let subtree_photo_count = taxon.subtree_photo_count;
-    Ok(PhotoTaxonNode {
-        taxon: Some(taxon),
-        subtree_photo_count,
-    })
-}
-
-pub fn browse_photo_taxon(
-    database: &Database,
-    taxon_id: Option<i64>,
-    show_empty: bool,
-    include_descendants: bool,
-    cursor: Option<&str>,
-    limit: usize,
-) -> CoreResult<PhotoPage<PhotoTaxonItem>> {
-    let connection = database.connect()?;
-    if let Some(taxon_id) = taxon_id {
-        load_usage_taxon(&connection, taxon_id, show_empty)?
-            .ok_or_else(|| CoreError::NotFound(format!("photo taxon node {taxon_id}")))?;
-    }
-    let (section, after_rank, after_item_id) = match decode_photo_cursor(cursor)? {
-        None => (PhotoPageSection::Containers, 0, 0),
-        Some(PhotoCursor::TaxonEntries {
-            taxon_id: cursor_taxon_id,
-            show_empty: cursor_show_empty,
-            include_descendants: cursor_include_descendants,
-            section,
-            rank,
-            item_id,
-        }) if cursor_taxon_id == taxon_id
-            && cursor_show_empty == show_empty
-            && cursor_include_descendants == include_descendants =>
-        {
-            (section, rank, item_id)
-        }
-        Some(_) => return Err(invalid_photo_cursor()),
-    };
-    let limit = photo_page_limit(limit);
-    let mut remaining = limit;
-    let mut taxa = Vec::new();
-    let mut has_more = false;
-    if section == PhotoPageSection::Containers {
-        taxa = load_usage_children_page(
-            &connection,
-            taxon_id,
-            show_empty,
-            after_rank,
-            after_item_id,
-            remaining + 1,
-        )?;
-        if taxa.len() > remaining {
-            taxa.pop();
-            let next_cursor = taxa
-                .last()
-                .map(|taxon| {
-                    encode_photo_cursor(&PhotoCursor::TaxonEntries {
-                        taxon_id,
-                        show_empty,
-                        include_descendants,
-                        section: PhotoPageSection::Containers,
-                        rank: taxon.rank.code(),
-                        item_id: taxon.taxon_id,
-                    })
-                })
-                .transpose()?;
-            return Ok(PhotoPage {
-                items: taxa
-                    .into_iter()
-                    .map(|taxon| PhotoTaxonItem::Taxon { taxon })
-                    .collect(),
-                next_cursor,
-            });
-        }
-        remaining -= taxa.len();
-    }
-    let after_photo_id = if section == PhotoPageSection::Photos {
-        after_item_id
-    } else {
-        0
-    };
-    let mut photos = load_photos_for_taxon(
-        &connection,
-        taxon_id,
-        include_descendants,
-        after_photo_id,
-        remaining + 1,
-    )?;
-    if photos.len() > remaining {
-        photos.pop();
-        has_more = true;
-    }
-    let next_cursor = if has_more {
-        if let Some(photo) = photos.last() {
-            Some(encode_photo_cursor(&PhotoCursor::TaxonEntries {
-                taxon_id,
-                show_empty,
-                include_descendants,
-                section: PhotoPageSection::Photos,
-                rank: 0,
-                item_id: photo.photo_id,
-            })?)
-        } else {
-            taxa.last()
-                .map(|taxon| {
-                    encode_photo_cursor(&PhotoCursor::TaxonEntries {
-                        taxon_id,
-                        show_empty,
-                        include_descendants,
-                        section: PhotoPageSection::Containers,
-                        rank: taxon.rank.code(),
-                        item_id: taxon.taxon_id,
-                    })
-                })
-                .transpose()?
-        }
-    } else {
-        None
-    };
-    let mut items = taxa
-        .into_iter()
-        .map(|taxon| PhotoTaxonItem::Taxon { taxon })
-        .collect::<Vec<_>>();
-    items.extend(
-        photos
-            .into_iter()
-            .map(|photo| PhotoTaxonItem::Photo { photo }),
-    );
-    Ok(PhotoPage { items, next_cursor })
-}
-
-pub fn list_photos_by_mapping_status(
-    database: &Database,
-    status: PhotoMappingListStatus,
-    cursor: Option<&str>,
-    limit: usize,
-) -> CoreResult<PhotoPage<PhotoMappingListItem>> {
-    let connection = database.connect()?;
-    let after_photo_id = match decode_photo_cursor(cursor)? {
-        None => 0,
-        Some(PhotoCursor::MappingStatus {
-            status: cursor_status,
-            photo_id,
-        }) if cursor_status == status.as_str() => photo_id,
-        Some(_) => return Err(invalid_photo_cursor()),
-    };
-    let limit = photo_page_limit(limit);
-    let fetch_limit = limit + 1;
-    let (joins, filter, values) = match status {
-        PhotoMappingListStatus::Processing => (
-            r#"
-            JOIN photo_mapping_queue ON photo_mapping_queue.photo_id = photos.photo_id
-            LEFT JOIN photo_taxon_mapping ON photo_taxon_mapping.photo_id = photos.photo_id
-            "#,
-            "photos.photo_id > ?",
-            vec![
-                SqlValue::Integer(after_photo_id),
-                SqlValue::Integer(fetch_limit as i64),
-            ],
-        ),
-        PhotoMappingListStatus::Unmapped => (
-            r#"
-            LEFT JOIN photo_mapping_queue ON photo_mapping_queue.photo_id = photos.photo_id
-            LEFT JOIN photo_taxon_mapping ON photo_taxon_mapping.photo_id = photos.photo_id
-            "#,
-            r#"
-            photo_mapping_queue.photo_id IS NULL
-            AND photo_taxon_mapping.photo_id IS NULL
-            AND photos.photo_id > ?
-            "#,
-            vec![
-                SqlValue::Integer(after_photo_id),
-                SqlValue::Integer(fetch_limit as i64),
-            ],
-        ),
-        status => (
-            r#"
-            LEFT JOIN photo_mapping_queue ON photo_mapping_queue.photo_id = photos.photo_id
-            JOIN photo_taxon_mapping ON photo_taxon_mapping.photo_id = photos.photo_id
-            "#,
-            r#"
-            photo_mapping_queue.photo_id IS NULL
-            AND photo_taxon_mapping.status = ?
-            AND photos.photo_id > ?
-            "#,
-            vec![
-                SqlValue::Text(status.as_str().into()),
-                SqlValue::Integer(after_photo_id),
-                SqlValue::Integer(fetch_limit as i64),
-            ],
-        ),
-    };
-    let sql = photo_mapping_query(joins, filter);
-    let mut statement = connection.prepare(&sql)?;
-    let rows = statement.query_map(params_from_iter(values), |row| {
-        let photo = crate::db::photo_from_row(row)?;
-        let mapping = match status {
-            PhotoMappingListStatus::Unmapped => None,
-            PhotoMappingListStatus::Processing => Some(PhotoTaxonMapping {
-                photo_id: photo.photo_id,
-                taxon_id: row.get("mapping_taxon_id")?,
-                status: PhotoTaxonStatus::Processing,
-            }),
-            _ => {
-                let stored_status = row.get::<_, String>("mapping_status")?;
-                let stored_status =
-                    PhotoTaxonStatus::from_str(&stored_status).map_err(|error| {
-                        rusqlite::Error::FromSqlConversionFailure(
-                            0,
-                            rusqlite::types::Type::Text,
-                            Box::new(error),
-                        )
-                    })?;
-                Some(PhotoTaxonMapping {
-                    photo_id: photo.photo_id,
-                    taxon_id: row.get("mapping_taxon_id")?,
-                    status: stored_status,
-                })
-            }
-        };
-        Ok(PhotoMappingListItem { photo, mapping })
-    })?;
-    let mut items = rows.collect::<Result<Vec<_>, _>>()?;
-    let next_cursor = if items.len() > limit {
-        items.pop();
-        items
-            .last()
-            .map(|item| {
-                encode_photo_cursor(&PhotoCursor::MappingStatus {
-                    status: status.as_str().into(),
-                    photo_id: item.photo.photo_id,
-                })
-            })
-            .transpose()?
-    } else {
-        None
-    };
-    Ok(PhotoPage { items, next_cursor })
-}
-
-fn load_photos_for_taxon(
-    connection: &rusqlite::Connection,
-    taxon_id: Option<i64>,
-    include_descendants: bool,
-    after_photo_id: i64,
-    limit: usize,
-) -> CoreResult<Vec<Photo>> {
-    let suffix = match (taxon_id, include_descendants) {
-        (Some(_), true) => {
-            r#"
-            JOIN photo_taxon_mapping ON photo_taxon_mapping.photo_id = photos.photo_id
-            JOIN (
-                WITH RECURSIVE descendants(taxon_id) AS (
-                    SELECT taxon_id FROM taxa WHERE taxon_id = ?1
-                    UNION ALL
-                    SELECT child.taxon_id
-                    FROM taxa AS child
-                    JOIN descendants ON child.parent_taxon_id = descendants.taxon_id
-                )
-                SELECT taxon_id FROM descendants
-            ) AS selected_taxa ON selected_taxa.taxon_id = photo_taxon_mapping.taxon_id
-            WHERE photo_taxon_mapping.status = 'matched' AND photos.photo_id > ?2
-            ORDER BY photos.photo_id LIMIT ?3
-        "#
-        }
-        (Some(_), false) => {
-            r#"
-            JOIN photo_taxon_mapping ON photo_taxon_mapping.photo_id = photos.photo_id
-            WHERE photo_taxon_mapping.status = 'matched'
-              AND photo_taxon_mapping.taxon_id = ?1 AND photos.photo_id > ?2
-            ORDER BY photos.photo_id LIMIT ?3
-        "#
-        }
-        (None, _) => {
-            r#"
-            JOIN photo_taxon_mapping ON photo_taxon_mapping.photo_id = photos.photo_id
-            WHERE photo_taxon_mapping.status = 'matched' AND photos.photo_id > ?2
-            ORDER BY photos.photo_id LIMIT ?3
-        "#
-        }
-    };
-    let sql = photo_query(suffix);
-    let mut statement = connection.prepare(&sql)?;
-    let rows = match taxon_id {
-        Some(taxon_id) => statement.query_map(
-            params![taxon_id, after_photo_id, limit as i64],
-            crate::db::photo_from_row,
-        )?,
-        None => statement.query_map(
-            params![SqlValue::Null, after_photo_id, limit as i64],
-            crate::db::photo_from_row,
-        )?,
-    };
-    Ok(rows.collect::<Result<Vec<_>, _>>()?)
-}
-
-pub fn suggest(
-    database: &Database,
-    query: &str,
-    mode: &str,
-    limit: usize,
-) -> CoreResult<Vec<TaxonSearchResult>> {
-    let results = search_taxa(database, query, limit)?;
-    Ok(results
-        .into_iter()
-        .filter(|result| {
-            mode != "binomial"
-                || result
-                    .matches
-                    .iter()
-                    .any(|value| value.name_kind == TaxonomyNameKind::Scientific)
-        })
-        .collect())
-}
-
-pub fn rebuild_mapping(database: &Database) -> CoreResult<MappingSyncResult> {
-    let photos = photos::list_photos(database)?;
-    let ids = photos
-        .iter()
-        .map(|photo| photo.photo_id)
-        .collect::<Vec<_>>();
-    let mut connection = database.connect()?;
-    let transaction = connection.transaction()?;
-    transaction.execute("DELETE FROM photo_taxon_usage", [])?;
-    transaction.execute("DELETE FROM photo_taxon_mapping", [])?;
-    transaction.execute("DELETE FROM photo_mapping_queue", [])?;
-    remap_photo_ids(&transaction, &ids)?;
-    transaction.commit()?;
-    mapping_result(database, photos)
-}
 
 pub(crate) fn refresh_after_taxonomy_changes(
     database: &Database,
@@ -649,8 +171,15 @@ pub(crate) fn refresh_after_taxonomy_changes(
         )?;
         let mut statement = transaction.prepare(&format!(
             r#"
-            SELECT photo_id
-            FROM photo_taxon_mapping
+            SELECT DISTINCT photo_id
+            FROM (
+                SELECT photo_id, taxon_id
+                FROM photo_taxon_mapping
+                WHERE taxon_id IS NOT NULL
+                UNION ALL
+                SELECT photo_id, taxon_id
+                FROM photo_taxon_candidates
+            ) AS affected_mappings
             WHERE {}
             "#,
             selection.predicate
@@ -694,6 +223,8 @@ pub fn process_pending_photo_matches(
     progress: &mut MappingProgressCallback<'_>,
 ) -> CoreResult<PhotoMappingRunResult> {
     let connection = database.connect()?;
+    let filename_parser = PhotoFilenameParser::load(&connection)?;
+    let match_settings = name_match::load(&connection)?;
     let total = connection.query_row("SELECT COUNT(*) FROM photo_mapping_queue", [], |row| {
         row.get::<_, i64>(0)
     })?;
@@ -723,7 +254,8 @@ pub fn process_pending_photo_matches(
         if photo_ids.is_empty() {
             break;
         }
-        changed += remap_photo_ids(&transaction, &photo_ids)?;
+        changed +=
+            remap_photo_ids_with(&transaction, &photo_ids, &filename_parser, &match_settings)?;
         delete_queued_photo_ids(&transaction, &photo_ids)?;
         transaction.commit()?;
         processed += photo_ids.len();
@@ -747,12 +279,27 @@ pub(crate) fn remap_photo_ids(
     if photo_ids.is_empty() {
         return Ok(0);
     }
+    let filename_parser = PhotoFilenameParser::load(transaction)?;
+    let match_settings = name_match::load(transaction)?;
+    remap_photo_ids_with(transaction, photo_ids, &filename_parser, &match_settings)
+}
+
+fn remap_photo_ids_with(
+    transaction: &Transaction<'_>,
+    photo_ids: &[i64],
+    filename_parser: &PhotoFilenameParser,
+    match_settings: &PhotoNameMatchSettings,
+) -> CoreResult<usize> {
+    if photo_ids.is_empty() {
+        return Ok(0);
+    }
     let photos = load_photo_names(transaction, photo_ids)?;
     let old_mappings = load_mappings(transaction, photo_ids)?;
     let mut direct_deltas = BTreeMap::<i64, i64>::new();
     let mut changed = 0usize;
     for (photo_id, filename) in photos {
-        let results = search_photo_taxa(transaction, &filename)?;
+        let results =
+            match_photo_taxa_with(transaction, filename_parser, match_settings, &filename)?;
         let old_mapping = old_mappings.get(&photo_id).copied();
         let old_taxon_id = old_mapping.and_then(|(taxon_id, status)| {
             (status == PhotoTaxonStatus::Matched)
@@ -766,7 +313,7 @@ pub(crate) fn remap_photo_ids(
         }) {
             (old_taxon_id, PhotoTaxonStatus::Matched)
         } else {
-            (None, unresolved_status(&results))
+            (resolved_taxon_id(&results), resolved_status(&results))
         };
         if old_taxon_id != new_taxon_id {
             if let Some(taxon_id) = old_taxon_id {
@@ -788,6 +335,11 @@ pub(crate) fn remap_photo_ids(
                 params![photo_id, new_taxon_id, new_status.as_str()],
             )?;
             changed += 1;
+        }
+        if new_status == PhotoTaxonStatus::Ambiguous {
+            candidates::replace(transaction, photo_id, &results)?;
+        } else {
+            candidates::clear(transaction, photo_id)?;
         }
     }
     apply_usage_deltas(transaction, &direct_deltas)?;
@@ -853,207 +405,118 @@ pub(crate) fn remove_directory_mappings(
     remove_photo_mappings(transaction, &photo_ids)
 }
 
-fn mapping_result(database: &Database, photos: Vec<Photo>) -> CoreResult<MappingSyncResult> {
-    let connection = database.connect()?;
-    let mapped = connection.query_row(
-        "SELECT COUNT(*) FROM photo_taxon_mapping WHERE status = 'matched'",
-        [],
-        |row| row.get::<_, i64>(0),
-    )? as usize;
-    let ambiguous = connection.query_row(
-        "SELECT COUNT(*) FROM photo_taxon_mapping WHERE status = 'ambiguous'",
-        [],
-        |row| row.get::<_, i64>(0),
-    )? as usize;
-    let unmapped_ids = {
-        let mut statement = connection.prepare(
-            "SELECT photo_id FROM photo_taxon_mapping WHERE status = 'unmatched' ORDER BY photo_id",
-        )?;
-        let rows = statement.query_map([], |row| row.get::<_, i64>(0))?;
-        rows.collect::<Result<BTreeSet<_>, _>>()?
-    };
-    let unmapped_photos = photos
-        .iter()
-        .filter(|photo| unmapped_ids.contains(&photo.photo_id))
-        .cloned()
-        .collect::<Vec<_>>();
-    Ok(MappingSyncResult {
-        processed: photos.len(),
-        mapped,
-        unmapped: unmapped_photos.len(),
-        ambiguous,
-        unmapped_photos,
-        orphan_mappings_deleted: 0,
-    })
-}
-
-fn load_usage_taxon(
+fn match_photo_taxa_with(
     connection: &rusqlite::Connection,
-    taxon_id: i64,
-    show_empty: bool,
-) -> CoreResult<Option<PhotoTaxonUsage>> {
-    connection
-        .query_row(
-            &format!(
-                "{} WHERE taxa.taxon_id = ? AND (? OR COALESCE(photo_taxon_usage.subtree_photo_count, 0) > 0)",
-                usage_taxon_select()
-            ),
-            params![taxon_id, show_empty],
-            usage_taxon_from_row,
-        )
-        .optional()
-        .map_err(Into::into)
-}
-
-fn load_usage_children_page(
-    connection: &rusqlite::Connection,
-    parent_taxon_id: Option<i64>,
-    show_empty: bool,
-    after_rank: i64,
-    after_taxon_id: i64,
-    limit: usize,
-) -> CoreResult<Vec<PhotoTaxonUsage>> {
-    let sql = format!(
-        r#"
-        {}
-        WHERE ((?1 IS NULL AND taxa.parent_taxon_id IS NULL)
-               OR taxa.parent_taxon_id = ?1)
-          AND (?2 OR COALESCE(photo_taxon_usage.subtree_photo_count, 0) > 0)
-          AND (?3 = 0 OR (taxa.rank, taxa.taxon_id) > (?4, ?5))
-        ORDER BY taxa.rank, taxa.taxon_id
-        LIMIT ?6
-        "#,
-        usage_taxon_select()
-    );
-    let has_cursor = after_rank != 0 || after_taxon_id != 0;
-    let mut statement = connection.prepare(&sql)?;
-    let rows = statement.query_map(
-        params![
-            parent_taxon_id,
-            show_empty,
-            has_cursor,
-            after_rank,
-            after_taxon_id,
-            limit as i64
-        ],
-        usage_taxon_from_row,
-    )?;
-    Ok(rows.collect::<Result<Vec<_>, _>>()?)
-}
-
-fn usage_taxon_select() -> &'static str {
-    r#"
-    SELECT taxa.taxon_id, taxa.rank,
-           (SELECT name FROM taxon_names
-            WHERE taxon_names.taxon_id = taxa.taxon_id
-              AND name_kind = 1 AND is_accepted = 1) AS scientific_name,
-           (SELECT name FROM taxon_names
-            WHERE taxon_names.taxon_id = taxa.taxon_id
-              AND name_kind = 2 AND is_accepted = 1) AS english_name,
-           (SELECT name FROM taxon_names
-            WHERE taxon_names.taxon_id = taxa.taxon_id
-              AND name_kind = 3 AND is_accepted = 1) AS chinese_name,
-           COALESCE(photo_taxon_usage.direct_photo_count, 0) AS direct_photo_count,
-           COALESCE(photo_taxon_usage.subtree_photo_count, 0) AS subtree_photo_count
-    FROM taxa
-    LEFT JOIN photo_taxon_usage USING (taxon_id)
-    "#
-}
-
-fn usage_taxon_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PhotoTaxonUsage> {
-    let rank = row.get::<_, i64>(1)?;
-    Ok(PhotoTaxonUsage {
-        taxon_id: row.get(0)?,
-        rank: TaxonRank::from_code(rank).map_err(|error| {
-            rusqlite::Error::FromSqlConversionFailure(
-                1,
-                rusqlite::types::Type::Integer,
-                Box::new(error),
-            )
-        })?,
-        names: TaxonDisplayNames {
-            scientific: row.get(2)?,
-            english: row.get(3)?,
-            chinese: row.get(4)?,
-        },
-        direct_photo_count: row.get(5)?,
-        subtree_photo_count: row.get(6)?,
-    })
-}
-
-fn photo_query(suffix: &str) -> String {
-    format!(
-        r#"
-        SELECT photos.photo_id, photos.directory_id,
-               CASE WHEN photo_directories.relative_path = '' THEN photos.filename
-                    ELSE photo_directories.relative_path || '/' || photos.filename END AS relative_path,
-               photos.filename, photos.file_size, photos.modified_at_ns, photos.thumbnail_path
-        FROM photos
-        JOIN photo_directories ON photo_directories.directory_id = photos.directory_id
-        {suffix}
-        "#
-    )
-}
-
-fn photo_mapping_query(joins: &str, filter: &str) -> String {
-    format!(
-        r#"
-        SELECT photos.photo_id, photos.directory_id,
-               CASE WHEN photo_directories.relative_path = '' THEN photos.filename
-                    ELSE photo_directories.relative_path || '/' || photos.filename END AS relative_path,
-               photos.filename, photos.file_size, photos.modified_at_ns, photos.thumbnail_path,
-               photo_taxon_mapping.taxon_id AS mapping_taxon_id,
-               photo_taxon_mapping.status AS mapping_status
-        FROM photos
-        JOIN photo_directories ON photo_directories.directory_id = photos.directory_id
-        {joins}
-        WHERE {filter}
-        ORDER BY photos.photo_id
-        LIMIT ?
-        "#
-    )
-}
-
-fn photo_match_query(filename: &str) -> &str {
-    std::path::Path::new(filename)
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .unwrap_or(filename)
-}
-
-fn search_photo_taxa(
-    connection: &rusqlite::Connection,
+    filename_parser: &PhotoFilenameParser,
+    settings: &PhotoNameMatchSettings,
     filename: &str,
-) -> CoreResult<Vec<TaxonSearchResult>> {
-    search_taxa_with_connection(
-        connection,
-        photo_match_query(filename),
-        PHOTO_TAXON_CANDIDATE_LIMIT,
-    )
+) -> CoreResult<Vec<PhotoTaxonCandidate>> {
+    let parsed = filename_parser.parse(filename)?;
+    for field in &settings.priority {
+        let Some(name) = field.value(&parsed.info) else {
+            continue;
+        };
+        let candidates = find_photo_name_candidates(connection, *field, name)?;
+        if !candidates.is_empty() {
+            return Ok(candidates);
+        }
+    }
+    Ok(Vec::new())
 }
 
-fn unresolved_status(results: &[TaxonSearchResult]) -> PhotoTaxonStatus {
-    if results.is_empty() {
-        PhotoTaxonStatus::Unmatched
-    } else {
-        PhotoTaxonStatus::Ambiguous
+fn find_photo_name_candidates(
+    connection: &rusqlite::Connection,
+    field: PhotoNameField,
+    name: &str,
+) -> CoreResult<Vec<PhotoTaxonCandidate>> {
+    let [first_name_type, second_name_type] = field.name_types();
+    let mut statement = connection.prepare(
+        r#"
+        WITH candidate_taxa AS (
+            SELECT DISTINCT taxa.taxon_id
+            FROM taxa
+            JOIN taxon_names USING (taxon_id)
+            WHERE taxa.rank = ?
+              AND taxon_names.name_type IN (?, ?)
+              AND taxon_names.normalized_name = lower(?)
+            ORDER BY taxa.taxon_id
+            LIMIT ?
+        )
+        SELECT candidate_taxa.taxon_id, taxon_names.name_id,
+               taxon_names.name_type, taxon_names.name
+        FROM candidate_taxa
+        JOIN taxon_names USING (taxon_id)
+        WHERE taxon_names.name_type IN (?, ?)
+          AND taxon_names.normalized_name = lower(?)
+        ORDER BY candidate_taxa.taxon_id, taxon_names.name_type,
+                 taxon_names.name_id
+        "#,
+    )?;
+    let rows = statement
+        .query_map(
+            params![
+                field.rank().code(),
+                first_name_type.code(),
+                second_name_type.code(),
+                name,
+                PHOTO_TAXON_CANDIDATE_LIMIT as i64,
+                first_name_type.code(),
+                second_name_type.code(),
+                name
+            ],
+            |row| {
+                let name_type_code = row.get::<_, i64>(2)?;
+                let name_type = TaxonomyNameType::from_code(name_type_code).map_err(|error| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        2,
+                        rusqlite::types::Type::Integer,
+                        Box::new(error),
+                    )
+                })?;
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    PhotoMatchedName {
+                        name_id: row.get(1)?,
+                        name_type,
+                        name: row.get(3)?,
+                    },
+                ))
+            },
+        )?
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut matched_names_by_taxon = BTreeMap::<i64, Vec<PhotoMatchedName>>::new();
+    for (taxon_id, matched_name) in rows {
+        matched_names_by_taxon
+            .entry(taxon_id)
+            .or_default()
+            .push(matched_name);
+    }
+    let taxon_ids = matched_names_by_taxon.keys().copied().collect::<Vec<_>>();
+    let summaries = load_taxon_summaries(connection, &taxon_ids)?;
+    Ok(summaries
+        .into_iter()
+        .map(|summary| PhotoTaxonCandidate {
+            accepted_names: summary.names.clone(),
+            matched_names: matched_names_by_taxon
+                .remove(&summary.taxon_id)
+                .unwrap_or_default(),
+            summary,
+        })
+        .collect())
+}
+
+fn resolved_taxon_id(results: &[PhotoTaxonCandidate]) -> Option<i64> {
+    match results {
+        [candidate] => Some(candidate.summary.taxon_id),
+        _ => None,
     }
 }
 
-fn photo_candidate(result: TaxonSearchResult) -> PhotoTaxonCandidate {
-    PhotoTaxonCandidate {
-        accepted_names: result.summary.names.clone(),
-        summary: result.summary,
-        matched_names: result
-            .matches
-            .into_iter()
-            .map(|name| PhotoMatchedName {
-                name_id: name.name_id,
-                name_kind: name.name_kind,
-                name: name.name,
-                is_accepted: name.is_accepted,
-            })
-            .collect(),
+fn resolved_status(results: &[PhotoTaxonCandidate]) -> PhotoTaxonStatus {
+    match results.len() {
+        0 => PhotoTaxonStatus::Unmatched,
+        1 => PhotoTaxonStatus::Matched,
+        _ => PhotoTaxonStatus::Ambiguous,
     }
 }
 
@@ -1279,10 +742,10 @@ fn delete_queued_photo_ids(transaction: &Transaction<'_>, photo_ids: &[i64]) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::photos::{open_library, refresh_directory};
+    use crate::naming::{NamingHookKind, set_naming_hook, take_hook_compile_count};
+    use crate::photos::{self, open_library, refresh_directory};
     use crate::taxonomy::{
-        TaxonInputRow, TaxonNameInput, TaxonUpdateInput, TaxonUpdateOptions, apply_rows,
-        execute_custom_taxonomy_sql, update_taxon,
+        TaxonInputRow, TaxonUpdateInput, apply_rows, execute_custom_taxonomy_sql, update_taxon,
     };
     use std::fs;
 
@@ -1302,6 +765,136 @@ mod tests {
             )
             .unwrap();
         connection.last_insert_rowid()
+    }
+
+    #[test]
+    fn one_mapping_run_compiles_the_hook_once_across_batches() {
+        let data = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let database = Database::open(data.path().join("vividarium.db")).unwrap();
+        let library = open_library(&database, root.path().to_str().unwrap()).unwrap();
+        let connection = database.connect().unwrap();
+        for index in 0..PHOTO_MAPPING_BATCH_SIZE + 1 {
+            let photo_id = insert_test_photo(
+                &connection,
+                library.root_directory_id,
+                &format!("Unknown {index}.jpg"),
+            );
+            connection
+                .execute(
+                    "INSERT INTO photo_mapping_queue (photo_id, reason) VALUES (?, 'refresh')",
+                    [photo_id],
+                )
+                .unwrap();
+        }
+        drop(connection);
+
+        take_hook_compile_count();
+        let mut progress = |_: u64, _: Option<u64>, _: &str| {};
+        let result = process_pending_photo_matches(&database, &mut progress).unwrap();
+
+        assert_eq!(result.processed, PHOTO_MAPPING_BATCH_SIZE + 1);
+        assert_eq!(take_hook_compile_count(), 1);
+    }
+
+    #[test]
+    fn six_dimension_priority_controls_photo_mapping() {
+        let data = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("input.jpg"), b"photo").unwrap();
+        let database = Database::open(data.path().join("vividarium.db")).unwrap();
+        apply_rows(
+            &database,
+            &[
+                TaxonInputRow {
+                    kingdom: Some("Animalia".into()),
+                    ..Default::default()
+                },
+                TaxonInputRow {
+                    kingdom: Some("Animalia".into()),
+                    order: Some("Carnivora".into()),
+                    ..Default::default()
+                },
+                TaxonInputRow {
+                    kingdom: Some("Animalia".into()),
+                    order: Some("Carnivora".into()),
+                    family: Some("Canidae".into()),
+                    ..Default::default()
+                },
+                TaxonInputRow {
+                    kingdom: Some("Animalia".into()),
+                    order: Some("Carnivora".into()),
+                    family: Some("Canidae".into()),
+                    genus: Some("Canis".into()),
+                    ..Default::default()
+                },
+                TaxonInputRow {
+                    kingdom: Some("Animalia".into()),
+                    order: Some("Carnivora".into()),
+                    family: Some("Canidae".into()),
+                    genus: Some("Canis".into()),
+                    species: Some("Canis lupus".into()),
+                    zh_name: Some("wolf".into()),
+                    ..Default::default()
+                },
+            ],
+        )
+        .unwrap();
+        set_naming_hook(
+            &database,
+            NamingHookKind::PhotoFilename,
+            Some(
+                r#"
+                fn parse_photo_filename(filename) {
+                    #{
+                        info: #{
+                            family_sci: "Canidae",
+                            species_zh: "wolf"
+                        },
+                        suffix: ".jpg"
+                    }
+                }
+                "#,
+            ),
+        )
+        .unwrap();
+        let library = open_library(&database, root.path().to_str().unwrap()).unwrap();
+        refresh_directory(&database, library.root_directory_id).unwrap();
+        let photo = photos::list_photos(&database).unwrap().remove(0);
+        let mut progress = |_: u64, _: Option<u64>, _: &str| {};
+        process_pending_photo_matches(&database, &mut progress).unwrap();
+        let species_match = get_photo_taxon_match(&database, photo.photo_id).unwrap();
+        assert_eq!(species_match.mapping.status, PhotoTaxonStatus::Matched);
+        assert!(species_match.candidates.is_empty());
+        let species_summary =
+            crate::taxonomy::get_taxon_summary(&database, species_match.mapping.taxon_id.unwrap())
+                .unwrap()
+                .unwrap();
+        assert_eq!(species_summary.names.zh_name.as_deref(), Some("wolf"));
+
+        set_photo_name_match_settings(
+            &database,
+            &PhotoNameMatchSettings {
+                priority: vec![
+                    PhotoNameField::FamilySci,
+                    PhotoNameField::SpeciesSci,
+                    PhotoNameField::SpeciesZh,
+                    PhotoNameField::GenusSci,
+                    PhotoNameField::GenusZh,
+                    PhotoNameField::FamilyZh,
+                ],
+            },
+        )
+        .unwrap();
+        process_pending_photo_matches(&database, &mut progress).unwrap();
+        let family_match = get_photo_taxon_match(&database, photo.photo_id).unwrap();
+        assert_eq!(family_match.mapping.status, PhotoTaxonStatus::Matched);
+        assert!(family_match.candidates.is_empty());
+        let family_summary =
+            crate::taxonomy::get_taxon_summary(&database, family_match.mapping.taxon_id.unwrap())
+                .unwrap()
+                .unwrap();
+        assert_eq!(family_summary.rank, TaxonRank::Family);
     }
 
     #[test]
@@ -1342,32 +935,25 @@ mod tests {
                 ..Default::default()
             },
         ];
-        apply_rows(
-            &database,
-            &rows,
-            TaxonUpdateOptions {
-                allow_new_names: true,
-                allow_new_taxa: true,
-                ..Default::default()
-            },
-        )
-        .unwrap();
+        apply_rows(&database, &rows).unwrap();
         let library = open_library(&database, root.path().to_str().unwrap()).unwrap();
         refresh_directory(&database, library.root_directory_id).unwrap();
         let mut progress = |_: u64, _: Option<u64>, _: &str| {};
         process_pending_photo_matches(&database, &mut progress).unwrap();
         let photo = photos::list_photos(&database).unwrap().remove(0);
         let matched = get_photo_taxon_match(&database, photo.photo_id).unwrap();
-        assert_eq!(matched.mapping.status, PhotoTaxonStatus::Ambiguous);
-        let species_id = matched
-            .candidates
-            .iter()
-            .find(|candidate| candidate.summary.names.scientific.as_deref() == Some("Canis lupus"))
+        assert_eq!(matched.mapping.status, PhotoTaxonStatus::Matched);
+        assert!(matched.candidates.is_empty());
+        let species_id = matched.mapping.taxon_id.unwrap();
+        let species_summary = crate::taxonomy::get_taxon_summary(&database, species_id)
             .unwrap()
-            .summary
-            .taxon_id;
-        let mapping = select_photo_taxon(&database, photo.photo_id, species_id).unwrap();
-        assert_eq!(mapping.status, PhotoTaxonStatus::Matched);
+            .unwrap();
+        assert_eq!(
+            species_summary.names.sci_name.as_deref(),
+            Some("Canis lupus")
+        );
+        let mapping = matched.mapping;
+        assert_eq!(mapping.taxon_id, Some(species_id));
         let node = get_photo_taxon_node(&database, mapping.taxon_id, false).unwrap();
         assert_eq!(node.taxon.as_ref().unwrap().direct_photo_count, 1);
         assert_eq!(node.subtree_photo_count, 1);
@@ -1394,8 +980,8 @@ mod tests {
         let mapping = get_photo_mapping(&database, mapping.photo_id)
             .unwrap()
             .unwrap();
-        assert_eq!(mapping.status, PhotoTaxonStatus::Unmatched);
-        assert_eq!(mapping.taxon_id, None);
+        assert_eq!(mapping.status, PhotoTaxonStatus::Matched);
+        assert_ne!(mapping.taxon_id, old_taxon_id);
         assert!(get_photo_taxon_node(&database, old_taxon_id, false).is_err());
     }
 
@@ -1406,7 +992,7 @@ mod tests {
         fs::write(root.path().join("Shared name.jpg"), b"photo").unwrap();
         let database = Database::open(data.path().join("vividarium.db")).unwrap();
         let connection = database.connect().unwrap();
-        for _ in 0..2 {
+        for accepted_name in ["Shared name", "Different name"] {
             connection
                 .execute("INSERT INTO taxa (rank) VALUES (5)", [])
                 .unwrap();
@@ -1414,8 +1000,17 @@ mod tests {
             connection
                 .execute(
                     r#"
-                    INSERT INTO taxon_names (taxon_id, name_kind, name, is_accepted)
-                    VALUES (?, 1, 'Shared name', 1)
+                    INSERT INTO taxon_names (taxon_id, name_type, name)
+                    VALUES (?, 1, ?)
+                    "#,
+                    params![taxon_id, accepted_name],
+                )
+                .unwrap();
+            connection
+                .execute(
+                    r#"
+                    INSERT INTO taxon_names (taxon_id, name_type, name)
+                    VALUES (?, 2, 'Shared name')
                     "#,
                     [taxon_id],
                 )
@@ -1436,12 +1031,112 @@ mod tests {
         let matched = get_photo_taxon_match(&database, photo.photo_id).unwrap();
         assert_eq!(matched.mapping.status, PhotoTaxonStatus::Ambiguous);
         assert_eq!(matched.candidates.len(), 2);
+        assert_eq!(matched.candidates[0].matched_names.len(), 2);
+        assert_eq!(matched.candidates[1].matched_names.len(), 1);
+        let connection = database.connect().unwrap();
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT COUNT(*) FROM photo_taxon_candidates WHERE photo_id = ?",
+                    [photo.photo_id],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT COUNT(*) FROM photo_taxon_candidate_names WHERE photo_id = ?",
+                    [photo.photo_id],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            3
+        );
+        drop(connection);
         let selected_taxon_id = matched.candidates[0].summary.taxon_id;
+        refresh_after_taxonomy_changes(&database, [selected_taxon_id]).unwrap();
+        let processing = get_photo_taxon_match(&database, photo.photo_id).unwrap();
+        assert_eq!(processing.mapping.status, PhotoTaxonStatus::Processing);
+        assert!(processing.candidates.is_empty());
+        process_pending_photo_matches(&database, &mut progress).unwrap();
+        let matched = get_photo_taxon_match(&database, photo.photo_id).unwrap();
+        assert_eq!(matched.mapping.status, PhotoTaxonStatus::Ambiguous);
+        assert_eq!(matched.candidates.len(), 2);
         let selected = select_photo_taxon(&database, photo.photo_id, selected_taxon_id).unwrap();
         assert_eq!(selected.status, PhotoTaxonStatus::Matched);
         assert_eq!(selected.taxon_id, Some(selected_taxon_id));
+        assert_eq!(
+            database
+                .connect()
+                .unwrap()
+                .query_row(
+                    "SELECT COUNT(*) FROM photo_taxon_candidates WHERE photo_id = ?",
+                    [photo.photo_id],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            0
+        );
         let error = select_photo_taxon(&database, photo.photo_id, i64::MAX).unwrap_err();
-        assert!(error.to_string().contains("not a filename candidate"));
+        assert!(error.to_string().contains("not a current candidate"));
+    }
+
+    #[test]
+    fn clears_forces_and_automatically_recomputes_one_mapping() {
+        let data = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("Canis lupus.jpg"), b"photo").unwrap();
+        let database = Database::open(data.path().join("vividarium.db")).unwrap();
+        let connection = database.connect().unwrap();
+        connection
+            .execute_batch(
+                r#"
+                INSERT INTO taxa (taxon_id, rank) VALUES (1, 5), (2, 5);
+                INSERT INTO taxon_names (taxon_id, name_type, name) VALUES
+                    (1, 1, 'Canis lupus'),
+                    (2, 1, 'Forced taxon');
+                "#,
+            )
+            .unwrap();
+        drop(connection);
+        let library = open_library(&database, root.path().to_str().unwrap()).unwrap();
+        refresh_directory(&database, library.root_directory_id).unwrap();
+        let photo = photos::list_photos(&database).unwrap().remove(0);
+        let mut progress = |_: u64, _: Option<u64>, _: &str| {};
+        process_pending_photo_matches(&database, &mut progress).unwrap();
+        assert_eq!(
+            get_photo_mapping(&database, photo.photo_id)
+                .unwrap()
+                .unwrap()
+                .taxon_id,
+            Some(1)
+        );
+
+        let forced = set_photo_mapping(&database, photo.photo_id, 2).unwrap();
+        assert_eq!(forced.status, PhotoTaxonStatus::Matched);
+        assert_eq!(forced.taxon_id, Some(2));
+        assert!(get_photo_taxon_node(&database, Some(1), false).is_err());
+        assert_eq!(
+            get_photo_taxon_node(&database, Some(2), false)
+                .unwrap()
+                .subtree_photo_count,
+            1
+        );
+
+        let cleared = clear_photo_mapping(&database, photo.photo_id).unwrap();
+        assert_eq!(cleared.status, PhotoTaxonStatus::Unmatched);
+        assert_eq!(cleared.taxon_id, None);
+        assert!(get_photo_taxon_node(&database, Some(2), false).is_err());
+
+        let remapped = remap_photo(&database, photo.photo_id).unwrap();
+        assert_eq!(remapped.mapping.status, PhotoTaxonStatus::Matched);
+        assert_eq!(remapped.mapping.taxon_id, Some(1));
+        assert!(remapped.candidates.is_empty());
+        assert!(set_photo_mapping(&database, photo.photo_id, i64::MAX).is_err());
+        assert!(clear_photo_mapping(&database, i64::MAX).is_err());
+        assert!(remap_photo(&database, i64::MAX).is_err());
     }
 
     #[test]
@@ -1453,6 +1148,36 @@ mod tests {
     }
 
     #[test]
+    fn rejects_a_photo_without_mapping_state() {
+        let data = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("Canis lupus.jpg"), b"photo").unwrap();
+        let database = Database::open(data.path().join("vividarium.db")).unwrap();
+        let library = open_library(&database, root.path().to_str().unwrap()).unwrap();
+        refresh_directory(&database, library.root_directory_id).unwrap();
+        let photo = photos::list_photos(&database).unwrap().remove(0);
+        database
+            .connect()
+            .unwrap()
+            .execute(
+                "DELETE FROM photo_mapping_queue WHERE photo_id = ?",
+                [photo.photo_id],
+            )
+            .unwrap();
+
+        let mapping_error = get_photo_mapping(&database, photo.photo_id).unwrap_err();
+        assert!(matches!(mapping_error, CoreError::Consistency(_)));
+        assert!(
+            mapping_error
+                .to_string()
+                .contains("neither a mapping nor a mapping queue entry")
+        );
+
+        let match_error = get_photo_taxon_match(&database, photo.photo_id).unwrap_err();
+        assert!(matches!(match_error, CoreError::Consistency(_)));
+    }
+
+    #[test]
     fn queues_a_photo_when_its_selected_taxon_is_deleted() {
         let data = tempfile::tempdir().unwrap();
         let root = tempfile::tempdir().unwrap();
@@ -1460,14 +1185,21 @@ mod tests {
         let database = Database::open(data.path().join("vividarium.db")).unwrap();
         let connection = database.connect().unwrap();
         connection
-            .execute("INSERT INTO taxa (rank) VALUES (5)", [])
+            .execute("INSERT INTO taxa (rank) VALUES (4)", [])
+            .unwrap();
+        let parent_taxon_id = connection.last_insert_rowid();
+        connection
+            .execute(
+                "INSERT INTO taxa (parent_taxon_id, rank) VALUES (?, 5)",
+                [parent_taxon_id],
+            )
             .unwrap();
         let taxon_id = connection.last_insert_rowid();
         connection
             .execute(
                 r#"
-                INSERT INTO taxon_names (taxon_id, name_kind, name, is_accepted)
-                VALUES (?, 1, 'Felis catus', 1)
+                INSERT INTO taxon_names (taxon_id, name_type, name)
+                VALUES (?, 1, 'Felis catus')
                 "#,
                 [taxon_id],
             )
@@ -1478,10 +1210,33 @@ mod tests {
         let photo = photos::list_photos(&database).unwrap().remove(0);
         let mut progress = |_: u64, _: Option<u64>, _: &str| {};
         process_pending_photo_matches(&database, &mut progress).unwrap();
-        select_photo_taxon(&database, photo.photo_id, taxon_id).unwrap();
+        set_photo_mapping(&database, photo.photo_id, taxon_id).unwrap();
+        assert_eq!(
+            get_photo_taxon_node(&database, Some(parent_taxon_id), false)
+                .unwrap()
+                .subtree_photo_count,
+            1
+        );
 
         crate::taxonomy::delete_taxon(&database, taxon_id).unwrap();
 
+        let connection = database.connect().unwrap();
+        let stored_mapping_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM photo_taxon_mapping WHERE photo_id = ?",
+                [photo.photo_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored_mapping_count, 0);
+        drop(connection);
+        assert!(get_photo_taxon_node(&database, Some(parent_taxon_id), false).is_err());
+        assert_eq!(
+            get_photo_taxon_node(&database, Some(parent_taxon_id), true)
+                .unwrap()
+                .subtree_photo_count,
+            0
+        );
         assert_eq!(
             get_photo_mapping(&database, photo.photo_id)
                 .unwrap()
@@ -1509,27 +1264,27 @@ mod tests {
         let database = Database::open(data.path().join("vividarium.db")).unwrap();
         let connection = database.connect().unwrap();
         connection
-            .execute("INSERT INTO taxa (rank) VALUES (5)", [])
+            .execute("INSERT INTO taxa (rank) VALUES (1)", [])
             .unwrap();
         let canis_taxon_id = connection.last_insert_rowid();
         connection
             .execute(
                 r#"
-                INSERT INTO taxon_names (taxon_id, name_kind, name, is_accepted)
-                VALUES (?, 1, 'Canis lupus', 1)
+                INSERT INTO taxon_names (taxon_id, name_type, name)
+                VALUES (?, 1, 'Canis lupus')
                 "#,
                 [canis_taxon_id],
             )
             .unwrap();
         connection
-            .execute("INSERT INTO taxa (rank) VALUES (5)", [])
+            .execute("INSERT INTO taxa (rank) VALUES (1)", [])
             .unwrap();
         let felis_taxon_id = connection.last_insert_rowid();
         connection
             .execute(
                 r#"
-                INSERT INTO taxon_names (taxon_id, name_kind, name, is_accepted)
-                VALUES (?, 1, 'Felis catus', 1)
+                INSERT INTO taxon_names (taxon_id, name_type, name)
+                VALUES (?, 1, 'Felis catus')
                 "#,
                 [felis_taxon_id],
             )
@@ -1552,24 +1307,40 @@ mod tests {
             .iter()
             .find(|photo| photo.filename == "domestic cat.jpg")
             .unwrap();
-        select_photo_taxon(&database, canis_photo.photo_id, canis_taxon_id).unwrap();
-        select_photo_taxon(&database, felis_photo.photo_id, felis_taxon_id).unwrap();
+        let connection = database.connect().unwrap();
+        connection
+            .execute(
+                r#"
+                INSERT INTO photo_taxon_mapping (photo_id, taxon_id, status)
+                VALUES (?, ?, 'matched')
+                ON CONFLICT(photo_id) DO UPDATE
+                SET taxon_id = excluded.taxon_id, status = excluded.status
+                "#,
+                params![canis_photo.photo_id, canis_taxon_id],
+            )
+            .unwrap();
+        connection
+            .execute(
+                r#"
+                INSERT INTO photo_taxon_mapping (photo_id, taxon_id, status)
+                VALUES (?, ?, 'matched')
+                ON CONFLICT(photo_id) DO UPDATE
+                SET taxon_id = excluded.taxon_id, status = excluded.status
+                "#,
+                params![felis_photo.photo_id, felis_taxon_id],
+            )
+            .unwrap();
+        connection
+            .execute("DELETE FROM photo_mapping_queue", [])
+            .unwrap();
+        drop(connection);
 
         update_taxon(
             &database,
             TaxonUpdateInput {
                 taxon_id: felis_taxon_id,
                 geological_range: None,
-                scientific: None,
-                english: Some(TaxonNameInput {
-                    name: "domestic cat".into(),
-                    is_accepted: Some(true),
-                    ..Default::default()
-                }),
-                chinese: None,
-            },
-            TaxonUpdateOptions {
-                allow_new_names: true,
+                en_name: Some("domestic cat".into()),
                 ..Default::default()
             },
         )
@@ -1611,8 +1382,8 @@ mod tests {
         connection
             .execute(
                 r#"
-                INSERT INTO taxon_names (taxon_id, name_kind, name, is_accepted)
-                VALUES (?, 1, 'Parent', 1)
+                INSERT INTO taxon_names (taxon_id, name_type, name)
+                VALUES (?, 1, 'Parent')
                 "#,
                 [parent_taxon_id],
             )
@@ -1629,8 +1400,8 @@ mod tests {
             connection
                 .execute(
                     r#"
-                    INSERT INTO taxon_names (taxon_id, name_kind, name, is_accepted)
-                    VALUES (?, 1, ?, 1)
+                    INSERT INTO taxon_names (taxon_id, name_type, name)
+                    VALUES (?, 1, ?)
                     "#,
                     params![child_taxon_id, name],
                 )
@@ -1683,6 +1454,23 @@ mod tests {
                 .all(|item| matches!(item, PhotoTaxonItem::Taxon { .. }))
         );
         assert!(first.next_cursor.is_some());
+        database
+            .connect()
+            .unwrap()
+            .execute(
+                "INSERT INTO photo_mapping_queue (photo_id, reason) VALUES (?, 'refresh')",
+                [first_photo_id],
+            )
+            .unwrap();
+        let current_node = get_photo_taxon_node(&database, Some(parent_taxon_id), false).unwrap();
+        assert_eq!(current_node.taxon.as_ref().unwrap().direct_photo_count, 1);
+        assert_eq!(current_node.subtree_photo_count, 1);
+        assert_eq!(
+            get_photo_taxon_node(&database, None, false)
+                .unwrap()
+                .subtree_photo_count,
+            1
+        );
         let error = browse_photo_taxon(
             &database,
             Some(child_taxon_ids[0]),
@@ -1703,12 +1491,13 @@ mod tests {
             2,
         )
         .unwrap();
-        assert_eq!(second.items.len(), 2);
-        assert!(
-            second
-                .items
-                .iter()
-                .all(|item| matches!(item, PhotoTaxonItem::Photo { .. }))
+        assert_eq!(
+            second.items,
+            vec![PhotoTaxonItem::Photo {
+                photo: photos::get_photo(&database, second_photo_id)
+                    .unwrap()
+                    .unwrap()
+            }]
         );
         assert_eq!(second.next_cursor, None);
     }
@@ -1731,8 +1520,11 @@ mod tests {
         let directory_id = connection.last_insert_rowid();
         let processing_photo_id = insert_test_photo(&connection, directory_id, "processing.jpg");
         let first_unmatched_id = insert_test_photo(&connection, directory_id, "unmatched-1.jpg");
-        let second_unmatched_id = insert_test_photo(&connection, directory_id, "unmatched-2.jpg");
-        let unmapped_photo_id = insert_test_photo(&connection, directory_id, "unmapped.jpg");
+        let second_unmatched_id =
+            insert_test_photo(&connection, directory_id, "Canidae-unmatched-2.jpg");
+        let matched_photo_id = insert_test_photo(&connection, directory_id, "plain-match.jpg");
+        let ambiguous_photo_id =
+            insert_test_photo(&connection, directory_id, "plain-ambiguous.jpg");
         for photo_id in [processing_photo_id, first_unmatched_id, second_unmatched_id] {
             connection
                 .execute(
@@ -1744,6 +1536,33 @@ mod tests {
                 )
                 .unwrap();
         }
+        connection
+            .execute_batch(&format!(
+                r#"
+                INSERT INTO taxa (taxon_id, rank) VALUES (1, 3), (2, 3);
+                INSERT INTO taxon_names (name_id, taxon_id, name_type, name)
+                VALUES
+                    (1, 1, 1, 'Canidae'),
+                    (2, 2, 1, 'Canidae');
+                INSERT INTO photo_taxon_mapping (photo_id, taxon_id, status)
+                VALUES
+                    ({matched_photo_id}, 1, 'matched'),
+                    ({ambiguous_photo_id}, NULL, 'ambiguous');
+                INSERT INTO photo_taxon_candidates (photo_id, taxon_id)
+                VALUES
+                    ({ambiguous_photo_id}, 1),
+                    ({ambiguous_photo_id}, 2);
+                INSERT INTO photo_taxon_candidate_names (
+                    photo_id, taxon_id, name_id, name_type, name
+                ) VALUES
+                    ({ambiguous_photo_id}, 1, 1, 1, 'Canidae'),
+                    ({ambiguous_photo_id}, 2, 2, 1, 'Canidae');
+                INSERT INTO photo_taxon_usage (
+                    taxon_id, direct_photo_count, subtree_photo_count
+                ) VALUES (1, 1, 1);
+                "#
+            ))
+            .unwrap();
         connection
             .execute(
                 r#"
@@ -1759,14 +1578,11 @@ mod tests {
             list_photos_by_mapping_status(&database, PhotoMappingListStatus::Unmatched, None, 1)
                 .unwrap();
         assert_eq!(first.items[0].photo.photo_id, first_unmatched_id);
-        assert_eq!(
-            first.items[0].mapping.as_ref().unwrap().status,
-            PhotoTaxonStatus::Unmatched
-        );
+        assert_eq!(first.items[0].mapping.status, PhotoTaxonStatus::Unmatched);
         assert!(first.next_cursor.is_some());
         let error = list_photos_by_mapping_status(
             &database,
-            PhotoMappingListStatus::Unmapped,
+            PhotoMappingListStatus::Processing,
             first.next_cursor.as_deref(),
             1,
         )
@@ -1788,15 +1604,104 @@ mod tests {
         assert_eq!(processing.items.len(), 1);
         assert_eq!(processing.items[0].photo.photo_id, processing_photo_id);
         assert_eq!(
-            processing.items[0].mapping.as_ref().unwrap().status,
+            processing.items[0].mapping.status,
             PhotoTaxonStatus::Processing
         );
-        let unmapped =
-            list_photos_by_mapping_status(&database, PhotoMappingListStatus::Unmapped, None, 10)
-                .unwrap();
-        assert_eq!(unmapped.items.len(), 1);
-        assert_eq!(unmapped.items[0].photo.photo_id, unmapped_photo_id);
-        assert_eq!(unmapped.items[0].mapping, None);
+
+        let matched_search = search_photos_by_mapping_status(
+            &database,
+            PhotoMappingListStatus::Matched,
+            "Canidae",
+            None,
+            10,
+        )
+        .unwrap();
+        assert_eq!(matched_search.items.len(), 1);
+        assert_eq!(matched_search.items[0].photo.photo_id, matched_photo_id);
+        let unmatched_search = search_photos_by_mapping_status(
+            &database,
+            PhotoMappingListStatus::Unmatched,
+            "Canidae",
+            None,
+            10,
+        )
+        .unwrap();
+        assert_eq!(unmatched_search.items.len(), 1);
+        assert_eq!(
+            unmatched_search.items[0].photo.photo_id,
+            second_unmatched_id
+        );
+        let first_search = search_photos_by_mapping_status(
+            &database,
+            PhotoMappingListStatus::Unmatched,
+            "unmatched",
+            None,
+            1,
+        )
+        .unwrap();
+        assert_eq!(first_search.items[0].photo.photo_id, first_unmatched_id);
+        assert!(first_search.next_cursor.is_some());
+        let second_search = search_photos_by_mapping_status(
+            &database,
+            PhotoMappingListStatus::Unmatched,
+            "unmatched",
+            first_search.next_cursor.as_deref(),
+            1,
+        )
+        .unwrap();
+        assert_eq!(second_search.items[0].photo.photo_id, second_unmatched_id);
+        assert!(second_search.next_cursor.is_none());
+        let processing_search = search_photos_by_mapping_status(
+            &database,
+            PhotoMappingListStatus::Processing,
+            "processing",
+            None,
+            10,
+        )
+        .unwrap();
+        assert_eq!(processing_search.items.len(), 1);
+        assert_eq!(
+            processing_search.items[0].photo.photo_id,
+            processing_photo_id
+        );
+        assert!(
+            search_photos_by_mapping_status(
+                &database,
+                PhotoMappingListStatus::Ambiguous,
+                "Canidae",
+                None,
+                10,
+            )
+            .unwrap()
+            .items
+            .is_empty()
+        );
+        let ambiguous_search = search_photos_by_mapping_status(
+            &database,
+            PhotoMappingListStatus::Ambiguous,
+            "ambiguous",
+            None,
+            10,
+        )
+        .unwrap();
+        assert_eq!(ambiguous_search.items.len(), 1);
+        assert_eq!(ambiguous_search.items[0].photo.photo_id, ambiguous_photo_id);
+        assert!(
+            search_photos_by_mapping_status(
+                &database,
+                PhotoMappingListStatus::Matched,
+                "Canidae",
+                first.next_cursor.as_deref(),
+                10,
+            )
+            .is_err()
+        );
+
+        let metadata = get_metadata(&database).unwrap();
+        assert_eq!(metadata.mapped_photo_count, 1);
+        assert_eq!(metadata.unmatched_photo_count, 2);
+        assert_eq!(metadata.ambiguous_photo_count, 1);
+        assert_eq!(metadata.processing_photo_count, 1);
     }
 
     #[test]

@@ -1,8 +1,10 @@
 pub mod db;
 pub mod error;
-pub mod export;
+pub mod map;
 pub mod mapping;
+mod metadata;
 pub mod models;
+pub mod naming;
 pub mod photos;
 pub mod taxonomy;
 

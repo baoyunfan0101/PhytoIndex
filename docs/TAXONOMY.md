@@ -1,209 +1,49 @@
-# Taxonomy Knowledge Base Backend API
+# Taxonomy Backend Public API
 
-This document describes the public backend surface of the taxonomy knowledge
-base. It covers the Rust API exported from `phytoindex_core::taxonomy` and the
-Tauri commands that adapt part of that API for desktop IPC.
+This document describes the public API exported by
+`phytoindex_core::taxonomy`. The desktop commands are adapters over the same
+types and behavior.
 
-This surface owns taxonomy records, names, identifiers, structured updates,
-direct management actions, custom SQL changes, operation history, and
-operation rollback. Photo browsing, photo-to-taxon mapping, workbook parsing,
-and frontend behavior are outside this document.
+Shared normalization and configurable synonym parsing are documented in
+[the naming backend API](NAMING.md).
 
-## Public module
+All functions return `CoreResult<T>`. Errors include invalid input, missing
+records, database failures, and taxonomy validation failures.
 
-All Rust types and functions described below are available from:
+## Common types
 
-```rust
-use phytoindex_core::taxonomy::*;
-```
+`TaxonRank` has the serialized values `kingdom`, `order`, `family`, `genus`,
+and `species`.
 
-The module hides its storage and query implementation. Callers work with the
-public models and functions only.
+`TaxonomyNameType` has the serialized values `sci_name`, `synonym`, `zh_name`,
+`zh_alias`, `en_name`, and `en_alias`. A taxon has exactly one `sci_name`, and
+may have at most one `zh_name` and one `en_name`.
 
-All Rust functions return `CoreResult<T>`. Invalid input and invalid cursors
-return `CoreError::InvalidArgument`; database failures return
-`CoreError::Database`. Read functions use `Option<T>` where absence is a normal
-result. Delete actions may return `CoreError::NotFound`. Structured and direct
-update planning reports row-level failures in `TaxonRowOutcome` when possible.
-
-## Serialization conventions
-
-- Struct fields use `snake_case` in serialized data.
-- Enum values use `snake_case`.
-- `Option<T>` is serialized as either its value or `null`.
-- Taxon, batch, and operation IDs are signed 64-bit integers in Rust and JSON
-  numbers over IPC.
-- Database timestamps are returned as SQLite UTC timestamp strings.
-- Cursor strings are opaque. A caller must not inspect, edit, or reuse a
-  cursor with a different endpoint, parent taxon, or batch.
-
-## Common enums
-
-### `TaxonRank`
-
-The supported hierarchy, from root to leaf, is:
-
-```text
-kingdom -> order -> family -> genus -> species
-```
-
-Serialized values are `kingdom`, `order`, `family`, `genus`, and `species`.
-
-### `TaxonomyNameKind`
-
-The supported name groups are `scientific`, `english`, and `chinese`.
-
-### `TaxonomyPage<T>`
-
-The serialized page model is `TaxonomyPage`; `T` is the endpoint-specific
-item type.
+`TaxonomyPage<T>` is used by paginated interfaces:
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `items` | `Vec<T>` | Items in the current page. |
-| `next_cursor` | `Option<String>` | Opaque cursor for the next page, or `null` when the page is final. |
+| `items` | `Vec<T>` | Current page in interface-defined order. |
+| `next_cursor` | `Option<String>` | Opaque cursor for the next page. |
 
-Page limits are clamped to `1..=500` by the core API. Tauri list commands use
-`50` when `limit` is omitted.
+Pass `None` for the first page. A returned cursor must only be reused with the
+same interface and parent resource. Page limits are clamped to `1..=500`.
 
-## Read models
+## Read views
 
-### `TaxonDisplayNames`
+The public read models are:
 
-Compact display names for a taxon.
-
-| Field | Type | Description |
+| Type | Fields | Description |
 | --- | --- | --- |
-| `scientific` | `Option<String>` | Accepted scientific name when present. |
-| `english` | `Option<String>` | Accepted English name when present. |
-| `chinese` | `Option<String>` | Accepted Chinese name when present. |
-
-If imported data lacks an accepted name for a populated name group, the
-backend uses the first name in lexical order as a display fallback.
-
-### `TaxonBreadcrumbItem`
-
-| Field | Type | Description |
-| --- | --- | --- |
-| `taxon_id` | `i64` | Ancestor taxon ID. |
-| `rank` | `TaxonRank` | Ancestor rank. |
-| `names` | `TaxonDisplayNames` | Compact names for the ancestor. |
-
-### `TaxonSummary`
-
-| Field | Type | Description |
-| --- | --- | --- |
-| `taxon_id` | `i64` | ID of the current taxon. |
-| `rank` | `TaxonRank` | Rank of the current taxon. |
-| `breadcrumb` | `Vec<TaxonBreadcrumbItem>` | All ancestors in root-to-parent order. The current taxon is not repeated here. |
-| `names` | `TaxonDisplayNames` | Compact names for the current taxon. |
-
-The complete ID path is therefore
-`breadcrumb[*].taxon_id + taxon_id`: every ancestor ID is in `breadcrumb`,
-and the current ID is in the top-level `taxon_id` field.
-
-### `TaxonChild`
-
-Lightweight immediate-child model.
-
-| Field | Type | Description |
-| --- | --- | --- |
-| `taxon_id` | `i64` | Child taxon ID. |
-| `rank` | `TaxonRank` | Child rank. |
-| `names` | `TaxonDisplayNames` | Compact child names. |
-
-Children do not include a repeated breadcrumb or full detail.
-
-### `TaxonNameDetail`
-
-| Field | Type | Description |
-| --- | --- | --- |
-| `name` | `String` | Name text. |
-| `is_accepted` | `bool` | Whether this is the accepted name in its name group. |
-| `authority_year` | `Option<String>` | Scientific authority/year metadata. |
-| `category` | `Option<String>` | Name category metadata. |
-| `source` | `Option<String>` | Name source metadata. |
-
-### `TaxonNamesDetail`
-
-Contains `scientific`, `english`, and `chinese` arrays of
-`TaxonNameDetail`. Within each array, accepted names are returned before other
-names, followed by lexical name order.
-
-### `TaxonIdentifierDetail`
-
-| Field | Type | Description |
-| --- | --- | --- |
-| `source` | `String` | Identifier namespace or provider. |
-| `external_id` | `String` | Identifier in that namespace. |
-
-### `TaxonDetail`
-
-| Field | Type | Description |
-| --- | --- | --- |
-| `taxon_id` | `i64` | Current taxon ID. |
-| `rank` | `TaxonRank` | Current rank. |
-| `parent_taxon_id` | `Option<i64>` | Immediate parent ID; `null` for a root taxon. |
-| `geological_range` | `Option<String>` | Geological range metadata. |
-| `names` | `TaxonNamesDetail` | All names and name metadata. |
-| `identifiers` | `Vec<TaxonIdentifierDetail>` | External identifiers. |
-
-`TaxonDetail` deliberately does not contain a summary or children.
-
-### `TaxonDetailNode`
-
-| Field | Type | Description |
-| --- | --- | --- |
-| `summary` | `TaxonSummary` | Current taxon display data and ancestor breadcrumb. |
-| `detail` | `TaxonDetail` | Full current-taxon data. |
-| `children` | `TaxonomyPage<TaxonChild>` | First or requested page of immediate children. |
-
-## Read and search API
-
-### `search_taxa`
-
-```rust
-pub fn search_taxa(
-    database: &Database,
-    query: &str,
-    limit: usize,
-) -> CoreResult<Vec<TaxonSearchResult>>
-```
-
-Parameters:
-
-| Parameter | Description |
-| --- | --- |
-| `query` | Name text to search across scientific, English, and Chinese names. Leading, trailing, and repeated whitespace is normalized. An empty normalized query returns an empty list. |
-| `limit` | Maximum number of taxa to return after clamping to `1..=500`. |
-
-Results are accumulated in this priority order:
-
-1. Exact full-name match.
-2. Full-name prefix match.
-3. Prefix of any word in a name.
-4. Match in the middle of a name.
-5. Fuzzy full-name match.
-
-Earlier tiers always remain ahead of later tiers, and a taxon is returned only
-once. Word-prefix matching requires at least two characters. Middle and fuzzy
-matching require at least three characters.
-
-The fuzzy tier uses trigram candidates followed by character-level Levenshtein
-distance. The maximum accepted distance is 1 for queries up to 4 characters,
-2 for queries of 5 through 8 characters, and 3 for longer queries.
-
-`TaxonSearchResult` contains:
-
-| Field | Type | Description |
-| --- | --- | --- |
-| `summary` | `TaxonSummary` | Compact current taxon and complete ancestor breadcrumb. |
-| `detail` | `TaxonDetail` | Full current-taxon detail. |
-| `matches` | `Vec<TaxonNameMatch>` | Names on this taxon that satisfied the selected search tiers. |
-
-`TaxonNameMatch` contains `name_id`, `name_kind`, `name`, and `is_accepted`.
-Search results do not load children; use `list_taxon_children` or
-`get_taxon_detail_node` when children are needed.
+| `TaxonDisplayNames` | `sci_name`, `zh_name`, `en_name` | Compact accepted-name view. |
+| `TaxonBreadcrumbItem` | `taxon_id`, `rank`, `names` | One ancestor in root-to-parent order. |
+| `TaxonSummary` | `taxon_id`, `rank`, `breadcrumb`, `names` | Compact taxon view with lineage. |
+| `TaxonChild` | `taxon_id`, `rank`, `names` | Compact direct-child view. |
+| `TaxonNameDetail` | `name_id`, `name`, `authority_year`, `source` | One stable name record. |
+| `TaxonNamesDetail` | `sci_name`, `synonyms`, `zh_name`, `zh_aliases`, `en_name`, `en_aliases` | Names grouped by type. |
+| `TaxonDetail` | `taxon_id`, `rank`, `parent_taxon_id`, `geological_range`, `names` | Complete editable taxon data. |
+| `TaxonDetailNode` | `summary`, `detail`, `children` | Detail view with the first or requested child page. |
+| `TaxonSuggestion` | `taxon_id`, `rank`, `names`, `matches` | Minimal autocomplete result without detail or breadcrumb data. |
 
 ### `get_taxon_summary`
 
@@ -214,8 +54,8 @@ pub fn get_taxon_summary(
 ) -> CoreResult<Option<TaxonSummary>>
 ```
 
-Returns the compact current-taxon model and its root-to-parent breadcrumb.
-Returns `None` when `taxon_id` does not exist.
+`taxon_id` identifies the requested taxon. The return value is `None` when the
+taxon does not exist.
 
 ### `get_taxon_detail`
 
@@ -226,8 +66,8 @@ pub fn get_taxon_detail(
 ) -> CoreResult<Option<TaxonDetail>>
 ```
 
-Returns all names, name metadata, identifiers, parent ID, and geological range
-for one taxon. Returns `None` when the taxon does not exist.
+`taxon_id` identifies the requested taxon. The return value is `None` when the
+taxon does not exist.
 
 ### `get_taxon_detail_node`
 
@@ -240,8 +80,8 @@ pub fn get_taxon_detail_node(
 ) -> CoreResult<Option<TaxonDetailNode>>
 ```
 
-Returns summary, detail, and one page of immediate children. Pass `None` for
-the first child page. Returns `None` when the taxon does not exist.
+`children_cursor` selects a child page and `children_limit` requests its size.
+The return value is `None` when the taxon does not exist.
 
 ### `list_taxon_children`
 
@@ -254,129 +94,235 @@ pub fn list_taxon_children(
 ) -> CoreResult<TaxonomyPage<TaxonChild>>
 ```
 
-Returns immediate children ordered by rank and taxon ID. Pass `None` for the
-first page and then pass the previous `next_cursor` unchanged.
+Returns direct children of `taxon_id`. `cursor` and `limit` control
+pagination.
 
-## Structured batch update API
+## Search
 
-Structured updates locate a target from rank scientific names, preview the
-planned changes, and optionally apply them. This API accepts already parsed
-rows; CSV and workbook parsing are adapter responsibilities.
+```rust
+pub fn search_taxa(
+    database: &Database,
+    query: &str,
+    limit: usize,
+) -> CoreResult<Vec<TaxonSearchResult>>
+```
 
-### `TaxonNameInput`
+`query` is matched against taxonomy names. Blank input returns an empty list.
+`limit` is clamped to `1..=500`.
 
-| Field | Type | Description |
-| --- | --- | --- |
-| `name` | `String` | Required when the enclosing name input is present. |
-| `is_accepted` | `Option<bool>` | Requested accepted-name state. `null` preserves existing state, or selects the default for a new name. |
-| `authority_year` | `Option<String>` | Metadata to supplement or overwrite. |
-| `category` | `Option<String>` | Metadata to supplement or overwrite. |
-| `source` | `Option<String>` | Metadata to supplement or overwrite. |
-
-Blank optional strings are normalized as absent values. Existing values are
-never cleared by passing blank or `null`.
-
-### `TaxonInputRow`
+Each `TaxonSearchResult` contains:
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `selected_taxon_id` | `Option<i64>` | Resolves an ambiguous locator. It must be one of the candidates produced by the row locator. |
-| `kingdom` | `Option<String>` | Kingdom scientific name locator/filter. |
-| `order` | `Option<String>` | Order scientific name locator/filter. |
-| `family` | `Option<String>` | Family scientific name locator/filter. |
-| `genus` | `Option<String>` | Genus scientific name locator/filter. |
-| `species` | `Option<String>` | Species scientific name locator/filter. |
-| `geological_range` | `Option<String>` | Taxon metadata to supplement or overwrite. |
-| `scientific` | `Option<TaxonNameInput>` | Scientific name change. |
-| `english` | `Option<TaxonNameInput>` | English name change. |
-| `chinese` | `Option<TaxonNameInput>` | Chinese name change. |
+| `summary` | `TaxonSummary` | Compact result and lineage. |
+| `detail` | `TaxonDetail` | Full taxonomy data. |
+| `matches` | `Vec<TaxonNameMatch>` | Name records responsible for the match. |
 
-The deepest non-empty rank field is the target rank and target scientific
-name. Higher rank fields narrow the lineage match. When creation is enabled,
-a new non-species taxon requires its immediate parent locator. A new species
-may derive its genus locator from the first word of a binomial scientific
-name.
+`TaxonNameMatch` contains `name_id`, `name_type`, and `name`. Results prefer
+exact and prefix matches before broader and fuzzy matches.
 
-### `TaxonUpdateOptions`
+### `suggest_taxa`
 
-All flags default to `false`.
+```rust
+pub fn suggest_taxa(
+    database: &Database,
+    query: &str,
+    limit: usize,
+) -> CoreResult<Vec<TaxonSuggestion>>
+```
 
-| Field | Effect when `true` |
-| --- | --- |
-| `allow_new_names` | Allows a name absent from an existing taxon to be appended. |
-| `allow_new_taxa` | Allows creation when the row locator finds no taxon. It does not create missing ancestors. |
-| `allow_overwrite` | Allows replacement of non-empty geological-range or name metadata values. Empty existing values may be supplemented without this flag. |
-| `allow_switch_accepted_name` | Allows a different name in the same name group to become accepted. The previous accepted name is demoted atomically. |
+Uses the same normalization, matching stages, priorities, result order, and
+matched-name rules as `search_taxa`. It only loads `taxon_id`, `rank`, accepted
+display names, and matched names. Blank input returns an empty list and `limit`
+is clamped to `1..=500`.
 
-An accepted name cannot be demoted without promoting a replacement. The first
-name in any populated name group must be accepted.
+## Formatted input
 
-### `preview_rows`
+### Input model
+
+`TaxonInputRow` is the structured form accepted by preview and apply:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `kingdom` | `Option<String>` | Kingdom scientific name. |
+| `order` | `Option<String>` | Order scientific name. |
+| `family` | `Option<String>` | Family scientific name. |
+| `genus` | `Option<String>` | Genus scientific name. |
+| `species` | `Option<String>` | Species scientific name. |
+| `authority_year` | `Option<String>` | Authority text paired with the target scientific-name value in this row. |
+| `synonyms` | `Vec<String>` | Ordered scientific synonyms, optionally including authority text. |
+| `zh_name` | `Option<String>` | First Chinese input name. |
+| `zh_alias` | `Vec<String>` | Additional Chinese input names. |
+| `en_name` | `Option<String>` | First English input name. |
+| `en_alias` | `Vec<String>` | Additional English input names. |
+| `geological_range` | `Option<String>` | Geological range of the target taxon. |
+| `source` | `Option<String>` | Source used for names in this row. |
+| `selected_taxon_id` | `Option<i64>` | Exact locator reserved for `update_taxon`; CSV clients omit it. |
+
+The CSV columns are:
+
+```text
+kingdom|order|family|genus|species|authority_year|synonyms|zh_name|zh_alias|en_name|en_alias|geological_range|source
+```
+
+CSV is UTF-8, uses `|` between columns, and requires a header. Columns may be
+omitted or reordered. Every data row must have the same number of fields as
+the header.
+
+### `taxonomy_formatted_update_template`
+
+```rust
+pub fn taxonomy_formatted_update_template() -> CoreResult<String>
+```
+
+Returns a UTF-8, pipe-delimited, header-only CSV template.
+
+### `parse_taxonomy_input_csv`
+
+```rust
+pub fn parse_taxonomy_input_csv(
+    database: &Database,
+    input: &str,
+) -> CoreResult<Vec<TaxonInputRow>>
+```
+
+`input` is a complete CSV document. The return value preserves data-row
+order. Unknown or duplicate headers, malformed CSV, and rows with inconsistent
+field counts are rejected.
+
+### Name separator metadata
+
+```rust
+pub fn get_taxonomy_name_separator(
+    database: &Database,
+) -> CoreResult<String>
+
+pub fn set_taxonomy_name_separator(
+    database: &Database,
+    separator: &str,
+) -> CoreResult<()>
+```
+
+The separator splits `synonyms`, `zh_alias`, and `en_alias` cells. The default
+is `;`. `set_taxonomy_name_separator` accepts exactly one non-whitespace
+character other than `|`.
+
+### Scientific-name authority parser
+
+```rust
+pub fn split_scientific_name_authority(
+    value: &str,
+) -> CoreResult<ScientificNameParts>
+```
+
+`value` is the raw scientific-name string. The return value contains the
+parsed `name` and optional `authority_year`.
+
+Formatted updates use the database-aware synonym parser from
+`phytoindex_core::naming`. It runs the configured Rhai hook or bundled Rhai
+template, then applies shared name normalization. See
+[the naming backend API](NAMING.md) for parameters, return values, and the
+hook contract.
+
+### Matching and update behavior
+
+The lowest supplied rank is the target. Supplied higher ranks narrow matching
+but do not need to form a continuous path from `kingdom`. Creating a
+non-kingdom taxon requires its direct parent. A missing genus may be derived
+from the first word of a species name.
+
+Input matching priority is the target scientific name, then each synonym in
+input order. For each input name, database `sci_name` records are considered
+before database `synonym` records. The first priority level producing matches
+determines the result.
+
+The row's `authority_year` is paired with its target scientific-name value.
+Authority text parsed from a synonym is paired with that synonym. After a
+taxon match, the paired authority may supplement or overwrite the matched
+name's authority. Other input scientific names are processed in priority
+order as synonyms.
+
+Formatted updates can create taxa, append names, supplement empty fields, and
+overwrite existing fields. They never switch an accepted name with an alias.
+
+Chinese inputs are processed as one ordered list: `zh_name` first, then
+`zh_alias`. If the taxon lacks `zh_name`, the first new value becomes
+`zh_name`; later values are aliases. Otherwise all new values are aliases.
+English inputs follow the same rule.
+
+`source` fills an empty existing source or initializes a new name. It does not
+overwrite a non-empty source.
+
+## Preview and apply
 
 ```rust
 pub fn preview_rows(
     database: &Database,
     rows: &[TaxonInputRow],
-    options: TaxonUpdateOptions,
-) -> CoreResult<TaxonBatchResult>
-```
+) -> CoreResult<TaxonomyPreviewResult>
 
-Executes the planned rows in one temporary transaction and then rolls it back.
-It performs no persistent write and creates no operation history.
-
-The returned `TaxonBatchResult.batch_id` is always `None`. A valid changing row
-has status `ready`; a row with no effective change has status `no_change`.
-
-### `apply_rows`
-
-```rust
 pub fn apply_rows(
     database: &Database,
     rows: &[TaxonInputRow],
-    options: TaxonUpdateOptions,
-) -> CoreResult<TaxonBatchResult>
+) -> CoreResult<TaxonomyOperationResult>
 ```
 
-Applies each row in its own transaction. A row-level validation or matching
-failure is returned in that row's outcome and does not roll back successful
-rows. A batch record is created lazily when the first row produces a real
-change. If every row fails or produces no change, `batch_id` is `None`.
+Both interfaces evaluate rows in input order. `preview_rows` rolls back all
+evaluated changes and returns:
 
-Each changed row creates one operation and returns status `applied` with an
-`operation_id`. Unchanged and rejected rows have no operation ID.
+| Field | Type | Description |
+| --- | --- | --- |
+| `delimiter` | `String` | Log delimiter, currently `|`. |
+| `encoding` | `String` | Log encoding, currently `UTF-8`. |
+| `rows` | `Vec<TaxonRowOutcome>` | One outcome per input row. |
 
-### `TaxonBatchResult` and `TaxonRowOutcome`
+`apply_rows` commits successful rows and stores one operation. Invalid,
+unmatched, or ambiguous rows fail independently; other rows in the operation
+may succeed. Its return value contains:
 
-`TaxonBatchResult` contains an optional `batch_id` and one `rows` outcome per
-input row, in input order.
+| Field | Type | Description |
+| --- | --- | --- |
+| `operation_id` | `i64` | Stored operation identifier. |
+| `total_rows` | `usize` | Number of attempted rows. |
+| `succeeded_rows` | `usize` | Rows without failure statuses. |
+| `failed_rows` | `usize` | Rows with a failure status. |
+| `delimiter` | `String` | Log delimiter. |
+| `encoding` | `String` | Log encoding. |
+| `rows` | `Vec<TaxonRowOutcome>` | Stored result log. |
 
-| `TaxonRowOutcome` field | Type | Description |
+A `TaxonRowOutcome` contains:
+
+| Field | Type | Description |
 | --- | --- | --- |
 | `row_number` | `usize` | One-based input row number. |
-| `operation_id` | `Option<i64>` | Created operation ID for an applied change. |
-| `status` | `TaxonRowStatus` | Machine-readable row result. |
-| `message` | `String` | Human-readable result or rejection reason. |
-| `target` | `Option<TaxonSummary>` | Located or newly created target when available. |
-| `candidates` | `Vec<TaxonSummary>` | Candidate taxa when status is `ambiguous`. |
-| `changes` | `Vec<TaxonChange>` | Planned or applied semantic changes. |
+| `operation_types` | `Vec<TaxonRowStatus>` | All statuses applying to the row. |
+| `message` | `String` | Human-readable result or failure reason. |
+| `target` | `Option<TaxonSummary>` | Matched or resulting taxon summary. |
+| `parent` | `Option<TaxonSummary>` | Parent summary when a taxon is created. |
+| `candidates` | `Vec<TaxonSummary>` | Ambiguous matches, when present. |
+| `changes` | `Vec<TaxonChange>` | Structured field-level changes. |
 
-`TaxonRowStatus` values:
+`TaxonRowStatus` serializes as `no_change`, `supplement`, `new_name`,
+`new_taxon`, `overwrite`, `invalid`, `not_matched`, or
+`multiple_candidates`. A row may contain more than one status.
 
-| Value | Meaning |
-| --- | --- |
-| `ready` | Preview found a valid plan with changes. |
-| `applied` | Apply committed the row and logged an operation. |
-| `no_change` | Target matched, but the input produced no effective change. |
-| `not_found` | No target or required parent matched and creation was not possible. |
-| `ambiguous` | Multiple taxa matched; inspect `candidates` and retry with `selected_taxon_id`. |
-| `conflict` | The requested change violates options or taxonomy update rules. |
-| `invalid` | The row shape, selected candidate, or required value is invalid. |
+Each `TaxonChange` contains `kind`, `field`, `old_value`, and `new_value`.
+`TaxonChangeKind` serializes as `create_taxon`, `append_name`, `supplement`,
+or `overwrite`. `TaxonomyOperationRowLog` is a public alias for
+`TaxonRowOutcome`.
 
-`TaxonChange` contains a `kind`, `field`, `old_value`, and `new_value`. Its
-`TaxonChangeKind` values are `create_taxon`, `append_name`, `supplement`,
-`overwrite`, and `change_accepted_name`.
+### `taxonomy_log_csv`
 
-## Direct management actions
+```rust
+pub fn taxonomy_log_csv(
+    rows: &[TaxonRowOutcome],
+) -> CoreResult<String>
+```
+
+Returns the supplied row outcomes as UTF-8, pipe-delimited CSV. Structured
+status, summary, parent, and change values are JSON strings inside CSV cells.
+
+## Direct actions
 
 ### `update_taxon`
 
@@ -384,22 +330,35 @@ input row, in input order.
 pub fn update_taxon(
     database: &Database,
     input: TaxonUpdateInput,
-    options: TaxonUpdateOptions,
-) -> CoreResult<TaxonomyUpdateActionResult>
+) -> CoreResult<TaxonomyOperationResult>
 ```
 
-`TaxonUpdateInput` contains `taxon_id`, `geological_range`, and optional
-`scientific`, `english`, and `chinese` `TaxonNameInput` values. Because the
-target is already identified, this function performs no locator or candidate
-search. `allow_new_taxa` has no effect here; the other update options retain
-their structured-update meanings.
+`TaxonUpdateInput` contains `taxon_id`, `authority_year`, `synonyms`,
+`zh_name`, `zh_alias`, `en_name`, `en_alias`, `geological_range`, and
+`source`. The function resolves the selected taxon and lineage, converts the
+request into one formatted input row, validates it without a separate preview,
+and applies it as one operation.
 
-`TaxonomyUpdateActionResult` contains:
+The exact selected ID is not stored in operation input and is not included in
+later exports.
 
-| Field | Type | Description |
-| --- | --- | --- |
-| `batch_id` | `Option<i64>` | Created query-update batch, or `null` for no change. |
-| `outcome` | `TaxonRowOutcome` | Row-style result with `row_number = 1`. |
+### `promote_taxon_name`
+
+```rust
+pub fn promote_taxon_name(
+    database: &Database,
+    input: PromoteTaxonNameInput,
+) -> CoreResult<()>
+```
+
+`PromoteTaxonNameInput` contains `taxon_id` and `name_id`. The name must
+belong to that taxon. Promotion swaps the selected alias type with the current
+accepted type: `synonym` with `sci_name`, `zh_alias` with `zh_name`, or
+`en_alias` with `en_name`.
+
+For a species synonym, the first word must exactly equal the parent genus
+scientific name. Promotion is unlogged and cannot be reverted through
+operation history.
 
 ### `delete_taxon_name`
 
@@ -407,21 +366,11 @@ their structured-update meanings.
 pub fn delete_taxon_name(
     database: &Database,
     input: DeleteTaxonNameInput,
-) -> CoreResult<TaxonomyActionResult>
+) -> CoreResult<()>
 ```
 
-`DeleteTaxonNameInput` fields:
-
-| Field | Type | Description |
-| --- | --- | --- |
-| `taxon_id` | `i64` | Owner taxon. |
-| `name_kind` | `TaxonomyNameKind` | Name group. |
-| `name` | `String` | Exact normalized name to delete. |
-| `replacement_accepted_name` | `Option<String>` | Existing name to promote when deleting the accepted name while other names remain. |
-
-`replacement_accepted_name` is required only when the deleted name is accepted
-and other names of the same kind remain. It must differ from `name` and already
-exist on the same taxon in the same name group.
+`DeleteTaxonNameInput` contains `taxon_id` and `name_id`. The name must belong
+to that taxon. The unique `sci_name` cannot be deleted. Deletion is unlogged.
 
 ### `delete_taxon`
 
@@ -429,25 +378,10 @@ exist on the same taxon in the same name group.
 pub fn delete_taxon(
     database: &Database,
     taxon_id: i64,
-) -> CoreResult<TaxonomyActionResult>
+) -> CoreResult<()>
 ```
 
-Deletes one taxon and its owned names/identifiers. The taxon must exist, have
-no child taxa, and have no photo mappings. This is a single-item management
-action; there is no public batch-delete interface.
-
-### `TaxonomyActionResult`
-
-Successful name and taxon deletion returns only:
-
-| Field | Type | Description |
-| --- | --- | --- |
-| `batch_id` | `i64` | Created management-action batch. |
-| `operation_id` | `i64` | Reversible operation in that batch. |
-
-Call a read API when a refreshed taxon view is needed.
-
-## Custom SQL action
+Deletes the identified taxon when it has no children. The action is unlogged.
 
 ### `execute_custom_taxonomy_sql`
 
@@ -459,96 +393,29 @@ pub fn execute_custom_taxonomy_sql(
 ) -> CoreResult<TaxonomyCustomSqlResult>
 ```
 
-`sql` must be non-empty. It may contain multiple statements. The action is
-transactional and restricted to taxonomy-domain reads and writes. It cannot
-change schema, load extensions, access unrelated application tables, or access
-the taxonomy search-index tables directly. The complete taxonomy is validated
-before a changing transaction commits.
+`sql` is the authorized SQL batch to execute. Optional tabular input contains
+`columns: Vec<String>` and `rows: Vec<Vec<String>>` and is exposed to the SQL
+batch as its temporary input table.
 
-This action does not return SQL result rows. It is intended for controlled
-taxonomy changes, not general-purpose querying.
+The return value contains `changeset_size`, the byte size of the applied
+taxonomy changeset. The action is transactional and validates taxonomy
+integrity before commit. It is unlogged and cannot be reverted through
+operation history.
 
-An optional `TaxonomyCustomSqlTempTable` creates `temp.input` on the same
-connection before SQL execution:
+## Operation history
 
-| Field | Type | Description |
-| --- | --- | --- |
-| `columns` | `Vec<String>` | Unique ASCII identifiers beginning with a letter or underscore. At least one column is required. |
-| `rows` | `Vec<Vec<String>>` | Text values. Every row width must equal `columns.len()`. |
-
-The table exists only for this call and disappears with the connection. Batch
-history stores only `TaxonomyCustomSqlTempTableMetadata`, which contains the
-normalized column names and row count, not the uploaded row values.
-
-`TaxonomyCustomSqlResult` contains:
+`TaxonomyOperation` contains:
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `batch_id` | `Option<i64>` | Created batch, or `null` when SQL changed no tracked taxonomy row. |
-| `operation_id` | `Option<i64>` | Created operation, or `null` when there was no tracked change. |
-| `changeset_size` | `usize` | Serialized SQLite changeset size in bytes, not an affected-row count. |
+| `operation_id` | `i64` | Operation identifier. |
+| `source` | `TaxonomyOperationSource` | Source, currently `formatted_update`. |
+| `input` | `Vec<TaxonInputRow>` | Ordered attempted input without transient IDs. |
+| `result` | `TaxonomyOperationResult` | Exact apply log. |
+| `changeset_size` | `usize` | Stored changeset size in bytes. |
+| `applied_at` | `String` | Database-generated apply timestamp. |
 
-A no-change SQL call succeeds with both IDs set to `null` and
-`changeset_size = 0`; it creates no history records.
-
-After a changing call commits, the backend extracts affected `taxon_id` values
-from the stored changeset. Only photos currently mapped to those taxa are
-queued for rematching.
-
-## Operation history and rollback
-
-Every applied structured row and every changing direct action is recorded as
-an operation. Related operations share a batch that stores invocation context
-and input.
-
-### `TaxonomyBatchContext`
-
-This is a tagged enum serialized with a `source` field:
-
-| `source` value | Additional fields | Meaning |
-| --- | --- | --- |
-| `batch_update` | `options` | Structured `apply_rows` batch. |
-| `query_update` | `options` | Direct `update_taxon` action. |
-| `query_delete_name` | none | Direct name deletion. |
-| `query_delete_taxon` | none | Direct taxon deletion. |
-| `custom_sql` | `input` | Custom SQL action and optional temp-input metadata. |
-
-### `TaxonomyOperationBatch`
-
-| Field | Type | Description |
-| --- | --- | --- |
-| `batch_id` | `i64` | Batch ID. |
-| `context` | `TaxonomyBatchContext` | Typed source and options/metadata. |
-| `input` | `serde_json::Value` | Original invocation input stored for audit. Shape depends on `context.source`. |
-| `created_at` | `String` | Batch creation timestamp. |
-
-Typical `input` shapes are an array of `TaxonInputRow` for `batch_update`, a
-single action input object for query actions, and `{ "sql": "..." }` for
-`custom_sql`.
-
-### `TaxonomyOperation`
-
-| Field | Type | Description |
-| --- | --- | --- |
-| `operation_id` | `i64` | Operation ID. |
-| `batch_id` | `i64` | Parent batch ID. |
-| `row_number` | `usize` | One-based source row; direct actions use `1`. |
-| `status` | `TaxonomyOperationStatus` | `applied` or `reverted`. |
-| `changeset_size` | `usize` | Stored SQLite changeset size in bytes. The changeset itself is not exposed. |
-| `applied_at` | `String` | Apply timestamp. |
-| `reverted_at` | `Option<String>` | Rollback timestamp when reverted. |
-
-### History list functions
-
-```rust
-pub fn list_taxonomy_operation_batches(
-    database: &Database,
-    cursor: Option<&str>,
-    limit: usize,
-) -> CoreResult<TaxonomyPage<TaxonomyOperationBatch>>
-```
-
-Returns batches newest first, ordered by creation time and batch ID.
+### `list_taxonomy_operations`
 
 ```rust
 pub fn list_taxonomy_operations(
@@ -558,19 +425,49 @@ pub fn list_taxonomy_operations(
 ) -> CoreResult<TaxonomyPage<TaxonomyOperation>>
 ```
 
-Returns global operations newest first by operation ID.
+Returns newest operations first. `cursor` and `limit` control pagination.
+
+### `get_taxonomy_operation`
 
 ```rust
-pub fn list_taxonomy_operations_for_batch(
+pub fn get_taxonomy_operation(
     database: &Database,
-    batch_id: i64,
-    cursor: Option<&str>,
-    limit: usize,
-) -> CoreResult<TaxonomyPage<TaxonomyOperation>>
+    operation_id: i64,
+) -> CoreResult<Option<TaxonomyOperation>>
 ```
 
-Returns operations for one batch in source-row and operation-ID order. A
-cursor from one batch cannot be used with another batch.
+Returns `None` when the operation does not exist.
+
+### `export_taxonomy_operation_csv`
+
+```rust
+pub fn export_taxonomy_operation_csv(
+    database: &Database,
+    operation_id: i64,
+) -> CoreResult<String>
+```
+
+`operation_id` identifies one existing knowledge-base update operation.
+Returns its complete attempted input as a UTF-8, pipe-delimited CSV accepted
+by formatted update. Rows remain in their original order, including failed or
+no-change attempts. Transient selected IDs are excluded.
+
+### `export_all_taxonomy_operations_csv`
+
+```rust
+pub fn export_all_taxonomy_operations_csv(
+    database: &Database,
+) -> CoreResult<String>
+```
+
+Returns the attempted input from every knowledge-base update operation as one
+formatted-update CSV. Operations are ordered from oldest to newest, rows
+retain their original order, and the combined file has one header. A file with
+no operations contains only the formatted-update header.
+
+Both exports use exactly the columns returned by
+`taxonomy_formatted_update_template`, so their output can be imported later
+for rebase.
 
 ### `revert_taxonomy_operation`
 
@@ -581,39 +478,82 @@ pub fn revert_taxonomy_operation(
 ) -> CoreResult<()>
 ```
 
-Reverts one `applied` operation from its stored changeset and marks it
-`reverted`. It does not revert the rest of the batch and returns no refreshed
-view. A missing, already reverted, or conflicting operation returns an error.
-Later changes to the same records may prevent rollback.
+Reverts the complete operation in one transaction. A conflict fails the whole
+revert. A successful revert deletes the operation from history.
 
-Rollback uses the same changeset-derived `taxon_id` scope as Custom SQL. It
-does not queue photos mapped to unrelated taxa.
+## Base database
 
-## Tauri command surface
+### `get_taxonomy_base_metadata`
 
-Tauri converts core errors to error strings. JavaScript invoke argument names
-use `camelCase`; serialized input and output object fields remain `snake_case`.
+```rust
+pub fn get_taxonomy_base_metadata(
+    database: &Database,
+) -> CoreResult<Option<TaxonomyBaseMetadata>>
+```
 
-| Command | JavaScript arguments | Return value |
+Returns `None` before a base database has been imported. Otherwise the
+metadata contains `source_path`, `taxa_count`, `taxon_names_count`, and
+`imported_at`.
+
+### `replace_taxonomy_base_database`
+
+```rust
+pub fn replace_taxonomy_base_database(
+    database: &Database,
+    source_path: &Path,
+) -> CoreResult<TaxonomyBaseReplaceResult>
+```
+
+`source_path` identifies the external SQLite base database. It must differ
+from the application database and contain valid taxonomy data in the expected
+base-database layout.
+
+Within that external database, `name_type` uses `1` for `sci_name`, `2` for
+`synonym`, `3` for `zh_name`, `4` for `zh_alias`, `5` for `en_name`, and `6`
+for `en_alias`. API and JSON values use the string names.
+
+Replacement discards the current taxonomy, taxonomy operation history, and
+mapping state, then imports the external taxon and name IDs. The return value
+contains:
+
+| Field | Type | Description |
 | --- | --- | --- |
-| `search_taxa` | `{ query, limit? }`; default limit `50` | `TaxonSearchResult[]` |
-| `get_taxon_detail_node` | `{ taxonId, childrenCursor?, childrenLimit? }`; default child limit `50` | `TaxonDetailNode`; a missing taxon is an IPC error |
-| `list_taxon_children` | `{ taxonId, cursor?, limit? }`; default limit `50` | `TaxonomyPage<TaxonChild>` |
-| `delete_taxon_name` | `{ input: DeleteTaxonNameInput }` | `TaxonomyActionResult` |
-| `update_taxon` | `{ input: TaxonUpdateInput, options? }`; omitted options use all-false defaults | `TaxonomyUpdateActionResult` |
-| `delete_taxon` | `{ taxonId }` | `TaxonomyActionResult` |
-| `execute_custom_taxonomy_sql` | `{ sql, input? }` | `TaxonomyCustomSqlResult` |
-| `list_taxonomy_operation_batches` | `{ cursor?, limit? }`; default limit `50` | `TaxonomyPage<TaxonomyOperationBatch>` |
-| `list_taxonomy_operations` | `{ cursor?, limit? }`; default limit `50` | `TaxonomyPage<TaxonomyOperation>` |
-| `list_taxonomy_operations_for_batch` | `{ batchId, cursor?, limit? }`; default limit `50` | `TaxonomyPage<TaxonomyOperation>` |
+| `metadata` | `TaxonomyBaseMetadata` | Metadata for the imported base database. |
+| `queued_photo_count` | `i64` | Number of photos queued for global remapping. |
 
-The following public Rust functions currently have no Tauri command adapter:
+The desktop adapter starts processing the global mapping queue asynchronously
+after replacement succeeds.
 
-- `get_taxon_summary`
-- `get_taxon_detail`
-- `preview_rows`
-- `apply_rows`
-- `revert_taxonomy_operation`
+## Desktop command adapters
 
-They are available to Rust callers and can be exposed later without changing
-the core taxonomy interface.
+The desktop layer supplies `Database` through application state. Its public
+taxonomy commands are:
+
+| Command | Explicit parameters | Return value |
+| --- | --- | --- |
+| `search_taxa` | `query: String`, `limit: Option<usize>` | `Vec<TaxonSearchResult>` |
+| `suggest_taxa` | `query: String`, `limit: Option<usize>` | `Vec<TaxonSuggestion>` |
+| `get_taxon_detail_node` | `taxon_id: i64`, `children_cursor: Option<String>`, `children_limit: Option<usize>` | `TaxonDetailNode`; missing taxa are errors |
+| `list_taxon_children` | `taxon_id: i64`, `cursor: Option<String>`, `limit: Option<usize>` | `TaxonomyPage<TaxonChild>` |
+| `update_taxon` | `input: TaxonUpdateInput` | `TaxonomyOperationResult` |
+| `promote_taxon_name` | `input: PromoteTaxonNameInput` | `()` |
+| `delete_taxon_name` | `input: DeleteTaxonNameInput` | `()` |
+| `delete_taxon` | `taxon_id: i64` | `()` |
+| `execute_custom_taxonomy_sql` | `sql: String`, `input: Option<TaxonomyCustomSqlTempTable>` | `TaxonomyCustomSqlResult` |
+| `preview_taxonomy_rows` | `rows: Vec<TaxonInputRow>` | `TaxonomyPreviewResult` |
+| `apply_taxonomy_rows` | `rows: Vec<TaxonInputRow>` | `TaxonomyOperationResult` |
+| `parse_taxonomy_input_csv` | `input: String` | `Vec<TaxonInputRow>` |
+| `get_taxonomy_formatted_update_template` | none | UTF-8 CSV `String` |
+| `export_taxonomy_log` | `rows: Vec<TaxonRowOutcome>` | UTF-8 CSV `String` |
+| `get_taxonomy_name_separator` | none | `String` |
+| `set_taxonomy_name_separator` | `separator: String` | `()` |
+| `list_taxonomy_operations` | `cursor: Option<String>`, `limit: Option<usize>` | `TaxonomyPage<TaxonomyOperation>` |
+| `get_taxonomy_operation` | `operation_id: i64` | `TaxonomyOperation`; missing operations are errors |
+| `revert_taxonomy_operation` | `operation_id: i64` | `()` |
+| `export_taxonomy_operation_csv` | `operation_id: i64` | UTF-8 formatted-input CSV `String` |
+| `export_all_taxonomy_operations_csv` | none | UTF-8 combined formatted-input CSV `String` |
+| `get_taxonomy_base_metadata` | none | `Option<TaxonomyBaseMetadata>` |
+| `replace_taxonomy_base_database` | `source_path: String` | Asynchronous operation handle; final result contains replacement and mapping results |
+
+Optional desktop page limits default to `50`. The autocomplete limit defaults
+to `10`.

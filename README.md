@@ -2,20 +2,20 @@
 
 PhytoIndex is a local-first desktop application for indexing plant photos. It scans photo folders, imports a taxonomy workbook, maps photos to taxa, and provides photo, taxonomy, and map browsers.
 
-Current release: `v2.1.0`
+Current development version: `v3.0.0`
 
-Version 2 replaces the Python service and separately hosted frontend from version 1 with a Tauri 2 desktop application. The user interface remains React and TypeScript, while application services, SQLite access, file scanning, and imports run in Rust.
+PhytoIndex is a Tauri 2 desktop application. The user interface uses React and TypeScript, while application services, SQLite access, file scanning, and imports run in Rust.
 
 ## Supported Platforms
 
 | Platform | Minimum system | Release artifact | First launch |
 | --- | --- | --- | --- |
-| macOS Apple Silicon | macOS 11 | `PhytoIndex_2.1.0_aarch64.dmg` | Allow the app in Privacy and Security |
-| Windows x64 | Windows 10 or 11 | `PhytoIndex_2.1.0_x64-setup.exe` | Confirm the SmartScreen warning |
+| macOS Apple Silicon | macOS 11 | `PhytoIndex_3.0.0_aarch64.dmg` | Allow the app in Privacy and Security |
+| Windows x64 | Windows 10 or 11 | `PhytoIndex_3.0.0_x64-setup.exe` | Confirm the SmartScreen warning |
 
 Release builds do not require Python, Node.js, Rust, a database server, or other development tools on the destination computer. Windows downloads WebView2 during installation only when the runtime is missing.
 
-Packages are available from [GitHub Releases](https://github.com/baoyunfan0101/PhytoIndex/releases).
+Packages and signed in-app updates are available from [GitHub Releases](https://github.com/baoyunfan0101/Vividarium/releases).
 
 ## Features
 
@@ -39,8 +39,10 @@ crates/
   phytoindex-core/          Rust domain services, SQLite, scanning, and imports
 docs/
   BUILDING.md               Local and GitHub release instructions
+  MAP.md                    Map query and settings backend API
   PHOTOS.md                 Photos library backend API
   TAXONOMY.md               Taxonomy knowledge base backend API
+  UPDATING.md               Application update backend API
 scripts/
   build-macos.sh            Apple Silicon DMG build
   build-windows.ps1         Windows x64 NSIS build
@@ -54,6 +56,10 @@ The React application calls typed Rust commands through Tauri IPC. Original phot
 See [docs/TAXONOMY.md](docs/TAXONOMY.md) for the public taxonomy knowledge base backend models, Rust APIs, and Tauri commands.
 
 See [docs/PHOTOS.md](docs/PHOTOS.md) for the public photos library, automatic taxonomy mapping, and sparse taxonomy browsing backend APIs.
+
+See [docs/MAP.md](docs/MAP.md) for map-photo pagination and map-provider settings.
+
+See [docs/UPDATING.md](docs/UPDATING.md) for the application update backend commands, models, and release endpoint.
 
 ## Development
 
@@ -110,9 +116,9 @@ Build the Windows x64 installer from PowerShell on Windows:
 
 The repository also includes a GitHub Actions workflow that builds both platforms and creates a GitHub release. See [docs/BUILDING.md](docs/BUILDING.md) for prerequisites, package locations, verification, first-launch instructions, and the complete release procedure.
 
-## Version 1 Data Migration
+## Data Compatibility
 
-Release builds use the operating system application-data directory. On first start, version 2 looks for the legacy version 1 `PhytoIndex` database and thumbnail directory and imports them when present. The SQLite schema remains compatible with version 1.
+Release builds use the operating system application-data directory. The current SQLite schema version is `2`. Databases with any other schema version are incompatible and rejected.
 
 The permanent application identifier is:
 

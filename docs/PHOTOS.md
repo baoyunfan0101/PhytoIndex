@@ -7,11 +7,10 @@ It covers:
   refresh, and rename APIs.
 - `phytoindex_core::mapping`: photo-to-taxon matching and taxon-based photo
   browsing APIs.
+- `phytoindex_core::naming`: shared name normalization and filename hook APIs,
+  documented in [the naming backend API](NAMING.md).
 - Desktop Tauri commands, operation events, and media URLs that expose those
   core APIs.
-
-Database tables and other internal storage details are not part of this
-contract.
 
 The Rust surfaces are imported from:
 
@@ -20,7 +19,7 @@ use phytoindex_core::mapping::*;
 use phytoindex_core::photos::*;
 ```
 
-Shared taxonomy types such as `TaxonRank`, `TaxonomyNameKind`,
+Shared taxonomy types such as `TaxonRank`, `TaxonomyNameType`,
 `TaxonDisplayNames`, and `TaxonSummary` are defined in the
 [taxonomy backend API](TAXONOMY.md).
 
@@ -155,11 +154,11 @@ returned before photos.
 | `message` | `String` | Short result or error description. |
 | `photo` | `Option<Photo>` | Current photo for `applied` and `no_change`; `null` for `failed`. |
 
-### `PhotoRenameBatchResult`
+### `PhotoRenameOperationResult`
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `batch_id` | `Option<i64>` | Shared batch ID when at least one row was applied; otherwise `null`. |
+| `operation_id` | `Option<i64>` | Shared operation ID when at least one row was applied; otherwise `null`. |
 | `rows` | `Vec<PhotoRenameRowOutcome>` | One outcome for every input ID, in input order. |
 
 ### `PhotoOperationSource`
@@ -168,44 +167,32 @@ returned before photos.
 | --- | --- |
 | `manual_rename` | One call to `rename_photo`. |
 | `taxon_rename` | One call to `rename_photo_from_taxon`. |
-| `taxon_batch_rename` | One call to `rename_photos_from_taxa`. |
-
-### `PhotoOperationStatus`
-
-| Value | Description |
-| --- | --- |
-| `applied` | The recorded rename is currently applied. |
-| `reverted` | The recorded rename has been reverted. |
-
-### `PhotoOperationBatch`
-
-One public rename call creates at most one batch. A no-op rename does not
-create a batch or operation.
-
-| Field | Type | Description |
-| --- | --- | --- |
-| `batch_id` | `i64` | Batch ID. |
-| `source` | `PhotoOperationSource` | Rename API that created the batch. |
-| `root_path` | `String` | Canonical photo library root at apply time. |
-| `created_at` | `String` | Batch creation timestamp. |
+| `taxon_selection_rename` | One call to `rename_photos_from_taxa` or the directory selection API. |
 
 ### `PhotoOperation`
 
-The operation stores explicit rename values. It does not expose or depend on a
-SQLite changeset.
+One public rename call creates at most one operation. A no-op call creates no
+operation. The operation stores its ordered request input and all successful
+file rename items.
 
 | Field | Type | Description |
 | --- | --- | --- |
 | `operation_id` | `i64` | Operation ID. |
-| `batch_id` | `i64` | Parent batch ID. |
+| `source` | `PhotoOperationSource` | Rename API that created the operation. |
+| `root_path` | `String` | Canonical photo library root at apply time. |
+| `input` | `Vec<PhotoOperationInput>` | Ordered requested photo IDs and optional manual filenames. |
+| `items` | `Vec<PhotoOperationItem>` | Successful renames in original row order. |
+| `applied_at` | `String` | Apply timestamp. |
+
+`PhotoOperationItem` contains:
+
+| Field | Type | Description |
+| --- | --- | --- |
 | `row_number` | `usize` | One-based position in the source call. |
-| `status` | `PhotoOperationStatus` | `applied` or `reverted`. |
 | `photo_id` | `i64` | Photo ID at apply time. |
 | `directory_relative_path` | `String` | Exact containing-directory path at apply time. |
 | `old_filename` | `String` | Exact filename before the rename. |
 | `new_filename` | `String` | Exact filename after the rename. |
-| `applied_at` | `String` | Apply timestamp. |
-| `reverted_at` | `Option<String>` | Revert timestamp, or `null`. |
 
 ## `phytoindex_core::photos`
 
@@ -299,8 +286,9 @@ pub fn refresh_directory(
 | `directory_id` | Directory to compare with the real filesystem. |
 
 Returns the changes found among the directory's immediate entries. Child
-directories are indexed but are not recursively scanned. New or changed photos
-become `processing` until taxon matching completes.
+directories are indexed but are not recursively scanned. Every newly discovered
+photo becomes `processing` during its first refresh. New or changed photos
+remain in that state until taxon matching completes.
 
 ### Photo read APIs
 
@@ -315,14 +303,50 @@ pub fn get_photo(
 
 Returns the indexed photo, or `None` when the ID does not exist.
 
-#### `list_photos`
+#### `search_photos`
 
 ```rust
-pub fn list_photos(database: &Database) -> CoreResult<Vec<Photo>>
+pub fn search_photos(
+    database: &Database,
+    query: &str,
+    cursor: Option<&str>,
+    limit: usize,
+) -> CoreResult<PhotoPage<Photo>>
 ```
 
-Returns every indexed photo ordered by `photo_id`. Interactive views should use
-the cursor-based directory, taxon, or mapping-status APIs instead.
+| Parameter | Description |
+| --- | --- |
+| `query` | Text matched against filenames and taxonomy names. |
+| `cursor` | `None` for the first page, otherwise the previous `next_cursor`. |
+| `limit` | Requested maximum number of photos. |
+
+Combines filename matches with photos assigned to matching taxa. Taxon matches
+include photos on descendant taxa. Duplicate photos are removed and results
+are ordered by `photo_id`. Blank input returns an empty page. The cursor is
+bound to the normalized query.
+
+This is the backend source for a general-search PhotoSet. PhotoSet itself is a
+frontend window concept and is not stored by the backend.
+
+#### `search_photos_by_filename`
+
+```rust
+pub fn search_photos_by_filename(
+    database: &Database,
+    query: &str,
+    cursor: Option<&str>,
+    limit: usize,
+) -> CoreResult<PhotoPage<Photo>>
+```
+
+| Parameter | Description |
+| --- | --- |
+| `query` | Case-insensitive text contained in `filename`. Leading and trailing whitespace is ignored. |
+| `cursor` | `None` for the first page, otherwise the previous page's `next_cursor`. |
+| `limit` | Requested maximum number of photos. |
+
+Returns case-insensitive substring matches ordered by `photo_id`. An empty
+query returns an empty page. The cursor is bound to the normalized query.
 
 #### `photo_file_path`
 
@@ -411,14 +435,39 @@ pub fn rename_photo_from_taxon(
 ) -> CoreResult<Photo>
 ```
 
-Renames one real file to:
+Formats and renames one real file using `PhotoFilenameFormatSettings`. The
+photo must have a current `matched` mapping. The configured filename parser
+supplies the preserved suffix, so serial numbers and the image extension are
+not discarded.
 
-```text
-{accepted scientific name}.{original extension}
+`PhotoFilenameFormatSettings` exposes the six booleans `family_zh`,
+`family_sci`, `genus_zh`, `genus_sci`, `species_zh`, and `species_sci`.
+The default enables only `species_sci`. When the requested rank is absent, the
+formatter moves that selection toward genus and then family. When one language
+is absent at the selected rank, it uses the other language.
+
+```rust
+pub fn get_photo_filename_format_settings(
+    database: &Database,
+) -> CoreResult<PhotoFilenameFormatSettings>
+
+pub fn set_photo_filename_format_settings(
+    database: &Database,
+    settings: &PhotoFilenameFormatSettings,
+) -> CoreResult<()>
+
+pub fn format_photo_filename(
+    info: &TaxonomicNameInfo,
+    suffix: &str,
+    settings: &PhotoFilenameFormatSettings,
+) -> CoreResult<String>
 ```
 
-The photo must have a current `matched` mapping and the selected taxon must
-have an accepted scientific name. Returns the updated `Photo`.
+| Function | Parameters | Return |
+| --- | --- | --- |
+| `get_photo_filename_format_settings` | `database`: project database | Current six-field filename format settings. |
+| `set_photo_filename_format_settings` | `database`; `settings`: complete six-field settings | `()` after validation and save. |
+| `format_photo_filename` | `info`: parsed six-dimensional names; `suffix`: preserved filename suffix; `settings`: fields to include | Formatted filename. |
 
 #### `rename_photos_from_taxa`
 
@@ -426,7 +475,7 @@ have an accepted scientific name. Returns the updated `Photo`.
 pub fn rename_photos_from_taxa(
     database: &Database,
     photo_ids: &[i64],
-) -> CoreResult<PhotoRenameBatchResult>
+) -> CoreResult<PhotoRenameOperationResult>
 ```
 
 | Parameter | Description |
@@ -435,31 +484,30 @@ pub fn rename_photos_from_taxa(
 
 Returns one outcome for every input ID. A row failure does not stop later rows;
 successful earlier and later renames remain applied. All changing rows share
-the returned `batch_id`. If every row fails or needs no change, `batch_id` is
-`None`. Database, cancellation, or runtime consistency failures abort the call
-as a top-level error.
+the returned `operation_id`. If every row fails or needs no change,
+`operation_id` is `None`.
 
-### Rename history APIs
-
-All changing rename calls are logged. Single-photo calls contain one operation.
-Successful rows from `rename_photos_from_taxa` share one batch.
-
-#### `list_photo_operation_batches`
+#### `rename_photos_in_directory_from_taxa`
 
 ```rust
-pub fn list_photo_operation_batches(
+pub fn rename_photos_in_directory_from_taxa(
     database: &Database,
-    cursor: Option<&str>,
-    limit: usize,
-) -> CoreResult<PhotoPage<PhotoOperationBatch>>
+    directory_id: i64,
+    include_descendants: bool,
+) -> CoreResult<PhotoRenameOperationResult>
 ```
 
 | Parameter | Description |
 | --- | --- |
-| `cursor` | `None` for the first page, otherwise the previous page's `next_cursor`. |
-| `limit` | Requested maximum number of batches. |
+| `directory_id` | Directory whose photos are considered. |
+| `include_descendants` | Whether to include photos in descendant directories. |
 
-Returns batches newest first by creation time and batch ID.
+Only photos with a current `matched` mapping are renamed. The return value has
+the same per-row and operation semantics as `rename_photos_from_taxa`.
+
+### Rename history APIs
+
+All changing rows from one public rename call share one operation.
 
 #### `list_photo_operations`
 
@@ -478,25 +526,16 @@ pub fn list_photo_operations(
 
 Returns operations newest first by operation ID.
 
-#### `list_photo_operations_for_batch`
+#### `get_photo_operation`
 
 ```rust
-pub fn list_photo_operations_for_batch(
+pub fn get_photo_operation(
     database: &Database,
-    batch_id: i64,
-    cursor: Option<&str>,
-    limit: usize,
-) -> CoreResult<PhotoPage<PhotoOperation>>
+    operation_id: i64,
+) -> CoreResult<Option<PhotoOperation>>
 ```
 
-| Parameter | Description |
-| --- | --- |
-| `batch_id` | Batch whose operations are requested. |
-| `cursor` | `None` for the first page, otherwise the previous page's `next_cursor`. |
-| `limit` | Requested maximum number of operations. |
-
-Returns operations in source-row and operation-ID order. A cursor from one
-batch cannot be used with another batch.
+Returns one operation with all successful file items in input order.
 
 #### `revert_photo_operation`
 
@@ -507,16 +546,53 @@ pub fn revert_photo_operation(
 ) -> CoreResult<()>
 ```
 
-Reverts one applied rename and marks it `reverted`. Revert succeeds only when:
+Reverts one operation and deletes its history record after success. Revert
+preflights every recorded file and then restores all items in reverse row
+order. It succeeds
+only when:
 
 - the currently open root equals the recorded root;
-- the photo still has the recorded ID and directory;
-- its current indexed and real filename equals `new_filename`;
-- `old_filename` is available as the destination.
+- every photo still has the recorded ID and directory;
+- every current indexed and real filename equals its `new_filename`;
+- every filesystem rename can be completed.
 
-On success the real file is renamed to `old_filename`, the photo mapping is
-re-evaluated, and the operation status is updated together. If a later rename
-changed the filename again, that later operation must be reverted first.
+Database changes and status update use one transaction. Filesystem work uses
+compensating renames if a later file or database step fails, so the operation
+restores as a whole or reports a consistency error.
+
+#### `export_photo_operation_csv`
+
+```rust
+pub fn export_photo_operation_csv(
+    database: &Database,
+    operation_id: i64,
+) -> CoreResult<String>
+```
+
+`operation_id` identifies one existing rename operation. The return value is a
+UTF-8, pipe-delimited audit CSV with one header and the operation's successful
+items in original row order.
+
+#### `export_all_photo_operations_csv`
+
+```rust
+pub fn export_all_photo_operations_csv(
+    database: &Database,
+) -> CoreResult<String>
+```
+
+Returns the same audit CSV for every rename operation. Operations are ordered
+from oldest to newest, their items retain row order, and the combined file has
+one header.
+
+Both audit exports use fields already present in `PhotoOperation` and
+`PhotoOperationItem`:
+
+```text
+operation_id|source|applied_at|root_path|row_number|photo_id|directory_relative_path|old_filename|new_filename
+```
+
+The exports are audit records only. No CSV-driven rename import is provided.
 
 ## Public mapping types
 
@@ -526,12 +602,16 @@ changed the filename again, that later operation must be reverted first.
 | --- | --- |
 | `processing` | The photo is waiting for background knowledge-base matching. |
 | `unmatched` | Matching found no candidate taxon. |
-| `ambiguous` | Matching found one or more candidates and no taxon has been selected. |
-| `matched` | A candidate taxon has been selected. |
-| `stale` | The previously selected taxon is no longer valid. |
+| `ambiguous` | The highest-priority matching dimension found more than one taxon. |
+| `matched` | Matching found one taxon, or the user selected or forced a taxon. |
 
 There is no `resolved_by` field. A selected taxon remains selected after
 rematching only while it is still a current candidate.
+
+`matched`, `ambiguous`, and `unmatched` are stable results. `processing` is a
+temporary state and takes precedence over any previous result. A processing
+photo is excluded from matched-only navigation, taxonomy browsing, search,
+counts, and rename operations until matching completes.
 
 ### `PhotoTaxonMapping`
 
@@ -549,9 +629,8 @@ that selection is being revalidated.
 | Field | Type | Description |
 | --- | --- | --- |
 | `name_id` | `i64` | Matched taxonomy name ID. |
-| `name_kind` | `TaxonomyNameKind` | Scientific, English, or Chinese name kind. |
+| `name_type` | `TaxonomyNameType` | One of the six taxonomy name types. |
 | `name` | `String` | Taxonomy name text that matched. |
-| `is_accepted` | `bool` | Whether the matched name is currently accepted. |
 
 ### `PhotoTaxonCandidate`
 
@@ -559,14 +638,17 @@ that selection is being revalidated.
 | --- | --- | --- |
 | `summary` | `TaxonSummary` | Candidate taxon, accepted display names, and breadcrumb. |
 | `matched_names` | `Vec<PhotoMatchedName>` | Taxonomy names responsible for this candidate. |
-| `accepted_names` | `TaxonDisplayNames` | Current accepted scientific, English, and Chinese names. |
+| `accepted_names` | `TaxonDisplayNames` | Current `sci_name`, `en_name`, and `zh_name`. |
+
+Candidates and matched-name snapshots are available only for `ambiguous`
+mappings. A later automatic or manual result replaces them.
 
 ### `PhotoTaxonMatch`
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `mapping` | `PhotoTaxonMapping` | Current stored or synthesized mapping state. |
-| `candidates` | `Vec<PhotoTaxonCandidate>` | Current candidates for the photo filename. |
+| `mapping` | `PhotoTaxonMapping` | Current logical mapping state. |
+| `candidates` | `Vec<PhotoTaxonCandidate>` | Persisted candidates when the current status is `ambiguous`; otherwise empty. |
 
 ### `PhotoTaxonUsage`
 
@@ -608,33 +690,28 @@ Accepted values are:
 - `unmatched`
 - `ambiguous`
 - `processing`
-- `stale`
-- `unmapped`
 
-`unmapped` means the photo has neither a current mapping nor pending matching
-work. A photo waiting for matching belongs to `processing`, regardless of its
-previous stored status.
+A photo waiting for matching belongs to `processing`, regardless of its
+previous stable result.
 
 ### `PhotoMappingListItem`
 
 | Field | Type | Description |
 | --- | --- | --- |
 | `photo` | `Photo` | Photo in the requested logical status. |
-| `mapping` | `Option<PhotoTaxonMapping>` | Mapping state, or `null` for `unmapped`. |
+| `mapping` | `PhotoTaxonMapping` | Current logical mapping state. |
 
 ### `MappingMetadata`
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `mapped_photo_count` | `i64` | Number of stored `matched` mappings. |
-| `unmatched_photo_count` | `i64` | Number of stored `unmatched` mappings. |
-| `ambiguous_photo_count` | `i64` | Number of stored `ambiguous` mappings. |
+| `mapped_photo_count` | `i64` | Number of current `matched` mappings. |
+| `unmatched_photo_count` | `i64` | Number of current `unmatched` mappings. |
+| `ambiguous_photo_count` | `i64` | Number of current `ambiguous` mappings. |
 | `processing_photo_count` | `i64` | Number of photos waiting for matching. |
 | `mapping_taxa_count` | `i64` | Number of non-empty taxon nodes in the photo taxonomy view. |
 
-Stored-status counts can overlap `processing_photo_count` while an existing
-mapping is being revalidated. Use `list_photos_by_mapping_status` when mutually
-exclusive logical status membership is required.
+The four photo-status counts are mutually exclusive.
 
 ### `PhotoMappingRunResult`
 
@@ -644,16 +721,13 @@ exclusive logical status membership is required.
 | `changed` | `usize` | Mapping states changed by this run. |
 | `pending` | `i64` | Photos still waiting for matching. |
 
-### `MappingSyncResult`
+### `PhotoNameField` and `PhotoNameMatchSettings`
 
-| Field | Type | Description |
-| --- | --- | --- |
-| `processed` | `usize` | Photos evaluated by the rebuild. |
-| `mapped` | `usize` | Photos ending in `matched`. |
-| `unmapped` | `usize` | Photos ending in `unmatched`. |
-| `ambiguous` | `usize` | Photos ending in `ambiguous`. |
-| `unmapped_photos` | `Vec<Photo>` | Photos ending in `unmatched`. |
-| `orphan_mappings_deleted` | `usize` | Obsolete mapping rows removed by the operation. |
+`PhotoNameField` serializes as `species_sci`, `species_zh`, `genus_sci`,
+`genus_zh`, `family_sci`, or `family_zh`.
+
+`PhotoNameMatchSettings` contains `priority: Vec<PhotoNameField>`. The list
+must contain all six fields exactly once and is evaluated from first to last.
 
 ## `phytoindex_core::mapping`
 
@@ -678,8 +752,13 @@ pub fn get_photo_mapping(
 ) -> CoreResult<Option<PhotoTaxonMapping>>
 ```
 
-Returns the photo's current logical mapping, including synthesized
-`processing`, or `None` when the photo has no mapping state or does not exist.
+| Parameter | Description |
+| --- | --- |
+| `photo_id` | Photo whose current mapping is requested. |
+
+Returns the photo's current logical mapping, including `processing`, or
+`None` when the photo does not exist. A photo that exists but has no mapping
+state is reported as a consistency error.
 
 #### `get_photo_taxon_match`
 
@@ -694,13 +773,45 @@ pub fn get_photo_taxon_match(
 | --- | --- |
 | `photo_id` | Photo whose current mapping and candidates are requested. |
 
-Returns the current mapping and freshly evaluated candidates. A missing photo
-is an error.
+Returns the current mapping and its persisted candidates. Candidates are
+returned only for a current `ambiguous` mapping. A missing photo is an error.
 
-The current filename extractor removes only the final extension. It does not
-replace punctuation or other valid name characters. Candidate lookup reuses
-taxonomy search order: exact, full-name prefix, word prefix, middle, then
-trigram candidates with edit distance.
+The configured filename parser returns six possible names: scientific and
+Chinese names at species, genus, and family ranks. Each scientific field
+queries `sci_name` and `synonym` together; each Chinese field queries `zh_name`
+and `zh_alias` together. Results within one field are merged and deduplicated
+by taxon ID. The first configured field producing candidates wins. One
+candidate is mapped automatically; several candidates are persisted with an
+`ambiguous` mapping.
+
+The default priority is `species_sci`, `species_zh`, `genus_sci`, `genus_zh`,
+`family_sci`, `family_zh`.
+
+#### `get_photo_name_match_settings`
+
+```rust
+pub fn get_photo_name_match_settings(
+    database: &Database,
+) -> CoreResult<PhotoNameMatchSettings>
+```
+
+Returns the six matching fields in their current priority order.
+
+#### `set_photo_name_match_settings`
+
+```rust
+pub fn set_photo_name_match_settings(
+    database: &Database,
+    settings: &PhotoNameMatchSettings,
+) -> CoreResult<()>
+```
+
+| Parameter | Description |
+| --- | --- |
+| `settings` | Priority list containing every `PhotoNameField` exactly once. |
+
+Returns `()` after saving the settings. Changing the priority marks every
+photo as `processing` for automatic remapping.
 
 #### `select_photo_taxon`
 
@@ -720,6 +831,59 @@ pub fn select_photo_taxon(
 Returns a `matched` mapping. Selecting a taxon that is not a current candidate
 is an error.
 
+#### `clear_photo_mapping`
+
+```rust
+pub fn clear_photo_mapping(
+    database: &Database,
+    photo_id: i64,
+) -> CoreResult<PhotoTaxonMapping>
+```
+
+| Parameter | Description |
+| --- | --- |
+| `photo_id` | Photo whose binding is removed. |
+
+Removes the current taxon binding and records the photo as `unmatched`.
+Candidates and pending automatic remapping are cancelled. Returns the new
+mapping. A missing photo is an error.
+
+#### `set_photo_mapping`
+
+```rust
+pub fn set_photo_mapping(
+    database: &Database,
+    photo_id: i64,
+    taxon_id: i64,
+) -> CoreResult<PhotoTaxonMapping>
+```
+
+| Parameter | Description |
+| --- | --- |
+| `photo_id` | Photo whose binding is assigned or replaced. |
+| `taxon_id` | Existing taxon to bind. |
+
+Forces the photo to `matched` with any existing taxon. The taxon does not need
+to be an automatic candidate. Returns the new mapping and cancels candidates
+and pending automatic remapping.
+
+#### `remap_photo`
+
+```rust
+pub fn remap_photo(
+    database: &Database,
+    photo_id: i64,
+) -> CoreResult<PhotoTaxonMatch>
+```
+
+| Parameter | Description |
+| --- | --- |
+| `photo_id` | Photo to match immediately. |
+
+Runs the configured filename parser and six-field matching engine for one
+photo and returns the resulting mapping. Candidates are included when the
+result is `ambiguous`.
+
 #### `process_pending_photo_matches`
 
 ```rust
@@ -735,18 +899,66 @@ pub fn process_pending_photo_matches(
 
 Processes photos waiting for filename matching and returns the run summary.
 
-#### `rebuild_mapping`
+### Taxon-based browsing
+
+#### `search_photo_taxa`
 
 ```rust
-pub fn rebuild_mapping(
+pub fn search_photo_taxa(
     database: &Database,
-) -> CoreResult<MappingSyncResult>
+    query: &str,
+    cursor: Option<&str>,
+    limit: usize,
+) -> CoreResult<PhotoPage<TaxonSearchResult>>
 ```
 
-Re-evaluates every indexed photo and replaces existing mapping results. Returns
-the complete rebuild summary.
+| Parameter | Description |
+| --- | --- |
+| `query` | Taxonomy name query. |
+| `cursor` | `None` for the first page, otherwise the previous page's `next_cursor`. |
+| `limit` | Requested maximum number of taxa. |
 
-### Taxon-based browsing
+Uses the taxonomy search matching stages, priorities, summaries, details, and
+matched-name output unchanged. The additional filter requires
+`subtree_photo_count > 0`, so a result has a matched photo on itself or a
+descendant. An empty query returns an empty page. The opaque cursor is bound
+to the normalized query and continues the same ranked result order.
+
+#### `suggest_photo_taxa`
+
+```rust
+pub fn suggest_photo_taxa(
+    database: &Database,
+    query: &str,
+    limit: usize,
+) -> CoreResult<Vec<TaxonSuggestion>>
+```
+
+Uses the same matching stages, priorities, ordering, and photo filter as
+`search_photo_taxa`, while only loading the minimal autocomplete fields:
+`taxon_id`, `rank`, accepted display names, and matched names.
+
+#### `list_taxon_photos`
+
+```rust
+pub fn list_taxon_photos(
+    database: &Database,
+    taxon_id: i64,
+    cursor: Option<&str>,
+    limit: usize,
+) -> CoreResult<PhotoPage<Photo>>
+```
+
+| Parameter | Description |
+| --- | --- |
+| `taxon_id` | Root of the selected taxonomy subtree. |
+| `cursor` | `None` for the first page, otherwise the previous page's `next_cursor`. |
+| `limit` | Requested maximum number of photos. |
+
+Returns matched photos assigned to the requested taxon or any descendant,
+ordered by `photo_id`. A missing taxon is an error. The cursor is bound to
+`taxon_id`. This directly supplies the PhotoSet opened from a knowledge-base
+taxon without per-photo lookup calls.
 
 #### `get_photo_taxon_node`
 
@@ -810,27 +1022,29 @@ pub fn list_photos_by_mapping_status(
 
 Returns photos in the requested logical status ordered by `photo_id`.
 
-### Taxon suggestions
-
-#### `suggest`
+#### `search_photos_by_mapping_status`
 
 ```rust
-pub fn suggest(
+pub fn search_photos_by_mapping_status(
     database: &Database,
+    status: PhotoMappingListStatus,
     query: &str,
-    mode: &str,
+    cursor: Option<&str>,
     limit: usize,
-) -> CoreResult<Vec<TaxonSearchResult>>
+) -> CoreResult<PhotoPage<PhotoMappingListItem>>
 ```
 
 | Parameter | Description |
 | --- | --- |
-| `query` | Text passed to taxonomy search. |
-| `mode` | Use `binomial` to retain only results matched by a scientific name; other values keep all name kinds. |
-| `limit` | Maximum requested taxonomy search results. |
+| `status` | Logical status to search. |
+| `query` | Filename or taxonomy query. |
+| `cursor` | `None` for the first page, otherwise the previous page's `next_cursor`. |
+| `limit` | Requested maximum number of photos. |
 
-Returns the same `TaxonSearchResult` model as taxonomy search, including the
-taxon summary and the names that matched the query.
+For `matched`, the query uses the same combined filename and taxonomy behavior
+as `search_photos`, then restricts results to current matched photos. Other
+statuses search filenames only. Results are ordered by `photo_id`; the cursor
+is bound to both the normalized query and status.
 
 ## Desktop interface
 
@@ -849,35 +1063,70 @@ strings. Parameter names below are the camel-case keys used in JavaScript
 | `get_photo_directory_counts` | `directoryId: number` | `DirectoryEntryCounts` |
 | `refresh_photo_directory` | `directoryId: number` | `{ operation: OperationState }` |
 | `start_photo_mapping` | none | `{ operation: OperationState }` |
+| `parse_photo_filename` | `filename: string` | `ParsedPhotoFilename` |
+| `normalize_taxonomy_name` | `value: string` | `string \| null` |
+| `get_naming_hook_settings` | none | `NamingHookSettings` |
+| `get_naming_hook_templates` | none | `NamingHookTemplates` |
+| `set_naming_hook` | `kind: NamingHookKind`, optional `script: string` | `null` |
+| `test_naming_hook` | `kind: NamingHookKind`, `script: string`, `input: string` | `NamingHookTestResult` |
+| `get_naming_hook_test_cases` | none | `NamingHookTestCases` |
+| `set_naming_hook_test_cases` | `kind: NamingHookKind`, `cases: NamingHookTestCase[]` | `null` |
+| `run_naming_hook_tests` | `kind: NamingHookKind`, optional `script: string` | `NamingHookTestReport` |
+| `get_photo_name_match_settings` | none | `PhotoNameMatchSettings` |
+| `set_photo_name_match_settings` | `settings: PhotoNameMatchSettings` | `null` |
+| `get_photo_filename_format_settings` | none | `PhotoFilenameFormatSettings` |
+| `set_photo_filename_format_settings` | `settings: PhotoFilenameFormatSettings` | `null` |
+| `format_photo_filename` | `info: TaxonomicNameInfo`, `suffix: string`, `settings: PhotoFilenameFormatSettings` | `string` |
 | `rename_photo` | `photoId: number`, `newFilename: string` | `Photo` |
 | `rename_photo_from_taxon` | `photoId: number` | `Photo` |
-| `rename_photos_from_taxa` | `photoIds: number[]` | `PhotoRenameBatchResult` |
-| `list_photo_operation_batches` | optional `cursor: string`, optional `limit: number` | `PhotoPage<PhotoOperationBatch>` |
+| `rename_photos_from_taxa` | `photoIds: number[]` | `PhotoRenameOperationResult` |
+| `rename_photos_in_directory_from_taxa` | `directoryId: number`, optional `includeDescendants: boolean` | `PhotoRenameOperationResult` |
 | `list_photo_operations` | optional `cursor: string`, optional `limit: number` | `PhotoPage<PhotoOperation>` |
-| `list_photo_operations_for_batch` | `batchId: number`, optional `cursor: string`, optional `limit: number` | `PhotoPage<PhotoOperation>` |
+| `get_photo_operation` | `operationId: number` | `PhotoOperation` |
 | `revert_photo_operation` | `operationId: number` | `null` |
-| `get_all_photos` | none | `Photo[]` |
+| `export_photo_operation_csv` | `operationId: number` | UTF-8 audit CSV `string` |
+| `export_all_photo_operations_csv` | none | UTF-8 combined audit CSV `string` |
 | `get_photo` | `photoId: number` | `Photo` |
+| `search_photos` | `query: string`, optional `cursor: string`, optional `limit: number` | `PhotoPage<Photo>` |
+| `search_photos_by_filename` | `query: string`, optional `cursor: string`, optional `limit: number` | `PhotoPage<Photo>` |
 | `get_photo_availability` | `photoId: number` | `{ available: boolean, error: string \| null }` |
+| `reveal_photo_in_file_manager` | `photoId: number` | `null` |
 | `get_photo_metadata` | `photoId: number` | `PhotoMetadata` |
 | `get_mapping_metadata` | none | `MappingMetadata` |
+| `search_photo_taxa` | `query: string`, optional `cursor: string`, optional `limit: number` | `PhotoPage<TaxonSearchResult>` |
+| `suggest_photo_taxa` | `query: string`, optional `limit: number` | `TaxonSuggestion[]` |
+| `get_photo_mapping` | `photoId: number` | `PhotoTaxonMapping \| null` |
+| `clear_photo_mapping` | `photoId: number` | `PhotoTaxonMapping` |
+| `set_photo_mapping` | `photoId: number`, `taxonId: number` | `PhotoTaxonMapping` |
+| `remap_photo` | `photoId: number` | `PhotoTaxonMatch` |
+| `list_taxon_photos` | `taxonId: number`, optional `cursor: string`, optional `limit: number` | `PhotoPage<Photo>` |
 | `get_photo_taxon_match` | `photoId: number` | `PhotoTaxonMatch` |
 | `select_photo_taxon` | `photoId: number`, `taxonId: number` | `PhotoTaxonMapping` |
 | `get_photo_taxon_node` | optional `taxonId: number`, optional `showEmpty: boolean` | `PhotoTaxonNode` |
 | `browse_photo_taxon` | optional `taxonId: number`, optional `showEmpty: boolean`, optional `includeDescendants: boolean`, optional `cursor: string`, optional `limit: number` | `PhotoPage<PhotoTaxonItem>` |
 | `list_photos_by_mapping_status` | `status: PhotoMappingListStatus`, optional `cursor: string`, optional `limit: number` | `PhotoPage<PhotoMappingListItem>` |
-| `suggest_mapping_taxa` | `query: string`, `mode: string` | `TaxonSearchResult[]` |
+| `search_photos_by_mapping_status` | `status: PhotoMappingListStatus`, `query: string`, optional `cursor: string`, optional `limit: number` | `PhotoPage<PhotoMappingListItem>` |
 | `get_operations_status` | none | `Record<string, OperationState>` |
 
 Desktop defaults:
 
 - `browse_photo_directory.limit = 50`
+- `search_photos.limit = 50`
+- `search_photos_by_filename.limit = 50`
 - Photo operation list limits default to `50`
+- `search_photo_taxa.limit = 50`
+- `suggest_photo_taxa.limit = 10`
+- `list_taxon_photos.limit = 50`
 - `browse_photo_taxon.limit = 50`
 - `browse_photo_taxon.show_empty = false`
 - `browse_photo_taxon.include_descendants = true`
 - `list_photos_by_mapping_status.limit = 50`
-- `suggest_mapping_taxa` requests at most 10 taxonomy results
+- `search_photos_by_mapping_status.limit = 50`
+
+`reveal_photo_in_file_manager` validates that the indexed photo still exists
+under the active library root, then selects it in Finder on macOS or Explorer
+on Windows. It returns an error when the photo is unavailable, the system file
+manager cannot be started, or the platform is unsupported.
 
 `refresh_photo_directory` and `start_photo_mapping` schedule background work
 and return immediately. Their `OperationState` has:
