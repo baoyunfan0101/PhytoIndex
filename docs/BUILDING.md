@@ -1,12 +1,12 @@
 # Building and Releasing PhytoIndex
 
-This guide describes the complete release process for PhytoIndex `v2.0.0`.
+This guide describes the complete release process for PhytoIndex `v3.0.0`.
 
 ## Release Matrix
 
 | Platform | Rust target | Bundle | Output directory | Signing model |
 | --- | --- | --- | --- | --- |
-| macOS Apple Silicon | `aarch64-apple-darwin` | DMG | `target/aarch64-apple-darwin/release/bundle/dmg/` | Free ad-hoc signature |
+| macOS Apple Silicon | `aarch64-apple-darwin` | App and DMG | `target/aarch64-apple-darwin/release/bundle/` | Free ad-hoc signature |
 | Windows x64 | `x86_64-pc-windows-msvc` | NSIS EXE | `target/x86_64-pc-windows-msvc/release/bundle/nsis/` | Unsigned |
 
 Development tools are required only on the build machine. Destination computers do not need Rust, Node.js, Python, npm, or SQLite.
@@ -32,6 +32,15 @@ cargo install tauri-cli --version "^2.0" --locked
 ```
 
 Both `Cargo.lock` and `apps/desktop/package-lock.json` are committed. Use `npm ci`, not `npm install`, for release builds.
+
+Every release build also creates signed updater artifacts. Set
+`TAURI_SIGNING_PRIVATE_KEY` to the updater private key before running a local
+build. The private key must never be committed. The corresponding public key is
+stored in `apps/desktop/src-tauri/tauri.conf.json`.
+
+Also set `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` to the private key password.
+Environment variables must be set in the shell; a `.env` file is not loaded by
+the Tauri CLI.
 
 ## macOS Apple Silicon
 
@@ -60,7 +69,7 @@ Equivalent manual commands:
 ```bash
 cd apps/desktop
 npm ci
-cargo tauri build --target aarch64-apple-darwin --bundles dmg
+cargo tauri build --target aarch64-apple-darwin --bundles app,dmg
 ```
 
 The macOS configuration uses `signingIdentity: "-"`. This creates an ad-hoc signature without an Apple Developer account, certificate, or notarization.
@@ -74,10 +83,10 @@ codesign --verify --deep --strict --verbose=2 \
   target/aarch64-apple-darwin/release/bundle/macos/PhytoIndex.app
 
 hdiutil verify \
-  target/aarch64-apple-darwin/release/bundle/dmg/PhytoIndex_2.0.0_aarch64.dmg
+  target/aarch64-apple-darwin/release/bundle/dmg/PhytoIndex_3.0.0_aarch64.dmg
 
 shasum -a 256 \
-  target/aarch64-apple-darwin/release/bundle/dmg/PhytoIndex_2.0.0_aarch64.dmg
+  target/aarch64-apple-darwin/release/bundle/dmg/PhytoIndex_3.0.0_aarch64.dmg
 ```
 
 Gatekeeper assessment is expected to reject this private build because it is not notarized.
@@ -126,7 +135,7 @@ The installer uses the WebView2 download bootstrapper. If WebView2 is absent, in
 ### Verify
 
 ```powershell
-$Installer = "target\x86_64-pc-windows-msvc\release\bundle\nsis\PhytoIndex_2.0.0_x64-setup.exe"
+$Installer = "target\x86_64-pc-windows-msvc\release\bundle\nsis\PhytoIndex_3.0.0_x64-setup.exe"
 
 Get-FileHash $Installer -Algorithm SHA256
 Get-AuthenticodeSignature $Installer
@@ -138,7 +147,7 @@ Test the installer on a clean Windows 10 or Windows 11 virtual machine with no R
 
 ### Install on another Windows computer
 
-1. Run `PhytoIndex_2.0.0_x64-setup.exe`.
+1. Run `PhytoIndex_3.0.0_x64-setup.exe`.
 2. If SmartScreen appears, select More info.
 3. Select Run anyway.
 4. Allow the installer to download WebView2 if requested.
@@ -150,6 +159,17 @@ Windows 11 Smart App Control can block unsigned software without an individual b
 `.github/workflows/release.yml` builds both supported packages on native GitHub runners and attaches them to a GitHub release.
 
 The workflow can be started manually from the Actions page or by pushing a matching version tag.
+
+Add the following GitHub Actions repository secret before the first release:
+
+| Secret | Value |
+| --- | --- |
+| `TAURI_SIGNING_PRIVATE_KEY` | Complete contents of the updater private key. |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Password for the updater private key. |
+
+The updater signing key is independent of Apple notarization and Windows
+Authenticode signing. Losing it prevents installed applications from trusting
+future updates, so keep a secure backup outside the repository.
 
 Before releasing, ensure these versions match:
 
@@ -172,23 +192,16 @@ npm run build
 Create and push the release tag:
 
 ```bash
-git tag -a v2.0.0 -m "PhytoIndex v2.0.0"
-git push origin v2.0.0
+git tag -a v3.0.0 -m "PhytoIndex v3.0.0"
+git push origin v3.0.0
 ```
 
-The workflow creates the `v2.0.0` GitHub release and uploads:
+The workflow creates the `v3.0.0` GitHub release and uploads:
 
-- `PhytoIndex_2.0.0_aarch64.dmg`
-- `PhytoIndex_2.0.0_x64-setup.exe`
+- `PhytoIndex_3.0.0_aarch64.dmg`
+- `PhytoIndex_3.0.0_x64-setup.exe`
+- Signed updater artifacts and signature files
+- `latest.json`, which the installed application uses to discover updates
 
-No Apple or Windows signing secrets are required for this private-release configuration.
-
-## Version Updates
-
-For a later patch release, update the JavaScript version and lock file from `apps/desktop`:
-
-```bash
-npm version 2.0.1 --no-git-tag-version
-```
-
-Then update `[workspace.package].version` in the root `Cargo.toml`, update `CHANGELOG.md`, run all checks, and create the matching `v2.0.1` tag.
+No Apple or Windows code-signing secrets are required for this release
+configuration. The updater signing secret is still mandatory.

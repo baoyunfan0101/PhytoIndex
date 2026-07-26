@@ -2,6 +2,7 @@ mod commands;
 mod media;
 mod paths;
 mod state;
+mod updater;
 
 use state::AppState;
 use tauri::Manager;
@@ -10,11 +11,13 @@ use tauri::Manager;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let state = AppState::new(paths::data_dir(app.handle())?)?;
             state::set_global(state.clone())
                 .map_err(|_| std::io::Error::other("application state already initialized"))?;
             app.manage(state);
+            app.manage(updater::PendingAppUpdate::default());
             Ok(())
         })
         .register_uri_scheme_protocol("phytoindex", |_context, request| media::handle(request))
@@ -84,6 +87,9 @@ pub fn run() {
             commands::browse_photo_taxon,
             commands::list_photos_by_mapping_status,
             commands::suggest_mapping_taxa,
+            commands::get_app_version,
+            commands::check_app_update,
+            commands::install_app_update,
             commands::get_operations_status,
             commands::export_table,
         ])

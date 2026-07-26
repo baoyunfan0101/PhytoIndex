@@ -2,6 +2,17 @@
 
 All notable changes to PhytoIndex are documented in this file.
 
+## [3.0.0] - Unreleased
+
+### Added
+
+- Added signed in-app update checks and installation from Vividarium GitHub Releases.
+- Added release metadata and updater artifacts to the desktop release workflow.
+
+### Changed
+
+- Kept the SQLite schema version at `2`; databases with other schema versions remain incompatible.
+
 ## [2.1.0] - 2026-07-12
 
 ### Added
@@ -33,7 +44,6 @@ All notable changes to PhytoIndex are documented in this file.
 - Adopted the permanent application identifier `io.github.baoyunfan0101.phytoindex`.
 - Added native Apple Silicon DMG and Windows x64 NSIS release pipelines.
 - Added automatic WebView2 bootstrapping for Windows computers without the runtime.
-- Added migration support for the version 1 database and thumbnail directory.
 
 ### Removed
 

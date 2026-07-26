@@ -24,11 +24,34 @@ use phytoindex_core::taxonomy::{
 };
 use phytoindex_core::{export, mapping, naming, photos, taxonomy};
 use serde_json::{Value, json};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, State, ipc::Channel};
 
 use crate::state::AppState;
+use crate::updater::{AppUpdateEvent, AppUpdateInfo, PendingAppUpdate};
 
 type CommandResult<T> = Result<T, String>;
+
+#[tauri::command]
+pub fn get_app_version(app: AppHandle) -> String {
+    app.package_info().version.to_string()
+}
+
+#[tauri::command]
+pub async fn check_app_update(
+    app: AppHandle,
+    pending: State<'_, PendingAppUpdate>,
+) -> CommandResult<Option<AppUpdateInfo>> {
+    crate::updater::check(&app, pending.inner()).await
+}
+
+#[tauri::command]
+pub async fn install_app_update(
+    app: AppHandle,
+    pending: State<'_, PendingAppUpdate>,
+    on_event: Channel<AppUpdateEvent>,
+) -> CommandResult<()> {
+    crate::updater::install(&app, pending.inner(), on_event).await
+}
 
 #[tauri::command]
 pub fn get_photo_library(state: State<'_, AppState>) -> CommandResult<Option<PhotoLibrary>> {
