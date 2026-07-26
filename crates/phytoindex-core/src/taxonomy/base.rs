@@ -189,6 +189,7 @@ fn validate_base_database(path: &Path) -> CoreResult<()> {
         ],
         true,
     )?;
+    require_column_declared_type(&connection, "taxon_names", "name_type", "INTEGER")?;
     Ok(())
 }
 
@@ -222,6 +223,29 @@ fn require_table_columns(
     if columns != expected {
         return Err(CoreError::InvalidArgument(format!(
             "taxonomy base table {table} has invalid columns"
+        )));
+    }
+    Ok(())
+}
+
+fn require_column_declared_type(
+    connection: &Connection,
+    table: &str,
+    column: &str,
+    expected: &str,
+) -> CoreResult<()> {
+    let mut statement = connection.prepare(&format!("PRAGMA table_xinfo({table})"))?;
+    let columns = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(1)?, row.get::<_, String>(2)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    let declared_type = columns
+        .iter()
+        .find_map(|(name, declared_type)| (name == column).then_some(declared_type.as_str()));
+    if !declared_type.is_some_and(|declared_type| declared_type.eq_ignore_ascii_case(expected)) {
+        return Err(CoreError::InvalidArgument(format!(
+            "taxonomy base table {table} column {column} must use {expected}"
         )));
     }
     Ok(())
@@ -371,6 +395,22 @@ mod tests {
         );
     }
 
+    #[test]
+    fn rejects_a_base_database_with_text_name_types() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = Database::open(directory.path().join("vividarium.db")).unwrap();
+        let source_path = directory.path().join("base.db");
+        create_base_database_with_name_type(&source_path, "TEXT");
+
+        let error = replace_taxonomy_base_database(&database, &source_path).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("taxon_names column name_type must use INTEGER")
+        );
+    }
+
     fn seed_old_taxonomy_tree(database: &Database) -> [i64; 3] {
         let result = apply_rows(
             database,
@@ -402,9 +442,13 @@ mod tests {
     }
 
     fn create_base_database(path: &Path) {
+        create_base_database_with_name_type(path, "INTEGER");
+    }
+
+    fn create_base_database_with_name_type(path: &Path, name_type: &str) {
         let connection = Connection::open(path).unwrap();
         connection
-            .execute_batch(
+            .execute_batch(&format!(
                 r#"
                 PRAGMA foreign_keys = ON;
                 CREATE TABLE taxa (
@@ -417,7 +461,7 @@ mod tests {
                 CREATE TABLE taxon_names (
                     name_id INTEGER PRIMARY KEY AUTOINCREMENT,
                     taxon_id INTEGER NOT NULL,
-                    name_type INTEGER NOT NULL,
+                    name_type {name_type} NOT NULL,
                     name TEXT NOT NULL,
                     normalized_name TEXT GENERATED ALWAYS AS (lower(name)) STORED,
                     authority_year TEXT,
@@ -434,8 +478,8 @@ mod tests {
                 ) VALUES
                     (1001, 101, 1, 'New kingdom'),
                     (1002, 102, 1, 'New order');
-                "#,
-            )
+                "#
+            ))
             .unwrap();
     }
 

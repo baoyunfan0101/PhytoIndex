@@ -403,6 +403,33 @@ mod tests {
             )
             .unwrap();
         assert_eq!(name_type_storage, "INTEGER");
+        let taxon_names_schema: String = connection
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'taxon_names'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(taxon_names_schema.contains("name_type INTEGER NOT NULL"));
+        assert!(taxon_names_schema.contains("CHECK (name_type BETWEEN 1 AND 6)"));
+        assert!(!taxon_names_schema.contains("name_type TEXT"));
+        for (index_name, name_type) in [
+            ("idx_taxon_names_one_sci_name", 1),
+            ("idx_taxon_names_one_zh_name", 3),
+            ("idx_taxon_names_one_en_name", 5),
+        ] {
+            let index_schema: String = connection
+                .query_row(
+                    "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?",
+                    [index_name],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(
+                index_schema.contains(&format!("WHERE name_type = {name_type}")),
+                "index {index_name} does not use integer name_type {name_type}"
+            );
+        }
         let photo_columns = table_columns(&connection, "photos");
         assert_eq!(
             photo_columns,
