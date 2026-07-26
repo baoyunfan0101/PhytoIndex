@@ -5,8 +5,8 @@ use phytoindex_core::mapping::{
     PhotoTaxonMapping, PhotoTaxonMatch, PhotoTaxonNode,
 };
 use phytoindex_core::models::{
-    DirectoryEntryCounts, MappingMetadata, OperationInputTable, OperationsStatus, Photo,
-    PhotoDirectoryItem, PhotoLibrary, PhotoMetadata, PhotoPage,
+    DirectoryEntryCounts, MappingMetadata, OperationsStatus, Photo, PhotoDirectoryItem,
+    PhotoLibrary, PhotoMetadata, PhotoPage,
 };
 use phytoindex_core::naming::{
     NamingHookKind, NamingHookSettings, NamingHookTemplates, NamingHookTestCase,
@@ -296,11 +296,16 @@ pub fn revert_photo_operation(state: State<'_, AppState>, operation_id: i64) -> 
 }
 
 #[tauri::command]
-pub fn export_photo_operation_inputs(
+pub fn export_photo_operation_csv(
     state: State<'_, AppState>,
-    operation_ids: Vec<i64>,
-) -> CommandResult<OperationInputTable> {
-    photos::export_photo_operation_inputs(&state.database, &operation_ids).map_err(error)
+    operation_id: i64,
+) -> CommandResult<String> {
+    photos::export_photo_operation_csv(&state.database, operation_id).map_err(error)
+}
+
+#[tauri::command]
+pub fn export_all_photo_operations_csv(state: State<'_, AppState>) -> CommandResult<String> {
+    photos::export_all_photo_operations_csv(&state.database).map_err(error)
 }
 
 #[tauri::command]
@@ -532,11 +537,16 @@ pub fn revert_taxonomy_operation(
 }
 
 #[tauri::command]
-pub fn export_taxonomy_operation_inputs(
+pub fn export_taxonomy_operation_csv(
     state: State<'_, AppState>,
-    operation_ids: Vec<i64>,
-) -> CommandResult<OperationInputTable> {
-    taxonomy::export_taxonomy_operation_inputs(&state.database, &operation_ids).map_err(error)
+    operation_id: i64,
+) -> CommandResult<String> {
+    taxonomy::export_taxonomy_operation_csv(&state.database, operation_id).map_err(error)
+}
+
+#[tauri::command]
+pub fn export_all_taxonomy_operations_csv(state: State<'_, AppState>) -> CommandResult<String> {
+    taxonomy::export_all_taxonomy_operations_csv(&state.database).map_err(error)
 }
 
 #[tauri::command]

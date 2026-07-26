@@ -93,12 +93,6 @@ pub struct OperationState {
 
 pub type OperationsStatus = BTreeMap<String, OperationState>;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct OperationInputTable {
-    pub columns: Vec<String>,
-    pub rows: Vec<Vec<String>>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PhotoSyncResult {
     pub directory_id: i64,

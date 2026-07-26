@@ -438,19 +438,36 @@ pub fn get_taxonomy_operation(
 
 Returns `None` when the operation does not exist.
 
-### `export_taxonomy_operation_inputs`
+### `export_taxonomy_operation_csv`
 
 ```rust
-pub fn export_taxonomy_operation_inputs(
+pub fn export_taxonomy_operation_csv(
     database: &Database,
-    operation_ids: &[i64],
-) -> CoreResult<OperationInputTable>
+    operation_id: i64,
+) -> CoreResult<String>
 ```
 
-Returns `columns: Vec<String>` and `rows: Vec<Vec<String>>` in formatted-input
-column order. Operations are exported in ascending ID order, and rows preserve
-their original order. The output records attempted input, not only successful
-changes. Transient selected IDs are excluded.
+`operation_id` identifies one existing knowledge-base update operation.
+Returns its complete attempted input as a UTF-8, pipe-delimited CSV accepted
+by formatted update. Rows remain in their original order, including failed or
+no-change attempts. Transient selected IDs are excluded.
+
+### `export_all_taxonomy_operations_csv`
+
+```rust
+pub fn export_all_taxonomy_operations_csv(
+    database: &Database,
+) -> CoreResult<String>
+```
+
+Returns the attempted input from every knowledge-base update operation as one
+formatted-update CSV. Operations are ordered from oldest to newest, rows
+retain their original order, and the combined file has one header. A file with
+no operations contains only the formatted-update header.
+
+Both exports use exactly the columns returned by
+`taxonomy_formatted_update_template`, so their output can be imported later
+for rebase.
 
 ### `revert_taxonomy_operation`
 
@@ -533,7 +550,8 @@ taxonomy commands are:
 | `list_taxonomy_operations` | `cursor: Option<String>`, `limit: Option<usize>` | `TaxonomyPage<TaxonomyOperation>` |
 | `get_taxonomy_operation` | `operation_id: i64` | `TaxonomyOperation`; missing operations are errors |
 | `revert_taxonomy_operation` | `operation_id: i64` | `()` |
-| `export_taxonomy_operation_inputs` | `operation_ids: Vec<i64>` | `OperationInputTable` |
+| `export_taxonomy_operation_csv` | `operation_id: i64` | UTF-8 formatted-input CSV `String` |
+| `export_all_taxonomy_operations_csv` | none | UTF-8 combined formatted-input CSV `String` |
 | `get_taxonomy_base_metadata` | none | `Option<TaxonomyBaseMetadata>` |
 | `replace_taxonomy_base_database` | `source_path: String` | Asynchronous operation handle; final result contains replacement and mapping results |
 

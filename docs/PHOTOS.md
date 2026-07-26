@@ -560,19 +560,39 @@ Database changes and status update use one transaction. Filesystem work uses
 compensating renames if a later file or database step fails, so the operation
 restores as a whole or reports a consistency error.
 
-#### `export_photo_operation_inputs`
+#### `export_photo_operation_csv`
 
 ```rust
-pub fn export_photo_operation_inputs(
+pub fn export_photo_operation_csv(
     database: &Database,
-    operation_ids: &[i64],
-) -> CoreResult<OperationInputTable>
+    operation_id: i64,
+) -> CoreResult<String>
 ```
 
-Selected operations are sorted by original operation ID and their inputs keep
-source row order. The returned archive table has `photo_id` and
-`requested_filename` columns. Taxon-derived renames leave
-`requested_filename` empty. No table-driven rename import is implemented.
+`operation_id` identifies one existing rename operation. The return value is a
+UTF-8, pipe-delimited audit CSV with one header and the operation's successful
+items in original row order.
+
+#### `export_all_photo_operations_csv`
+
+```rust
+pub fn export_all_photo_operations_csv(
+    database: &Database,
+) -> CoreResult<String>
+```
+
+Returns the same audit CSV for every rename operation. Operations are ordered
+from oldest to newest, their items retain row order, and the combined file has
+one header.
+
+Both audit exports use fields already present in `PhotoOperation` and
+`PhotoOperationItem`:
+
+```text
+operation_id|source|applied_at|root_path|row_number|photo_id|directory_relative_path|old_filename|new_filename
+```
+
+The exports are audit records only. No CSV-driven rename import is provided.
 
 ## Public mapping types
 
@@ -1064,7 +1084,8 @@ strings. Parameter names below are the camel-case keys used in JavaScript
 | `list_photo_operations` | optional `cursor: string`, optional `limit: number` | `PhotoPage<PhotoOperation>` |
 | `get_photo_operation` | `operationId: number` | `PhotoOperation` |
 | `revert_photo_operation` | `operationId: number` | `null` |
-| `export_photo_operation_inputs` | `operationIds: number[]` | `OperationInputTable` |
+| `export_photo_operation_csv` | `operationId: number` | UTF-8 audit CSV `string` |
+| `export_all_photo_operations_csv` | none | UTF-8 combined audit CSV `string` |
 | `get_photo` | `photoId: number` | `Photo` |
 | `search_photos` | `query: string`, optional `cursor: string`, optional `limit: number` | `PhotoPage<Photo>` |
 | `search_photos_by_filename` | `query: string`, optional `cursor: string`, optional `limit: number` | `PhotoPage<Photo>` |

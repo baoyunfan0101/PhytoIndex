@@ -1,7 +1,6 @@
-use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-use rusqlite::{OptionalExtension, Transaction, params, params_from_iter};
+use rusqlite::{OptionalExtension, Transaction, params};
 use serde::{Deserialize, Serialize};
 
 use super::page::{
@@ -13,7 +12,7 @@ use super::{
 use crate::db::Database;
 use crate::error::{CoreError, CoreResult};
 use crate::mapping;
-use crate::models::{OperationInputTable, PhotoPage};
+use crate::models::PhotoPage;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -196,48 +195,6 @@ pub fn get_photo_operation(
         .optional()?
         .map(|header| photo_operation_from_header(&connection, header))
         .transpose()
-}
-
-pub fn export_photo_operation_inputs(
-    database: &Database,
-    operation_ids: &[i64],
-) -> CoreResult<OperationInputTable> {
-    let operation_ids = unique_operation_ids(operation_ids)?;
-    let mut rows = Vec::new();
-    if !operation_ids.is_empty() {
-        let connection = database.connect()?;
-        let placeholders = std::iter::repeat_n("?", operation_ids.len())
-            .collect::<Vec<_>>()
-            .join(", ");
-        let mut statement = connection.prepare(&format!(
-            "SELECT input_json FROM photo_operations \
-             WHERE operation_id IN ({placeholders}) ORDER BY operation_id"
-        ))?;
-        let inputs = statement
-            .query_map(params_from_iter(operation_ids.iter()), |row| {
-                row.get::<_, String>(0)
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
-        if inputs.len() != operation_ids.len() {
-            return Err(CoreError::NotFound("one or more photo operations".into()));
-        }
-        for input_json in inputs {
-            let inputs: Vec<PhotoOperationInput> =
-                serde_json::from_str(&input_json).map_err(|error| {
-                    CoreError::InvalidArgument(format!("invalid photo input: {error}"))
-                })?;
-            rows.extend(inputs.into_iter().map(|input| {
-                vec![
-                    input.photo_id.to_string(),
-                    input.requested_filename.unwrap_or_default(),
-                ]
-            }));
-        }
-    }
-    Ok(OperationInputTable {
-        columns: vec!["photo_id".into(), "requested_filename".into()],
-        rows,
-    })
 }
 
 pub fn revert_photo_operation(database: &Database, operation_id: i64) -> CoreResult<()> {
@@ -423,14 +380,4 @@ fn photo_operation_from_header(
         items,
         applied_at: header.applied_at,
     })
-}
-
-fn unique_operation_ids(operation_ids: &[i64]) -> CoreResult<Vec<i64>> {
-    let unique = operation_ids.iter().copied().collect::<BTreeSet<_>>();
-    if unique.iter().any(|operation_id| *operation_id <= 0) {
-        return Err(CoreError::InvalidArgument(
-            "operation ids must be positive".into(),
-        ));
-    }
-    Ok(unique.into_iter().collect())
 }

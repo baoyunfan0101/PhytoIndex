@@ -20,7 +20,6 @@ use super::page::{
 };
 use super::view::{TaxonSummary, load_taxon_summaries, load_taxon_summary};
 use crate::mapping;
-use crate::models::OperationInputTable;
 use crate::naming::{SynonymAuthorityParser, normalize_taxonomy_name};
 use crate::{CoreError, CoreResult, Database};
 
@@ -1530,72 +1529,6 @@ fn operation_from_row(row: rusqlite::Result<StoredOperationRow>) -> CoreResult<T
         changeset_size: changeset_size as usize,
         applied_at,
     })
-}
-
-pub fn export_taxonomy_operation_inputs(
-    database: &Database,
-    operation_ids: &[i64],
-) -> CoreResult<OperationInputTable> {
-    let ids = unique_operation_ids(operation_ids)?;
-    let separator = get_taxonomy_name_separator(database)?;
-    let connection = database.connect()?;
-    let mut output = Vec::new();
-    if !ids.is_empty() {
-        let placeholders = std::iter::repeat_n("?", ids.len())
-            .collect::<Vec<_>>()
-            .join(", ");
-        let mut statement = connection.prepare(&format!(
-            "SELECT input_json FROM taxonomy_operations \
-             WHERE operation_id IN ({placeholders}) ORDER BY operation_id"
-        ))?;
-        let input_json = statement
-            .query_map(params_from_iter(ids.iter()), |row| row.get::<_, String>(0))?
-            .collect::<Result<Vec<_>, _>>()?;
-        if input_json.len() != ids.len() {
-            return Err(CoreError::NotFound(
-                "one or more taxonomy operations".into(),
-            ));
-        }
-        for value in input_json {
-            let rows: Vec<TaxonInputRow> = deserialize_json(&value, "taxonomy operation input")?;
-            output.extend(rows.into_iter().map(|row| input_table_row(row, &separator)));
-        }
-    }
-    Ok(OperationInputTable {
-        columns: TAXONOMY_INPUT_COLUMNS
-            .into_iter()
-            .map(str::to_string)
-            .collect(),
-        rows: output,
-    })
-}
-
-fn input_table_row(row: TaxonInputRow, separator: &str) -> Vec<String> {
-    vec![
-        row.kingdom.unwrap_or_default(),
-        row.order.unwrap_or_default(),
-        row.family.unwrap_or_default(),
-        row.genus.unwrap_or_default(),
-        row.species.unwrap_or_default(),
-        row.authority_year.unwrap_or_default(),
-        row.synonyms.join(separator),
-        row.zh_name.unwrap_or_default(),
-        row.zh_alias.join(separator),
-        row.en_name.unwrap_or_default(),
-        row.en_alias.join(separator),
-        row.geological_range.unwrap_or_default(),
-        row.source.unwrap_or_default(),
-    ]
-}
-
-fn unique_operation_ids(operation_ids: &[i64]) -> CoreResult<Vec<i64>> {
-    let ids = operation_ids.iter().copied().collect::<BTreeSet<_>>();
-    if ids.iter().any(|operation_id| *operation_id <= 0) {
-        return Err(CoreError::InvalidArgument(
-            "operation ids must be positive".into(),
-        ));
-    }
-    Ok(ids.into_iter().collect())
 }
 
 pub fn revert_taxonomy_operation(database: &Database, operation_id: i64) -> CoreResult<()> {

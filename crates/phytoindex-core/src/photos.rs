@@ -18,6 +18,7 @@ pub use crate::models::{PhotoDirectoryItem, PhotoPage};
 
 mod media;
 mod naming;
+mod operation_export;
 mod operations;
 mod page;
 mod search;
@@ -29,10 +30,10 @@ pub use naming::{
     PhotoFilenameFormatSettings, format_photo_filename, get_photo_filename_format_settings,
     set_photo_filename_format_settings,
 };
+pub use operation_export::{export_all_photo_operations_csv, export_photo_operation_csv};
 pub use operations::{
     PhotoOperation, PhotoOperationInput, PhotoOperationItem, PhotoOperationSource,
-    export_photo_operation_inputs, get_photo_operation, list_photo_operations,
-    revert_photo_operation,
+    get_photo_operation, list_photo_operations, revert_photo_operation,
 };
 use operations::{insert_photo_operation, insert_photo_operation_item};
 pub(crate) use page::{
@@ -1290,8 +1291,8 @@ mod tests {
         assert_eq!(operation.items.len(), 2);
         assert_eq!(operation.items[0].row_number, 1);
         assert_eq!(operation.items[1].row_number, 2);
-        let exported = export_photo_operation_inputs(&database, &[operation.operation_id]).unwrap();
-        assert_eq!(exported.rows.len(), 2);
+        let exported = export_photo_operation_csv(&database, operation.operation_id).unwrap();
+        assert_eq!(exported.lines().count(), 3);
 
         revert_photo_operation(&database, operation.operation_id).unwrap();
         assert!(root.path().join("first.jpg").is_file());
