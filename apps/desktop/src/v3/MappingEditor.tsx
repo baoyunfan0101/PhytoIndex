@@ -109,11 +109,14 @@ export function MappingEditor({
               </button>
             </div>
           ) : match?.mapping.status === "ambiguous" ? (
-            <div className="candidate-stack">
-              {match.candidates.map((candidate) => (
+            <VirtualList
+              className="candidate-stack"
+              items={match.candidates}
+              rowHeight={60}
+              itemKey={(candidate) => candidate.summary.taxon_id}
+              renderItem={(candidate) => (
                 <TaxonCard
                   compact
-                  key={candidate.summary.taxon_id}
                   taxon={candidate.summary}
                   actions={
                     <button className="small-button" type="button" onClick={() => void mutate("Selecting", () => selectPhotoTaxon(photo.photo_id, candidate.summary.taxon_id))}>
@@ -121,8 +124,8 @@ export function MappingEditor({
                     </button>
                   }
                 />
-              ))}
-            </div>
+              )}
+            />
           ) : (
             <EmptyState title="No automatic match" detail="Search below to assign any taxon." icon={Sparkles} />
           )}
