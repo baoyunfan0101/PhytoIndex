@@ -1045,11 +1045,9 @@ fn search_photo_taxa_with(
         let Some(name) = field.value(&parsed.info) else {
             continue;
         };
-        for name_type in field.name_types() {
-            let candidates = find_photo_name_candidates(connection, *field, name_type, name)?;
-            if !candidates.is_empty() {
-                return Ok(candidates);
-            }
+        let candidates = find_photo_name_candidates(connection, *field, name)?;
+        if !candidates.is_empty() {
+            return Ok(candidates);
         }
     }
     Ok(Vec::new())
@@ -1058,53 +1056,80 @@ fn search_photo_taxa_with(
 fn find_photo_name_candidates(
     connection: &rusqlite::Connection,
     field: PhotoNameField,
-    name_type: TaxonomyNameType,
     name: &str,
 ) -> CoreResult<Vec<PhotoTaxonCandidate>> {
+    let [first_name_type, second_name_type] = field.name_types();
     let mut statement = connection.prepare(
         r#"
-        SELECT taxa.taxon_id, taxon_names.name_id, taxon_names.name
-        FROM taxa
+        WITH candidate_taxa AS (
+            SELECT DISTINCT taxa.taxon_id
+            FROM taxa
+            JOIN taxon_names USING (taxon_id)
+            WHERE taxa.rank = ?
+              AND taxon_names.name_type IN (?, ?)
+              AND taxon_names.normalized_name = lower(?)
+            ORDER BY taxa.taxon_id
+            LIMIT ?
+        )
+        SELECT candidate_taxa.taxon_id, taxon_names.name_id,
+               taxon_names.name_type, taxon_names.name
+        FROM candidate_taxa
         JOIN taxon_names USING (taxon_id)
-        WHERE taxa.rank = ?
-          AND taxon_names.name_type = ?
+        WHERE taxon_names.name_type IN (?, ?)
           AND taxon_names.normalized_name = lower(?)
-        ORDER BY taxa.taxon_id, taxon_names.name_id
-        LIMIT ?
+        ORDER BY candidate_taxa.taxon_id, taxon_names.name_type,
+                 taxon_names.name_id
         "#,
     )?;
     let rows = statement
         .query_map(
             params![
                 field.rank().code(),
-                name_type.code(),
+                first_name_type.code(),
+                second_name_type.code(),
                 name,
-                PHOTO_TAXON_CANDIDATE_LIMIT as i64
+                PHOTO_TAXON_CANDIDATE_LIMIT as i64,
+                first_name_type.code(),
+                second_name_type.code(),
+                name
             ],
             |row| {
+                let name_type_code = row.get::<_, i64>(2)?;
+                let name_type = TaxonomyNameType::from_code(name_type_code).map_err(|error| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        2,
+                        rusqlite::types::Type::Integer,
+                        Box::new(error),
+                    )
+                })?;
                 Ok((
                     row.get::<_, i64>(0)?,
                     PhotoMatchedName {
                         name_id: row.get(1)?,
                         name_type,
-                        name: row.get(2)?,
+                        name: row.get(3)?,
                     },
                 ))
             },
         )?
         .collect::<Result<Vec<_>, _>>()?;
-    let taxon_ids = rows
-        .iter()
-        .map(|(taxon_id, _)| *taxon_id)
-        .collect::<Vec<_>>();
+    let mut matched_names_by_taxon = BTreeMap::<i64, Vec<PhotoMatchedName>>::new();
+    for (taxon_id, matched_name) in rows {
+        matched_names_by_taxon
+            .entry(taxon_id)
+            .or_default()
+            .push(matched_name);
+    }
+    let taxon_ids = matched_names_by_taxon.keys().copied().collect::<Vec<_>>();
     let summaries = load_taxon_summaries(connection, &taxon_ids)?;
     Ok(summaries
         .into_iter()
-        .zip(rows)
-        .map(|(summary, (_, matched_name))| PhotoTaxonCandidate {
+        .map(|summary| PhotoTaxonCandidate {
             accepted_names: summary.names.clone(),
+            matched_names: matched_names_by_taxon
+                .remove(&summary.taxon_id)
+                .unwrap_or_default(),
             summary,
-            matched_names: vec![matched_name],
         })
         .collect())
 }
@@ -1558,7 +1583,7 @@ mod tests {
         fs::write(root.path().join("Shared name.jpg"), b"photo").unwrap();
         let database = Database::open(data.path().join("vividarium.db")).unwrap();
         let connection = database.connect().unwrap();
-        for _ in 0..2 {
+        for accepted_name in ["Shared name", "Different name"] {
             connection
                 .execute("INSERT INTO taxa (rank) VALUES (5)", [])
                 .unwrap();
@@ -1567,7 +1592,16 @@ mod tests {
                 .execute(
                     r#"
                     INSERT INTO taxon_names (taxon_id, name_type, name)
-                    VALUES (?, 1, 'Shared name')
+                    VALUES (?, 1, ?)
+                    "#,
+                    params![taxon_id, accepted_name],
+                )
+                .unwrap();
+            connection
+                .execute(
+                    r#"
+                    INSERT INTO taxon_names (taxon_id, name_type, name)
+                    VALUES (?, 2, 'Shared name')
                     "#,
                     [taxon_id],
                 )
@@ -1588,6 +1622,8 @@ mod tests {
         let matched = get_photo_taxon_match(&database, photo.photo_id).unwrap();
         assert_eq!(matched.mapping.status, PhotoTaxonStatus::Ambiguous);
         assert_eq!(matched.candidates.len(), 2);
+        assert_eq!(matched.candidates[0].matched_names.len(), 2);
+        assert_eq!(matched.candidates[1].matched_names.len(), 1);
         let selected_taxon_id = matched.candidates[0].summary.taxon_id;
         let selected = select_photo_taxon(&database, photo.photo_id, selected_taxon_id).unwrap();
         assert_eq!(selected.status, PhotoTaxonStatus::Matched);

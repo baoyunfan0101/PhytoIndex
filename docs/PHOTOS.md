@@ -699,10 +699,11 @@ Returns the current mapping and freshly evaluated candidates. A missing photo
 is an error.
 
 The configured filename parser returns six possible names: scientific and
-Chinese names at species, genus, and family ranks. Each scientific value
-matches `sci_name` before `synonym`; each Chinese value matches `zh_name`
-before `zh_alias`. The first configured dimension producing candidates wins.
-One candidate is mapped automatically; several candidates are `ambiguous`.
+Chinese names at species, genus, and family ranks. Each scientific field
+queries `sci_name` and `synonym` together; each Chinese field queries `zh_name`
+and `zh_alias` together. Results within one field are merged and deduplicated
+by taxon ID. The first configured field producing candidates wins. One
+candidate is mapped automatically; several candidates are `ambiguous`.
 
 The default priority is `species_sci`, `species_zh`, `genus_sci`, `genus_zh`,
 `family_sci`, `family_zh`.
