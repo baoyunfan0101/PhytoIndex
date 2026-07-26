@@ -1,114 +1,285 @@
-import { useCallback, useState } from "react";
 import {
   ArrowRightLeft,
+  Braces,
+  Clock3,
   Database,
-  FileImage,
+  FileClock,
+  FolderTree,
+  History,
+  Images,
+  Map,
+  Search,
   Settings,
+  TableProperties,
+  TreeDeciduous,
+  X,
 } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import appIconUrl from "../src-tauri/icons/icon.png";
-import { MappingView } from "./v3/MappingView";
-import { PhotosView } from "./v3/PhotosView";
-import { SettingsView } from "./v3/SettingsView";
-import { TaxonomyView } from "./v3/TaxonomyView";
+import {
+  getPhotoLibrary,
+  listTaxonPhotos,
+  openPhotoLibrary,
+  searchPhotos,
+  selectPhotoDirectory,
+  suggestPhotoTaxa,
+  type Photo,
+  type TaxonSuggestion,
+} from "./v3/api";
 import type { IconComponent } from "./v3/components";
+import { MappingEditor } from "./v3/MappingEditor";
+import { PhotoBrowser } from "./v3/PhotoBrowser";
+import { PhotoDetailView } from "./v3/PhotoDetailView";
+import {
+  FolderPhotosView,
+  PhotoHistoryView,
+  PhotoMapView,
+  TaxonPhotosView,
+  type PhotoOpenHandlers,
+} from "./v3/PhotosView";
+import { MappingView } from "./v3/MappingView";
+import { SettingsView } from "./v3/SettingsView";
+import {
+  CustomUpdateView,
+  FormattedUpdateView,
+  TaxonomyHistoryView,
+  TaxonomySearchView,
+} from "./v3/TaxonomyView";
 
-type Module = "photos" | "mapping" | "taxonomy" | "settings";
+type TabKind =
+  | "folders"
+  | "photo-taxonomy"
+  | "map"
+  | "photo-history"
+  | "mapping"
+  | "taxonomy-search"
+  | "formatted-update"
+  | "custom-update"
+  | "taxonomy-history"
+  | "settings"
+  | "search-photos"
+  | "taxon-photos"
+  | "photo-detail"
+  | "mapping-editor"
+  | "taxon-detail";
 
-const modules: Array<{
-  id: Exclude<Module, "settings">;
-  label: string;
-  icon: IconComponent;
-}> = [
-  { id: "photos", label: "Photos", icon: FileImage },
-  { id: "mapping", label: "Mapping", icon: ArrowRightLeft },
-  { id: "taxonomy", label: "Taxonomy", icon: Database },
-];
-
-const settingsModule = {
-  id: "settings" as const,
-  label: "Settings",
-  icon: Settings,
+type AppTab = {
+  id: string;
+  kind: TabKind;
+  title: string;
+  query?: string;
+  taxonId?: number;
+  photo?: Photo;
 };
 
-export function App() {
-  const [module, setModule] = useState<Module>("photos");
-  const [status, setStatus] = useState({
-    message: "Ready",
-    busy: false,
-  });
+const initialTab: AppTab = { id: "folders", kind: "folders", title: "Folders" };
 
-  const handleStatus = useCallback((message: string, busy = false) => {
-    setStatus({ message, busy });
+const photoItems: Array<[TabKind, string, IconComponent]> = [
+  ["folders", "Folders", FolderTree],
+  ["photo-taxonomy", "Photo taxonomy", TreeDeciduous],
+  ["map", "Map", Map],
+  ["photo-history", "Rename history", History],
+];
+const taxonomyItems: Array<[TabKind, string, IconComponent]> = [
+  ["taxonomy-search", "Taxonomy search", Database],
+  ["formatted-update", "Formatted update", TableProperties],
+  ["custom-update", "Custom update", Braces],
+  ["taxonomy-history", "Update history", FileClock],
+];
+
+export function App() {
+  const [tabs, setTabs] = useState<AppTab[]>([initialTab]);
+  const [activeId, setActiveId] = useState(initialTab.id);
+  const [root, setRoot] = useState("");
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [suggestions, setSuggestions] = useState<TaxonSuggestion[]>([]);
+  const [status, setStatus] = useState("Ready");
+  const active = tabs.find((tab) => tab.id === activeId) ?? tabs[0];
+
+  useEffect(() => {
+    void getPhotoLibrary().then((library) => setRoot(library?.root_path ?? ""));
   }, []);
 
-  function switchModule(nextModule: Module) {
-    setModule(nextModule);
-    setStatus({ message: "Ready", busy: false });
+  useEffect(() => {
+    const value = searchQuery.trim();
+    if (!searchOpen || !value) {
+      setSuggestions([]);
+      return;
+    }
+    const timer = window.setTimeout(() => void suggestPhotoTaxa(value).then(setSuggestions), 140);
+    return () => window.clearTimeout(timer);
+  }, [searchOpen, searchQuery]);
+
+  function openTab(tab: AppTab, singleton = false) {
+    const existing = tabs.find((item) => item.id === tab.id || (singleton && item.kind === tab.kind));
+    if (existing) {
+      setActiveId(existing.id);
+      return;
+    }
+    setTabs((current) => [...current, tab]);
+    setActiveId(tab.id);
+  }
+
+  function openModule(kind: TabKind, title: string) {
+    openTab({ id: kind, kind, title }, true);
+  }
+
+  function closeTab(id: string) {
+    setTabs((current) => {
+      if (current.length === 1) return current;
+      const index = current.findIndex((tab) => tab.id === id);
+      const next = current.filter((tab) => tab.id !== id);
+      if (activeId === id) setActiveId(next[Math.max(0, index - 1)]?.id ?? next[0].id);
+      return next;
+    });
+  }
+
+  const handlers: PhotoOpenHandlers = useMemo(() => ({
+    openDetails: (photo) => openTab({ id: `photo:${photo.photo_id}`, kind: "photo-detail", title: photo.filename, photo }),
+    openTaxon: (taxonId) => openTab({ id: `taxon:${taxonId}`, kind: "taxon-detail", title: `Taxon ${taxonId}`, taxonId }),
+    openMappingEditor: (photo) => openTab({ id: `mapping:${photo.photo_id}`, kind: "mapping-editor", title: `Map ${photo.filename}`, photo }),
+  }), [tabs]);
+
+  function submitSearch(query = searchQuery) {
+    const value = query.trim();
+    if (!value) return;
+    openTab({ id: `search:${value.toLocaleLowerCase()}`, kind: "search-photos", title: `Search: ${value}`, query: value });
+    setSearchOpen(false);
+  }
+
+  async function chooseRoot() {
+    const selected = await selectPhotoDirectory();
+    if (!selected) return;
+    await openPhotoLibrary(selected);
+    setRoot(selected);
+    setStatus("Photo root opened");
+    openModule("folders", "Folders");
   }
 
   return (
     <div className="desktop-shell">
       <aside className="activity-bar">
-        <div className="brand-button" title="Vividarium">
-          <img className="mark" src={appIconUrl} alt="Vividarium" />
-        </div>
-        <div className="activity-group">
-          {modules.map(({ id, label, icon }) => (
-            <ActivityButton
-              key={id}
-              active={module === id}
-              icon={icon}
-              label={label}
-              onClick={() => switchModule(id)}
-            />
-          ))}
-        </div>
+        <button className="brand-button" type="button" title="Vividarium" onClick={() => openModule("folders", "Folders")}><img src={appIconUrl} alt="Vividarium" /></button>
+        <ActivityButton icon={Search} label="Search photos" active={searchOpen} onClick={() => setSearchOpen((current) => !current)} />
+        <div className="activity-divider" />
+        {photoItems.map(([kind, label, icon]) => <ActivityButton key={kind} icon={icon} label={label} active={active?.kind === kind} onClick={() => openModule(kind, label)} />)}
+        <div className="activity-divider" />
+        <ActivityButton icon={ArrowRightLeft} label="Mapping" active={active?.kind === "mapping"} onClick={() => openModule("mapping", "Mapping")} />
+        <div className="activity-divider" />
+        {taxonomyItems.map(([kind, label, icon]) => <ActivityButton key={kind} icon={icon} label={label} active={active?.kind === kind} onClick={() => openModule(kind, label)} />)}
         <div className="activity-spacer" />
-        <ActivityButton
-          active={module === settingsModule.id}
-          icon={settingsModule.icon}
-          label={settingsModule.label}
-          onClick={() => switchModule(settingsModule.id)}
-        />
+        <ActivityButton icon={Settings} label="Settings" active={active?.kind === "settings"} onClick={() => openModule("settings", "Settings")} />
       </aside>
       <div className="desktop-main">
-        <div className="desktop-content">
-          {module === "photos" && <PhotosView onStatus={handleStatus} />}
-          {module === "mapping" && <MappingView onStatus={handleStatus} />}
-          {module === "taxonomy" && <TaxonomyView onStatus={handleStatus} />}
-          {module === "settings" && <SettingsView onStatus={handleStatus} />}
-        </div>
-        <footer className="status-bar">
-          <span className={status.busy ? "status-dot busy" : "status-dot"} />
-          <span>{status.message}</span>
-          <span className="status-module">{module}</span>
-        </footer>
+        <header className="app-topbar">
+          <button className="root-button" type="button" onClick={() => void chooseRoot()} title={root || "Open photo root"}>
+            <FolderTree size={14} /><span>{root || "Open photo root"}</span>
+          </button>
+          <div className="tab-strip">
+            {tabs.map((tab) => (
+              <button className={`app-tab${tab.id === activeId ? " active" : ""}`} type="button" key={tab.id} onClick={() => setActiveId(tab.id)}>
+                <span>{tab.title}</span>
+                <i role="button" tabIndex={0} onClick={(event) => {
+                  event.stopPropagation();
+                  closeTab(tab.id);
+                }}><X size={12} /></i>
+              </button>
+            ))}
+          </div>
+          {searchOpen && (
+            <div className="global-search">
+              <label><Search size={15} /><input autoFocus value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} onKeyDown={(event) => {
+                if (event.key === "Enter") submitSearch();
+                if (event.key === "Escape") setSearchOpen(false);
+              }} placeholder="Search filenames and photo taxonomy" /></label>
+              {suggestions.length > 0 && <div className="suggestions">{suggestions.map((item) => (
+                <button type="button" key={item.taxon_id} onClick={() => submitSearch(item.names.sci_name ?? item.names.zh_name ?? item.names.en_name ?? searchQuery)}>
+                  <strong>{item.names.sci_name ?? `Taxon ${item.taxon_id}`}</strong><span>{item.rank} / {item.names.zh_name ?? item.names.en_name ?? ""}</span>
+                </button>
+              ))}</div>}
+            </div>
+          )}
+        </header>
+        <main className="tab-content">
+          {active && <TabBody tab={active} handlers={handlers} onStatus={setStatus} openTab={openTab} />}
+        </main>
+        <footer className="status-bar"><span className="status-dot" />{status}<span>{active?.title}</span></footer>
       </div>
     </div>
   );
 }
 
+function TabBody({
+  tab,
+  handlers,
+  onStatus,
+  openTab,
+}: {
+  tab: AppTab;
+  handlers: PhotoOpenHandlers;
+  onStatus: (message: string, busy?: boolean) => void;
+  openTab: (tab: AppTab, singleton?: boolean) => void;
+}) {
+  if (tab.kind === "folders") return <FolderPhotosView handlers={handlers} onStatus={onStatus} />;
+  if (tab.kind === "photo-taxonomy") return <TaxonPhotosView handlers={handlers} />;
+  if (tab.kind === "map") return <PhotoMapView handlers={handlers} />;
+  if (tab.kind === "photo-history") return <PhotoHistoryView onStatus={onStatus} />;
+  if (tab.kind === "mapping") return <MappingView onStatus={onStatus} handlers={handlers} />;
+  if (tab.kind === "taxonomy-search") return <TaxonomySearchView onOpenTaxon={handlers.openTaxon} onOpenPhotos={(taxonId, label) => openTab({ id: `taxon-photos:${taxonId}`, kind: "taxon-photos", title: label, taxonId })} />;
+  if (tab.kind === "taxon-detail") return <TaxonomySearchView taxonId={tab.taxonId} onOpenTaxon={handlers.openTaxon} onOpenPhotos={(taxonId, label) => openTab({ id: `taxon-photos:${taxonId}`, kind: "taxon-photos", title: label, taxonId })} />;
+  if (tab.kind === "formatted-update") return <FormattedUpdateView />;
+  if (tab.kind === "custom-update") return <CustomUpdateView />;
+  if (tab.kind === "taxonomy-history") return <TaxonomyHistoryView />;
+  if (tab.kind === "settings") return <SettingsView />;
+  if (tab.kind === "photo-detail" && tab.photo) return <PhotoDetailView photo={tab.photo} />;
+  if (tab.kind === "mapping-editor" && tab.photo) return <MappingEditor photo={tab.photo} />;
+  if (tab.kind === "search-photos" && tab.query) return <PhotoSet query={tab.query} handlers={handlers} />;
+  if (tab.kind === "taxon-photos" && tab.taxonId !== undefined) return <PhotoSet taxonId={tab.taxonId} handlers={handlers} />;
+  return null;
+}
+
+function PhotoSet({ query, taxonId, handlers }: { query?: string; taxonId?: number; handlers: PhotoOpenHandlers }) {
+  const [photos, setPhotos] = useState<Photo[]>([]);
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  async function load(append = false) {
+    if (loading) return;
+    setLoading(true);
+    const page = query !== undefined
+      ? await searchPhotos(query, append ? cursor : null)
+      : await listTaxonPhotos(taxonId!, append ? cursor : null);
+    setPhotos((current) => append ? [...current, ...page.items] : page.items);
+    setCursor(page.next_cursor);
+    setLoading(false);
+  }
+
+  useEffect(() => { void load(false); }, [query, taxonId]);
+  return (
+    <PhotoBrowser
+      title={query !== undefined ? `Search: ${query}` : `Taxon ${taxonId}`}
+      detail={loading ? "Loading" : undefined}
+      photos={photos}
+      hasMore={cursor !== null}
+      onLoadMore={() => { if (cursor) void load(true); }}
+      onOpenDetails={handlers.openDetails}
+      onOpenTaxon={handlers.openTaxon}
+      onOpenMappingEditor={handlers.openMappingEditor}
+    />
+  );
+}
+
 function ActivityButton({
-  active,
   icon: Icon,
   label,
+  active,
   onClick,
 }: {
-  active: boolean;
   icon: IconComponent;
   label: string;
+  active: boolean;
   onClick: () => void;
 }) {
-  return (
-    <button
-      className={`activity-button${active ? " active" : ""}`}
-      type="button"
-      onClick={onClick}
-      aria-label={label}
-      title={label}
-    >
-      <Icon size={18} strokeWidth={1.8} />
-      <span>{label}</span>
-    </button>
-  );
+  return <button className={`activity-button${active ? " active" : ""}`} type="button" title={label} aria-label={label} onClick={onClick}><Icon size={19} /></button>;
 }

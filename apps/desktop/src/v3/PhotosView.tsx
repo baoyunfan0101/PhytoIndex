@@ -1,465 +1,321 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import {
-  ChevronRight,
-  Folder,
-  FolderOpen,
-  History,
-  Image,
-  Map,
-  Play,
-  RefreshCw,
-  TreeDeciduous,
-} from "lucide-react";
+import "maplibre-gl/dist/maplibre-gl.css";
+
+import { ChevronRight, Download, Folder, History, Images, RefreshCw, RotateCcw } from "lucide-react";
+import maplibregl, { type Map as MapLibreMap } from "maplibre-gl";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   browsePhotoDirectory,
+  browsePhotoTaxon,
+  downloadCsv,
+  errorMessage,
+  exportAllPhotoOperationsCsv,
+  exportPhotoOperationCsv,
+  getMapSettings,
   getPhotoDirectoryCounts,
   getPhotoLibrary,
+  getPhotoMapping,
+  listMapPhotos,
   listPhotoOperations,
-  openPhotoLibrary,
   refreshPhotoDirectory,
-  selectPhotoDirectory,
+  revertPhotoOperation,
   waitForOperation,
-  type DirectoryEntryCounts,
   type Photo,
   type PhotoDirectory,
   type PhotoLibrary,
   type PhotoOperation,
+  type PhotoTaxonMapping,
+  type PhotoTaxonUsage,
 } from "./api";
-import {
-  BusyState,
-  EmptyState,
-  PanelTitle,
-  PhotoPreview,
-  Tabs,
-  errorMessage,
-  formatBytes,
-} from "./components";
+import { EmptyState, PhotoStage, SectionHeader, VirtualList } from "./components";
+import { PhotoContextMenu } from "./PhotoContextMenu";
 
-type PhotoMode = "Folders" | "Taxa" | "Map" | "History";
-type Location = Pick<PhotoDirectory, "directory_id" | "name" | "relative_path">;
-
-const photoModes = ["Folders", "Taxa", "Map", "History"] as const;
-const photoModeIcons = {
-  Folders: Folder,
-  Taxa: TreeDeciduous,
-  Map,
-  History,
+export type PhotoOpenHandlers = {
+  openDetails: (photo: Photo) => void;
+  openTaxon: (taxonId: number) => void;
+  openMappingEditor: (photo: Photo) => void;
 };
 
-export function PhotosView({
+export function FolderPhotosView({
+  handlers,
   onStatus,
 }: {
+  handlers: PhotoOpenHandlers;
   onStatus: (message: string, busy?: boolean) => void;
 }) {
-  const [mode, setMode] = useState<PhotoMode>("Folders");
   const [library, setLibrary] = useState<PhotoLibrary | null>(null);
-  const [draftRoot, setDraftRoot] = useState("");
-  const [trail, setTrail] = useState<Location[]>([]);
+  const [trail, setTrail] = useState<PhotoDirectory[]>([]);
   const [directories, setDirectories] = useState<PhotoDirectory[]>([]);
   const [photos, setPhotos] = useState<Photo[]>([]);
-  const [counts, setCounts] = useState<DirectoryEntryCounts | null>(null);
-  const [selectedPhoto, setSelectedPhoto] = useState<Photo | null>(null);
-  const [operations, setOperations] = useState<PhotoOperation[]>([]);
-  const [selectedOperation, setSelectedOperation] = useState<PhotoOperation | null>(null);
+  const [selected, setSelected] = useState<Photo | null>(null);
+  const [context, setContext] = useState<{ photo: Photo; mapping: PhotoTaxonMapping | null; loading: boolean; x: number; y: number } | null>(null);
   const [loading, setLoading] = useState(true);
-  const [progress, setProgress] = useState("");
   const [error, setError] = useState("");
+  const directoryId = trail[trail.length - 1]?.directory_id ?? library?.root_directory_id ?? null;
 
-  const currentDirectoryId =
-    trail[trail.length - 1]?.directory_id ??
-    library?.root_directory_id ??
-    null;
-
-  const loadDirectory = useCallback(async (directoryId: number) => {
+  const load = useCallback(async (id: number) => {
     setLoading(true);
     setError("");
     try {
-      const [page, nextCounts] = await Promise.all([
-        browsePhotoDirectory(directoryId),
-        getPhotoDirectoryCounts(directoryId),
-      ]);
-      setDirectories(
-        page.items
-          .filter((item) => item.kind === "directory")
-          .map((item) => item.directory),
-      );
-      setPhotos(
-        page.items
-          .filter((item) => item.kind === "photo")
-          .map((item) => item.photo),
-      );
-      setCounts(nextCounts);
-      setSelectedPhoto(null);
-      onStatus(
-        `${nextCounts.directory_count} folders, ${nextCounts.file_count} photos`,
-      );
+      const [page, counts] = await Promise.all([browsePhotoDirectory(id), getPhotoDirectoryCounts(id)]);
+      setDirectories(page.items.flatMap((item) => item.kind === "directory" ? [item.directory] : []));
+      const nextPhotos = page.items.flatMap((item) => item.kind === "photo" ? [item.photo] : []);
+      setPhotos(nextPhotos);
+      setSelected(nextPhotos[0] ?? null);
+      onStatus(`${counts.directory_count} folders, ${counts.file_count} photos`);
     } catch (nextError) {
-      const message = errorMessage(nextError);
-      setError(message);
-      onStatus(message);
+      setError(errorMessage(nextError));
     } finally {
       setLoading(false);
     }
   }, [onStatus]);
 
   useEffect(() => {
-    let active = true;
-    getPhotoLibrary()
-      .then((nextLibrary) => {
-        if (!active) {
-          return;
-        }
-        setLibrary(nextLibrary);
-        setDraftRoot(nextLibrary?.root_path ?? "");
-        if (nextLibrary) {
-          return loadDirectory(nextLibrary.root_directory_id);
-        }
-        setLoading(false);
-        onStatus("Open a photo folder to begin");
-      })
-      .catch((nextError) => {
-        if (!active) {
-          return;
-        }
-        const message = errorMessage(nextError);
-        setError(message);
-        setLoading(false);
-        onStatus(message);
-      });
-    return () => {
-      active = false;
-    };
-  }, [loadDirectory, onStatus]);
-
-  useEffect(() => {
-    if (mode !== "History") {
-      return;
-    }
-    setLoading(true);
-    listPhotoOperations()
-      .then((page) => {
-        setOperations(page.items);
-        setSelectedOperation(page.items[0] ?? null);
-        onStatus(`${page.items.length} rename operations`);
-      })
-      .catch((nextError) => {
-        const message = errorMessage(nextError);
-        setError(message);
-        onStatus(message);
-      })
-      .finally(() => setLoading(false));
-  }, [mode, onStatus]);
-
-  async function browseRoot() {
-    const selected = await selectPhotoDirectory();
-    if (selected) {
-      setDraftRoot(selected);
-      await openRoot(selected);
-    }
-  }
-
-  async function openRoot(root = draftRoot) {
-    const value = root.trim();
-    if (!value) {
-      setError("Enter or browse to a photo folder.");
-      return;
-    }
-    setLoading(true);
-    setProgress("Opening folder");
-    setError("");
-    onStatus("Opening photo folder", true);
-    try {
-      const nextLibrary = await openPhotoLibrary(value);
-      setLibrary(nextLibrary);
-      setDraftRoot(nextLibrary.root_path);
-      setTrail([]);
-      await runRefresh(nextLibrary.root_directory_id);
-    } catch (nextError) {
-      const message = errorMessage(nextError);
-      setError(message);
-      onStatus(message);
-    } finally {
-      setProgress("");
+    getPhotoLibrary().then((next) => {
+      setLibrary(next);
+      if (next) return load(next.root_directory_id);
       setLoading(false);
-    }
-  }
-
-  async function refreshCurrent() {
-    if (currentDirectoryId === null) {
-      return;
-    }
-    setLoading(true);
-    setError("");
-    onStatus("Refreshing photos", true);
-    try {
-      await runRefresh(currentDirectoryId);
-    } catch (nextError) {
-      const message = errorMessage(nextError);
-      setError(message);
-      onStatus(message);
-    } finally {
-      setProgress("");
+    }).catch((nextError) => {
+      setError(errorMessage(nextError));
       setLoading(false);
-    }
-  }
-
-  async function runRefresh(directoryId: number) {
-    const started = await refreshPhotoDirectory(directoryId);
-    await waitForOperation("photos", started.operation.task_id, (operation) => {
-      const suffix = operation.total
-        ? ` ${operation.processed}/${operation.total}`
-        : "";
-      setProgress(`${operation.message}${suffix}`);
-      onStatus(operation.message, true);
     });
-    await loadDirectory(directoryId);
+  }, [load]);
+
+  async function refresh() {
+    if (directoryId === null) return;
+    onStatus("Refreshing photo library", true);
+    const started = await refreshPhotoDirectory(directoryId);
+    await waitForOperation("photos", started.operation.task_id, (operation) => onStatus(operation.message, true));
+    await load(directoryId);
   }
 
-  function openDirectory(directory: PhotoDirectory) {
-    const nextLocation: Location = {
-      directory_id: directory.directory_id,
-      name: directory.name,
-      relative_path: directory.relative_path,
-    };
-    setTrail((current) => [...current, nextLocation]);
-    void loadDirectory(directory.directory_id);
+  function enter(directory: PhotoDirectory) {
+    setTrail((current) => [...current, directory]);
+    void load(directory.directory_id);
   }
 
-  function openBreadcrumb(index: number) {
-    const nextTrail = index < 0 ? [] : trail.slice(0, index + 1);
-    const nextDirectoryId =
-      nextTrail[nextTrail.length - 1]?.directory_id ??
-      library?.root_directory_id;
-    setTrail(nextTrail);
-    if (nextDirectoryId !== undefined) {
-      void loadDirectory(nextDirectoryId);
-    }
+  function openContext(event: React.MouseEvent, photo: Photo) {
+    setSelected(photo);
+    setContext({ photo, mapping: null, loading: true, x: event.clientX, y: event.clientY });
+    void getPhotoMapping(photo.photo_id).then((mapping) => setContext((current) => current?.photo.photo_id === photo.photo_id ? { ...current, mapping, loading: false } : current));
   }
-
-  const currentLabel = trail[trail.length - 1]?.name || "Root";
-  const visibleCount = directories.length + photos.length;
-  const totalCount = (counts?.directory_count ?? 0) + (counts?.file_count ?? 0);
 
   return (
-    <section className="module-view">
-      <div className="topbar photos-topbar">
-        <form
-          className="root-field"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void openRoot();
-          }}
-        >
-          <span>Root</span>
-          <input
-            value={draftRoot}
-            onChange={(event) => setDraftRoot(event.target.value)}
-            placeholder="/path/to/photos"
-            aria-label="Photo root"
+    <div className="folder-workbench">
+      <header className="workbench-toolbar">
+        <div className="breadcrumbs">
+          <button type="button" onClick={() => {
+            setTrail([]);
+            if (library) void load(library.root_directory_id);
+          }}>Root</button>
+          {trail.map((item, index) => (
+            <span key={item.directory_id}><ChevronRight size={12} /><button type="button" onClick={() => {
+              setTrail(trail.slice(0, index + 1));
+              void load(item.directory_id);
+            }}>{item.name}</button></span>
+          ))}
+        </div>
+        <button className="icon-button" type="button" onClick={() => void refresh()} title="Refresh"><RefreshCw size={14} /></button>
+      </header>
+      <div className="explorer-columns">
+        <aside className="finder-pane">
+          <VirtualList
+            items={[
+              ...directories.map((directory) => ({ kind: "directory" as const, directory })),
+              ...photos.map((photo) => ({ kind: "photo" as const, photo })),
+            ]}
+            rowHeight={40}
+            itemKey={(item) => item.kind === "directory" ? `d:${item.directory.directory_id}` : `p:${item.photo.photo_id}`}
+            renderItem={(item) => (
+              item.kind === "directory" ? (
+                <button className="finder-row" type="button" onDoubleClick={() => enter(item.directory)}>
+                  <Folder size={14} /><span>{item.directory.name}</span><ChevronRight size={12} />
+                </button>
+              ) : (
+                <button
+                  className={`finder-row${selected?.photo_id === item.photo.photo_id ? " active" : ""}`}
+                  type="button"
+                  onClick={() => setSelected(item.photo)}
+                  onContextMenu={(event) => {
+                    event.preventDefault();
+                    openContext(event, item.photo);
+                  }}
+                >
+                  <Images size={14} /><span>{item.photo.filename}</span>
+                </button>
+              )
+            )}
           />
-          <button type="submit">
-            <Play size={12} />
-            Open
-          </button>
-          <button type="button" onClick={() => void browseRoot()}>
-            Browse
-          </button>
-        </form>
-        <button
-          className="ghost-button icon-action"
-          type="button"
-          onClick={() => void refreshCurrent()}
-          disabled={!library || loading}
-          title="Refresh current folder"
-        >
-          <RefreshCw size={13} />
-          Refresh
-        </button>
+          {loading && <div className="pane-overlay">Loading</div>}
+          {error && <div className="inline-error">{error}</div>}
+        </aside>
+        <PhotoStage photo={selected} onContextMenu={openContext} />
       </div>
-      <Tabs
-        items={photoModes}
-        value={mode}
-        onChange={setMode}
-        icons={photoModeIcons}
-      />
-
-      {mode === "Folders" && (
-        <div className="workspace-grid photos-grid">
-          <aside className="panel sidebar-panel">
-            <PanelTitle trailing={<span className="counter">{counts?.directory_count ?? 0}</span>}>
-              Explorer
-            </PanelTitle>
-            {!library ? (
-              <EmptyState
-                icon={FolderOpen}
-                title="No root"
-                detail="Open a photo folder above."
-              />
-            ) : (
-              <>
-                <div className="breadcrumbs">
-                  <button type="button" onClick={() => openBreadcrumb(-1)}>
-                    {lastPathSegment(library.root_path)}
-                  </button>
-                  {trail.map((item, index) => (
-                    <span key={item.directory_id}>
-                      <ChevronRight size={11} />
-                      <button type="button" onClick={() => openBreadcrumb(index)}>
-                        {item.name}
-                      </button>
-                    </span>
-                  ))}
-                </div>
-                <div className="tree-list">
-                  {trail.length > 0 && (
-                    <button className="tree-row" type="button" onClick={() => openBreadcrumb(trail.length - 2)}>
-                      <FolderOpen size={14} />
-                      <span>..</span>
-                    </button>
-                  )}
-                  {directories.map((directory) => (
-                    <button
-                      className="tree-row"
-                      key={directory.directory_id}
-                      type="button"
-                      onClick={() => openDirectory(directory)}
-                    >
-                      <Folder size={14} />
-                      <span>{directory.name}</span>
-                    </button>
-                  ))}
-                </div>
-              </>
-            )}
-          </aside>
-          <main className="panel list-panel">
-            <PanelTitle trailing={<span className="counter">{totalCount}</span>}>
-              {currentLabel}
-            </PanelTitle>
-            {loading ? (
-              <BusyState label={progress || "Loading photos"} />
-            ) : error ? (
-              <EmptyState title="Unable to load photos" detail={error} />
-            ) : !library ? (
-              <EmptyState
-                icon={FolderOpen}
-                title="Open a photo folder"
-                detail="Type a path or use Browse."
-              />
-            ) : visibleCount === 0 ? (
-              <EmptyState
-                icon={Image}
-                title="This folder is empty"
-                detail="Refresh after adding supported image files."
-              />
-            ) : (
-              <div className="photo-list">
-                {photos.map((photo) => (
-                  <button
-                    className={`photo-row${selectedPhoto?.photo_id === photo.photo_id ? " active" : ""}`}
-                    key={photo.photo_id}
-                    type="button"
-                    onClick={() => setSelectedPhoto(photo)}
-                  >
-                    <Image size={14} />
-                    <div>
-                      <strong>{photo.filename}</strong>
-                      <span>{formatBytes(photo.file_size)}</span>
-                    </div>
-                  </button>
-                ))}
-                {visibleCount < totalCount && (
-                  <div className="list-note">Showing the first {visibleCount} entries</div>
-                )}
-              </div>
-            )}
-          </main>
-          <aside className="panel preview-panel">
-            <PanelTitle>Preview</PanelTitle>
-            <PhotoPreview photo={selectedPhoto} />
-          </aside>
-        </div>
-      )}
-
-      {mode === "History" && (
-        <div className="workspace-grid history-grid">
-          <main className="panel list-panel">
-            <PanelTitle trailing={<span className="counter">{operations.length}</span>}>
-              Renames
-            </PanelTitle>
-            {loading ? (
-              <BusyState label="Loading rename history" />
-            ) : operations.length === 0 ? (
-              <EmptyState
-                icon={History}
-                title="No rename history"
-                detail="Photo rename operations will appear here."
-              />
-            ) : (
-              <div className="photo-list">
-                {operations.map((operation) => (
-                  <button
-                    className={`photo-row${selectedOperation?.operation_id === operation.operation_id ? " active" : ""}`}
-                    key={operation.operation_id}
-                    type="button"
-                    onClick={() => setSelectedOperation(operation)}
-                  >
-                    <History size={14} />
-                    <div>
-                      <strong>{operation.new_filename}</strong>
-                      <span>{operation.status}</span>
-                    </div>
-                  </button>
-                ))}
-              </div>
-            )}
-          </main>
-          <aside className="panel preview-panel">
-            <PanelTitle>Details</PanelTitle>
-            {selectedOperation ? (
-              <dl className="compact-details standalone">
-                <dt>Before</dt>
-                <dd>{selectedOperation.old_filename}</dd>
-                <dt>After</dt>
-                <dd>{selectedOperation.new_filename}</dd>
-                <dt>Folder</dt>
-                <dd>{selectedOperation.directory_relative_path || "/"}</dd>
-                <dt>Status</dt>
-                <dd>{selectedOperation.status}</dd>
-                <dt>Applied</dt>
-                <dd>{selectedOperation.applied_at}</dd>
-              </dl>
-            ) : (
-              <EmptyState title="No operation selected" />
-            )}
-          </aside>
-        </div>
-      )}
-
-      {mode === "Taxa" && (
-        <div className="single-panel">
-          <EmptyState
-            icon={TreeDeciduous}
-            title="Taxon browser"
-            detail="This view will use the mappings created in Mapping."
-          />
-        </div>
-      )}
-
-      {mode === "Map" && (
-        <div className="single-panel">
-          <EmptyState
-            icon={Map}
-            title="Map"
-            detail="Geotagged photos will appear here after metadata is indexed."
-          />
-        </div>
-      )}
-    </section>
+      {context && <PhotoContextMenu {...context} onClose={() => setContext(null)} onChanged={(photo) => setSelected(photo)} onOpenDetails={() => handlers.openDetails(context.photo)} onOpenTaxon={handlers.openTaxon} onOpenMappingEditor={() => handlers.openMappingEditor(context.photo)} />}
+    </div>
   );
 }
 
-function lastPathSegment(path: string): string {
-  const parts = path.split(/[/\\]/).filter(Boolean);
-  return parts[parts.length - 1] || "Root";
+export function TaxonPhotosView({ handlers }: { handlers: PhotoOpenHandlers }) {
+  const [trail, setTrail] = useState<PhotoTaxonUsage[]>([]);
+  const [taxa, setTaxa] = useState<PhotoTaxonUsage[]>([]);
+  const [photos, setPhotos] = useState<Photo[]>([]);
+  const [selected, setSelected] = useState<Photo | null>(null);
+  const [context, setContext] = useState<{ photo: Photo; mapping: PhotoTaxonMapping | null; loading: boolean; x: number; y: number } | null>(null);
+  const currentId = trail[trail.length - 1]?.taxon_id ?? null;
+
+  const load = useCallback(async (taxonId: number | null) => {
+    const page = await browsePhotoTaxon(taxonId);
+    setTaxa(page.items.flatMap((item) => item.kind === "taxon" ? [item.taxon] : []));
+    setPhotos(page.items.flatMap((item) => item.kind === "photo" ? [item.photo] : []));
+    setSelected(page.items.flatMap((item) => item.kind === "photo" ? [item.photo] : [])[0] ?? null);
+  }, []);
+
+  useEffect(() => { void load(currentId); }, [currentId, load]);
+
+  function openContext(event: React.MouseEvent, photo: Photo) {
+    setSelected(photo);
+    setContext({ photo, mapping: null, loading: true, x: event.clientX, y: event.clientY });
+    void getPhotoMapping(photo.photo_id).then((mapping) => setContext((current) => current?.photo.photo_id === photo.photo_id ? { ...current, mapping, loading: false } : current));
+  }
+
+  return (
+    <div className="folder-workbench">
+      <header className="workbench-toolbar breadcrumbs">
+        <button type="button" onClick={() => setTrail([])}>Taxonomy</button>
+        {trail.map((item, index) => (
+          <span key={item.taxon_id}><ChevronRight size={12} /><button type="button" onClick={() => setTrail(trail.slice(0, index + 1))}>{item.names.sci_name ?? `Taxon ${item.taxon_id}`}</button></span>
+        ))}
+      </header>
+      <div className="explorer-columns">
+        <aside className="finder-pane">
+          <VirtualList
+            items={[
+              ...taxa.map((taxon) => ({ kind: "taxon" as const, taxon })),
+              ...photos.map((photo) => ({ kind: "photo" as const, photo })),
+            ]}
+            rowHeight={48}
+            itemKey={(item) => item.kind === "taxon" ? `t:${item.taxon.taxon_id}` : `p:${item.photo.photo_id}`}
+            renderItem={(item) => (
+              item.kind === "taxon" ? (
+                <button className="finder-row taxon" type="button" onClick={() => setTrail((current) => [...current, item.taxon])}>
+                  <span><strong>{item.taxon.names.sci_name ?? `Taxon ${item.taxon.taxon_id}`}</strong><small>{item.taxon.subtree_photo_count} photos</small></span><ChevronRight size={12} />
+                </button>
+              ) : (
+                <button className={`finder-row${selected?.photo_id === item.photo.photo_id ? " active" : ""}`} type="button" onClick={() => setSelected(item.photo)} onContextMenu={(event) => {
+                  event.preventDefault();
+                  openContext(event, item.photo);
+                }}><Images size={14} /><span>{item.photo.filename}</span></button>
+              )
+            )}
+          />
+        </aside>
+        <PhotoStage photo={selected} onContextMenu={openContext} />
+      </div>
+      {context && <PhotoContextMenu {...context} onClose={() => setContext(null)} onChanged={(photo) => setSelected(photo)} onOpenDetails={() => handlers.openDetails(context.photo)} onOpenTaxon={handlers.openTaxon} onOpenMappingEditor={() => handlers.openMappingEditor(context.photo)} />}
+    </div>
+  );
+}
+
+export function PhotoHistoryView({ onStatus }: { onStatus: (message: string) => void }) {
+  const [items, setItems] = useState<PhotoOperation[]>([]);
+  const [error, setError] = useState("");
+
+  const load = useCallback(() => {
+    listPhotoOperations().then((page) => setItems(page.items)).catch((nextError) => setError(errorMessage(nextError)));
+  }, []);
+  useEffect(load, [load]);
+
+  async function exportAll() {
+    downloadCsv("photo-rename-operations.csv", await exportAllPhotoOperationsCsv());
+  }
+
+  return (
+    <div className="history-view">
+      <SectionHeader title="Rename history" detail={`${items.length} operations`} actions={
+        <button className="secondary-button" type="button" onClick={() => void exportAll()}><Download size={13} />Export all</button>
+      } />
+      {error ? <EmptyState title="Unable to load history" detail={error} /> : (
+        <VirtualList
+          className="history-list"
+          items={items}
+          rowHeight={72}
+          itemKey={(item) => item.operation_id}
+          renderItem={(item) => (
+            <article className="operation-row">
+              <History size={15} />
+              <div><strong>Operation {item.operation_id}</strong><span>{item.applied_at} / {item.items.length} files / {item.source}</span></div>
+              <div className="operation-actions">
+                <button type="button" title="Export" onClick={() => void exportPhotoOperationCsv(item.operation_id).then((csv) => downloadCsv(`photo-operation-${item.operation_id}.csv`, csv))}><Download size={14} /></button>
+                <button type="button" title="Revert" onClick={() => void revertPhotoOperation(item.operation_id).then(() => {
+                  onStatus(`Reverted operation ${item.operation_id}`);
+                  load();
+                })}><RotateCcw size={14} /></button>
+              </div>
+            </article>
+          )}
+        />
+      )}
+    </div>
+  );
+}
+
+export function PhotoMapView({ handlers }: { handlers: PhotoOpenHandlers }) {
+  const container = useRef<HTMLDivElement>(null);
+  const map = useRef<MapLibreMap | null>(null);
+  const [photos, setPhotos] = useState<Awaited<ReturnType<typeof listMapPhotos>>["items"]>([]);
+  const [selected, setSelected] = useState<Photo | null>(null);
+  const [context, setContext] = useState<{ photo: Photo; mapping: PhotoTaxonMapping | null; loading: boolean; x: number; y: number } | null>(null);
+
+  function openContext(event: React.MouseEvent, photo: Photo) {
+    setContext({ photo, mapping: null, loading: true, x: event.clientX, y: event.clientY });
+    void getPhotoMapping(photo.photo_id).then((mapping) => setContext((current) => current?.photo.photo_id === photo.photo_id ? { ...current, mapping, loading: false } : current));
+  }
+
+  useEffect(() => {
+    let disposed = false;
+    Promise.all([getMapSettings(), listMapPhotos()]).then(([settings, page]) => {
+      if (disposed || !container.current) return;
+      setPhotos(page.items);
+      const rasterUrl = settings.provider === "tianditu" && settings.tianditu_token
+        ? `https://t0.tianditu.gov.cn/vec_w/wmts?tk=${settings.tianditu_token}&service=wmts&request=gettile&version=1.0.0&layer=vec&style=default&tilematrixset=w&format=tiles&tilematrix={z}&tilerow={y}&tilecol={x}`
+        : "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
+      const next = new maplibregl.Map({
+        container: container.current,
+        center: page.items.length ? [page.items[0].longitude, page.items[0].latitude] : [0, 20],
+        zoom: page.items.length ? 6 : 1.5,
+        style: { version: 8, sources: { tiles: { type: "raster", tiles: [rasterUrl], tileSize: 256 } }, layers: [{ id: "tiles", type: "raster", source: "tiles" }] },
+      });
+      map.current = next;
+      page.items.forEach((item) => {
+        const marker = document.createElement("button");
+        marker.className = "map-photo-marker";
+        marker.type = "button";
+        marker.title = item.photo.filename;
+        marker.addEventListener("click", () => setSelected(item.photo));
+        new maplibregl.Marker({ element: marker }).setLngLat([item.longitude, item.latitude]).addTo(next);
+      });
+    });
+    return () => {
+      disposed = true;
+      map.current?.remove();
+      map.current = null;
+    };
+  }, []);
+
+  return (
+    <div className="map-view">
+      <div className="map-canvas" ref={container} />
+      {selected && (
+        <div className="map-photo-float">
+          <PhotoStage photo={selected} compact onContextMenu={openContext} />
+          <div className="map-float-actions">
+            <button type="button" onClick={() => handlers.openDetails(selected)}>Open details</button>
+            <button type="button" onClick={() => handlers.openMappingEditor(selected)}>Edit mapping</button>
+          </div>
+        </div>
+      )}
+      <span className="map-count">{photos.length} geotagged photos</span>
+      {context && <PhotoContextMenu {...context} onClose={() => setContext(null)} onChanged={(photo) => setSelected(photo)} onOpenDetails={() => handlers.openDetails(context.photo)} onOpenTaxon={handlers.openTaxon} onOpenMappingEditor={() => handlers.openMappingEditor(context.photo)} />}
+    </div>
+  );
 }
