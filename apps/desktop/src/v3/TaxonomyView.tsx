@@ -18,23 +18,31 @@ import {
   exportAllTaxonomyOperationsCsv,
   exportTaxonomyOperationCsv,
   getTaxonDetailNode,
+  getTaxonomyNameSeparator,
   getTaxonomyTemplate,
   listTaxonChildren,
   listTaxonomyOperations,
+  parseCustomTaxonomyInputCsv,
   parseTaxonomyCsv,
   previewTaxonomyRows,
   revertTaxonomyOperation,
   type TaxonChild,
+  type TaxonDetail,
   type TaxonDetailNode,
   type TaxonInputRow,
   type TaxonRowOutcome,
   type TaxonSearchResult,
+  type TaxonSummary,
   type TaxonomyOperation,
 } from "./api";
 import { EmptyState, SectionHeader, TaxonCard, VirtualList } from "./components";
 import { CodeEditor } from "./CodeEditor";
 import { useCursorPage } from "./useCursorPage";
 import { useTaxonSearch } from "./useTaxonSearch";
+
+type TaxonomyRecordItem =
+  | { kind: "selected"; result: TaxonSearchResult }
+  | { kind: "child"; child: TaxonChild };
 
 export function TaxonomySearchView({
   taxonId,
@@ -98,24 +106,10 @@ export function TaxonomySearchView({
     }
   }
 
-  const visible = selected ? [selected, ...(expanded && node ? children.items.map((child) => ({
-    summary: { taxon_id: child.taxon_id, rank: child.rank, names: child.names, breadcrumb: [] },
-    detail: {
-      taxon_id: child.taxon_id,
-      rank: child.rank,
-      parent_taxon_id: node.summary.taxon_id,
-      geological_range: null,
-      names: {
-        sci_name: { name_id: 0, name: child.names.sci_name ?? `Taxon ${child.taxon_id}`, authority_year: null, source: null },
-        synonyms: [],
-        zh_name: child.names.zh_name ? { name_id: 0, name: child.names.zh_name, authority_year: null, source: null } : null,
-        zh_aliases: [],
-        en_name: child.names.en_name ? { name_id: 0, name: child.names.en_name, authority_year: null, source: null } : null,
-        en_aliases: [],
-      },
-    },
-    matches: [],
-  })) : [])] : [];
+  const visible: TaxonomyRecordItem[] = selected ? [
+    { kind: "selected", result: selected },
+    ...(expanded ? children.items.map((child) => ({ kind: "child" as const, child })) : []),
+  ] : [];
 
   return (
     <div className="taxonomy-search-view">
@@ -147,13 +141,15 @@ export function TaxonomySearchView({
             <VirtualList
               items={visible}
               rowHeight={expanded ? 194 : 250}
-              itemKey={(item) => item.summary.taxon_id}
+              itemKey={(item) => item.kind === "selected" ? item.result.summary.taxon_id : item.child.taxon_id}
               onNearEnd={() => void children.loadMore()}
               renderItem={(item, index) => (
                 <TaxonRecord
-                  result={item}
-                  detail={index === 0 ? node : null}
-                  child={index > 0}
+                  summary={item.kind === "selected" ? item.result.summary : item.child}
+                  detail={item.kind === "selected" ? item.result.detail : null}
+                  breadcrumb={item.kind === "selected" ? item.result.summary.breadcrumb : []}
+                  loadedChildCount={index === 0 ? node?.children.items.length ?? null : null}
+                  child={item.kind === "child"}
                   expanded={expanded}
                   onToggleChildren={() => void toggleChildren()}
                   onOpenTaxon={(nextTaxonId) => void navigateTo(nextTaxonId)}
@@ -169,46 +165,50 @@ export function TaxonomySearchView({
 }
 
 function TaxonRecord({
-  result,
+  summary,
   detail,
+  breadcrumb,
+  loadedChildCount,
   child,
   expanded,
   onToggleChildren,
   onOpenTaxon,
   onOpenPhotos,
 }: {
-  result: TaxonSearchResult;
-  detail: TaxonDetailNode | null;
+  summary: Pick<TaxonSummary, "taxon_id" | "rank" | "names">;
+  detail: TaxonDetail | null;
+  breadcrumb: TaxonSummary["breadcrumb"];
+  loadedChildCount: number | null;
   child: boolean;
   expanded: boolean;
   onToggleChildren: () => void;
   onOpenTaxon: (taxonId: number) => void;
   onOpenPhotos: (taxonId: number, label: string) => void;
 }) {
-  const label = displayTaxon(result.summary);
+  const label = displayTaxon(summary);
   return (
     <article className={`taxon-record${child ? " child" : ""}`}>
-      {!child && result.summary.breadcrumb.length > 0 && (
+      {!child && breadcrumb.length > 0 && (
         <div className="taxon-breadcrumb">
-          {result.summary.breadcrumb.map((item) => (
+          {breadcrumb.map((item) => (
             <span key={item.taxon_id}><button type="button" onClick={() => onOpenTaxon(item.taxon_id)}>{displayTaxon(item)}</button><ChevronRight size={11} /></span>
           ))}
         </div>
       )}
       <div className="taxon-record-heading">
-        <div><span className="taxon-rank">{result.summary.rank}</span><strong>{label}</strong><small>Taxon {result.summary.taxon_id}</small></div>
+        <div><span className="taxon-rank">{summary.rank}</span><strong>{label}</strong><small>Taxon {summary.taxon_id}</small></div>
         <div className="record-actions">
           {!child && <button type="button" onClick={onToggleChildren}>{expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}Children</button>}
-          <button type="button" onClick={() => onOpenPhotos(result.summary.taxon_id, label)}><Images size={14} />Photos</button>
+          <button type="button" onClick={() => onOpenPhotos(summary.taxon_id, label)}><Images size={14} />Photos</button>
         </div>
       </div>
       <div className="taxon-name-summary">
-        <span><b>Scientific</b>{result.detail.names.sci_name.name}</span>
-        <span><b>Chinese</b>{result.detail.names.zh_name?.name ?? "-"}</span>
-        <span><b>English</b>{result.detail.names.en_name?.name ?? "-"}</span>
-        <span><b>Synonyms</b>{result.detail.names.synonyms.map((name) => name.name).join("; ") || "-"}</span>
-        <span><b>Range</b>{result.detail.geological_range ?? "-"}</span>
-        {detail && <span><b>Children</b>{detail.children.items.length}</span>}
+        <span><b>Scientific</b>{detail?.names.sci_name.name ?? summary.names.sci_name ?? "-"}</span>
+        <span><b>Chinese</b>{detail?.names.zh_name?.name ?? summary.names.zh_name ?? "-"}</span>
+        <span><b>English</b>{detail?.names.en_name?.name ?? summary.names.en_name ?? "-"}</span>
+        {detail && <span><b>Synonyms</b>{detail.names.synonyms.map((name) => name.name).join("; ") || "-"}</span>}
+        {detail && <span><b>Range</b>{detail.geological_range ?? "-"}</span>}
+        {loadedChildCount !== null && <span><b>Children loaded</b>{loadedChildCount}</span>}
       </div>
     </article>
   );
@@ -224,6 +224,13 @@ export function FormattedUpdateView() {
   const [outcomes, setOutcomes] = useState<TaxonRowOutcome[]>([]);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  const [separator, setSeparator] = useState(";");
+
+  useEffect(() => {
+    getTaxonomyNameSeparator()
+      .then(setSeparator)
+      .catch((nextError) => setMessage(errorMessage(nextError)));
+  }, []);
 
   async function importFile(file: File) {
     setRows(await parseTaxonomyCsv(await file.text()));
@@ -233,7 +240,9 @@ export function FormattedUpdateView() {
   function updateRow(index: number, field: keyof TaxonInputRow, value: string) {
     setRows((current) => current.map((row, rowIndex) => rowIndex === index ? {
       ...row,
-      [field]: ["synonyms", "zh_alias", "en_alias"].includes(field) ? value.split(";") : value || null,
+      [field]: ["synonyms", "zh_alias", "en_alias"].includes(field)
+        ? value === "" ? [] : value.split(separator)
+        : value || null,
     } : row));
   }
 
@@ -259,7 +268,7 @@ export function FormattedUpdateView() {
 
   return (
     <div className="formatted-view">
-      <SectionHeader title="Formatted update" detail="Pipe-delimited UTF-8 input or direct table editing" actions={
+      <SectionHeader title="Formatted update" detail={`Pipe-delimited UTF-8 input or direct table editing. Multiple names use "${separator}".`} actions={
         <>
           <label className="secondary-button file-button"><FileUp size={13} />Upload CSV<input type="file" accept=".csv,text/csv" onChange={(event) => {
             const file = event.target.files?.[0];
@@ -279,7 +288,7 @@ export function FormattedUpdateView() {
           renderItem={(row, index) => (
             <div className="input-table-row">
               <span>{index + 1}</span>
-              {inputFields.map((field) => <input key={field} value={Array.isArray(row[field]) ? (row[field] as string[]).join(";") : String(row[field] ?? "")} onChange={(event) => updateRow(index, field, event.target.value)} />)}
+              {inputFields.map((field) => <input key={field} value={Array.isArray(row[field]) ? (row[field] as string[]).join(separator) : String(row[field] ?? "")} onChange={(event) => updateRow(index, field, event.target.value)} />)}
             </div>
           )}
         />
@@ -307,6 +316,7 @@ export function FormattedUpdateView() {
 export function CustomUpdateView() {
   const [sql, setSql] = useState("UPDATE taxa\nSET geological_range = 'Recent'\nWHERE taxon_id = 0;");
   const [csv, setCsv] = useState<{ columns: string[]; rows: string[][] } | null>(null);
+  const [csvName, setCsvName] = useState("");
   const [message, setMessage] = useState("");
 
   async function execute() {
@@ -322,13 +332,21 @@ export function CustomUpdateView() {
     <div className="custom-update-view">
       <SectionHeader title="Custom update" detail="Direct SQL is intentionally not logged or recoverable" actions={
         <>
-          <label className="secondary-button file-button"><FileUp size={13} />Attach CSV<input type="file" accept=".csv,text/csv" onChange={(event) => {
+          <label className="secondary-button file-button"><FileUp size={13} />{csvName || "Attach CSV"}<input type="file" accept=".csv,text/csv" onChange={(event) => {
             const file = event.target.files?.[0];
             if (!file) return;
-            void file.text().then((text) => {
-              const lines = text.split(/\r?\n/).filter(Boolean).map((line) => line.split("|"));
-              setCsv(lines.length ? { columns: lines[0], rows: lines.slice(1) } : null);
-            });
+            void file.text()
+              .then(parseCustomTaxonomyInputCsv)
+              .then((input) => {
+                setCsv(input);
+                setCsvName(file.name);
+                setMessage(`${input.rows.length} CSV rows attached`);
+              })
+              .catch((nextError) => {
+                setCsv(null);
+                setCsvName("");
+                setMessage(errorMessage(nextError));
+              });
           }} /></label>
           <button className="primary-button" type="button" onClick={() => void execute()}><Play size={13} />Execute</button>
         </>

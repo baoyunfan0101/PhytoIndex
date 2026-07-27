@@ -10,7 +10,7 @@ mod view;
 pub use actions::{
     DeleteTaxonNameInput, PromoteTaxonNameInput, TaxonUpdateInput, TaxonomyCustomSqlResult,
     TaxonomyCustomSqlTempTable, delete_taxon, delete_taxon_name, execute_custom_taxonomy_sql,
-    promote_taxon_name, update_taxon,
+    parse_custom_taxonomy_input_csv, promote_taxon_name, update_taxon,
 };
 pub use base::{
     TaxonomyBaseMetadata, TaxonomyBaseReplaceResult, get_taxonomy_base_metadata,

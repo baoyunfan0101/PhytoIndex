@@ -269,6 +269,11 @@ export type TaxonomyOperation = {
   applied_at: string;
 };
 
+export type TaxonomyCustomSqlInput = {
+  columns: string[];
+  rows: string[][];
+};
+
 export type MapSettings = {
   provider: "osm" | "tianditu";
   tianditu_token: string | null;
@@ -751,6 +756,8 @@ export const applyTaxonomyRows = (rows: TaxonInputRow[]) =>
   }));
 export const executeCustomTaxonomySql = (sql: string, input: { columns: string[]; rows: string[][] } | null) =>
   call<{ changeset_size: number }>("execute_custom_taxonomy_sql", { sql, input }, () => ({ changeset_size: sql.length + (input?.rows.length ?? 0) }));
+export const parseCustomTaxonomyInputCsv = (input: string) =>
+  call<TaxonomyCustomSqlInput>("parse_custom_taxonomy_input_csv", { input }, () => parseDelimitedCsv(input));
 
 export const getMapSettings = () =>
   call<MapSettings>("get_map_settings", undefined, () => ({ provider: "osm", tianditu_token: null }));
@@ -856,6 +863,70 @@ export function formatBytes(value: number): string {
   if (value < 1024) return `${value} B`;
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
   return `${(value / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function parseDelimitedCsv(input: string): TaxonomyCustomSqlInput {
+  const source = input.replace(/^\uFEFF/, "");
+  if (!source.trim()) throw new Error("Custom SQL input CSV is empty");
+  const delimiters = [",", "|", "\t", ";"];
+  const counts = delimiters.map(() => 0);
+  let quoted = false;
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index];
+    if (character === "\"") {
+      if (quoted && source[index + 1] === "\"") {
+        index += 1;
+      } else {
+        quoted = !quoted;
+      }
+    } else if (!quoted && (character === "\r" || character === "\n")) {
+      break;
+    } else if (!quoted) {
+      const delimiterIndex = delimiters.indexOf(character);
+      if (delimiterIndex >= 0) counts[delimiterIndex] += 1;
+    }
+  }
+  const maximum = Math.max(...counts);
+  const delimiter = maximum === 0 ? "," : delimiters[counts.indexOf(maximum)];
+  const records: string[][] = [];
+  let record: string[] = [];
+  let field = "";
+  quoted = false;
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index];
+    if (character === "\"") {
+      if (quoted && source[index + 1] === "\"") {
+        field += "\"";
+        index += 1;
+      } else {
+        quoted = !quoted;
+      }
+    } else if (!quoted && character === delimiter) {
+      record.push(field);
+      field = "";
+    } else if (!quoted && (character === "\r" || character === "\n")) {
+      record.push(field);
+      records.push(record);
+      record = [];
+      field = "";
+      if (character === "\r" && source[index + 1] === "\n") index += 1;
+    } else {
+      field += character;
+    }
+  }
+  if (quoted) throw new Error("Custom SQL input CSV has an unclosed quoted field");
+  if (field || record.length > 0) {
+    record.push(field);
+    records.push(record);
+  }
+  const [columns, ...rows] = records;
+  if (!columns?.length) throw new Error("Custom SQL input CSV requires a header");
+  rows.forEach((value, index) => {
+    if (value.length !== columns.length) {
+      throw new Error(`Custom SQL input CSV row ${index + 1} has ${value.length} values; expected ${columns.length}`);
+    }
+  });
+  return { columns, rows };
 }
 
 export function errorMessage(error: unknown): string {

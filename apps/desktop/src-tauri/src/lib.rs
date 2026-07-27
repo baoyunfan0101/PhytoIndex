@@ -68,6 +68,7 @@ pub fn run() {
             commands::promote_taxon_name,
             commands::delete_taxon,
             commands::execute_custom_taxonomy_sql,
+            commands::parse_custom_taxonomy_input_csv,
             commands::preview_taxonomy_rows,
             commands::apply_taxonomy_rows,
             commands::parse_taxonomy_input_csv,

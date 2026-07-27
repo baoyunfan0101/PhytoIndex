@@ -55,6 +55,77 @@ pub struct TaxonomyCustomSqlTempTable {
     pub rows: Vec<Vec<String>>,
 }
 
+pub fn parse_custom_taxonomy_input_csv(input: &str) -> CoreResult<TaxonomyCustomSqlTempTable> {
+    let input = input.trim_start_matches('\u{feff}');
+    if input.trim().is_empty() {
+        return Err(CoreError::InvalidArgument(
+            "custom sql input csv is empty".into(),
+        ));
+    }
+    let delimiter = detect_csv_delimiter(input);
+    let mut reader = csv::ReaderBuilder::new()
+        .delimiter(delimiter)
+        .has_headers(true)
+        .flexible(false)
+        .from_reader(input.as_bytes());
+    let columns = reader
+        .headers()
+        .map_err(|error| {
+            CoreError::InvalidArgument(format!("invalid custom sql input csv: {error}"))
+        })?
+        .iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    if columns.is_empty() {
+        return Err(CoreError::InvalidArgument(
+            "custom sql input csv requires a header".into(),
+        ));
+    }
+    let rows = reader
+        .records()
+        .map(|record| {
+            record
+                .map(|record| record.iter().map(str::to_string).collect::<Vec<_>>())
+                .map_err(|error| {
+                    CoreError::InvalidArgument(format!("invalid custom sql input csv: {error}"))
+                })
+        })
+        .collect::<CoreResult<Vec<_>>>()?;
+    Ok(TaxonomyCustomSqlTempTable { columns, rows })
+}
+
+fn detect_csv_delimiter(input: &str) -> u8 {
+    let candidates = [b',', b'|', b'\t', b';'];
+    let mut counts = [0_usize; 4];
+    let bytes = input.as_bytes();
+    let mut in_quotes = false;
+    let mut index = 0;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if byte == b'"' {
+            if in_quotes && bytes.get(index + 1) == Some(&b'"') {
+                index += 2;
+                continue;
+            }
+            in_quotes = !in_quotes;
+        } else if !in_quotes && matches!(byte, b'\r' | b'\n') {
+            break;
+        } else if !in_quotes {
+            if let Some(candidate) = candidates.iter().position(|value| *value == byte) {
+                counts[candidate] += 1;
+            }
+        }
+        index += 1;
+    }
+    counts
+        .iter()
+        .enumerate()
+        .max_by_key(|(_, count)| *count)
+        .filter(|(_, count)| **count > 0)
+        .map(|(index, _)| candidates[index])
+        .unwrap_or(b',')
+}
+
 pub fn update_taxon(
     database: &Database,
     input: TaxonUpdateInput,
@@ -544,6 +615,28 @@ mod tests {
         let directory = TempDir::new().unwrap();
         let database = Database::open(directory.path().join("test.db")).unwrap();
         (directory, database)
+    }
+
+    #[test]
+    fn custom_sql_csv_parser_handles_quoted_delimiters_and_newlines() {
+        let comma = parse_custom_taxonomy_input_csv(
+            "name,notes\n\"Felis, catus\",\"line one\nline two\"\n",
+        )
+        .unwrap();
+        assert_eq!(comma.columns, ["name", "notes"]);
+        assert_eq!(
+            comma.rows,
+            [["Felis, catus".to_string(), "line one\nline two".to_string()]]
+        );
+
+        let pipe =
+            parse_custom_taxonomy_input_csv("name|notes\n\"A|B\"|\"quoted \"\"value\"\"\"\n")
+                .unwrap();
+        assert_eq!(pipe.columns, ["name", "notes"]);
+        assert_eq!(
+            pipe.rows,
+            [["A|B".to_string(), "quoted \"value\"".to_string()]]
+        );
     }
 
     #[test]

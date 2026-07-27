@@ -462,6 +462,11 @@ pub fn execute_custom_taxonomy_sql(
 }
 
 #[tauri::command]
+pub fn parse_custom_taxonomy_input_csv(input: String) -> CommandResult<TaxonomyCustomSqlTempTable> {
+    taxonomy::parse_custom_taxonomy_input_csv(&input).map_err(error)
+}
+
+#[tauri::command]
 pub fn preview_taxonomy_rows(
     state: State<'_, AppState>,
     rows: Vec<TaxonInputRow>,
