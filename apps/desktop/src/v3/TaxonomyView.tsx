@@ -37,6 +37,7 @@ import {
 } from "./api";
 import { EmptyState, SectionHeader, TaxonCard, VirtualList } from "./components";
 import { CodeEditor } from "./CodeEditor";
+import { useMetadataChange } from "./metadataChanges";
 import { useCursorPage } from "./useCursorPage";
 import { useTaxonSearch } from "./useTaxonSearch";
 
@@ -231,6 +232,9 @@ export function FormattedUpdateView() {
       .then(setSeparator)
       .catch((nextError) => setMessage(errorMessage(nextError)));
   }, []);
+  useMetadataChange((change) => {
+    if (change.key === "taxonomy_name_separator") setSeparator(change.value);
+  });
 
   async function importFile(file: File) {
     setRows(await parseTaxonomyCsv(await file.text()));

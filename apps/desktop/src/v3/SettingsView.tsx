@@ -47,6 +47,7 @@ import {
 } from "./api";
 import { Modal, SectionHeader, Segmented, VirtualList } from "./components";
 import { CodeEditor } from "./CodeEditor";
+import { emitMetadataChange } from "./metadataChanges";
 
 type SettingsSection = "General" | "Naming" | "Map" | "Base Database" | "Hooks";
 
@@ -244,6 +245,7 @@ function NamingSettings() {
         setPhotoFilenameFormatSettings(format),
         setTaxonomyNameSeparator(separator),
       ]);
+      emitMetadataChange({ key: "taxonomy_name_separator", value: separator });
       setMessage("Naming metadata saved. Photos have been queued for remapping.");
     } catch (nextError) {
       setMessage(errorMessage(nextError));
