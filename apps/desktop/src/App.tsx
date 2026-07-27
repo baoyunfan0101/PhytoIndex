@@ -89,6 +89,7 @@ const taxonomyItems: Array<[TabKind, string, IconComponent]> = [
 export function App() {
   const [tabs, setTabs] = useState<AppTab[]>([initialTab]);
   const [activeId, setActiveId] = useState(initialTab.id);
+  const [workspaceId, setWorkspaceId] = useState(0);
   const [root, setRoot] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -165,8 +166,13 @@ export function App() {
     if (!selected) return;
     await openPhotoLibrary(selected);
     setRoot(selected);
+    setWorkspaceId((current) => current + 1);
+    setTabs([initialTab]);
+    setActiveId(initialTab.id);
+    setSearchOpen(false);
+    setSearchQuery("");
+    setSuggestions([]);
     setStatus("Photo root opened");
-    openModule("folders", "Folders");
   }
 
   return (
@@ -213,7 +219,15 @@ export function App() {
           )}
         </header>
         <main className="tab-content">
-          {active && <TabBody tab={active} handlers={handlers} onStatus={setStatus} openTab={openTab} />}
+          {tabs.map((tab) => (
+            <section
+              className={`tab-panel${tab.id === activeId ? " active" : ""}`}
+              aria-hidden={tab.id !== activeId}
+              key={`${workspaceId}:${tab.id}`}
+            >
+              <TabBody tab={tab} handlers={handlers} onStatus={setStatus} openTab={openTab} />
+            </section>
+          ))}
         </main>
         <footer className="status-bar"><span className="status-dot" />{status}<span>{active?.title}</span></footer>
       </div>

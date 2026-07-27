@@ -134,7 +134,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .suggestions button { display: flex; width: 100%; justify-content: space-between; padding: 8px 10px; border: 0; text-align: left; background: transparent; }
 .suggestions button:hover { background: var(--active); }
 .suggestions span { color: var(--muted); }
-.tab-content { min-width: 0; min-height: 0; overflow: hidden; background: #181818; }
+.tab-content { position: relative; min-width: 0; min-height: 0; overflow: hidden; background: #181818; }
+.tab-panel { position: absolute; inset: 0; min-width: 0; min-height: 0; overflow: hidden; visibility: hidden; pointer-events: none; }
+.tab-panel.active { visibility: visible; pointer-events: auto; }
 .status-bar { display: flex; align-items: center; gap: 7px; padding: 0 9px; border-top: 1px solid var(--line); color: #aaa; background: #191919; }
 .status-bar > :last-child { margin-left: auto; color: var(--quiet); }
 .status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent-bright); }
