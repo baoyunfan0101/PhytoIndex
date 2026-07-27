@@ -27,6 +27,7 @@ export function PhotoContextMenu({
   y,
   onClose,
   onChanged,
+  onMappingChanged,
   onOpenDetails,
   onOpenTaxon,
   onOpenMappingEditor,
@@ -38,6 +39,7 @@ export function PhotoContextMenu({
   y: number;
   onClose: () => void;
   onChanged: (photo: Photo) => void;
+  onMappingChanged: () => void;
   onOpenDetails: () => void;
   onOpenTaxon: (taxonId: number) => void;
   onOpenMappingEditor: () => void;
@@ -115,7 +117,10 @@ export function PhotoContextMenu({
           icon={RefreshCw}
           label="Remap from filename"
           disabled={Boolean(busy)}
-          onClick={() => void run("Remapping", async () => { await remapPhoto(photo.photo_id); })}
+          onClick={() => void run("Remapping", async () => {
+            await remapPhoto(photo.photo_id);
+            onMappingChanged();
+          })}
         />
         <MenuSeparator />
         <MenuButton

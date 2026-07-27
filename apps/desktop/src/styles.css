@@ -153,7 +153,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .section-header strong, .pane-header strong { font-size: 12px; color: #e1e1e1; }
 .section-header span, .pane-header span { overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
 .section-actions { display: flex; align-items: center; gap: 6px; }
-.primary-button, .secondary-button, .small-button, .icon-button, .record-actions button, .map-float-actions button {
+.primary-button, .secondary-button, .small-button, .icon-button, .record-actions button {
   display: inline-flex;
   height: 28px;
   align-items: center;
@@ -451,7 +451,6 @@ button:disabled { cursor: not-allowed; opacity: .42; }
 .map-photo-marker { width: 15px; height: 15px; padding: 0; border: 2px solid #fff; border-radius: 50%; background: var(--accent); box-shadow: 0 1px 5px #0009; }
 .map-photo-float { position: absolute; z-index: 5; right: 18px; bottom: 22px; width: min(420px, 38vw); height: min(360px, 48vh); overflow: hidden; border: 1px solid var(--line-strong); border-radius: 5px; background: #181818; box-shadow: 0 12px 34px #000b; }
 .map-photo-float .photo-stage { height: calc(100% - 36px); }
-.map-float-actions { display: flex; height: 36px; justify-content: flex-end; gap: 6px; padding: 4px; }
 .map-count { position: absolute; z-index: 4; bottom: 12px; left: 12px; padding: 5px 8px; border-radius: 3px; background: #181818dd; }
 
 .context-menu {

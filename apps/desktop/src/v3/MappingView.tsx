@@ -1,7 +1,6 @@
 import { RefreshCw, Search } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
-  errorMessage,
   getMappingMetadata,
   listPhotosByMappingStatus,
   searchPhotosByMappingStatus,
@@ -13,8 +12,8 @@ import {
 } from "./api";
 import { MappingBadge, PhotoStage, Segmented, VirtualList } from "./components";
 import { MappingEditor } from "./MappingEditor";
-import { PhotoContextMenu } from "./PhotoContextMenu";
-import type { PhotoOpenHandlers } from "./PhotosView";
+import { usePhotoInteraction, type PhotoOpenHandlers } from "./PhotoInteraction";
+import { useCursorPage } from "./useCursorPage";
 
 const statuses = ["matched", "ambiguous", "unmatched", "processing"] as const;
 const emptyMetadata: MappingMetadata = {
@@ -34,44 +33,41 @@ export function MappingView({
 }) {
   const [status, setStatus] = useState<PhotoTaxonStatus>("ambiguous");
   const [metadata, setMetadata] = useState<MappingMetadata>(emptyMetadata);
-  const [items, setItems] = useState<PhotoMappingListItem[]>([]);
-  const [selected, setSelected] = useState<PhotoMappingListItem | null>(null);
   const [query, setQuery] = useState("");
-  const [cursor, setCursor] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [context, setContext] = useState<{ item: PhotoMappingListItem; x: number; y: number } | null>(null);
-
-  const load = useCallback(async (append = false) => {
-    if (loading) return;
-    setLoading(true);
-    setError("");
-    try {
-      const nextCursor = append ? cursor : null;
-      const page = query.trim()
-        ? await searchPhotosByMappingStatus(status, query.trim(), nextCursor)
-        : await listPhotosByMappingStatus(status, nextCursor);
-      setItems((current) => append ? [...current, ...page.items] : page.items);
-      setCursor(page.next_cursor);
-      if (!append) setSelected(page.items[0] ?? null);
-      setMetadata(await getMappingMetadata());
-    } catch (nextError) {
-      setError(errorMessage(nextError));
-    } finally {
-      setLoading(false);
-    }
-  }, [cursor, loading, query, status]);
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => void load(false), query ? 180 : 0);
-    return () => window.clearTimeout(timer);
-  }, [query, status]);
+  const normalizedQuery = query.trim();
+  const refreshMetadata = useCallback(() => {
+    void getMappingMetadata().then(setMetadata);
+  }, []);
+  const page = useCursorPage<PhotoMappingListItem, { status: PhotoTaxonStatus; query: string }>({
+    params: { status, query: normalizedQuery },
+    resetKey: `${status}:${normalizedQuery}`,
+    debounceMs: normalizedQuery ? 180 : 0,
+    loadPage: (params, cursor) => params.query
+      ? searchPhotosByMappingStatus(params.status, params.query, cursor)
+      : listPhotosByMappingStatus(params.status, cursor),
+    onPageLoaded: refreshMetadata,
+  });
+  const photos = useMemo(() => page.items.map((item) => item.photo), [page.items]);
+  const knownMapping = useCallback(
+    (photo: PhotoMappingListItem["photo"]) => page.items.find((item) => item.photo.photo_id === photo.photo_id)?.mapping,
+    [page.items],
+  );
+  const interaction = usePhotoInteraction({
+    photos,
+    handlers,
+    knownMapping,
+    onMappingChanged: () => void page.reload(),
+    onPhotoChanged: (photo) => page.updateItems((current) => current.map((item) => (
+      item.photo.photo_id === photo.photo_id ? { ...item, photo } : item
+    ))),
+  });
+  const selected = page.items.find((item) => item.photo.photo_id === interaction.selectedId) ?? null;
 
   async function mapAll() {
     onStatus("Mapping photos", true);
     const started = await startPhotoMapping();
     await waitForOperation("mapping", started.operation.task_id, (operation) => onStatus(operation.message, true));
-    await load(false);
+    await page.reload();
     onStatus("Mapping complete");
   }
 
@@ -98,49 +94,32 @@ export function MappingView({
       <div className="mapping-three-columns">
         <aside className="mapping-photo-list">
           <VirtualList
-            items={items}
+            items={page.items}
             rowHeight={54}
             itemKey={(item) => item.photo.photo_id}
-            onNearEnd={() => { if (cursor) void load(true); }}
+            onNearEnd={() => void page.loadMore()}
             renderItem={(item) => (
               <button
                 className={`mapping-photo-row${selected?.photo.photo_id === item.photo.photo_id ? " active" : ""}`}
                 type="button"
-                onClick={() => setSelected(item)}
-                onContextMenu={(event) => {
-                  event.preventDefault();
-                  setSelected(item);
-                  setContext({ item, x: event.clientX, y: event.clientY });
-                }}
+                onClick={() => interaction.selectPhoto(item.photo)}
+                onContextMenu={(event) => interaction.openContextMenu(event, item.photo)}
               >
                 <span>{item.photo.filename}</span><MappingBadge status={item.mapping.status} />
               </button>
             )}
           />
-          {loading && <div className="pane-overlay">Loading</div>}
-          {error && <div className="inline-error">{error}</div>}
+          {page.loading && <div className="pane-overlay">Loading</div>}
+          {page.error && <div className="inline-error">{page.error}</div>}
         </aside>
-        <main className="mapping-photo-stage"><PhotoStage photo={selected?.photo ?? null} onContextMenu={(event) => {
-          if (selected) setContext({ item: selected, x: event.clientX, y: event.clientY });
-        }} /></main>
+        <main className="mapping-photo-stage">
+          <PhotoStage photo={interaction.selected} onContextMenu={interaction.openContextMenu} />
+        </main>
         <aside className="mapping-editor-pane">
-          {selected ? <MappingEditor photo={selected.photo} embedded onChanged={() => void load(false)} /> : <div className="empty-copy">Select a photo</div>}
+          {selected ? <MappingEditor photo={selected.photo} embedded onChanged={() => void page.reload()} /> : <div className="empty-copy">Select a photo</div>}
         </aside>
       </div>
-      {context && (
-        <PhotoContextMenu
-          photo={context.item.photo}
-          mapping={context.item.mapping}
-          loading={false}
-          x={context.x}
-          y={context.y}
-          onClose={() => setContext(null)}
-          onChanged={() => void load(false)}
-          onOpenDetails={() => handlers.openDetails(context.item.photo)}
-          onOpenTaxon={handlers.openTaxon}
-          onOpenMappingEditor={() => handlers.openMappingEditor(context.item.photo)}
-        />
-      )}
+      {interaction.contextMenu}
     </div>
   );
 }

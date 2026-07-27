@@ -28,12 +28,12 @@ import type { IconComponent } from "./v3/components";
 import { MappingEditor } from "./v3/MappingEditor";
 import { PhotoBrowser } from "./v3/PhotoBrowser";
 import { PhotoDetailView } from "./v3/PhotoDetailView";
+import type { PhotoOpenHandlers } from "./v3/PhotoInteraction";
 import {
   FolderPhotosView,
   PhotoHistoryView,
   PhotoMapView,
   TaxonPhotosView,
-  type PhotoOpenHandlers,
 } from "./v3/PhotosView";
 import { MappingView } from "./v3/MappingView";
 import { SettingsView } from "./v3/SettingsView";
@@ -43,6 +43,7 @@ import {
   TaxonomyHistoryView,
   TaxonomySearchView,
 } from "./v3/TaxonomyView";
+import { useCursorPage } from "./v3/useCursorPage";
 
 type TabKind =
   | "folders"
@@ -250,32 +251,22 @@ function TabBody({
 }
 
 function PhotoSet({ query, taxonId, handlers }: { query?: string; taxonId?: number; handlers: PhotoOpenHandlers }) {
-  const [photos, setPhotos] = useState<Photo[]>([]);
-  const [cursor, setCursor] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-
-  async function load(append = false) {
-    if (loading) return;
-    setLoading(true);
-    const page = query !== undefined
-      ? await searchPhotos(query, append ? cursor : null)
-      : await listTaxonPhotos(taxonId!, append ? cursor : null);
-    setPhotos((current) => append ? [...current, ...page.items] : page.items);
-    setCursor(page.next_cursor);
-    setLoading(false);
-  }
-
-  useEffect(() => { void load(false); }, [query, taxonId]);
+  const params = query !== undefined
+    ? { kind: "search" as const, query }
+    : { kind: "taxon" as const, taxonId: taxonId! };
+  const page = useCursorPage({
+    params,
+    resetKey: query !== undefined ? `search:${query}` : `taxon:${taxonId}`,
+    loadPage: (next, cursor) => next.kind === "search"
+      ? searchPhotos(next.query, cursor)
+      : listTaxonPhotos(next.taxonId, cursor),
+  });
   return (
     <PhotoBrowser
       title={query !== undefined ? `Search: ${query}` : `Taxon ${taxonId}`}
-      detail={loading ? "Loading" : undefined}
-      photos={photos}
-      hasMore={cursor !== null}
-      onLoadMore={() => { if (cursor) void load(true); }}
-      onOpenDetails={handlers.openDetails}
-      onOpenTaxon={handlers.openTaxon}
-      onOpenMappingEditor={handlers.openMappingEditor}
+      detail={page.loading ? "Loading" : page.error || undefined}
+      page={page}
+      handlers={handlers}
     />
   );
 }

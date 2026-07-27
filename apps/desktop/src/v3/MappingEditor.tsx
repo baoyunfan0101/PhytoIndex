@@ -6,15 +6,14 @@ import {
   errorMessage,
   getPhotoTaxonMatch,
   getTaxonDetailNode,
-  searchTaxa,
   selectPhotoTaxon,
   setPhotoMapping,
   type Photo,
   type PhotoTaxonMatch,
-  type TaxonSearchResult,
   type TaxonSummary,
 } from "./api";
 import { Busy, EmptyState, MappingBadge, PhotoStage, TaxonCard, VirtualList } from "./components";
+import { useTaxonSearch } from "./useTaxonSearch";
 
 export function MappingEditor({
   photo,
@@ -28,10 +27,10 @@ export function MappingEditor({
   const [match, setMatch] = useState<PhotoTaxonMatch | null>(null);
   const [mappedTaxon, setMappedTaxon] = useState<TaxonSummary | null>(null);
   const [query, setQuery] = useState("");
-  const [results, setResults] = useState<TaxonSearchResult[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
+  const taxonomySearch = useTaxonSearch(query, { limit: 60 });
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -54,18 +53,6 @@ export function MappingEditor({
   useEffect(() => {
     void reload();
   }, [reload]);
-
-  useEffect(() => {
-    const value = query.trim();
-    if (!value) {
-      setResults([]);
-      return;
-    }
-    const timer = window.setTimeout(() => {
-      searchTaxa(value, 60).then(setResults).catch((nextError) => setError(errorMessage(nextError)));
-    }, 180);
-    return () => window.clearTimeout(timer);
-  }, [query]);
 
   async function mutate(label: string, action: () => Promise<unknown>) {
     setBusy(label);
@@ -137,7 +124,7 @@ export function MappingEditor({
           </label>
           <VirtualList
             className="mapping-search-results"
-            items={results}
+            items={taxonomySearch.results}
             rowHeight={58}
             itemKey={(item) => item.summary.taxon_id}
             renderItem={(item) => (
@@ -154,7 +141,7 @@ export function MappingEditor({
           />
         </section>
         {busy && <div className="floating-progress"><Busy label={busy} /></div>}
-        {error && <div className="inline-error">{error}</div>}
+        {(error || taxonomySearch.error) && <div className="inline-error">{error || taxonomySearch.error}</div>}
       </div>
     </div>
   );

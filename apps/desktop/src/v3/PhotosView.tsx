@@ -2,7 +2,7 @@ import "maplibre-gl/dist/maplibre-gl.css";
 
 import { ChevronRight, Download, Folder, History, Images, RefreshCw, RotateCcw } from "lucide-react";
 import maplibregl, { type Map as MapLibreMap } from "maplibre-gl";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   browsePhotoDirectory,
   browsePhotoTaxon,
@@ -13,27 +13,21 @@ import {
   getMapSettings,
   getPhotoDirectoryCounts,
   getPhotoLibrary,
-  getPhotoMapping,
   listMapPhotos,
   listPhotoOperations,
   refreshPhotoDirectory,
   revertPhotoOperation,
   waitForOperation,
-  type Photo,
   type PhotoDirectory,
+  type PhotoDirectoryItem,
   type PhotoLibrary,
   type PhotoOperation,
-  type PhotoTaxonMapping,
+  type PhotoTaxonItem,
   type PhotoTaxonUsage,
 } from "./api";
 import { EmptyState, PhotoStage, SectionHeader, VirtualList } from "./components";
-import { PhotoContextMenu } from "./PhotoContextMenu";
-
-export type PhotoOpenHandlers = {
-  openDetails: (photo: Photo) => void;
-  openTaxon: (taxonId: number) => void;
-  openMappingEditor: (photo: Photo) => void;
-};
+import { usePhotoInteraction, type PhotoOpenHandlers } from "./PhotoInteraction";
+import { useCursorPage } from "./useCursorPage";
 
 export function FolderPhotosView({
   handlers,
@@ -44,59 +38,56 @@ export function FolderPhotosView({
 }) {
   const [library, setLibrary] = useState<PhotoLibrary | null>(null);
   const [trail, setTrail] = useState<PhotoDirectory[]>([]);
-  const [directories, setDirectories] = useState<PhotoDirectory[]>([]);
-  const [photos, setPhotos] = useState<Photo[]>([]);
-  const [selected, setSelected] = useState<Photo | null>(null);
-  const [context, setContext] = useState<{ photo: Photo; mapping: PhotoTaxonMapping | null; loading: boolean; x: number; y: number } | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
+  const [libraryLoading, setLibraryLoading] = useState(true);
+  const [libraryError, setLibraryError] = useState("");
   const directoryId = trail[trail.length - 1]?.directory_id ?? library?.root_directory_id ?? null;
-
-  const load = useCallback(async (id: number) => {
-    setLoading(true);
-    setError("");
-    try {
-      const [page, counts] = await Promise.all([browsePhotoDirectory(id), getPhotoDirectoryCounts(id)]);
-      setDirectories(page.items.flatMap((item) => item.kind === "directory" ? [item.directory] : []));
-      const nextPhotos = page.items.flatMap((item) => item.kind === "photo" ? [item.photo] : []);
-      setPhotos(nextPhotos);
-      setSelected(nextPhotos[0] ?? null);
-      onStatus(`${counts.directory_count} folders, ${counts.file_count} photos`);
-    } catch (nextError) {
-      setError(errorMessage(nextError));
-    } finally {
-      setLoading(false);
-    }
-  }, [onStatus]);
+  const page = useCursorPage<PhotoDirectoryItem, number | null>({
+    params: directoryId,
+    resetKey: directoryId,
+    enabled: directoryId !== null,
+    loadPage: (id, cursor) => browsePhotoDirectory(id!, cursor),
+  });
+  const photos = useMemo(
+    () => page.items.flatMap((item) => item.kind === "photo" ? [item.photo] : []),
+    [page.items],
+  );
+  const interaction = usePhotoInteraction({
+    photos,
+    handlers,
+    onPhotoChanged: (photo) => page.updateItems((current) => current.map((item) => (
+      item.kind === "photo" && item.photo.photo_id === photo.photo_id
+        ? { ...item, photo }
+        : item
+    ))),
+  });
 
   useEffect(() => {
     getPhotoLibrary().then((next) => {
       setLibrary(next);
-      if (next) return load(next.root_directory_id);
-      setLoading(false);
+      setLibraryLoading(false);
     }).catch((nextError) => {
-      setError(errorMessage(nextError));
-      setLoading(false);
+      setLibraryError(errorMessage(nextError));
+      setLibraryLoading(false);
     });
-  }, [load]);
+  }, []);
+
+  useEffect(() => {
+    if (directoryId === null) return;
+    void getPhotoDirectoryCounts(directoryId)
+      .then((counts) => onStatus(`${counts.directory_count} folders, ${counts.file_count} photos`))
+      .catch(() => undefined);
+  }, [directoryId, onStatus]);
 
   async function refresh() {
     if (directoryId === null) return;
     onStatus("Refreshing photo library", true);
     const started = await refreshPhotoDirectory(directoryId);
     await waitForOperation("photos", started.operation.task_id, (operation) => onStatus(operation.message, true));
-    await load(directoryId);
+    await page.reload();
   }
 
   function enter(directory: PhotoDirectory) {
     setTrail((current) => [...current, directory]);
-    void load(directory.directory_id);
-  }
-
-  function openContext(event: React.MouseEvent, photo: Photo) {
-    setSelected(photo);
-    setContext({ photo, mapping: null, loading: true, x: event.clientX, y: event.clientY });
-    void getPhotoMapping(photo.photo_id).then((mapping) => setContext((current) => current?.photo.photo_id === photo.photo_id ? { ...current, mapping, loading: false } : current));
   }
 
   return (
@@ -105,12 +96,10 @@ export function FolderPhotosView({
         <div className="breadcrumbs">
           <button type="button" onClick={() => {
             setTrail([]);
-            if (library) void load(library.root_directory_id);
           }}>Root</button>
           {trail.map((item, index) => (
             <span key={item.directory_id}><ChevronRight size={12} /><button type="button" onClick={() => {
               setTrail(trail.slice(0, index + 1));
-              void load(item.directory_id);
             }}>{item.name}</button></span>
           ))}
         </div>
@@ -119,12 +108,10 @@ export function FolderPhotosView({
       <div className="explorer-columns">
         <aside className="finder-pane">
           <VirtualList
-            items={[
-              ...directories.map((directory) => ({ kind: "directory" as const, directory })),
-              ...photos.map((photo) => ({ kind: "photo" as const, photo })),
-            ]}
+            items={page.items}
             rowHeight={40}
             itemKey={(item) => item.kind === "directory" ? `d:${item.directory.directory_id}` : `p:${item.photo.photo_id}`}
+            onNearEnd={() => void page.loadMore()}
             renderItem={(item) => (
               item.kind === "directory" ? (
                 <button className="finder-row" type="button" onDoubleClick={() => enter(item.directory)}>
@@ -132,51 +119,47 @@ export function FolderPhotosView({
                 </button>
               ) : (
                 <button
-                  className={`finder-row${selected?.photo_id === item.photo.photo_id ? " active" : ""}`}
+                  className={`finder-row${interaction.selectedId === item.photo.photo_id ? " active" : ""}`}
                   type="button"
-                  onClick={() => setSelected(item.photo)}
-                  onContextMenu={(event) => {
-                    event.preventDefault();
-                    openContext(event, item.photo);
-                  }}
+                  onClick={() => interaction.selectPhoto(item.photo)}
+                  onContextMenu={(event) => interaction.openContextMenu(event, item.photo)}
                 >
                   <Images size={14} /><span>{item.photo.filename}</span>
                 </button>
               )
             )}
           />
-          {loading && <div className="pane-overlay">Loading</div>}
-          {error && <div className="inline-error">{error}</div>}
+          {(libraryLoading || page.loading) && <div className="pane-overlay">Loading</div>}
+          {(libraryError || page.error) && <div className="inline-error">{libraryError || page.error}</div>}
         </aside>
-        <PhotoStage photo={selected} onContextMenu={openContext} />
+        <PhotoStage photo={interaction.selected} onContextMenu={interaction.openContextMenu} />
       </div>
-      {context && <PhotoContextMenu {...context} onClose={() => setContext(null)} onChanged={(photo) => setSelected(photo)} onOpenDetails={() => handlers.openDetails(context.photo)} onOpenTaxon={handlers.openTaxon} onOpenMappingEditor={() => handlers.openMappingEditor(context.photo)} />}
+      {interaction.contextMenu}
     </div>
   );
 }
 
 export function TaxonPhotosView({ handlers }: { handlers: PhotoOpenHandlers }) {
   const [trail, setTrail] = useState<PhotoTaxonUsage[]>([]);
-  const [taxa, setTaxa] = useState<PhotoTaxonUsage[]>([]);
-  const [photos, setPhotos] = useState<Photo[]>([]);
-  const [selected, setSelected] = useState<Photo | null>(null);
-  const [context, setContext] = useState<{ photo: Photo; mapping: PhotoTaxonMapping | null; loading: boolean; x: number; y: number } | null>(null);
   const currentId = trail[trail.length - 1]?.taxon_id ?? null;
-
-  const load = useCallback(async (taxonId: number | null) => {
-    const page = await browsePhotoTaxon(taxonId);
-    setTaxa(page.items.flatMap((item) => item.kind === "taxon" ? [item.taxon] : []));
-    setPhotos(page.items.flatMap((item) => item.kind === "photo" ? [item.photo] : []));
-    setSelected(page.items.flatMap((item) => item.kind === "photo" ? [item.photo] : [])[0] ?? null);
-  }, []);
-
-  useEffect(() => { void load(currentId); }, [currentId, load]);
-
-  function openContext(event: React.MouseEvent, photo: Photo) {
-    setSelected(photo);
-    setContext({ photo, mapping: null, loading: true, x: event.clientX, y: event.clientY });
-    void getPhotoMapping(photo.photo_id).then((mapping) => setContext((current) => current?.photo.photo_id === photo.photo_id ? { ...current, mapping, loading: false } : current));
-  }
+  const page = useCursorPage<PhotoTaxonItem, number | null>({
+    params: currentId,
+    resetKey: currentId,
+    loadPage: (taxonId, cursor) => browsePhotoTaxon(taxonId, false, true, cursor),
+  });
+  const photos = useMemo(
+    () => page.items.flatMap((item) => item.kind === "photo" ? [item.photo] : []),
+    [page.items],
+  );
+  const interaction = usePhotoInteraction({
+    photos,
+    handlers,
+    onPhotoChanged: (photo) => page.updateItems((current) => current.map((item) => (
+      item.kind === "photo" && item.photo.photo_id === photo.photo_id
+        ? { ...item, photo }
+        : item
+    ))),
+  });
 
   return (
     <div className="folder-workbench">
@@ -189,41 +172,38 @@ export function TaxonPhotosView({ handlers }: { handlers: PhotoOpenHandlers }) {
       <div className="explorer-columns">
         <aside className="finder-pane">
           <VirtualList
-            items={[
-              ...taxa.map((taxon) => ({ kind: "taxon" as const, taxon })),
-              ...photos.map((photo) => ({ kind: "photo" as const, photo })),
-            ]}
+            items={page.items}
             rowHeight={48}
             itemKey={(item) => item.kind === "taxon" ? `t:${item.taxon.taxon_id}` : `p:${item.photo.photo_id}`}
+            onNearEnd={() => void page.loadMore()}
             renderItem={(item) => (
               item.kind === "taxon" ? (
                 <button className="finder-row taxon" type="button" onClick={() => setTrail((current) => [...current, item.taxon])}>
                   <span><strong>{item.taxon.names.sci_name ?? `Taxon ${item.taxon.taxon_id}`}</strong><small>{item.taxon.subtree_photo_count} photos</small></span><ChevronRight size={12} />
                 </button>
               ) : (
-                <button className={`finder-row${selected?.photo_id === item.photo.photo_id ? " active" : ""}`} type="button" onClick={() => setSelected(item.photo)} onContextMenu={(event) => {
-                  event.preventDefault();
-                  openContext(event, item.photo);
-                }}><Images size={14} /><span>{item.photo.filename}</span></button>
+                <button className={`finder-row${interaction.selectedId === item.photo.photo_id ? " active" : ""}`} type="button" onClick={() => interaction.selectPhoto(item.photo)} onContextMenu={(event) => interaction.openContextMenu(event, item.photo)}>
+                  <Images size={14} /><span>{item.photo.filename}</span>
+                </button>
               )
             )}
           />
+          {page.loading && <div className="pane-overlay">Loading</div>}
+          {page.error && <div className="inline-error">{page.error}</div>}
         </aside>
-        <PhotoStage photo={selected} onContextMenu={openContext} />
+        <PhotoStage photo={interaction.selected} onContextMenu={interaction.openContextMenu} />
       </div>
-      {context && <PhotoContextMenu {...context} onClose={() => setContext(null)} onChanged={(photo) => setSelected(photo)} onOpenDetails={() => handlers.openDetails(context.photo)} onOpenTaxon={handlers.openTaxon} onOpenMappingEditor={() => handlers.openMappingEditor(context.photo)} />}
+      {interaction.contextMenu}
     </div>
   );
 }
 
 export function PhotoHistoryView({ onStatus }: { onStatus: (message: string) => void }) {
-  const [items, setItems] = useState<PhotoOperation[]>([]);
-  const [error, setError] = useState("");
-
-  const load = useCallback(() => {
-    listPhotoOperations().then((page) => setItems(page.items)).catch((nextError) => setError(errorMessage(nextError)));
-  }, []);
-  useEffect(load, [load]);
+  const page = useCursorPage<PhotoOperation, null>({
+    params: null,
+    resetKey: "photo-history",
+    loadPage: (_, cursor) => listPhotoOperations(cursor),
+  });
 
   async function exportAll() {
     downloadCsv("photo-rename-operations.csv", await exportAllPhotoOperationsCsv());
@@ -231,15 +211,16 @@ export function PhotoHistoryView({ onStatus }: { onStatus: (message: string) => 
 
   return (
     <div className="history-view">
-      <SectionHeader title="Rename history" detail={`${items.length} operations`} actions={
+      <SectionHeader title="Rename history" detail={`${page.items.length} operations${page.hasMore ? " loaded" : ""}`} actions={
         <button className="secondary-button" type="button" onClick={() => void exportAll()}><Download size={13} />Export all</button>
       } />
-      {error ? <EmptyState title="Unable to load history" detail={error} /> : (
+      {page.error ? <EmptyState title="Unable to load history" detail={page.error} /> : (
         <VirtualList
           className="history-list"
-          items={items}
+          items={page.items}
           rowHeight={72}
           itemKey={(item) => item.operation_id}
+          onNearEnd={() => void page.loadMore()}
           renderItem={(item) => (
             <article className="operation-row">
               <History size={15} />
@@ -248,7 +229,7 @@ export function PhotoHistoryView({ onStatus }: { onStatus: (message: string) => 
                 <button type="button" title="Export" onClick={() => void exportPhotoOperationCsv(item.operation_id).then((csv) => downloadCsv(`photo-operation-${item.operation_id}.csv`, csv))}><Download size={14} /></button>
                 <button type="button" title="Revert" onClick={() => void revertPhotoOperation(item.operation_id).then(() => {
                   onStatus(`Reverted operation ${item.operation_id}`);
-                  load();
+                  void page.reload();
                 })}><RotateCcw size={14} /></button>
               </div>
             </article>
@@ -262,60 +243,83 @@ export function PhotoHistoryView({ onStatus }: { onStatus: (message: string) => 
 export function PhotoMapView({ handlers }: { handlers: PhotoOpenHandlers }) {
   const container = useRef<HTMLDivElement>(null);
   const map = useRef<MapLibreMap | null>(null);
-  const [photos, setPhotos] = useState<Awaited<ReturnType<typeof listMapPhotos>>["items"]>([]);
-  const [selected, setSelected] = useState<Photo | null>(null);
-  const [context, setContext] = useState<{ photo: Photo; mapping: PhotoTaxonMapping | null; loading: boolean; x: number; y: number } | null>(null);
-
-  function openContext(event: React.MouseEvent, photo: Photo) {
-    setContext({ photo, mapping: null, loading: true, x: event.clientX, y: event.clientY });
-    void getPhotoMapping(photo.photo_id).then((mapping) => setContext((current) => current?.photo.photo_id === photo.photo_id ? { ...current, mapping, loading: false } : current));
-  }
+  const markers = useRef(new Map<number, maplibregl.Marker>());
+  const [mapReady, setMapReady] = useState(false);
+  const page = useCursorPage({
+    params: null,
+    resetKey: "photo-map",
+    loadPage: (_, cursor) => listMapPhotos(null, cursor),
+  });
+  const photos = useMemo(() => page.items.map((item) => item.photo), [page.items]);
+  const interaction = usePhotoInteraction({
+    photos,
+    handlers,
+    selectFirst: false,
+    onPhotoChanged: (photo) => page.updateItems((current) => current.map((item) => (
+      item.photo.photo_id === photo.photo_id ? { ...item, photo } : item
+    ))),
+  });
 
   useEffect(() => {
     let disposed = false;
-    Promise.all([getMapSettings(), listMapPhotos()]).then(([settings, page]) => {
+    getMapSettings().then((settings) => {
       if (disposed || !container.current) return;
-      setPhotos(page.items);
       const rasterUrl = settings.provider === "tianditu" && settings.tianditu_token
         ? `https://t0.tianditu.gov.cn/vec_w/wmts?tk=${settings.tianditu_token}&service=wmts&request=gettile&version=1.0.0&layer=vec&style=default&tilematrixset=w&format=tiles&tilematrix={z}&tilerow={y}&tilecol={x}`
         : "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
       const next = new maplibregl.Map({
         container: container.current,
-        center: page.items.length ? [page.items[0].longitude, page.items[0].latitude] : [0, 20],
-        zoom: page.items.length ? 6 : 1.5,
+        center: [0, 20],
+        zoom: 1.5,
         style: { version: 8, sources: { tiles: { type: "raster", tiles: [rasterUrl], tileSize: 256 } }, layers: [{ id: "tiles", type: "raster", source: "tiles" }] },
       });
       map.current = next;
-      page.items.forEach((item) => {
-        const marker = document.createElement("button");
-        marker.className = "map-photo-marker";
-        marker.type = "button";
-        marker.title = item.photo.filename;
-        marker.addEventListener("click", () => setSelected(item.photo));
-        new maplibregl.Marker({ element: marker }).setLngLat([item.longitude, item.latitude]).addTo(next);
-      });
+      setMapReady(true);
     });
     return () => {
       disposed = true;
       map.current?.remove();
       map.current = null;
+      markers.current.clear();
     };
   }, []);
+
+  useEffect(() => {
+    if (!mapReady || !map.current) return;
+    const firstMarker = markers.current.size === 0;
+    page.items.forEach((item) => {
+      if (markers.current.has(item.photo.photo_id)) return;
+      const marker = document.createElement("button");
+      marker.className = "map-photo-marker";
+      marker.type = "button";
+      marker.title = item.photo.filename;
+      marker.addEventListener("click", () => interaction.selectPhoto(item.photo));
+      markers.current.set(
+        item.photo.photo_id,
+        new maplibregl.Marker({ element: marker })
+          .setLngLat([item.longitude, item.latitude])
+          .addTo(map.current!),
+      );
+    });
+    if (firstMarker && page.items[0]) {
+      map.current.jumpTo({ center: [page.items[0].longitude, page.items[0].latitude], zoom: 6 });
+    }
+  }, [interaction.selectPhoto, mapReady, page.items]);
+
+  useEffect(() => {
+    if (page.hasMore && !page.loading) void page.loadMore();
+  }, [page.hasMore, page.loadMore, page.loading]);
 
   return (
     <div className="map-view">
       <div className="map-canvas" ref={container} />
-      {selected && (
+      {interaction.selected && (
         <div className="map-photo-float">
-          <PhotoStage photo={selected} compact onContextMenu={openContext} />
-          <div className="map-float-actions">
-            <button type="button" onClick={() => handlers.openDetails(selected)}>Open details</button>
-            <button type="button" onClick={() => handlers.openMappingEditor(selected)}>Edit mapping</button>
-          </div>
+          <PhotoStage photo={interaction.selected} compact onContextMenu={interaction.openContextMenu} />
         </div>
       )}
-      <span className="map-count">{photos.length} geotagged photos</span>
-      {context && <PhotoContextMenu {...context} onClose={() => setContext(null)} onChanged={(photo) => setSelected(photo)} onOpenDetails={() => handlers.openDetails(context.photo)} onOpenTaxon={handlers.openTaxon} onOpenMappingEditor={() => handlers.openMappingEditor(context.photo)} />}
+      <span className="map-count">{page.items.length} geotagged photos{page.loading ? " loading" : ""}</span>
+      {interaction.contextMenu}
     </div>
   );
 }

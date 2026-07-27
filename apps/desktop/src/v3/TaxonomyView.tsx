@@ -8,7 +8,7 @@ import {
   RotateCcw,
   Search,
 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   applyTaxonomyRows,
   displayTaxon,
@@ -24,7 +24,7 @@ import {
   parseTaxonomyCsv,
   previewTaxonomyRows,
   revertTaxonomyOperation,
-  searchTaxa,
+  type TaxonChild,
   type TaxonDetailNode,
   type TaxonInputRow,
   type TaxonRowOutcome,
@@ -33,6 +33,8 @@ import {
 } from "./api";
 import { EmptyState, SectionHeader, TaxonCard, VirtualList } from "./components";
 import { CodeEditor } from "./CodeEditor";
+import { useCursorPage } from "./useCursorPage";
+import { useTaxonSearch } from "./useTaxonSearch";
 
 export function TaxonomySearchView({
   taxonId,
@@ -42,11 +44,17 @@ export function TaxonomySearchView({
   onOpenPhotos: (taxonId: number, label: string) => void;
 }) {
   const [query, setQuery] = useState("");
-  const [results, setResults] = useState<TaxonSearchResult[]>([]);
   const [selected, setSelected] = useState<TaxonSearchResult | null>(null);
   const [node, setNode] = useState<TaxonDetailNode | null>(null);
   const [expanded, setExpanded] = useState(false);
   const [error, setError] = useState("");
+  const taxonomySearch = useTaxonSearch(query, { enabled: taxonId === undefined });
+  const children = useCursorPage<TaxonChild, number | null>({
+    params: selected?.summary.taxon_id ?? null,
+    resetKey: selected?.summary.taxon_id ?? null,
+    enabled: expanded && selected !== null,
+    loadPage: (selectedTaxonId, cursor) => listTaxonChildren(selectedTaxonId!, cursor),
+  });
 
   useEffect(() => {
     if (taxonId === undefined) return;
@@ -58,37 +66,25 @@ export function TaxonomySearchView({
 
   useEffect(() => {
     if (taxonId !== undefined) return;
-    const value = query.trim();
-    if (!value) {
-      setResults([]);
+    if (!query.trim()) {
       setSelected(null);
       setNode(null);
       return;
     }
-    const timer = window.setTimeout(() => {
-      searchTaxa(value).then((next) => {
-        setResults(next);
-        setSelected(next[0] ?? null);
-      }).catch((nextError) => setError(errorMessage(nextError)));
-    }, 180);
-    return () => window.clearTimeout(timer);
-  }, [query, taxonId]);
+    setSelected(taxonomySearch.results[0] ?? null);
+  }, [query, taxonId, taxonomySearch.results]);
 
   useEffect(() => {
     if (!selected) {
       setNode(null);
       return;
     }
+    setExpanded(false);
     getTaxonDetailNode(selected.summary.taxon_id).then(setNode).catch((nextError) => setError(errorMessage(nextError)));
   }, [selected]);
 
-  async function toggleChildren() {
-    if (!node) return;
-    if (!expanded && node.children.items.length === 0) {
-      const page = await listTaxonChildren(node.summary.taxon_id);
-      setNode({ ...node, children: page });
-    }
-    setExpanded(!expanded);
+  function toggleChildren() {
+    if (node) setExpanded((current) => !current);
   }
 
   async function navigateTo(nextTaxonId: number) {
@@ -102,7 +98,7 @@ export function TaxonomySearchView({
     }
   }
 
-  const visible = selected ? [selected, ...(expanded && node ? node.children.items.map((child) => ({
+  const visible = selected ? [selected, ...(expanded && node ? children.items.map((child) => ({
     summary: { taxon_id: child.taxon_id, rank: child.rank, names: child.names, breadcrumb: [] },
     detail: {
       taxon_id: child.taxon_id,
@@ -135,7 +131,7 @@ export function TaxonomySearchView({
         {taxonId === undefined && (
           <aside className="taxonomy-results">
             <VirtualList
-              items={results}
+              items={taxonomySearch.results}
               rowHeight={62}
               itemKey={(item) => item.summary.taxon_id}
               renderItem={(item) => (
@@ -145,13 +141,14 @@ export function TaxonomySearchView({
           </aside>
         )}
         <main className="taxonomy-records">
-          {error ? <EmptyState title="Taxonomy unavailable" detail={error} /> : visible.length === 0 ? (
+          {(error || taxonomySearch.error || children.error) ? <EmptyState title="Taxonomy unavailable" detail={error || taxonomySearch.error || children.error} /> : visible.length === 0 ? (
             <EmptyState icon={Search} title={taxonId === undefined ? "Search taxonomy" : "Loading taxon"} detail="Results include accepted names and aliases." />
           ) : (
             <VirtualList
               items={visible}
               rowHeight={expanded ? 194 : 250}
               itemKey={(item) => item.summary.taxon_id}
+              onNearEnd={() => void children.loadMore()}
               renderItem={(item, index) => (
                 <TaxonRecord
                   result={item}
@@ -343,30 +340,30 @@ export function CustomUpdateView() {
 }
 
 export function TaxonomyHistoryView() {
-  const [items, setItems] = useState<TaxonomyOperation[]>([]);
-  const [error, setError] = useState("");
-  const load = useCallback(() => {
-    listTaxonomyOperations().then((page) => setItems(page.items)).catch((nextError) => setError(errorMessage(nextError)));
-  }, []);
-  useEffect(load, [load]);
+  const page = useCursorPage<TaxonomyOperation, null>({
+    params: null,
+    resetKey: "taxonomy-history",
+    loadPage: (_, cursor) => listTaxonomyOperations(cursor),
+  });
 
   return (
     <div className="history-view">
-      <SectionHeader title="Taxonomy update history" detail={`${items.length} operations`} actions={
+      <SectionHeader title="Taxonomy update history" detail={`${page.items.length} operations${page.hasMore ? " loaded" : ""}`} actions={
         <button className="secondary-button" type="button" onClick={() => void exportAllTaxonomyOperationsCsv().then((csv) => downloadCsv("taxonomy-operations.csv", csv))}><Download size={13} />Export all</button>
       } />
-      {error ? <EmptyState title="Unable to load history" detail={error} /> : (
+      {page.error ? <EmptyState title="Unable to load history" detail={page.error} /> : (
         <VirtualList
           className="history-list"
-          items={items}
+          items={page.items}
           rowHeight={72}
           itemKey={(item) => item.operation_id}
+          onNearEnd={() => void page.loadMore()}
           renderItem={(item) => (
             <article className="operation-row">
               <div><strong>Operation {item.operation_id}</strong><span>{item.applied_at} / {item.result.succeeded_rows} succeeded / {item.result.failed_rows} failed</span></div>
               <div className="operation-actions">
                 <button type="button" title="Export input" onClick={() => void exportTaxonomyOperationCsv(item.operation_id).then((csv) => downloadCsv(`taxonomy-operation-${item.operation_id}.csv`, csv))}><Download size={14} /></button>
-                <button type="button" title="Revert" onClick={() => void revertTaxonomyOperation(item.operation_id).then(load)}><RotateCcw size={14} /></button>
+                <button type="button" title="Revert" onClick={() => void revertTaxonomyOperation(item.operation_id).then(() => page.reload())}><RotateCcw size={14} /></button>
               </div>
             </article>
           )}
