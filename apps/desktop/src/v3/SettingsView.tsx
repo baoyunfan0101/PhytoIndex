@@ -3,6 +3,8 @@ import {
   ArrowUp,
   Beaker,
   CaseSensitive,
+  DatabaseBackup,
+  FileUp,
   MapPinned,
   Save,
   SlidersHorizontal,
@@ -12,6 +14,7 @@ import { useEffect, useState } from "react";
 import {
   errorMessage,
   checkAppUpdate,
+  getTaxonomyBaseMetadata,
   getAppVersion,
   getMapSettings,
   getNamingHookSettings,
@@ -23,13 +26,16 @@ import {
   getPhotoNameMatchSettings,
   getTaxonomyNameSeparator,
   installAppUpdate,
+  replaceTaxonomyBaseDatabase,
   runNamingHookTests,
+  selectTaxonomyBaseDatabase,
   setMapSettings,
   setNamingHook,
   setNamingHookTestCases,
   setPhotoFilenameFormatSettings,
   setPhotoNameMatchSettings,
   setTaxonomyNameSeparator,
+  waitForOperation,
   type MapSettings,
   type NamingHookKind,
   type NamingHookTestCase,
@@ -37,11 +43,12 @@ import {
   type NamingHookTestResult,
   type PhotoFilenameFormatSettings,
   type PhotoNameField,
+  type TaxonomyBaseMetadata,
 } from "./api";
-import { SectionHeader, Segmented, VirtualList } from "./components";
+import { Modal, SectionHeader, Segmented, VirtualList } from "./components";
 import { CodeEditor } from "./CodeEditor";
 
-type SettingsSection = "General" | "Naming" | "Map" | "Hooks";
+type SettingsSection = "General" | "Naming" | "Map" | "Base Database" | "Hooks";
 
 const settingsSections: Array<{
   id: SettingsSection;
@@ -50,10 +57,11 @@ const settingsSections: Array<{
   { id: "General", icon: SlidersHorizontal },
   { id: "Naming", icon: CaseSensitive },
   { id: "Map", icon: MapPinned },
+  { id: "Base Database", icon: DatabaseBackup },
   { id: "Hooks", icon: Beaker },
 ];
 
-export function SettingsView() {
+export function SettingsView({ onBaseReplaced }: { onBaseReplaced?: () => void }) {
   const [section, setSection] = useState<SettingsSection>("General");
   return (
     <div className="settings-workbench">
@@ -68,8 +76,88 @@ export function SettingsView() {
         {section === "General" && <GeneralSettings />}
         {section === "Naming" && <NamingSettings />}
         {section === "Map" && <MapSettingsPanel />}
+        {section === "Base Database" && <BaseDatabaseSettings onReplaced={onBaseReplaced} />}
         {section === "Hooks" && <HooksSettings />}
       </main>
+    </div>
+  );
+}
+
+function BaseDatabaseSettings({ onReplaced }: { onReplaced?: () => void }) {
+  const [metadata, setMetadata] = useState<TaxonomyBaseMetadata | null>(null);
+  const [sourcePath, setSourcePath] = useState("");
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+
+  useEffect(() => {
+    getTaxonomyBaseMetadata()
+      .then(setMetadata)
+      .catch((nextError) => setMessage(errorMessage(nextError)));
+  }, []);
+
+  async function chooseDatabase() {
+    const selected = await selectTaxonomyBaseDatabase();
+    if (selected) setSourcePath(selected);
+  }
+
+  async function replaceDatabase() {
+    setBusy(true);
+    setMessage("Replacing base database");
+    try {
+      const started = await replaceTaxonomyBaseDatabase(sourcePath);
+      const completed = await waitForOperation("mapping", started.operation.task_id, (operation) => {
+        setMessage(operation.message);
+      });
+      if (completed.error) throw new Error(completed.error);
+      setMetadata(await getTaxonomyBaseMetadata());
+      setMessage("Base database replaced and photo mapping completed.");
+      setConfirming(false);
+      onReplaced?.();
+    } catch (nextError) {
+      setMessage(errorMessage(nextError));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="settings-section">
+      <SectionHeader title="Base Database" detail="Trusted external taxonomy dataset metadata and replacement" />
+      <Setting label="Source" value={metadata?.source_path ?? "Not imported"} />
+      <Setting label="Taxa" value={metadata ? String(metadata.taxa_count) : "-"} />
+      <Setting label="Taxon names" value={metadata ? String(metadata.taxon_names_count) : "-"} />
+      <Setting label="Imported at" value={metadata?.imported_at ?? "-"} />
+      <div className="base-database-action">
+        <div>
+          <strong>Replacement database</strong>
+          <span title={sourcePath}>{sourcePath || "Select a .db, .sqlite, or .sqlite3 file"}</span>
+        </div>
+        <button className="secondary-button" type="button" disabled={busy} onClick={() => void chooseDatabase()}>
+          <FileUp size={13} />Select file
+        </button>
+        <button className="primary-button" type="button" disabled={!sourcePath || busy} onClick={() => setConfirming(true)}>
+          Replace base database
+        </button>
+      </div>
+      <div className="editor-message">{message}</div>
+      {confirming && (
+        <Modal
+          title="Replace base database"
+          onClose={() => !busy && setConfirming(false)}
+          actions={
+            <>
+              <button className="secondary-button" type="button" disabled={busy} onClick={() => setConfirming(false)}>Cancel</button>
+              <button className="primary-button" type="button" disabled={busy} onClick={() => void replaceDatabase()}>
+                {busy ? "Replacing" : "Replace and remap"}
+              </button>
+            </>
+          }
+        >
+          <p>This clears the current taxonomy and its update history, imports the selected base database, and remaps all photos.</p>
+          <p className="field-hint">{sourcePath}</p>
+        </Modal>
+      )}
     </div>
   );
 }

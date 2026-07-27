@@ -184,18 +184,22 @@ export function App() {
     setSearchOpen(false);
   }
 
-  async function chooseRoot() {
-    const selected = await selectPhotoDirectory();
-    if (!selected) return;
-    await openPhotoLibrary(selected);
-    setRoot(selected);
+  function resetWorkspace(message: string) {
     setWorkspaceId((current) => current + 1);
     setTabs([initialTab]);
     setActiveId(initialTab.id);
     setSearchOpen(false);
     setSearchQuery("");
     setSuggestions([]);
-    setStatus("Photo root opened");
+    setStatus(message);
+  }
+
+  async function chooseRoot() {
+    const selected = await selectPhotoDirectory();
+    if (!selected) return;
+    await openPhotoLibrary(selected);
+    setRoot(selected);
+    resetWorkspace("Photo root opened");
   }
 
   return (
@@ -248,7 +252,13 @@ export function App() {
               aria-hidden={tab.id !== activeId}
               key={`${workspaceId}:${tab.id}`}
             >
-              <TabBody tab={tab} handlers={handlers} onStatus={setStatus} openTab={openTab} />
+              <TabBody
+                tab={tab}
+                handlers={handlers}
+                onStatus={setStatus}
+                openTab={openTab}
+                onBaseReplaced={() => resetWorkspace("Base database replaced")}
+              />
             </section>
           ))}
         </main>
@@ -263,11 +273,13 @@ function TabBody({
   handlers,
   onStatus,
   openTab,
+  onBaseReplaced,
 }: {
   tab: AppTab;
   handlers: PhotoOpenHandlers;
   onStatus: (message: string, busy?: boolean) => void;
   openTab: (tab: AppTab, singleton?: boolean) => void;
+  onBaseReplaced: () => void;
 }) {
   if (tab.kind === "folders") return <FolderPhotosView handlers={handlers} onStatus={onStatus} />;
   if (tab.kind === "photo-taxonomy") return <TaxonPhotosView handlers={handlers} />;
@@ -279,7 +291,7 @@ function TabBody({
   if (tab.kind === "formatted-update") return <FormattedUpdateView />;
   if (tab.kind === "custom-update") return <CustomUpdateView />;
   if (tab.kind === "taxonomy-history") return <TaxonomyHistoryView />;
-  if (tab.kind === "settings") return <SettingsView />;
+  if (tab.kind === "settings") return <SettingsView onBaseReplaced={onBaseReplaced} />;
   if (tab.kind === "photo-detail" && tab.photo) return <PhotoDetailView photo={tab.photo} />;
   if (tab.kind === "mapping-editor" && tab.photo) return <MappingEditor photo={tab.photo} />;
   if (tab.kind === "search-photos" && tab.query) return <PhotoSet query={tab.query} handlers={handlers} />;

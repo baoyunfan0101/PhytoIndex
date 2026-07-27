@@ -274,6 +274,13 @@ export type TaxonomyCustomSqlInput = {
   rows: string[][];
 };
 
+export type TaxonomyBaseMetadata = {
+  source_path: string;
+  taxa_count: number;
+  taxon_names_count: number;
+  imported_at: string;
+};
+
 export type MapSettings = {
   provider: "osm" | "tianditu";
   tianditu_token: string | null;
@@ -383,6 +390,7 @@ let demoMappings = new Map<number, PhotoTaxonMapping>(
     },
   ]),
 );
+let demoTaxonomyBaseMetadata: TaxonomyBaseMetadata | null = null;
 
 function demoTaxon(
   taxonId: number,
@@ -471,6 +479,18 @@ export async function selectPhotoDirectory(): Promise<string | null> {
     return "/Demo/Vividarium Photos";
   }
   const selected = await open({ directory: true, multiple: false });
+  return typeof selected === "string" ? selected : null;
+}
+
+export async function selectTaxonomyBaseDatabase(): Promise<string | null> {
+  if (!desktopRuntime) {
+    return "/Demo/Vividarium Base.db";
+  }
+  const selected = await open({
+    directory: false,
+    multiple: false,
+    filters: [{ name: "SQLite database", extensions: ["db", "sqlite", "sqlite3"] }],
+  });
   return typeof selected === "string" ? selected : null;
 }
 
@@ -758,6 +778,18 @@ export const executeCustomTaxonomySql = (sql: string, input: { columns: string[]
   call<{ changeset_size: number }>("execute_custom_taxonomy_sql", { sql, input }, () => ({ changeset_size: sql.length + (input?.rows.length ?? 0) }));
 export const parseCustomTaxonomyInputCsv = (input: string) =>
   call<TaxonomyCustomSqlInput>("parse_custom_taxonomy_input_csv", { input }, () => parseDelimitedCsv(input));
+export const getTaxonomyBaseMetadata = () =>
+  call<TaxonomyBaseMetadata | null>("get_taxonomy_base_metadata", undefined, () => demoTaxonomyBaseMetadata);
+export const replaceTaxonomyBaseDatabase = (sourcePath: string) =>
+  call<{ operation: OperationState }>("replace_taxonomy_base_database", { sourcePath }, () => {
+    demoTaxonomyBaseMetadata = {
+      source_path: sourcePath,
+      taxa_count: 125_000,
+      taxon_names_count: 185_000,
+      imported_at: new Date().toISOString(),
+    };
+    return { operation: demoOperation("mapping", "Base database replaced") };
+  });
 
 export const getMapSettings = () =>
   call<MapSettings>("get_map_settings", undefined, () => ({ provider: "osm", tianditu_token: null }));
