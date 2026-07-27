@@ -440,10 +440,9 @@ export function PhotoMapView({ handlers }: { handlers: PhotoOpenHandlers }) {
       });
       map.current = next;
       const updateBounds = () => setBounds(readMapBounds(next.getBounds()));
-      next.on("load", () => {
-        setMapReady(true);
-        updateBounds();
-      });
+      setMapReady(true);
+      updateBounds();
+      next.on("load", updateBounds);
       next.on("moveend", updateBounds);
     });
     return () => {
