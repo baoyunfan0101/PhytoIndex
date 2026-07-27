@@ -21,7 +21,7 @@ pub fn run() {
             app.manage(updater::PendingAppUpdate::default());
             Ok(())
         })
-        .register_uri_scheme_protocol("phytoindex", |_context, request| media::handle(request))
+        .register_uri_scheme_protocol("vividarium", |_context, request| media::handle(request))
         .invoke_handler(tauri::generate_handler![
             commands::get_photo_library,
             commands::get_photo_library_count,
@@ -68,6 +68,7 @@ pub fn run() {
             commands::promote_taxon_name,
             commands::delete_taxon,
             commands::execute_custom_taxonomy_sql,
+            commands::parse_custom_taxonomy_input_csv,
             commands::preview_taxonomy_rows,
             commands::apply_taxonomy_rows,
             commands::parse_taxonomy_input_csv,
@@ -105,5 +106,5 @@ pub fn run() {
             commands::get_operations_status,
         ])
         .run(tauri::generate_context!())
-        .expect("error while running PhytoIndex");
+        .expect("error while running Vividarium");
 }

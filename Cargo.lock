@@ -2548,42 +2548,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "phytoindex-core"
-version = "3.0.0"
-dependencies = [
- "base64 0.22.1",
- "chrono",
- "csv",
- "image",
- "kamadak-exif",
- "regex",
- "rhai",
- "rusqlite",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.18",
- "walkdir",
-]
-
-[[package]]
-name = "phytoindex-desktop"
-version = "3.0.0"
-dependencies = [
- "chrono",
- "mime_guess",
- "percent-encoding",
- "phytoindex-core",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "tauri-plugin-updater",
- "uuid",
-]
-
-[[package]]
 name = "pin-project-lite"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4514,6 +4478,42 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
+
+[[package]]
+name = "vividarium-core"
+version = "3.0.0"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "csv",
+ "image",
+ "kamadak-exif",
+ "regex",
+ "rhai",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "walkdir",
+]
+
+[[package]]
+name = "vividarium-desktop"
+version = "3.0.0"
+dependencies = [
+ "chrono",
+ "mime_guess",
+ "percent-encoding",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tauri-plugin-updater",
+ "uuid",
+ "vividarium-core",
+]
 
 [[package]]
 name = "vswhom"

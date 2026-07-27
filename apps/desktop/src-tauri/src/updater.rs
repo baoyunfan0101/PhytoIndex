@@ -1,9 +1,9 @@
 use std::sync::Mutex;
 
-use phytoindex_core::OperationsStatus;
 use serde::Serialize;
 use tauri::{AppHandle, ipc::Channel};
 use tauri_plugin_updater::{Update, UpdaterExt};
+use vividarium_core::OperationsStatus;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct AppUpdateInfo {
@@ -117,8 +117,8 @@ pub async fn install(
 #[cfg(test)]
 mod tests {
     use super::{AppUpdateEvent, AppUpdateInfo, ensure_install_allowed};
-    use phytoindex_core::{OperationState, OperationsStatus};
     use serde_json::json;
+    use vividarium_core::{OperationState, OperationsStatus};
 
     #[test]
     fn serializes_update_info_for_ipc() {

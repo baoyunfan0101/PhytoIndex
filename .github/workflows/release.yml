@@ -58,7 +58,7 @@ jobs:
         with:
           projectPath: apps/desktop
           tagName: v__VERSION__
-          releaseName: PhytoIndex v__VERSION__
+          releaseName: Vividarium v__VERSION__
           releaseBody: |
             Private desktop build for macOS Apple Silicon and Windows x64.
 

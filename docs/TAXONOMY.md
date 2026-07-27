@@ -1,7 +1,7 @@
 # Taxonomy Backend Public API
 
 This document describes the public API exported by
-`phytoindex_core::taxonomy`. The desktop commands are adapters over the same
+`vividarium_core::taxonomy`. The desktop commands are adapters over the same
 types and behavior.
 
 Shared normalization and configurable synonym parsing are documented in
@@ -219,7 +219,7 @@ pub fn split_scientific_name_authority(
 parsed `name` and optional `authority_year`.
 
 Formatted updates use the database-aware synonym parser from
-`phytoindex_core::naming`. It runs the configured Rhai hook or bundled Rhai
+`vividarium_core::naming`. It runs the configured Rhai hook or bundled Rhai
 template, then applies shared name normalization. See
 [the naming backend API](NAMING.md) for parameters, return values, and the
 hook contract.
@@ -402,6 +402,22 @@ taxonomy changeset. The action is transactional and validates taxonomy
 integrity before commit. It is unlogged and cannot be reverted through
 operation history.
 
+### `parse_custom_taxonomy_input_csv`
+
+```rust
+pub fn parse_custom_taxonomy_input_csv(
+    input: &str,
+) -> CoreResult<TaxonomyCustomSqlTempTable>
+```
+
+`input` is a complete UTF-8 CSV document with a required header. The parser
+detects comma, pipe, tab, or semicolon delimiters from the header and supports
+quoted delimiters, escaped quotes, and embedded newlines.
+
+The return value contains `columns: Vec<String>` and
+`rows: Vec<Vec<String>>`, ready for `execute_custom_taxonomy_sql`. Malformed
+CSV and rows whose field count differs from the header are rejected.
+
 ## Operation history
 
 `TaxonomyOperation` contains:
@@ -540,6 +556,7 @@ taxonomy commands are:
 | `delete_taxon_name` | `input: DeleteTaxonNameInput` | `()` |
 | `delete_taxon` | `taxon_id: i64` | `()` |
 | `execute_custom_taxonomy_sql` | `sql: String`, `input: Option<TaxonomyCustomSqlTempTable>` | `TaxonomyCustomSqlResult` |
+| `parse_custom_taxonomy_input_csv` | `input: String` | `TaxonomyCustomSqlTempTable` |
 | `preview_taxonomy_rows` | `rows: Vec<TaxonInputRow>` | `TaxonomyPreviewResult` |
 | `apply_taxonomy_rows` | `rows: Vec<TaxonInputRow>` | `TaxonomyOperationResult` |
 | `parse_taxonomy_input_csv` | `input: String` | `Vec<TaxonInputRow>` |

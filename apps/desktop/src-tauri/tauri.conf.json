@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "PhytoIndex",
+  "productName": "Vividarium",
   "version": "../package.json",
-  "identifier": "io.github.baoyunfan0101.phytoindex",
+  "identifier": "io.github.baoyunfan0101.vividarium",
   "build": {
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build",
@@ -13,17 +13,17 @@
     "windows": [
       {
         "label": "main",
-        "title": "PhytoIndex",
-        "width": 1280,
-        "height": 800,
-        "minWidth": 900,
-        "minHeight": 600,
+        "title": "Vividarium",
+        "width": 1040,
+        "height": 680,
+        "minWidth": 760,
+        "minHeight": 500,
         "resizable": true,
         "fullscreen": false
       }
     ],
     "security": {
-      "csp": "default-src 'self'; img-src 'self' phytoindex: http://phytoindex.localhost data: blob: https:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ipc: http://ipc.localhost https:; font-src 'self' data:; worker-src 'self' blob:",
+      "csp": "default-src 'self'; img-src 'self' vividarium: http://vividarium.localhost data: blob: https:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ipc: http://ipc.localhost https:; font-src 'self' data:; worker-src 'self' blob:",
       "capabilities": ["desktop"]
     }
   },

@@ -1,6 +1,6 @@
 # Application Update Backend API
 
-The desktop backend checks and installs signed PhytoIndex releases from:
+The desktop backend checks and installs signed Vividarium releases from:
 
 ```text
 https://github.com/baoyunfan0101/Vividarium/releases/latest/download/latest.json

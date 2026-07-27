@@ -1,6 +1,6 @@
 # Naming Backend API
 
-This document describes `phytoindex_core::naming`, the public boundary for
+This document describes `vividarium_core::naming`, the public boundary for
 taxonomy-name normalization and user-configurable Rhai hooks.
 
 All fallible Rust functions return `CoreResult<T>`.
