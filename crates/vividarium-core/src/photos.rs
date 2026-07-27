@@ -6,6 +6,7 @@ use std::time::UNIX_EPOCH;
 
 use rusqlite::{OptionalExtension, Transaction, params};
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::db::{Database, photo_from_row};
 use crate::error::{CoreError, CoreResult};
@@ -97,29 +98,17 @@ pub fn open_library(database: &Database, root: &str) -> CoreResult<PhotoLibrary>
         .lock()
         .map_err(|_| CoreError::InvalidArgument("photo workspace lock is poisoned".into()))?;
     let root = normalize_root(root)?;
-    let mut connection = database.connect()?;
-    let transaction = connection.transaction()?;
-    let current = transaction
-        .query_row(
-            "SELECT root_path FROM photo_library WHERE library_id = 1",
-            [],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()?;
-    if current.as_deref() != Some(root.as_str()) {
-        transaction.execute("DELETE FROM photo_taxon_usage", [])?;
-        transaction.execute("DELETE FROM photo_directories", [])?;
-        transaction.execute("DELETE FROM photo_library", [])?;
-        transaction.execute(
-            "INSERT INTO photo_library (library_id, root_path) VALUES (1, ?)",
-            [&root],
-        )?;
-        transaction.execute(
-            "INSERT INTO photo_directories (parent_directory_id, name, relative_path) VALUES (NULL, '', '')",
-            [],
-        )?;
+    if let Some(existing) = database
+        .list_photo_libraries()?
+        .into_iter()
+        .find(|library| library.root_path == root)
+    {
+        database.switch_photo_library(&existing.library_uuid)?;
+    } else {
+        let directory = PathBuf::from(database.locations()?.default_photo_library_directory);
+        let path = directory.join(format!("photo-library-{}.db", Uuid::new_v4()));
+        database.register_photo_library(Path::new(&root), &path, None)?;
     }
-    transaction.commit()?;
     get_library(database)?.ok_or_else(|| CoreError::NotFound("photo library".into()))
 }
 

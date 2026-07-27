@@ -197,6 +197,87 @@ pub(crate) fn refresh_after_taxonomy_changes(
     Ok(())
 }
 
+pub(crate) fn invalidate_deleted_taxa(
+    transaction: &Transaction<'_>,
+    taxon_ids: impl IntoIterator<Item = i64>,
+) -> CoreResult<()> {
+    let taxon_ids = taxon_ids.into_iter().collect::<BTreeSet<_>>();
+    if taxon_ids.is_empty() {
+        return Ok(());
+    }
+    let taxon_ids = taxon_ids.into_iter().collect::<Vec<_>>();
+    let selection = id_selection(
+        transaction,
+        &taxon_ids,
+        "taxon_id",
+        "temp_deleted_taxon_ids",
+    )?;
+    let mut photo_ids = Vec::new();
+    let mut direct_deltas = BTreeMap::new();
+    {
+        let mut statement = transaction.prepare(&format!(
+            r#"
+            SELECT DISTINCT photo_id
+            FROM (
+                SELECT photo_id, taxon_id
+                FROM photo_taxon_mapping
+                WHERE taxon_id IS NOT NULL
+                UNION ALL
+                SELECT photo_id, taxon_id
+                FROM photo_taxon_candidates
+            ) AS affected
+            WHERE {}
+            "#,
+            selection.predicate
+        ))?;
+        for photo_id in statement.query_map(params_from_iter(selection.values.iter()), |row| {
+            row.get::<_, i64>(0)
+        })? {
+            photo_ids.push(photo_id?);
+        }
+    }
+    if photo_ids.is_empty() {
+        return Ok(());
+    }
+    let photos = id_selection(
+        transaction,
+        &photo_ids,
+        "photo_id",
+        "temp_deleted_taxon_photo_ids",
+    )?;
+    {
+        let mut statement = transaction.prepare(&format!(
+            r#"
+            SELECT taxon_id, COUNT(*)
+            FROM photo_taxon_mapping
+            WHERE status = 'matched' AND {}
+            GROUP BY taxon_id
+            "#,
+            photos.predicate
+        ))?;
+        let rows = statement.query_map(params_from_iter(photos.values.iter()), |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+        })?;
+        for row in rows {
+            let (taxon_id, count) = row?;
+            direct_deltas.insert(taxon_id, -count);
+        }
+    }
+    apply_usage_deltas(transaction, &direct_deltas)?;
+    queue_photo_ids(transaction, &photo_ids, "taxonomy")?;
+    let photos = id_selection(
+        transaction,
+        &photo_ids,
+        "photo_id",
+        "temp_deleted_taxon_photo_ids_delete",
+    )?;
+    transaction.execute(
+        &format!("DELETE FROM photo_taxon_mapping WHERE {}", photos.predicate),
+        params_from_iter(photos.values),
+    )?;
+    Ok(())
+}
+
 pub(crate) fn queue_photo_ids(
     transaction: &Transaction<'_>,
     photo_ids: &[i64],

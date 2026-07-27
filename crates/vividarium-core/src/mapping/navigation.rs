@@ -162,8 +162,7 @@ mod tests {
         connection
             .execute_batch(
                 r#"
-                INSERT INTO photo_library (library_id, root_path)
-                VALUES (1, '/photos');
+                UPDATE photo_library SET root_path = '/photos' WHERE library_id = 1;
                 INSERT INTO photo_directories (
                     directory_id, parent_directory_id, name, relative_path
                 ) VALUES (1, NULL, '', '');

@@ -58,7 +58,7 @@ pub fn search_taxa(
     query: &str,
     limit: usize,
 ) -> CoreResult<Vec<TaxonSearchResult>> {
-    let connection = database.connect()?;
+    let connection = database.connect_taxonomy_context()?;
     search_taxa_with_connection(&connection, query, limit)
 }
 
@@ -89,7 +89,12 @@ pub fn suggest_taxa(
     query: &str,
     limit: usize,
 ) -> CoreResult<Vec<TaxonSuggestion>> {
-    suggest_taxa_with_filter(&database.connect()?, query, page_limit(limit), false)
+    suggest_taxa_with_filter(
+        &database.connect_taxonomy_context()?,
+        query,
+        page_limit(limit),
+        false,
+    )
 }
 
 pub(crate) fn suggest_taxa_with_photos_connection(
@@ -754,7 +759,7 @@ mod tests {
     fn ranked_search_cursor_continues_across_match_levels() {
         let directory = tempfile::tempdir().unwrap();
         let database = Database::open(directory.path().join("test.db")).unwrap();
-        let connection = database.connect().unwrap();
+        let connection = database.connect_taxonomy_context().unwrap();
         connection
             .execute_batch(
                 r#"

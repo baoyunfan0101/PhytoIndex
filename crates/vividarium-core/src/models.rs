@@ -40,6 +40,31 @@ pub struct PhotoLibrary {
     pub root_directory_id: i64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PhotoLibraryRegistration {
+    pub library_uuid: String,
+    pub display_name: String,
+    pub root_path: String,
+    pub db_path: String,
+    pub last_opened_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PhotoLibraryLocation {
+    pub library_uuid: String,
+    pub root_path: String,
+    pub database_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DatabaseLocations {
+    pub metadata_database: String,
+    pub taxonomy_database: String,
+    pub default_taxonomy_directory: String,
+    pub default_photo_library_directory: String,
+    pub active_photo_library_uuid: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PhotoDirectory {
     pub directory_id: i64,

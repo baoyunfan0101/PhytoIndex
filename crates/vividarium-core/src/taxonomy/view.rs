@@ -75,11 +75,11 @@ pub struct TaxonDetailNode {
 }
 
 pub fn get_taxon_summary(database: &Database, taxon_id: i64) -> CoreResult<Option<TaxonSummary>> {
-    load_taxon_summary(&database.connect()?, taxon_id)
+    load_taxon_summary(&database.connect_taxonomy_context()?, taxon_id)
 }
 
 pub fn get_taxon_detail(database: &Database, taxon_id: i64) -> CoreResult<Option<TaxonDetail>> {
-    load_taxon_detail(&database.connect()?, taxon_id)
+    load_taxon_detail(&database.connect_taxonomy_context()?, taxon_id)
 }
 
 pub fn get_taxon_detail_node(
@@ -88,7 +88,7 @@ pub fn get_taxon_detail_node(
     children_cursor: Option<&str>,
     children_limit: usize,
 ) -> CoreResult<Option<TaxonDetailNode>> {
-    let connection = database.connect()?;
+    let connection = database.connect_taxonomy_context()?;
     let Some(summary) = load_taxon_summary(&connection, taxon_id)? else {
         return Ok(None);
     };
@@ -109,7 +109,12 @@ pub fn list_taxon_children(
     cursor: Option<&str>,
     limit: usize,
 ) -> CoreResult<TaxonomyPage<TaxonChild>> {
-    load_taxon_children(&database.connect()?, taxon_id, cursor, limit)
+    load_taxon_children(
+        &database.connect_taxonomy_context()?,
+        taxon_id,
+        cursor,
+        limit,
+    )
 }
 
 pub(super) fn load_taxon_summary(

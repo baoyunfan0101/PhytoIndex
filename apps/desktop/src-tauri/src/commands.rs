@@ -7,8 +7,8 @@ use vividarium_core::mapping::{
     PhotoTaxonMapping, PhotoTaxonMatch, PhotoTaxonNode,
 };
 use vividarium_core::models::{
-    DirectoryEntryCounts, MappingMetadata, OperationsStatus, Photo, PhotoDirectoryItem,
-    PhotoLibrary, PhotoMetadata, PhotoPage,
+    DatabaseLocations, DirectoryEntryCounts, MappingMetadata, OperationsStatus, Photo,
+    PhotoDirectoryItem, PhotoLibrary, PhotoLibraryRegistration, PhotoMetadata, PhotoPage,
 };
 use vividarium_core::naming::{
     NamingHookKind, NamingHookSettings, NamingHookTemplates, NamingHookTestCase,
@@ -71,6 +71,111 @@ pub fn get_photo_library_count(state: State<'_, AppState>) -> CommandResult<i64>
 #[tauri::command]
 pub fn open_photo_library(state: State<'_, AppState>, root: String) -> CommandResult<PhotoLibrary> {
     photos::open_library(&state.database, &root).map_err(error)
+}
+
+#[tauri::command]
+pub fn get_database_locations(state: State<'_, AppState>) -> CommandResult<DatabaseLocations> {
+    state.database.locations().map_err(error)
+}
+
+#[tauri::command]
+pub fn list_photo_libraries(
+    state: State<'_, AppState>,
+) -> CommandResult<Vec<PhotoLibraryRegistration>> {
+    state.database.list_photo_libraries().map_err(error)
+}
+
+#[tauri::command]
+pub fn register_photo_library(
+    state: State<'_, AppState>,
+    root_path: String,
+    database_path: String,
+    display_name: Option<String>,
+) -> CommandResult<PhotoLibraryRegistration> {
+    state
+        .database
+        .register_photo_library(
+            Path::new(&root_path),
+            Path::new(&database_path),
+            display_name.as_deref(),
+        )
+        .map_err(error)
+}
+
+#[tauri::command]
+pub fn switch_photo_library(
+    state: State<'_, AppState>,
+    library_uuid: String,
+) -> CommandResult<PhotoLibraryRegistration> {
+    state
+        .database
+        .switch_photo_library(&library_uuid)
+        .map_err(error)
+}
+
+#[tauri::command]
+pub fn rebind_photo_library_root(
+    state: State<'_, AppState>,
+    library_uuid: String,
+    root_path: String,
+) -> CommandResult<PhotoLibraryRegistration> {
+    state
+        .database
+        .rebind_photo_library_root(&library_uuid, Path::new(&root_path))
+        .map_err(error)
+}
+
+#[tauri::command]
+pub fn relocate_photo_library_database(
+    state: State<'_, AppState>,
+    library_uuid: String,
+    database_path: String,
+) -> CommandResult<PhotoLibraryRegistration> {
+    state
+        .database
+        .relocate_photo_library_database(&library_uuid, Path::new(&database_path))
+        .map_err(error)
+}
+
+#[tauri::command]
+pub fn remove_photo_library(state: State<'_, AppState>, library_uuid: String) -> CommandResult<()> {
+    state
+        .database
+        .remove_photo_library(&library_uuid)
+        .map_err(error)
+}
+
+#[tauri::command]
+pub fn relocate_taxonomy_database(
+    state: State<'_, AppState>,
+    database_path: String,
+) -> CommandResult<DatabaseLocations> {
+    state
+        .database
+        .relocate_taxonomy_database(Path::new(&database_path))
+        .map_err(error)
+}
+
+#[tauri::command]
+pub fn set_default_taxonomy_directory(
+    state: State<'_, AppState>,
+    directory: String,
+) -> CommandResult<DatabaseLocations> {
+    state
+        .database
+        .set_default_taxonomy_directory(Path::new(&directory))
+        .map_err(error)
+}
+
+#[tauri::command]
+pub fn set_default_photo_library_directory(
+    state: State<'_, AppState>,
+    directory: String,
+) -> CommandResult<DatabaseLocations> {
+    state
+        .database
+        .set_default_photo_library_directory(Path::new(&directory))
+        .map_err(error)
 }
 
 #[tauri::command]

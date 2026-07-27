@@ -6,7 +6,7 @@ use crate::{CoreError, CoreResult, Database};
 
 pub fn export_taxonomy_operation_csv(database: &Database, operation_id: i64) -> CoreResult<String> {
     validate_operation_id(operation_id)?;
-    let connection = database.connect()?;
+    let connection = database.connect_taxonomy_context()?;
     let input_json = connection
         .query_row(
             "SELECT input_json FROM taxonomy_operations WHERE operation_id = ?",
@@ -19,7 +19,7 @@ pub fn export_taxonomy_operation_csv(database: &Database, operation_id: i64) -> 
 }
 
 pub fn export_all_taxonomy_operations_csv(database: &Database) -> CoreResult<String> {
-    let connection = database.connect()?;
+    let connection = database.connect_taxonomy_context()?;
     let mut statement =
         connection.prepare("SELECT input_json FROM taxonomy_operations ORDER BY operation_id")?;
     let input_json = statement

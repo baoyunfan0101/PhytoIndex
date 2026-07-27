@@ -310,7 +310,7 @@ pub fn preview_rows(
     database: &Database,
     rows: &[TaxonInputRow],
 ) -> CoreResult<TaxonomyPreviewResult> {
-    let mut connection = database.connect()?;
+    let mut connection = database.connect_taxonomy_context()?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let outcomes = process_rows(&transaction, rows)?;
     transaction.rollback()?;
@@ -325,7 +325,7 @@ pub fn apply_rows(
     database: &Database,
     rows: &[TaxonInputRow],
 ) -> CoreResult<TaxonomyOperationResult> {
-    let mut connection = database.connect()?;
+    let mut connection = database.connect_taxonomy_context()?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let mut session = start_taxonomy_session(&transaction)?;
     let outcomes = process_rows(&transaction, rows)?;
@@ -1300,7 +1300,7 @@ fn describe_changes(changes: &[TaxonChange]) -> String {
 
 pub fn get_taxonomy_name_separator(database: &Database) -> CoreResult<String> {
     Ok(crate::metadata::get_raw(
-        &database.connect()?,
+        &database.connect_taxonomy_context()?,
         crate::metadata::MetadataKey::TaxonomyNameSeparator,
     )?
     .unwrap_or_else(|| ";".to_string()))
@@ -1319,7 +1319,7 @@ pub fn set_taxonomy_name_separator(database: &Database, separator: &str) -> Core
         ));
     }
     crate::metadata::set_raw(
-        &database.connect()?,
+        &database.connect_taxonomy_context()?,
         crate::metadata::MetadataKey::TaxonomyNameSeparator,
         separator,
     )
@@ -1439,7 +1439,7 @@ pub fn list_taxonomy_operations(
         Some(_) => return Err(invalid_cursor()),
         None => None,
     };
-    let connection = database.connect()?;
+    let connection = database.connect_taxonomy_context()?;
     let limit = page_limit(limit);
     let mut items = if let Some(operation_id) = before_id {
         let mut statement = connection.prepare(
@@ -1532,7 +1532,7 @@ fn operation_from_row(row: rusqlite::Result<StoredOperationRow>) -> CoreResult<T
 }
 
 pub fn revert_taxonomy_operation(database: &Database, operation_id: i64) -> CoreResult<()> {
-    let mut connection = database.connect()?;
+    let mut connection = database.connect_taxonomy_context()?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let changeset_blob = transaction
         .query_row(
@@ -1787,7 +1787,7 @@ mod tests {
         .unwrap();
         assert_eq!(rows[0].synonyms, vec!["  Raw_synonym  ", "   "]);
         apply_rows(&database, &rows).unwrap();
-        let connection = database.connect().unwrap();
+        let connection = database.connect_taxonomy_context().unwrap();
         let mut statement = connection
             .prepare(
                 "SELECT name, authority_year FROM taxon_names WHERE name_type = 2 ORDER BY name",
@@ -1881,7 +1881,7 @@ mod tests {
             }],
         )
         .unwrap();
-        let connection = database.connect().unwrap();
+        let connection = database.connect_taxonomy_context().unwrap();
         connection
             .execute(
                 "UPDATE taxon_names SET source = NULL WHERE name_type = 1",
@@ -2022,7 +2022,7 @@ mod tests {
             result.rows[0].operation_types,
             vec![TaxonRowStatus::Supplement, TaxonRowStatus::NewName]
         );
-        let connection = database.connect().unwrap();
+        let connection = database.connect_taxonomy_context().unwrap();
         let names = connection
             .prepare(
                 r#"

@@ -130,7 +130,7 @@ pub fn update_taxon(
     database: &Database,
     input: TaxonUpdateInput,
 ) -> CoreResult<TaxonomyOperationResult> {
-    let connection = database.connect()?;
+    let connection = database.connect_taxonomy_context()?;
     let summary = load_taxon_summary(&connection, input.taxon_id)?
         .ok_or_else(|| CoreError::NotFound(format!("taxon {}", input.taxon_id)))?;
     drop(connection);
@@ -165,7 +165,7 @@ pub fn update_taxon(
 }
 
 pub fn promote_taxon_name(database: &Database, input: PromoteTaxonNameInput) -> CoreResult<()> {
-    let mut connection = database.connect()?;
+    let mut connection = database.connect_taxonomy_context()?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let (rank, current_type, name) = transaction
         .query_row(
@@ -252,7 +252,7 @@ pub fn promote_taxon_name(database: &Database, input: PromoteTaxonNameInput) -> 
 }
 
 pub fn delete_taxon_name(database: &Database, input: DeleteTaxonNameInput) -> CoreResult<()> {
-    let mut connection = database.connect()?;
+    let mut connection = database.connect_taxonomy_context()?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let (name_type, name) = transaction
         .query_row(
@@ -289,7 +289,7 @@ pub fn delete_taxon_name(database: &Database, input: DeleteTaxonNameInput) -> Co
 }
 
 pub fn delete_taxon(database: &Database, taxon_id: i64) -> CoreResult<()> {
-    let mut connection = database.connect()?;
+    let mut connection = database.connect_taxonomy_context()?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let exists: bool = transaction.query_row(
         "SELECT EXISTS(SELECT 1 FROM taxa WHERE taxon_id = ?)",
@@ -309,6 +309,7 @@ pub fn delete_taxon(database: &Database, taxon_id: i64) -> CoreResult<()> {
             "taxon {taxon_id} cannot be deleted because it has child taxa"
         )));
     }
+    mapping::invalidate_deleted_taxa(&transaction, [taxon_id])?;
     transaction.execute("DELETE FROM taxa WHERE taxon_id = ?", [taxon_id])?;
     transaction.commit()?;
     Ok(())
@@ -341,7 +342,7 @@ pub fn execute_custom_taxonomy_sql(
     if sql.is_empty() {
         return Err(CoreError::InvalidArgument("sql is required".into()));
     }
-    let mut connection = database.connect()?;
+    let mut connection = database.connect_taxonomy_context()?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     if let Some(input) = input.as_ref() {
         create_temp_input_table(&transaction, input)?;
@@ -679,7 +680,7 @@ mod tests {
             ],
         )
         .unwrap();
-        let connection = database.connect().unwrap();
+        let connection = database.connect_taxonomy_context().unwrap();
         let (taxon_id, promoted_name_id, invalid_name_id): (i64, i64, i64) = connection
             .query_row(
                 r#"
@@ -707,7 +708,7 @@ mod tests {
             },
         )
         .unwrap();
-        let connection = database.connect().unwrap();
+        let connection = database.connect_taxonomy_context().unwrap();
         let promoted: i64 = connection
             .query_row(
                 "SELECT name_type FROM taxon_names WHERE name = 'Canis lycaon'",
@@ -755,7 +756,7 @@ mod tests {
             ],
         )
         .unwrap();
-        let connection = database.connect().unwrap();
+        let connection = database.connect_taxonomy_context().unwrap();
         let (animalia_id, sci_name_id, synonym_id): (i64, i64, i64) = connection
             .query_row(
                 r#"
@@ -828,7 +829,7 @@ mod tests {
     #[test]
     fn custom_taxon_delete_queues_old_matches() {
         let (_directory, database) = database();
-        let connection = database.connect().unwrap();
+        let connection = database.connect_taxonomy_context().unwrap();
         connection
             .execute("INSERT INTO taxa (rank) VALUES (5)", [])
             .unwrap();
@@ -910,7 +911,7 @@ mod tests {
         )
         .unwrap();
 
-        let connection = database.connect().unwrap();
+        let connection = database.connect_taxonomy_context().unwrap();
         let queued: i64 = connection
             .query_row(
                 "SELECT COUNT(*) FROM photo_mapping_queue WHERE photo_id IN (1, 2)",
