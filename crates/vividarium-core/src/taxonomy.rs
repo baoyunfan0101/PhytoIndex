@@ -5,6 +5,7 @@ mod name_parser;
 mod operation_export;
 mod page;
 mod query;
+pub(crate) mod sync;
 mod view;
 
 pub use actions::{

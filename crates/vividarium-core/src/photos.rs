@@ -1451,7 +1451,11 @@ mod tests {
         let mut progress = |_: u64, _: Option<u64>, _: &str| {};
         mapping::process_pending_photo_matches(&database, &mut progress).unwrap();
         mapping::set_photo_mapping(&database, photo.photo_id, taxon_id).unwrap();
-        mapping::refresh_after_taxonomy_changes(&database, [taxon_id]).unwrap();
+        let mut taxonomy = database.connect_taxonomy().unwrap();
+        let transaction = taxonomy.transaction().unwrap();
+        crate::taxonomy::sync::record_event(&transaction, None, [taxon_id], false).unwrap();
+        transaction.commit().unwrap();
+        crate::taxonomy::sync::synchronize_all_photo_libraries(&database).unwrap();
         let error = rename_photo_from_taxon(&database, photo.photo_id).unwrap_err();
         assert!(
             error

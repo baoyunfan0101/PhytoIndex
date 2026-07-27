@@ -230,7 +230,8 @@ impl Database {
             [library_uuid],
         )?;
         transaction.commit()?;
-        self.synchronize_active_library_identity()?;
+        crate::taxonomy::sync::synchronize_photo_library(self, &library)?;
+        crate::taxonomy::sync::cleanup_consumed_events(self)?;
         self.active_photo_library()?
             .ok_or_else(|| CoreError::Consistency("active photo library was not stored".into()))
     }
@@ -376,6 +377,13 @@ impl Database {
         let library = self.active_photo_library()?.ok_or_else(|| {
             CoreError::InvalidArgument("no active photo library is registered".into())
         })?;
+        self.connect_photo_library_registration(&library)
+    }
+
+    pub(crate) fn connect_photo_library_registration(
+        &self,
+        library: &PhotoLibraryRegistration,
+    ) -> CoreResult<Connection> {
         let connection = open_connection(Path::new(&library.db_path))?;
         attach_database(&connection, &self.taxonomy_path()?, "taxonomy")?;
         attach_database(&connection, &self.metadata_path(), "metadata")?;
@@ -393,15 +401,7 @@ impl Database {
             .map_err(Into::into)
     }
 
-    pub(crate) fn set_taxonomy_identity(&self, identity: &str) -> CoreResult<()> {
-        self.connect_taxonomy()?.execute(
-            "UPDATE taxonomy_identity SET taxonomy_identity = ? WHERE identity_id = 1",
-            [identity],
-        )?;
-        Ok(())
-    }
-
-    fn photo_library(&self, library_uuid: &str) -> CoreResult<PhotoLibraryRegistration> {
+    pub(crate) fn photo_library(&self, library_uuid: &str) -> CoreResult<PhotoLibraryRegistration> {
         self.connect_metadata()?
             .query_row(
                 r#"
@@ -448,7 +448,7 @@ impl Database {
         self.ensure_taxonomy_identity()?;
         self.ensure_default_library(&photo_directory)?;
         self.seed_metadata()?;
-        self.synchronize_active_library_identity()?;
+        crate::taxonomy::sync::synchronize_all_photo_libraries(self)?;
         Ok(())
     }
 
@@ -516,44 +516,6 @@ impl Database {
             ";",
         )?;
         crate::naming::seed_default_test_cases(&connection)
-    }
-
-    fn synchronize_active_library_identity(&self) -> CoreResult<()> {
-        let Some(library) = self.active_photo_library()? else {
-            return Ok(());
-        };
-        let taxonomy_identity = self.taxonomy_identity()?;
-        let mut connection = open_connection(Path::new(&library.db_path))?;
-        let transaction = connection.transaction()?;
-        let bound_identity = transaction.query_row(
-            "SELECT bound_taxonomy_identity FROM photo_library WHERE library_id = 1",
-            [],
-            |row| row.get::<_, String>(0),
-        )?;
-        if bound_identity != taxonomy_identity {
-            transaction.execute("DELETE FROM photo_taxon_candidate_names", [])?;
-            transaction.execute("DELETE FROM photo_taxon_candidates", [])?;
-            transaction.execute("DELETE FROM photo_taxon_mapping", [])?;
-            transaction.execute("DELETE FROM photo_taxon_usage", [])?;
-            transaction.execute("DELETE FROM photo_mapping_queue", [])?;
-            transaction.execute(
-                r#"
-                INSERT INTO photo_mapping_queue (photo_id, reason)
-                SELECT photo_id, 'taxonomy' FROM photos
-                "#,
-                [],
-            )?;
-            transaction.execute(
-                r#"
-                UPDATE photo_library
-                SET bound_taxonomy_identity = ?, last_taxonomy_sync_id = 0
-                WHERE library_id = 1
-                "#,
-                [taxonomy_identity],
-            )?;
-        }
-        transaction.commit()?;
-        Ok(())
     }
 }
 

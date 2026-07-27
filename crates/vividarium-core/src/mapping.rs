@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
 
 use rusqlite::types::Value as SqlValue;
 use rusqlite::{Transaction, params, params_from_iter};
@@ -149,134 +149,6 @@ const PHOTO_TAXON_CANDIDATE_LIMIT: usize = 500;
 const PHOTO_MAPPING_BATCH_SIZE: usize = 200;
 
 pub type MappingProgressCallback<'a> = dyn FnMut(u64, Option<u64>, &str) + Send + 'a;
-
-pub(crate) fn refresh_after_taxonomy_changes(
-    database: &Database,
-    taxon_ids: impl IntoIterator<Item = i64>,
-) -> CoreResult<()> {
-    let taxon_ids = taxon_ids.into_iter().collect::<BTreeSet<_>>();
-    if taxon_ids.is_empty() {
-        return Ok(());
-    }
-    let mut connection = database.connect()?;
-    let transaction = connection.transaction()?;
-    let mut photo_ids = BTreeSet::<i64>::new();
-    let taxon_ids = taxon_ids.into_iter().collect::<Vec<_>>();
-    {
-        let selection = id_selection(
-            &transaction,
-            &taxon_ids,
-            "taxon_id",
-            "temp_mapping_taxon_ids",
-        )?;
-        let mut statement = transaction.prepare(&format!(
-            r#"
-            SELECT DISTINCT photo_id
-            FROM (
-                SELECT photo_id, taxon_id
-                FROM photo_taxon_mapping
-                WHERE taxon_id IS NOT NULL
-                UNION ALL
-                SELECT photo_id, taxon_id
-                FROM photo_taxon_candidates
-            ) AS affected_mappings
-            WHERE {}
-            "#,
-            selection.predicate
-        ))?;
-        let rows = statement.query_map(params_from_iter(selection.values), |row| {
-            row.get::<_, i64>(0)
-        })?;
-        for photo_id in rows {
-            photo_ids.insert(photo_id?);
-        }
-    }
-    let photo_ids = photo_ids.into_iter().collect::<Vec<_>>();
-    queue_photo_ids(&transaction, &photo_ids, "taxonomy")?;
-    transaction.commit()?;
-    Ok(())
-}
-
-pub(crate) fn invalidate_deleted_taxa(
-    transaction: &Transaction<'_>,
-    taxon_ids: impl IntoIterator<Item = i64>,
-) -> CoreResult<()> {
-    let taxon_ids = taxon_ids.into_iter().collect::<BTreeSet<_>>();
-    if taxon_ids.is_empty() {
-        return Ok(());
-    }
-    let taxon_ids = taxon_ids.into_iter().collect::<Vec<_>>();
-    let selection = id_selection(
-        transaction,
-        &taxon_ids,
-        "taxon_id",
-        "temp_deleted_taxon_ids",
-    )?;
-    let mut photo_ids = Vec::new();
-    let mut direct_deltas = BTreeMap::new();
-    {
-        let mut statement = transaction.prepare(&format!(
-            r#"
-            SELECT DISTINCT photo_id
-            FROM (
-                SELECT photo_id, taxon_id
-                FROM photo_taxon_mapping
-                WHERE taxon_id IS NOT NULL
-                UNION ALL
-                SELECT photo_id, taxon_id
-                FROM photo_taxon_candidates
-            ) AS affected
-            WHERE {}
-            "#,
-            selection.predicate
-        ))?;
-        for photo_id in statement.query_map(params_from_iter(selection.values.iter()), |row| {
-            row.get::<_, i64>(0)
-        })? {
-            photo_ids.push(photo_id?);
-        }
-    }
-    if photo_ids.is_empty() {
-        return Ok(());
-    }
-    let photos = id_selection(
-        transaction,
-        &photo_ids,
-        "photo_id",
-        "temp_deleted_taxon_photo_ids",
-    )?;
-    {
-        let mut statement = transaction.prepare(&format!(
-            r#"
-            SELECT taxon_id, COUNT(*)
-            FROM photo_taxon_mapping
-            WHERE status = 'matched' AND {}
-            GROUP BY taxon_id
-            "#,
-            photos.predicate
-        ))?;
-        let rows = statement.query_map(params_from_iter(photos.values.iter()), |row| {
-            Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
-        })?;
-        for row in rows {
-            let (taxon_id, count) = row?;
-            direct_deltas.insert(taxon_id, -count);
-        }
-    }
-    apply_usage_deltas(transaction, &direct_deltas)?;
-    queue_photo_ids(transaction, &photo_ids, "taxonomy")?;
-    let photos = id_selection(
-        transaction,
-        &photo_ids,
-        "photo_id",
-        "temp_deleted_taxon_photo_ids_delete",
-    )?;
-    transaction.execute(
-        &format!("DELETE FROM photo_taxon_mapping WHERE {}", photos.predicate),
-        params_from_iter(photos.values),
-    )?;
-    Ok(())
-}
 
 pub(crate) fn queue_photo_ids(
     transaction: &Transaction<'_>,
@@ -1137,7 +1009,12 @@ mod tests {
         );
         drop(connection);
         let selected_taxon_id = matched.candidates[0].summary.taxon_id;
-        refresh_after_taxonomy_changes(&database, [selected_taxon_id]).unwrap();
+        let mut taxonomy = database.connect_taxonomy().unwrap();
+        let transaction = taxonomy.transaction().unwrap();
+        crate::taxonomy::sync::record_event(&transaction, None, [selected_taxon_id], false)
+            .unwrap();
+        transaction.commit().unwrap();
+        crate::taxonomy::sync::synchronize_all_photo_libraries(&database).unwrap();
         let processing = get_photo_taxon_match(&database, photo.photo_id).unwrap();
         assert_eq!(processing.mapping.status, PhotoTaxonStatus::Processing);
         assert!(processing.candidates.is_empty());

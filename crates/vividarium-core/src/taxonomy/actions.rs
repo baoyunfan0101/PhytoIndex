@@ -16,7 +16,6 @@ use super::{
     TaxonInputRow, TaxonRank, TaxonRowStatus, TaxonomyNameType, TaxonomyOperationResult,
     apply_rows, preview_rows,
 };
-use crate::mapping;
 use crate::{CoreError, CoreResult, Database};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -246,8 +245,9 @@ pub fn promote_taxon_name(database: &Database, input: PromoteTaxonNameInput) -> 
         params![accepted_type.code(), input.taxon_id, input.name_id],
     )?;
     validate_taxonomy(&transaction)?;
+    super::sync::record_event(&transaction, None, [input.taxon_id], false)?;
     transaction.commit()?;
-    mapping::refresh_after_taxonomy_changes(database, [input.taxon_id])?;
+    super::sync::synchronize_all_photo_libraries(database)?;
     Ok(())
 }
 
@@ -283,8 +283,9 @@ pub fn delete_taxon_name(database: &Database, input: DeleteTaxonNameInput) -> Co
         )));
     }
     validate_taxonomy(&transaction)?;
+    super::sync::record_event(&transaction, None, [input.taxon_id], false)?;
     transaction.commit()?;
-    mapping::refresh_after_taxonomy_changes(database, [input.taxon_id])?;
+    super::sync::synchronize_all_photo_libraries(database)?;
     Ok(())
 }
 
@@ -309,9 +310,10 @@ pub fn delete_taxon(database: &Database, taxon_id: i64) -> CoreResult<()> {
             "taxon {taxon_id} cannot be deleted because it has child taxa"
         )));
     }
-    mapping::invalidate_deleted_taxa(&transaction, [taxon_id])?;
     transaction.execute("DELETE FROM taxa WHERE taxon_id = ?", [taxon_id])?;
+    super::sync::record_event(&transaction, None, [taxon_id], false)?;
     transaction.commit()?;
+    super::sync::synchronize_all_photo_libraries(database)?;
     Ok(())
 }
 
@@ -360,8 +362,9 @@ pub fn execute_custom_taxonomy_sql(
     }
     validate_taxonomy(&transaction)?;
     let affected_taxon_ids = affected_taxon_ids_from_changeset(&transaction, &changeset_blob)?;
+    super::sync::record_event(&transaction, None, affected_taxon_ids, false)?;
     transaction.commit()?;
-    mapping::refresh_after_taxonomy_changes(database, affected_taxon_ids)?;
+    super::sync::synchronize_all_photo_libraries(database)?;
     Ok(TaxonomyCustomSqlResult { changeset_size })
 }
 

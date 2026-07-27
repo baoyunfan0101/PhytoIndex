@@ -5,7 +5,9 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, Transaction, params};
 use serde::{Deserialize, Serialize};
 
 use super::formatted::validate_taxonomy;
+use super::sync;
 use crate::db::LOCAL_TAXON_ID_FLOOR;
+use crate::naming::normalize_taxonomy_name;
 use crate::{CoreError, CoreResult, Database};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -59,7 +61,28 @@ pub fn replace_taxonomy_base_database(
     let result = replace_from_attached_database(&mut connection, &source_path);
     let detach_result = connection.execute_batch("DETACH DATABASE taxonomy_base");
     match (result, detach_result) {
-        (Ok(result), Ok(())) => Ok(result),
+        (Ok(result), Ok(())) => {
+            sync::synchronize_all_photo_libraries(database)?;
+            let queued_photo_count = database
+                .active_photo_library()?
+                .and_then(|active| {
+                    database
+                        .connect_photo_library_registration(&active)
+                        .ok()
+                        .and_then(|connection| {
+                            connection
+                                .query_row("SELECT COUNT(*) FROM photo_mapping_queue", [], |row| {
+                                    row.get::<_, i64>(0)
+                                })
+                                .ok()
+                        })
+                })
+                .unwrap_or(0);
+            Ok(TaxonomyBaseReplaceResult {
+                metadata: result.metadata,
+                queued_photo_count,
+            })
+        }
         (Err(error), _) => Err(error),
         (Ok(_), Err(error)) => Err(error.into()),
     }
@@ -72,11 +95,9 @@ fn replace_from_attached_database(
     let transaction = connection.transaction()?;
     transaction.execute_batch(
         r#"
-        DELETE FROM photo_taxon_usage;
-        DELETE FROM photo_mapping_queue;
-        DELETE FROM photo_taxon_mapping;
         DELETE FROM taxonomy_operations;
         DELETE FROM taxonomy_base_metadata;
+        DELETE FROM taxonomy_sync_events;
         UPDATE taxa SET parent_taxon_id = NULL;
         DELETE FROM taxon_names;
         DELETE FROM taxa;
@@ -87,16 +108,9 @@ fn replace_from_attached_database(
         SELECT taxon_id, parent_taxon_id, rank, geological_range
         FROM taxonomy_base.taxa
         ORDER BY rank, taxon_id;
-
-        INSERT INTO taxon_names (
-            name_id, taxon_id, name_type, name, authority_year, source
-        )
-        SELECT
-            name_id, taxon_id, name_type, name, authority_year, source
-        FROM taxonomy_base.taxon_names
-        ORDER BY name_id;
         "#,
     )?;
+    import_normalized_names(&transaction)?;
     validate_taxonomy(&transaction)?;
     set_local_taxon_id_floor(&transaction)?;
     let taxa_count =
@@ -114,16 +128,10 @@ fn replace_from_attached_database(
         params![source_path, taxa_count, taxon_names_count],
     )?;
     transaction.execute(
-        r#"
-        INSERT INTO photo_mapping_queue (photo_id, reason)
-        SELECT photo_id, 'taxonomy' FROM photos
-        "#,
-        [],
+        "UPDATE taxonomy_identity SET taxonomy_identity = ? WHERE identity_id = 1",
+        [uuid::Uuid::new_v4().to_string()],
     )?;
-    let queued_photo_count =
-        transaction.query_row("SELECT COUNT(*) FROM photo_mapping_queue", [], |row| {
-            row.get::<_, i64>(0)
-        })?;
+    sync::record_event(&transaction, None, [], true)?;
     let metadata = transaction.query_row(
         r#"
         SELECT source_path, taxa_count, taxon_names_count, imported_at
@@ -136,8 +144,55 @@ fn replace_from_attached_database(
     transaction.commit()?;
     Ok(TaxonomyBaseReplaceResult {
         metadata,
-        queued_photo_count,
+        queued_photo_count: 0,
     })
+}
+
+fn import_normalized_names(transaction: &Transaction<'_>) -> CoreResult<()> {
+    let names = {
+        let mut statement = transaction.prepare(
+            r#"
+            SELECT name_id, taxon_id, name_type, name, authority_year, source
+            FROM taxonomy_base.taxon_names
+            ORDER BY name_id
+            "#,
+        )?;
+        statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?
+    };
+    let mut insert = transaction.prepare_cached(
+        r#"
+        INSERT INTO taxon_names (
+            name_id, taxon_id, name_type, name, authority_year, source
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        "#,
+    )?;
+    for (name_id, taxon_id, name_type, raw_name, authority_year, source) in names {
+        let name = normalize_taxonomy_name(&raw_name).ok_or_else(|| {
+            CoreError::InvalidArgument(format!(
+                "taxonomy base name {name_id} is empty after normalization"
+            ))
+        })?;
+        insert.execute(params![
+            name_id,
+            taxon_id,
+            name_type,
+            name,
+            authority_year,
+            source
+        ])?;
+    }
+    Ok(())
 }
 
 fn set_local_taxon_id_floor(transaction: &Transaction<'_>) -> CoreResult<()> {
@@ -476,8 +531,8 @@ mod tests {
                 INSERT INTO taxon_names (
                     name_id, taxon_id, name_type, name
                 ) VALUES
-                    (1001, 101, 1, 'New kingdom'),
-                    (1002, 102, 1, 'New order');
+                    (1001, 101, 1, 'New_kingdom'),
+                    (1002, 102, 1, '  New   order  ');
                 "#
             ))
             .unwrap();

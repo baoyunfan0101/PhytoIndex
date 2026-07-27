@@ -19,7 +19,6 @@ use super::page::{
     TaxonomyCursor, TaxonomyPage, decode_cursor, encode_cursor, invalid_cursor, page_limit,
 };
 use super::view::{TaxonSummary, load_taxon_summaries, load_taxon_summary};
-use crate::mapping;
 use crate::naming::{SynonymAuthorityParser, normalize_taxonomy_name};
 use crate::{CoreError, CoreResult, Database};
 
@@ -376,8 +375,9 @@ pub fn apply_rows(
         ],
     )?;
     let affected_taxon_ids = affected_taxon_ids_from_changeset(&transaction, &changeset_blob)?;
+    super::sync::record_event(&transaction, Some(operation_id), affected_taxon_ids, false)?;
     transaction.commit()?;
-    mapping::refresh_after_taxonomy_changes(database, affected_taxon_ids)?;
+    super::sync::synchronize_all_photo_libraries(database)?;
     Ok(result)
 }
 
@@ -1561,12 +1561,13 @@ pub fn revert_taxonomy_operation(database: &Database, operation_id: i64) -> Core
         )?;
     }
     validate_taxonomy(&transaction)?;
+    super::sync::record_event(&transaction, None, affected_taxon_ids, false)?;
     transaction.execute(
         "DELETE FROM taxonomy_operations WHERE operation_id = ?",
         [operation_id],
     )?;
     transaction.commit()?;
-    mapping::refresh_after_taxonomy_changes(database, affected_taxon_ids)?;
+    super::sync::synchronize_all_photo_libraries(database)?;
     Ok(())
 }
 
