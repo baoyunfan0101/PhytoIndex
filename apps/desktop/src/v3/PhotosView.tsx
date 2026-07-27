@@ -30,6 +30,7 @@ import {
 } from "./api";
 import { EmptyState, PhotoStage, SectionHeader, VirtualList } from "./components";
 import { usePhotoInteraction, type PhotoOpenHandlers } from "./PhotoInteraction";
+import { emitPhotoMutation, usePhotoMutation } from "./photoMutations";
 import { useCursorPage } from "./useCursorPage";
 import { useCursorTree, type CursorTreeNode } from "./useCursorTree";
 
@@ -131,11 +132,9 @@ export function FolderPhotosView({
   const interaction = usePhotoInteraction({
     photos,
     handlers,
-    onPhotoChanged: (photo) => page.updateItems((current) => current.map((item) => (
-      item.kind === "photo" && item.photo.photo_id === photo.photo_id
-        ? { ...item, photo }
-        : item
-    ))),
+  });
+  usePhotoMutation(() => {
+    void Promise.all([page.reload(), tree.reloadExpanded()]);
   });
 
   useEffect(() => {
@@ -267,11 +266,9 @@ export function TaxonPhotosView({ handlers }: { handlers: PhotoOpenHandlers }) {
   const interaction = usePhotoInteraction({
     photos,
     handlers,
-    onPhotoChanged: (photo) => page.updateItems((current) => current.map((item) => (
-      item.kind === "photo" && item.photo.photo_id === photo.photo_id
-        ? { ...item, photo }
-        : item
-    ))),
+  });
+  usePhotoMutation(() => {
+    void Promise.all([page.reload(), tree.reloadExpanded()]);
   });
 
   return (
@@ -355,6 +352,9 @@ export function PhotoHistoryView({ onStatus }: { onStatus: (message: string) => 
     () => page.items.flatMap((operation) => operation.items.map((item) => ({ operation, item }))),
     [page.items],
   );
+  usePhotoMutation((mutation) => {
+    if (mutation.kind === "photo") void page.reload();
+  });
 
   async function exportAll() {
     downloadCsv("photo-rename-operations.csv", await exportAllPhotoOperationsCsv());
@@ -385,7 +385,11 @@ export function PhotoHistoryView({ onStatus }: { onStatus: (message: string) => 
                 <button type="button" title={`Export operation ${operation.operation_id}`} onClick={() => void exportPhotoOperationCsv(operation.operation_id).then((csv) => downloadCsv(`photo-operation-${operation.operation_id}.csv`, csv))}><Download size={14} /></button>
                 <button type="button" title={`Revert operation ${operation.operation_id}`} onClick={() => void revertPhotoOperation(operation.operation_id).then(() => {
                   onStatus(`Reverted operation ${operation.operation_id}`);
-                  void page.reload();
+                  emitPhotoMutation({
+                    photoId: null,
+                    photoIds: operation.items.map((record) => record.photo_id),
+                    kind: "photo",
+                  });
                 })}><RotateCcw size={14} /></button>
               </div>
             </article>
@@ -416,9 +420,9 @@ export function PhotoMapView({ handlers }: { handlers: PhotoOpenHandlers }) {
     photos,
     handlers,
     selectFirst: false,
-    onPhotoChanged: (photo) => page.updateItems((current) => current.map((item) => (
-      item.photo.photo_id === photo.photo_id ? { ...item, photo } : item
-    ))),
+  });
+  usePhotoMutation(() => {
+    void page.reload();
   });
 
   useEffect(() => {

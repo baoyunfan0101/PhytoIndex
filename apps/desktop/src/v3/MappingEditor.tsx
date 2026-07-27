@@ -13,16 +13,15 @@ import {
   type TaxonSummary,
 } from "./api";
 import { Busy, EmptyState, MappingBadge, PhotoStage, TaxonCard, VirtualList } from "./components";
+import { emitPhotoMutation } from "./photoMutations";
 import { useTaxonSearch } from "./useTaxonSearch";
 
 export function MappingEditor({
   photo,
   embedded = false,
-  onChanged,
 }: {
   photo: Photo;
   embedded?: boolean;
-  onChanged?: () => void;
 }) {
   const [match, setMatch] = useState<PhotoTaxonMatch | null>(null);
   const [mappedTaxon, setMappedTaxon] = useState<TaxonSummary | null>(null);
@@ -60,7 +59,7 @@ export function MappingEditor({
     try {
       await action();
       await reload();
-      onChanged?.();
+      emitPhotoMutation({ photoId: photo.photo_id, kind: "mapping" });
     } catch (nextError) {
       setError(errorMessage(nextError));
     } finally {

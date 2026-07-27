@@ -9,6 +9,7 @@ import {
   VirtualList,
 } from "./components";
 import { usePhotoInteraction, type PhotoOpenHandlers } from "./PhotoInteraction";
+import { usePhotoMutation } from "./photoMutations";
 import type { CursorPageController } from "./useCursorPage";
 
 type DisplayMode = "Thumbnails" | "Image";
@@ -18,23 +19,20 @@ export function PhotoBrowser({
   detail,
   page,
   handlers,
-  onPhotoChanged,
 }: {
   title: string;
   detail?: string;
   page: CursorPageController<Photo>;
   handlers: PhotoOpenHandlers;
-  onPhotoChanged?: (photo: Photo) => void;
 }) {
   const photos = page.items;
   const [mode, setMode] = useState<DisplayMode>("Thumbnails");
   const interaction = usePhotoInteraction({
     photos,
     handlers,
-    onPhotoChanged: (photo) => {
-      page.updateItems((current) => current.map((item) => item.photo_id === photo.photo_id ? photo : item));
-      onPhotoChanged?.(photo);
-    },
+  });
+  usePhotoMutation(() => {
+    void page.reload();
   });
 
   const typeSelect = (query: string) => {

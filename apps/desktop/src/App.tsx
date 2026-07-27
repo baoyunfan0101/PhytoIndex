@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import {
+  getPhoto,
   getPhotoLibrary,
   listTaxonPhotos,
   openPhotoLibrary,
@@ -29,6 +30,7 @@ import { MappingEditor } from "./v3/MappingEditor";
 import { PhotoBrowser } from "./v3/PhotoBrowser";
 import { PhotoDetailView } from "./v3/PhotoDetailView";
 import type { PhotoOpenHandlers } from "./v3/PhotoInteraction";
+import { usePhotoMutation } from "./v3/photoMutations";
 import {
   FolderPhotosView,
   PhotoHistoryView,
@@ -98,6 +100,27 @@ export function App() {
   const searchRef = useRef<HTMLDivElement>(null);
   const searchToggleRef = useRef<HTMLButtonElement>(null);
   const active = tabs.find((tab) => tab.id === activeId) ?? tabs[0];
+
+  usePhotoMutation((mutation) => {
+    if (mutation.kind !== "photo") return;
+    const applyPhoto = (photo: Photo) => setTabs((current) => current.map((tab) => {
+      if (tab.photo?.photo_id !== photo.photo_id) return tab;
+      const title = tab.kind === "photo-detail"
+        ? photo.filename
+        : tab.kind === "mapping-editor"
+          ? `Map ${photo.filename}`
+          : tab.title;
+      return { ...tab, photo, title };
+    }));
+    if (mutation.photo) {
+      applyPhoto(mutation.photo);
+    } else {
+      const photoIds = mutation.photoIds ?? (mutation.photoId === null ? [] : [mutation.photoId]);
+      photoIds.forEach((photoId) => {
+        void getPhoto(photoId).then(applyPhoto);
+      });
+    }
+  });
 
   useEffect(() => {
     void getPhotoLibrary().then((library) => setRoot(library?.root_path ?? ""));

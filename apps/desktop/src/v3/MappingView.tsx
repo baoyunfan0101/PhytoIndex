@@ -13,6 +13,8 @@ import {
 import { MappingBadge, PhotoStage, Segmented, VirtualList } from "./components";
 import { MappingEditor } from "./MappingEditor";
 import { usePhotoInteraction, type PhotoOpenHandlers } from "./PhotoInteraction";
+import { usePhotoMutation } from "./photoMutations";
+import { emitPhotoMutation } from "./photoMutations";
 import { useCursorPage } from "./useCursorPage";
 
 const statuses = ["matched", "ambiguous", "unmatched", "processing"] as const;
@@ -56,10 +58,10 @@ export function MappingView({
     photos,
     handlers,
     knownMapping,
-    onMappingChanged: () => void page.reload(),
-    onPhotoChanged: (photo) => page.updateItems((current) => current.map((item) => (
-      item.photo.photo_id === photo.photo_id ? { ...item, photo } : item
-    ))),
+  });
+  usePhotoMutation(() => {
+    void page.reload();
+    refreshMetadata();
   });
   const selected = page.items.find((item) => item.photo.photo_id === interaction.selectedId) ?? null;
 
@@ -67,7 +69,7 @@ export function MappingView({
     onStatus("Mapping photos", true);
     const started = await startPhotoMapping();
     await waitForOperation("mapping", started.operation.task_id, (operation) => onStatus(operation.message, true));
-    await page.reload();
+    emitPhotoMutation({ photoId: null, kind: "mapping" });
     onStatus("Mapping complete");
   }
 
@@ -116,7 +118,7 @@ export function MappingView({
           <PhotoStage photo={interaction.selected} onContextMenu={interaction.openContextMenu} />
         </main>
         <aside className="mapping-editor-pane">
-          {selected ? <MappingEditor photo={selected.photo} embedded onChanged={() => void page.reload()} /> : <div className="empty-copy">Select a photo</div>}
+          {selected ? <MappingEditor photo={selected.photo} embedded /> : <div className="empty-copy">Select a photo</div>}
         </aside>
       </div>
       {interaction.contextMenu}

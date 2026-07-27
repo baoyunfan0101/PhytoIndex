@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState, type MouseEvent } from "react";
 import { getPhotoMapping, type Photo, type PhotoTaxonMapping } from "./api";
 import { PhotoContextMenu } from "./PhotoContextMenu";
+import { emitPhotoMutation } from "./photoMutations";
 
 export type PhotoOpenHandlers = {
   openDetails: (photo: Photo) => void;
@@ -19,15 +20,11 @@ type PhotoContextState = {
 export function usePhotoInteraction({
   photos,
   handlers,
-  onPhotoChanged,
-  onMappingChanged,
   knownMapping,
   selectFirst = true,
 }: {
   photos: Photo[];
   handlers: PhotoOpenHandlers;
-  onPhotoChanged?: (photo: Photo) => void;
-  onMappingChanged?: () => void;
   knownMapping?: (photo: Photo) => PhotoTaxonMapping | null | undefined;
   selectFirst?: boolean;
 }) {
@@ -65,9 +62,9 @@ export function usePhotoInteraction({
       onClose={() => setContext(null)}
       onChanged={(photo) => {
         selectPhoto(photo);
-        onPhotoChanged?.(photo);
+        emitPhotoMutation({ photoId: photo.photo_id, kind: "photo", photo });
       }}
-      onMappingChanged={() => onMappingChanged?.()}
+      onMappingChanged={() => emitPhotoMutation({ photoId: context.photo.photo_id, kind: "mapping" })}
       onOpenDetails={() => handlers.openDetails(context.photo)}
       onOpenTaxon={handlers.openTaxon}
       onOpenMappingEditor={() => handlers.openMappingEditor(context.photo)}
