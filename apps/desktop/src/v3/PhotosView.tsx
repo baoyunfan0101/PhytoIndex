@@ -351,6 +351,10 @@ export function PhotoHistoryView({ onStatus }: { onStatus: (message: string) => 
     resetKey: "photo-history",
     loadPage: (_, cursor) => listPhotoOperations(cursor),
   });
+  const records = useMemo(
+    () => page.items.flatMap((operation) => operation.items.map((item) => ({ operation, item }))),
+    [page.items],
+  );
 
   async function exportAll() {
     downloadCsv("photo-rename-operations.csv", await exportAllPhotoOperationsCsv());
@@ -358,24 +362,29 @@ export function PhotoHistoryView({ onStatus }: { onStatus: (message: string) => 
 
   return (
     <div className="history-view">
-      <SectionHeader title="Rename history" detail={`${page.items.length} operations${page.hasMore ? " loaded" : ""}`} actions={
+      <SectionHeader title="Rename history" detail={`${records.length} rename records${page.hasMore ? " loaded" : ""}`} actions={
         <button className="secondary-button" type="button" onClick={() => void exportAll()}><Download size={13} />Export all</button>
       } />
       {page.error ? <EmptyState title="Unable to load history" detail={page.error} /> : (
         <VirtualList
           className="history-list"
-          items={page.items}
-          rowHeight={72}
-          itemKey={(item) => item.operation_id}
+          items={records}
+          rowHeight={82}
+          itemKey={({ operation, item }) => `${operation.operation_id}:${item.row_number}`}
           onNearEnd={() => void page.loadMore()}
-          renderItem={(item) => (
+          renderItem={({ operation, item }) => (
             <article className="operation-row">
               <History size={15} />
-              <div><strong>Operation {item.operation_id}</strong><span>{item.applied_at} / {item.items.length} files / {item.source}</span></div>
+              <div className="rename-audit-fields">
+                <span><b>Path</b>{item.directory_relative_path || operation.root_path}</span>
+                <span><b>Old filename</b>{item.old_filename}</span>
+                <span><b>New filename</b>{item.new_filename}</span>
+                <small>{operation.applied_at} / {operation.source}</small>
+              </div>
               <div className="operation-actions">
-                <button type="button" title="Export" onClick={() => void exportPhotoOperationCsv(item.operation_id).then((csv) => downloadCsv(`photo-operation-${item.operation_id}.csv`, csv))}><Download size={14} /></button>
-                <button type="button" title="Revert" onClick={() => void revertPhotoOperation(item.operation_id).then(() => {
-                  onStatus(`Reverted operation ${item.operation_id}`);
+                <button type="button" title={`Export operation ${operation.operation_id}`} onClick={() => void exportPhotoOperationCsv(operation.operation_id).then((csv) => downloadCsv(`photo-operation-${operation.operation_id}.csv`, csv))}><Download size={14} /></button>
+                <button type="button" title={`Revert operation ${operation.operation_id}`} onClick={() => void revertPhotoOperation(operation.operation_id).then(() => {
+                  onStatus(`Reverted operation ${operation.operation_id}`);
                   void page.reload();
                 })}><RotateCcw size={14} /></button>
               </div>
