@@ -8,7 +8,7 @@ import {
   RotateCcw,
   Search,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   applyTaxonomyRows,
   displayTaxon,
@@ -47,9 +47,11 @@ type TaxonomyRecordItem =
 
 export function TaxonomySearchView({
   taxonId,
+  onTaxonChange,
   onOpenPhotos,
 }: {
   taxonId?: number;
+  onTaxonChange?: (taxonId: number, label: string) => void;
   onOpenPhotos: (taxonId: number, label: string) => void;
 }) {
   const [query, setQuery] = useState("");
@@ -57,6 +59,7 @@ export function TaxonomySearchView({
   const [node, setNode] = useState<TaxonDetailNode | null>(null);
   const [expanded, setExpanded] = useState(false);
   const [error, setError] = useState("");
+  const loadedTaxonId = useRef<number | null>(null);
   const taxonomySearch = useTaxonSearch(query, { enabled: taxonId === undefined });
   const children = useCursorPage<TaxonChild, number | null>({
     params: selected?.summary.taxon_id ?? null,
@@ -67,9 +70,12 @@ export function TaxonomySearchView({
 
   useEffect(() => {
     if (taxonId === undefined) return;
+    if (loadedTaxonId.current === taxonId) return;
     getTaxonDetailNode(taxonId).then((next) => {
+      loadedTaxonId.current = next.summary.taxon_id;
       setNode(next);
       setSelected({ summary: next.summary, detail: next.detail, matches: [] });
+      onTaxonChange?.(next.summary.taxon_id, displayTaxon(next.summary));
     }).catch((nextError) => setError(errorMessage(nextError)));
   }, [taxonId]);
 
@@ -85,11 +91,16 @@ export function TaxonomySearchView({
 
   useEffect(() => {
     if (!selected) {
+      loadedTaxonId.current = null;
       setNode(null);
       return;
     }
     setExpanded(false);
-    getTaxonDetailNode(selected.summary.taxon_id).then(setNode).catch((nextError) => setError(errorMessage(nextError)));
+    if (loadedTaxonId.current === selected.summary.taxon_id) return;
+    getTaxonDetailNode(selected.summary.taxon_id).then((next) => {
+      loadedTaxonId.current = next.summary.taxon_id;
+      setNode(next);
+    }).catch((nextError) => setError(errorMessage(nextError)));
   }, [selected]);
 
   function toggleChildren() {
@@ -99,9 +110,11 @@ export function TaxonomySearchView({
   async function navigateTo(nextTaxonId: number) {
     try {
       const next = await getTaxonDetailNode(nextTaxonId);
+      loadedTaxonId.current = next.summary.taxon_id;
       setNode(next);
       setSelected({ summary: next.summary, detail: next.detail, matches: [] });
       setExpanded(false);
+      onTaxonChange?.(next.summary.taxon_id, displayTaxon(next.summary));
     } catch (nextError) {
       setError(errorMessage(nextError));
     }

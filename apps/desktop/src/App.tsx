@@ -173,6 +173,12 @@ export function App() {
     openTab({ id: kind, kind, title }, true);
   }
 
+  function updateTaxonTab(id: string, taxonId: number, title: string) {
+    setTabs((current) => current.map((tab) => tab.id === id && tab.kind === "taxon-detail"
+      ? { ...tab, taxonId, title }
+      : tab));
+  }
+
   function closeTab(id: string) {
     setTabs((current) => {
       if (current.length === 1) return current;
@@ -185,7 +191,7 @@ export function App() {
 
   const handlers: PhotoOpenHandlers = useMemo(() => ({
     openDetails: (photo) => openTab({ id: `photo:${photo.photo_id}`, kind: "photo-detail", title: photo.filename, photo }),
-    openTaxon: (taxonId) => openTab({ id: `taxon:${taxonId}`, kind: "taxon-detail", title: `Taxon ${taxonId}`, taxonId }),
+    openTaxon: (taxonId) => openTab({ id: `taxon-detail:${crypto.randomUUID()}`, kind: "taxon-detail", title: `Taxon ${taxonId}`, taxonId }),
     openMappingEditor: (photo) => openTab({ id: `mapping:${photo.photo_id}`, kind: "mapping-editor", title: `Map ${photo.filename}`, photo }),
   }), [tabs]);
 
@@ -315,6 +321,7 @@ export function App() {
                   handlers={handlers}
                   onStatus={setStatus}
                   openTab={openTab}
+                  updateTaxonTab={updateTaxonTab}
                   onBaseReplaced={() => resetWorkspace("Base database replaced")}
                 />
               </section>
@@ -333,6 +340,7 @@ function TabBody({
   handlers,
   onStatus,
   openTab,
+  updateTaxonTab,
   onBaseReplaced,
 }: {
   active: boolean;
@@ -340,6 +348,7 @@ function TabBody({
   handlers: PhotoOpenHandlers;
   onStatus: (message: string, busy?: boolean) => void;
   openTab: (tab: AppTab, singleton?: boolean) => void;
+  updateTaxonTab: (id: string, taxonId: number, title: string) => void;
   onBaseReplaced: () => void;
 }) {
   if (tab.kind === "folders") return <FolderPhotosView handlers={handlers} onStatus={onStatus} />;
@@ -348,7 +357,7 @@ function TabBody({
   if (tab.kind === "photo-history") return <PhotoHistoryView onStatus={onStatus} />;
   if (tab.kind === "mapping") return <MappingView active={active} onStatus={onStatus} handlers={handlers} />;
   if (tab.kind === "taxonomy-search") return <TaxonomySearchView onOpenPhotos={(taxonId, label) => openTab({ id: `taxon-photos:${taxonId}`, kind: "taxon-photos", title: label, taxonId })} />;
-  if (tab.kind === "taxon-detail") return <TaxonomySearchView taxonId={tab.taxonId} onOpenPhotos={(taxonId, label) => openTab({ id: `taxon-photos:${taxonId}`, kind: "taxon-photos", title: label, taxonId })} />;
+  if (tab.kind === "taxon-detail") return <TaxonomySearchView taxonId={tab.taxonId} onTaxonChange={(taxonId, label) => updateTaxonTab(tab.id, taxonId, label)} onOpenPhotos={(taxonId, label) => openTab({ id: `taxon-photos:${taxonId}`, kind: "taxon-photos", title: label, taxonId })} />;
   if (tab.kind === "formatted-update") return <FormattedUpdateView />;
   if (tab.kind === "custom-update") return <CustomUpdateView />;
   if (tab.kind === "taxonomy-history") return <TaxonomyHistoryView />;
