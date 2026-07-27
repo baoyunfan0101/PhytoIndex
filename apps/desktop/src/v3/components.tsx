@@ -23,6 +23,7 @@ import {
   type PhotoTaxonStatus,
   type TaxonSummary,
 } from "./api";
+import { useViewState } from "./viewState";
 
 export type IconComponent = LucideIcon;
 
@@ -35,6 +36,7 @@ export function VirtualList<T>({
   renderItem,
   onNearEnd,
   onTypeSelect,
+  stateKey,
 }: {
   items: T[];
   rowHeight?: number;
@@ -44,16 +46,21 @@ export function VirtualList<T>({
   renderItem: (item: T, index: number) => ReactNode;
   onNearEnd?: () => void;
   onTypeSelect?: (query: string) => void;
+  stateKey?: string;
 }) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const typeBuffer = useRef("");
   const typeTimer = useRef<number | null>(null);
   const [height, setHeight] = useState(0);
-  const [scrollTop, setScrollTop] = useState(0);
+  const [scrollTop, setScrollTop] = useViewState(
+    stateKey ? `${stateKey}.scroll-top` : null,
+    0,
+  );
 
   useEffect(() => {
     const element = viewportRef.current;
     if (!element) return;
+    element.scrollTop = scrollTop;
     const update = () => setHeight(element.clientHeight);
     update();
     const observer = new ResizeObserver(update);
@@ -114,6 +121,7 @@ export function VirtualGrid<T>({
   itemKey,
   renderItem,
   onNearEnd,
+  stateKey,
 }: {
   items: T[];
   minColumnWidth?: number;
@@ -121,14 +129,19 @@ export function VirtualGrid<T>({
   itemKey: (item: T) => string | number;
   renderItem: (item: T, index: number) => ReactNode;
   onNearEnd?: () => void;
+  stateKey?: string;
 }) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
-  const [scrollTop, setScrollTop] = useState(0);
+  const [scrollTop, setScrollTop] = useViewState(
+    stateKey ? `${stateKey}.scroll-top` : null,
+    0,
+  );
 
   useEffect(() => {
     const element = viewportRef.current;
     if (!element) return;
+    element.scrollTop = scrollTop;
     const update = () => setSize({ width: element.clientWidth, height: element.clientHeight });
     update();
     const observer = new ResizeObserver(update);

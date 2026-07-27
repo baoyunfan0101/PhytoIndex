@@ -46,6 +46,7 @@ import {
   TaxonomySearchView,
 } from "./v3/TaxonomyView";
 import { useCursorPage } from "./v3/useCursorPage";
+import { ViewStateProvider, type ViewStateStore } from "./v3/viewState";
 
 type TabKind =
   | "folders"
@@ -107,6 +108,7 @@ export function App() {
   const [status, setStatus] = useState("Ready");
   const searchRef = useRef<HTMLDivElement>(null);
   const searchToggleRef = useRef<HTMLButtonElement>(null);
+  const viewStateStores = useRef(new globalThis.Map<string, ViewStateStore>());
   const active = tabs.find((tab) => tab.id === activeId) ?? tabs[0];
 
   usePhotoMutation((mutation) => {
@@ -182,6 +184,7 @@ export function App() {
   function closeTab(id: string) {
     setTabs((current) => {
       if (current.length === 1) return current;
+      viewStateStores.current.delete(id);
       const index = current.findIndex((tab) => tab.id === id);
       const next = current.filter((tab) => tab.id !== id);
       if (activeId === id) setActiveId(next[Math.max(0, index - 1)]?.id ?? next[0].id);
@@ -204,6 +207,7 @@ export function App() {
   }
 
   function resetWorkspace(message: string) {
+    viewStateStores.current.clear();
     setWorkspaceId((current) => current + 1);
     setTabs([initialTab]);
     setActiveId(initialTab.id);
@@ -309,21 +313,28 @@ export function App() {
           {tabs.map((tab) => {
             const isActive = tab.id === activeId;
             if (!isActive && !keepAliveTabKinds.has(tab.kind)) return null;
+            let viewState = viewStateStores.current.get(tab.id);
+            if (!viewState) {
+              viewState = new globalThis.Map();
+              viewStateStores.current.set(tab.id, viewState);
+            }
             return (
               <section
                 className={`tab-panel${isActive ? " active" : ""}`}
                 aria-hidden={!isActive}
                 key={`${workspaceId}:${tab.id}`}
               >
-                <TabBody
-                  active={isActive}
-                  tab={tab}
-                  handlers={handlers}
-                  onStatus={setStatus}
-                  openTab={openTab}
-                  updateTaxonTab={updateTaxonTab}
-                  onBaseReplaced={() => resetWorkspace("Base database replaced")}
-                />
+                <ViewStateProvider store={viewState}>
+                  <TabBody
+                    active={isActive}
+                    tab={tab}
+                    handlers={handlers}
+                    onStatus={setStatus}
+                    openTab={openTab}
+                    updateTaxonTab={updateTaxonTab}
+                    onBaseReplaced={() => resetWorkspace("Base database replaced")}
+                  />
+                </ViewStateProvider>
               </section>
             );
           })}
@@ -383,6 +394,7 @@ function PhotoSet({ query, taxonId, handlers }: { query?: string; taxonId?: numb
   const page = useCursorPage({
     params,
     resetKey: query !== undefined ? `search:${query}` : `taxon:${taxonId}`,
+    stateKey: "photo-set.page",
     loadPage: (next, cursor) => next.kind === "search"
       ? searchPhotos(next.query, cursor)
       : listTaxonPhotos(next.taxonId, cursor),

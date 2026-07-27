@@ -1,5 +1,5 @@
 import { Image as ImageIcon, Rows3 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import type { Photo } from "./api";
 import {
   PhotoStage,
@@ -11,6 +11,7 @@ import {
 import { usePhotoInteraction, type PhotoOpenHandlers } from "./PhotoInteraction";
 import { usePhotoMutation } from "./photoMutations";
 import type { CursorPageController } from "./useCursorPage";
+import { useViewState } from "./viewState";
 
 type DisplayMode = "Thumbnails" | "Image";
 
@@ -26,10 +27,11 @@ export function PhotoBrowser({
   handlers: PhotoOpenHandlers;
 }) {
   const photos = page.items;
-  const [mode, setMode] = useState<DisplayMode>("Thumbnails");
+  const [mode, setMode] = useViewState<DisplayMode>("photo-browser.mode", "Thumbnails");
   const interaction = usePhotoInteraction({
     photos,
     handlers,
+    stateKey: "photo-browser.interaction",
   });
   usePhotoMutation(() => {
     void page.reload();
@@ -53,6 +55,7 @@ export function PhotoBrowser({
           <Rows3 size={14} />
         </header>
         <VirtualList
+          stateKey="photo-browser.list"
           items={photos}
           rowHeight={43}
           itemKey={(photo) => photo.photo_id}
@@ -79,6 +82,7 @@ export function PhotoBrowser({
         </header>
         {mode === "Thumbnails" ? (
           <VirtualGrid
+            stateKey="photo-browser.grid"
             items={photos}
             itemKey={(photo) => photo.photo_id}
             onNearEnd={() => void page.loadMore()}

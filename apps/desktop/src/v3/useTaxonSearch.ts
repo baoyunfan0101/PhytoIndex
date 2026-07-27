@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { errorMessage, searchTaxa, type TaxonSearchResult } from "./api";
+import { useViewState } from "./viewState";
 
 export function useTaxonSearch(
   query: string,
@@ -7,15 +8,24 @@ export function useTaxonSearch(
     enabled = true,
     limit = 80,
     debounceMs = 180,
+    stateKey,
   }: {
     enabled?: boolean;
     limit?: number;
     debounceMs?: number;
+    stateKey?: string;
   } = {},
 ) {
-  const [results, setResults] = useState<TaxonSearchResult[]>([]);
+  const [results, setResults] = useViewState<TaxonSearchResult[]>(
+    stateKey ? `${stateKey}.results` : null,
+    [],
+  );
+  const [lastQuery, setLastQuery] = useViewState(
+    stateKey ? `${stateKey}.query` : null,
+    "",
+  );
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useViewState(stateKey ? `${stateKey}.error` : null, "");
   const requestRef = useRef(0);
 
   useEffect(() => {
@@ -24,10 +34,12 @@ export function useTaxonSearch(
     setError("");
     if (!enabled || !value) {
       setResults([]);
+      setLastQuery("");
       setLoading(false);
       return;
     }
-    setResults([]);
+    if (lastQuery !== value) setResults([]);
+    setLastQuery(value);
     setLoading(true);
     const timer = window.setTimeout(() => {
       searchTaxa(value, limit)

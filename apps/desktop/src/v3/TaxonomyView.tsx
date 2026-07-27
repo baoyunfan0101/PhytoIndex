@@ -40,6 +40,7 @@ import { CodeEditor } from "./CodeEditor";
 import { useMetadataChange } from "./metadataChanges";
 import { useCursorPage } from "./useCursorPage";
 import { useTaxonSearch } from "./useTaxonSearch";
+import { useViewState } from "./viewState";
 
 type TaxonomyRecordItem =
   | { kind: "selected"; result: TaxonSearchResult }
@@ -54,16 +55,21 @@ export function TaxonomySearchView({
   onTaxonChange?: (taxonId: number, label: string) => void;
   onOpenPhotos: (taxonId: number, label: string) => void;
 }) {
-  const [query, setQuery] = useState("");
-  const [selected, setSelected] = useState<TaxonSearchResult | null>(null);
-  const [node, setNode] = useState<TaxonDetailNode | null>(null);
-  const [expanded, setExpanded] = useState(false);
+  const [query, setQuery] = useViewState("taxonomy-search.query", "");
+  const [selected, setSelected] = useViewState<TaxonSearchResult | null>("taxonomy-search.selected", null);
+  const [node, setNode] = useViewState<TaxonDetailNode | null>("taxonomy-search.node", null);
+  const [expanded, setExpanded] = useViewState("taxonomy-search.expanded", false);
   const [error, setError] = useState("");
   const loadedTaxonId = useRef<number | null>(null);
-  const taxonomySearch = useTaxonSearch(query, { enabled: taxonId === undefined });
+  const selectedTaxonId = useRef(selected?.summary.taxon_id ?? null);
+  const taxonomySearch = useTaxonSearch(query, {
+    enabled: taxonId === undefined,
+    stateKey: "taxonomy-search.results",
+  });
   const children = useCursorPage<TaxonChild, number | null>({
     params: selected?.summary.taxon_id ?? null,
     resetKey: selected?.summary.taxon_id ?? null,
+    stateKey: "taxonomy-search.children",
     enabled: expanded && selected !== null,
     loadPage: (selectedTaxonId, cursor) => listTaxonChildren(selectedTaxonId!, cursor),
   });
@@ -86,16 +92,27 @@ export function TaxonomySearchView({
       setNode(null);
       return;
     }
-    setSelected(taxonomySearch.results[0] ?? null);
+    setSelected((current) => current
+      ? taxonomySearch.results.find((item) => item.summary.taxon_id === current.summary.taxon_id)
+        ?? taxonomySearch.results[0]
+        ?? null
+      : taxonomySearch.results[0] ?? null);
   }, [query, taxonId, taxonomySearch.results]);
 
   useEffect(() => {
     if (!selected) {
       loadedTaxonId.current = null;
+      selectedTaxonId.current = null;
       setNode(null);
       return;
     }
-    setExpanded(false);
+    const selectionChanged = selectedTaxonId.current !== selected.summary.taxon_id;
+    selectedTaxonId.current = selected.summary.taxon_id;
+    if (selectionChanged) setExpanded(false);
+    if (node?.summary.taxon_id === selected.summary.taxon_id) {
+      loadedTaxonId.current = selected.summary.taxon_id;
+      return;
+    }
     if (loadedTaxonId.current === selected.summary.taxon_id) return;
     getTaxonDetailNode(selected.summary.taxon_id).then((next) => {
       loadedTaxonId.current = next.summary.taxon_id;
@@ -139,6 +156,7 @@ export function TaxonomySearchView({
         {taxonId === undefined && (
           <aside className="taxonomy-results">
             <VirtualList
+              stateKey="taxonomy-search.results-list"
               items={taxonomySearch.results}
               rowHeight={62}
               itemKey={(item) => item.summary.taxon_id}
@@ -153,6 +171,7 @@ export function TaxonomySearchView({
             <EmptyState icon={Search} title={taxonId === undefined ? "Search taxonomy" : "Loading taxon"} detail="Results include accepted names and aliases." />
           ) : (
             <VirtualList
+              stateKey="taxonomy-search.records-list"
               items={visible}
               rowHeight={expanded ? 194 : 250}
               itemKey={(item) => item.kind === "selected" ? item.result.summary.taxon_id : item.child.taxon_id}
@@ -378,6 +397,7 @@ export function TaxonomyHistoryView() {
   const page = useCursorPage<TaxonomyOperation, null>({
     params: null,
     resetKey: "taxonomy-history",
+    stateKey: "taxonomy-history.page",
     loadPage: (_, cursor) => listTaxonomyOperations(cursor),
   });
 
@@ -388,6 +408,7 @@ export function TaxonomyHistoryView() {
       } />
       {page.error ? <EmptyState title="Unable to load history" detail={page.error} /> : (
         <VirtualList
+          stateKey="taxonomy-history.list"
           className="history-list"
           items={page.items}
           rowHeight={72}

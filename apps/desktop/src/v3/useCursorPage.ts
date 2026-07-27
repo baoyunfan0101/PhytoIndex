@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { errorMessage, type Page } from "./api";
+import { useViewState } from "./viewState";
 
 type CursorPageOptions<T, P> = {
   params: P;
@@ -8,6 +9,7 @@ type CursorPageOptions<T, P> = {
   enabled?: boolean;
   debounceMs?: number;
   onPageLoaded?: (page: Page<T>, append: boolean) => void;
+  stateKey?: string;
 };
 
 export type CursorPageController<T> = {
@@ -28,15 +30,20 @@ export function useCursorPage<T, P>({
   enabled = true,
   debounceMs = 0,
   onPageLoaded,
+  stateKey,
 }: CursorPageOptions<T, P>): CursorPageController<T> {
-  const [items, setItems] = useState<T[]>([]);
-  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [items, setItems] = useViewState<T[]>(stateKey ? `${stateKey}.items` : null, []);
+  const [nextCursor, setNextCursor] = useViewState<string | null>(stateKey ? `${stateKey}.cursor` : null, null);
+  const [storedResetKey, setStoredResetKey] = useViewState<typeof resetKey>(
+    stateKey ? `${stateKey}.reset-key` : null,
+    resetKey,
+  );
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useViewState(stateKey ? `${stateKey}.error` : null, "");
   const paramsRef = useRef(params);
   const loadPageRef = useRef(loadPage);
   const onPageLoadedRef = useRef(onPageLoaded);
-  const cursorRef = useRef<string | null>(null);
+  const cursorRef = useRef<string | null>(nextCursor);
   const loadingRef = useRef(false);
   const requestRef = useRef(0);
 
@@ -79,11 +86,15 @@ export function useCursorPage<T, P>({
   const loadMore = useCallback(() => load(true), [load]);
 
   useEffect(() => {
+    const reset = !Object.is(storedResetKey, resetKey);
     requestRef.current += 1;
     loadingRef.current = false;
-    cursorRef.current = null;
-    setItems([]);
-    setNextCursor(null);
+    cursorRef.current = reset ? null : nextCursor;
+    if (reset) {
+      setItems([]);
+      setNextCursor(null);
+      setStoredResetKey(resetKey);
+    }
     setError("");
     setLoading(false);
     if (!enabled) return;

@@ -15,6 +15,7 @@ import {
 import { Busy, EmptyState, MappingBadge, PhotoStage, TaxonCard, VirtualList } from "./components";
 import { emitPhotoMutation } from "./photoMutations";
 import { useTaxonSearch } from "./useTaxonSearch";
+import { useViewState } from "./viewState";
 
 export function MappingEditor({
   photo,
@@ -25,13 +26,16 @@ export function MappingEditor({
   embedded?: boolean;
   refreshKey?: number;
 }) {
-  const [match, setMatch] = useState<PhotoTaxonMatch | null>(null);
-  const [mappedTaxon, setMappedTaxon] = useState<TaxonSummary | null>(null);
-  const [query, setQuery] = useState("");
+  const [match, setMatch] = useViewState<PhotoTaxonMatch | null>("mapping-editor.match", null);
+  const [mappedTaxon, setMappedTaxon] = useViewState<TaxonSummary | null>("mapping-editor.taxon", null);
+  const [query, setQuery] = useViewState("mapping-editor.query", "");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
-  const taxonomySearch = useTaxonSearch(query, { limit: 60 });
+  const taxonomySearch = useTaxonSearch(query, {
+    limit: 60,
+    stateKey: "mapping-editor.search",
+  });
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -98,6 +102,7 @@ export function MappingEditor({
             </div>
           ) : match?.mapping.status === "ambiguous" ? (
             <VirtualList
+              stateKey="mapping-editor.candidates"
               className="candidate-stack"
               items={match.candidates}
               rowHeight={60}
@@ -124,6 +129,7 @@ export function MappingEditor({
             <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search taxonomy" />
           </label>
           <VirtualList
+            stateKey="mapping-editor.results"
             className="mapping-search-results"
             items={taxonomySearch.results}
             rowHeight={58}

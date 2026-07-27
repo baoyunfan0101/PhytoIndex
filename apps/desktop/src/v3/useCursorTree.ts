@@ -1,5 +1,6 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useRef } from "react";
 import { errorMessage, type Page } from "./api";
+import { useViewState } from "./viewState";
 
 export type CursorTreeNode<T> = {
   expanded: boolean;
@@ -11,6 +12,7 @@ export type CursorTreeNode<T> = {
 
 type CursorTreeOptions<T, K extends string | number> = {
   loadPage: (key: K, cursor: string | null) => Promise<Page<T>>;
+  stateKey?: string;
 };
 
 const emptyNode = <T,>(expanded = false): CursorTreeNode<T> => ({
@@ -23,8 +25,12 @@ const emptyNode = <T,>(expanded = false): CursorTreeNode<T> => ({
 
 export function useCursorTree<T, K extends string | number>({
   loadPage,
+  stateKey,
 }: CursorTreeOptions<T, K>) {
-  const [nodes, setNodes] = useState<Map<K, CursorTreeNode<T>>>(new Map());
+  const [nodes, setNodes] = useViewState<Map<K, CursorTreeNode<T>>>(
+    stateKey ? `${stateKey}.nodes` : null,
+    () => new Map(),
+  );
   const nodesRef = useRef(nodes);
   const loadPageRef = useRef(loadPage);
   const requests = useRef(new Map<K, number>());

@@ -1,5 +1,5 @@
 import { Copy } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   displayTaxon,
   errorMessage,
@@ -11,12 +11,15 @@ import {
   type PhotoMetadata,
 } from "./api";
 import { Busy, PhotoStage } from "./components";
+import { useViewState } from "./viewState";
 
 export function PhotoDetailView({ photo }: { photo: Photo }) {
-  const [metadata, setMetadata] = useState<PhotoMetadata | null>(null);
-  const [taxon, setTaxon] = useState("");
+  const [metadata, setMetadata] = useViewState<PhotoMetadata | null>("photo-detail.metadata", null);
+  const [taxon, setTaxon] = useViewState("photo-detail.taxon", "");
+  const [detailScrollTop, setDetailScrollTop] = useViewState("photo-detail.scroll-top", 0);
   const [error, setError] = useState("");
   const [copied, setCopied] = useState("");
+  const detailRef = useRef<HTMLDListElement>(null);
 
   useEffect(() => {
     let active = true;
@@ -33,6 +36,10 @@ export function PhotoDetailView({ photo }: { photo: Photo }) {
     }).catch((nextError) => setError(errorMessage(nextError)));
     return () => { active = false; };
   }, [photo]);
+
+  useEffect(() => {
+    if (detailRef.current) detailRef.current.scrollTop = detailScrollTop;
+  }, [metadata]);
 
   function copy(label: string, value: string) {
     void navigator.clipboard.writeText(value).then(() => {
@@ -59,7 +66,11 @@ export function PhotoDetailView({ photo }: { photo: Photo }) {
       <div className="photo-detail-content">
         <PhotoStage photo={photo} compact />
         {!metadata && !error ? <Busy label="Loading details" /> : (
-          <dl className="detail-grid">
+          <dl
+            className="detail-grid"
+            ref={detailRef}
+            onScroll={(event) => setDetailScrollTop(event.currentTarget.scrollTop)}
+          >
             <DetailValue label="Path" value={photo.relative_path} copied={copied} onCopy={copy} />
             <DetailValue label="Size" value={formatBytes(photo.file_size)} copied={copied} onCopy={copy} />
             <DetailValue label="Captured" value={metadata?.captured_at ?? "-"} copied={copied} onCopy={copy} />

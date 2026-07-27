@@ -2,6 +2,7 @@ import { useCallback, useMemo, useState, type MouseEvent } from "react";
 import { getPhotoMapping, type Photo, type PhotoTaxonMapping } from "./api";
 import { PhotoContextMenu } from "./PhotoContextMenu";
 import { emitPhotoMutation } from "./photoMutations";
+import { useViewState } from "./viewState";
 
 export type PhotoOpenHandlers = {
   openDetails: (photo: Photo) => void;
@@ -22,13 +23,18 @@ export function usePhotoInteraction({
   handlers,
   knownMapping,
   selectFirst = true,
+  stateKey,
 }: {
   photos: Photo[];
   handlers: PhotoOpenHandlers;
   knownMapping?: (photo: Photo) => PhotoTaxonMapping | null | undefined;
   selectFirst?: boolean;
+  stateKey?: string;
 }) {
-  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [selectedId, setSelectedId] = useViewState<number | null>(
+    stateKey ? `${stateKey}.selected-photo` : null,
+    null,
+  );
   const [context, setContext] = useState<PhotoContextState | null>(null);
   const selected = useMemo(
     () => photos.find((photo) => photo.photo_id === selectedId) ?? (selectFirst ? photos[0] : null) ?? null,

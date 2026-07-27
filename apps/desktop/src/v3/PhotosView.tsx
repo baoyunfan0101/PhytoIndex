@@ -33,6 +33,7 @@ import { usePhotoInteraction, type PhotoOpenHandlers } from "./PhotoInteraction"
 import { emitPhotoMutation, useDeferredPhotoMutation, usePhotoMutation } from "./photoMutations";
 import { useCursorPage } from "./useCursorPage";
 import { useCursorTree, type CursorTreeNode } from "./useCursorTree";
+import { useViewState } from "./viewState";
 
 type DirectoryTreeRow =
   | { kind: "directory"; directory: PhotoDirectory; depth: number }
@@ -107,18 +108,20 @@ export function FolderPhotosView({
   handlers: PhotoOpenHandlers;
   onStatus: (message: string, busy?: boolean) => void;
 }) {
-  const [library, setLibrary] = useState<PhotoLibrary | null>(null);
-  const [trail, setTrail] = useState<PhotoDirectory[]>([]);
-  const [libraryLoading, setLibraryLoading] = useState(true);
+  const [library, setLibrary] = useViewState<PhotoLibrary | null>("folders.library", null);
+  const [trail, setTrail] = useViewState<PhotoDirectory[]>("folders.trail", []);
+  const [libraryLoading, setLibraryLoading] = useState(library === null);
   const [libraryError, setLibraryError] = useState("");
   const directoryId = trail[trail.length - 1]?.directory_id ?? library?.root_directory_id ?? null;
   const page = useCursorPage<PhotoDirectoryItem, number | null>({
     params: directoryId,
     resetKey: directoryId,
+    stateKey: "folders.page",
     enabled: directoryId !== null,
     loadPage: (id, cursor) => browsePhotoDirectory(id!, cursor),
   });
   const tree = useCursorTree<PhotoDirectoryItem, number>({
+    stateKey: "folders.tree",
     loadPage: (id, cursor) => browsePhotoDirectory(id, cursor),
   });
   const rows = useMemo(
@@ -132,6 +135,7 @@ export function FolderPhotosView({
   const interaction = usePhotoInteraction({
     photos,
     handlers,
+    stateKey: "folders.interaction",
   });
   usePhotoMutation(() => {
     void Promise.all([page.reload(), tree.reloadExpanded()]);
@@ -187,6 +191,7 @@ export function FolderPhotosView({
       <div className="explorer-columns">
         <aside className="finder-pane">
           <VirtualList
+            stateKey="folders.list"
             items={rows}
             rowHeight={40}
             itemKey={(item) => item.kind === "directory"
@@ -245,14 +250,16 @@ export function FolderPhotosView({
 }
 
 export function TaxonPhotosView({ handlers }: { handlers: PhotoOpenHandlers }) {
-  const [trail, setTrail] = useState<PhotoTaxonUsage[]>([]);
+  const [trail, setTrail] = useViewState<PhotoTaxonUsage[]>("photo-taxonomy.trail", []);
   const currentId = trail[trail.length - 1]?.taxon_id ?? null;
   const page = useCursorPage<PhotoTaxonItem, number | null>({
     params: currentId,
     resetKey: currentId,
+    stateKey: "photo-taxonomy.page",
     loadPage: (taxonId, cursor) => browsePhotoTaxon(taxonId, false, true, cursor),
   });
   const tree = useCursorTree<PhotoTaxonItem, number>({
+    stateKey: "photo-taxonomy.tree",
     loadPage: (taxonId, cursor) => browsePhotoTaxon(taxonId, false, true, cursor),
   });
   const rows = useMemo(
@@ -266,6 +273,7 @@ export function TaxonPhotosView({ handlers }: { handlers: PhotoOpenHandlers }) {
   const interaction = usePhotoInteraction({
     photos,
     handlers,
+    stateKey: "photo-taxonomy.interaction",
   });
   usePhotoMutation(() => {
     void Promise.all([page.reload(), tree.reloadExpanded()]);
@@ -288,6 +296,7 @@ export function TaxonPhotosView({ handlers }: { handlers: PhotoOpenHandlers }) {
       <div className="explorer-columns">
         <aside className="finder-pane">
           <VirtualList
+            stateKey="photo-taxonomy.list"
             items={rows}
             rowHeight={48}
             itemKey={(item) => item.kind === "taxon"
@@ -346,6 +355,7 @@ export function PhotoHistoryView({ onStatus }: { onStatus: (message: string) => 
   const page = useCursorPage<PhotoOperation, null>({
     params: null,
     resetKey: "photo-history",
+    stateKey: "photo-history.page",
     loadPage: (_, cursor) => listPhotoOperations(cursor),
   });
   const records = useMemo(
@@ -367,6 +377,7 @@ export function PhotoHistoryView({ onStatus }: { onStatus: (message: string) => 
       } />
       {page.error ? <EmptyState title="Unable to load history" detail={page.error} /> : (
         <VirtualList
+          stateKey="photo-history.list"
           className="history-list"
           items={records}
           rowHeight={82}
