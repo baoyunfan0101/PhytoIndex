@@ -13,8 +13,7 @@ import {
 import { MappingBadge, PhotoStage, Segmented, VirtualList } from "./components";
 import { MappingEditor } from "./MappingEditor";
 import { usePhotoInteraction, type PhotoOpenHandlers } from "./PhotoInteraction";
-import { usePhotoMutation } from "./photoMutations";
-import { emitPhotoMutation } from "./photoMutations";
+import { emitPhotoMutation, useDeferredPhotoMutation } from "./photoMutations";
 import { useCursorPage } from "./useCursorPage";
 
 const statuses = ["matched", "ambiguous", "unmatched", "processing"] as const;
@@ -27,15 +26,18 @@ const emptyMetadata: MappingMetadata = {
 };
 
 export function MappingView({
+  active,
   onStatus,
   handlers,
 }: {
+  active: boolean;
   onStatus: (message: string, busy?: boolean) => void;
   handlers: PhotoOpenHandlers;
 }) {
   const [status, setStatus] = useState<PhotoTaxonStatus>("ambiguous");
   const [metadata, setMetadata] = useState<MappingMetadata>(emptyMetadata);
   const [query, setQuery] = useState("");
+  const [editorRevision, setEditorRevision] = useState(0);
   const normalizedQuery = query.trim();
   const refreshMetadata = useCallback(() => {
     void getMappingMetadata().then(setMetadata);
@@ -59,9 +61,10 @@ export function MappingView({
     handlers,
     knownMapping,
   });
-  usePhotoMutation(() => {
+  useDeferredPhotoMutation(active, () => {
     void page.reload();
     refreshMetadata();
+    setEditorRevision((current) => current + 1);
   });
   const selected = page.items.find((item) => item.photo.photo_id === interaction.selectedId) ?? null;
 
@@ -118,7 +121,7 @@ export function MappingView({
           <PhotoStage photo={interaction.selected} onContextMenu={interaction.openContextMenu} />
         </main>
         <aside className="mapping-editor-pane">
-          {selected ? <MappingEditor photo={selected.photo} embedded /> : <div className="empty-copy">Select a photo</div>}
+          {selected ? <MappingEditor photo={selected.photo} embedded refreshKey={editorRevision} /> : <div className="empty-copy">Select a photo</div>}
         </aside>
       </div>
       {interaction.contextMenu}

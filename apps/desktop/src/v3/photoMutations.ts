@@ -28,3 +28,32 @@ export function usePhotoMutation(listener: PhotoMutationListener) {
     };
   }, []);
 }
+
+export function useDeferredPhotoMutation(
+  active: boolean,
+  invalidate: () => void,
+  shouldInvalidate?: (mutation: PhotoMutation) => boolean,
+) {
+  const activeRef = useRef(active);
+  const dirtyRef = useRef(false);
+  const invalidateRef = useRef(invalidate);
+  const shouldInvalidateRef = useRef(shouldInvalidate);
+  activeRef.current = active;
+  invalidateRef.current = invalidate;
+  shouldInvalidateRef.current = shouldInvalidate;
+
+  usePhotoMutation((mutation) => {
+    if (shouldInvalidateRef.current && !shouldInvalidateRef.current(mutation)) return;
+    if (activeRef.current) {
+      invalidateRef.current();
+    } else {
+      dirtyRef.current = true;
+    }
+  });
+
+  useEffect(() => {
+    if (!active || !dirtyRef.current) return;
+    dirtyRef.current = false;
+    invalidateRef.current();
+  }, [active]);
+}

@@ -74,6 +74,13 @@ type AppTab = {
 };
 
 const initialTab: AppTab = { id: "folders", kind: "folders", title: "Folders" };
+const keepAliveTabKinds = new Set<TabKind>([
+  "map",
+  "formatted-update",
+  "custom-update",
+  "settings",
+  "mapping",
+]);
 
 const photoItems: Array<[TabKind, string, IconComponent]> = [
   ["folders", "Folders", FolderOpen],
@@ -293,21 +300,26 @@ export function App() {
           )}
         </header>
         <main className="tab-content">
-          {tabs.map((tab) => (
-            <section
-              className={`tab-panel${tab.id === activeId ? " active" : ""}`}
-              aria-hidden={tab.id !== activeId}
-              key={`${workspaceId}:${tab.id}`}
-            >
-              <TabBody
-                tab={tab}
-                handlers={handlers}
-                onStatus={setStatus}
-                openTab={openTab}
-                onBaseReplaced={() => resetWorkspace("Base database replaced")}
-              />
-            </section>
-          ))}
+          {tabs.map((tab) => {
+            const isActive = tab.id === activeId;
+            if (!isActive && !keepAliveTabKinds.has(tab.kind)) return null;
+            return (
+              <section
+                className={`tab-panel${isActive ? " active" : ""}`}
+                aria-hidden={!isActive}
+                key={`${workspaceId}:${tab.id}`}
+              >
+                <TabBody
+                  active={isActive}
+                  tab={tab}
+                  handlers={handlers}
+                  onStatus={setStatus}
+                  openTab={openTab}
+                  onBaseReplaced={() => resetWorkspace("Base database replaced")}
+                />
+              </section>
+            );
+          })}
         </main>
         <footer className="status-bar"><span className="status-dot" />{status}<span>{active?.title}</span></footer>
       </div>
@@ -316,12 +328,14 @@ export function App() {
 }
 
 function TabBody({
+  active,
   tab,
   handlers,
   onStatus,
   openTab,
   onBaseReplaced,
 }: {
+  active: boolean;
   tab: AppTab;
   handlers: PhotoOpenHandlers;
   onStatus: (message: string, busy?: boolean) => void;
@@ -330,9 +344,9 @@ function TabBody({
 }) {
   if (tab.kind === "folders") return <FolderPhotosView handlers={handlers} onStatus={onStatus} />;
   if (tab.kind === "photo-taxonomy") return <TaxonPhotosView handlers={handlers} />;
-  if (tab.kind === "map") return <PhotoMapView handlers={handlers} />;
+  if (tab.kind === "map") return <PhotoMapView active={active} handlers={handlers} />;
   if (tab.kind === "photo-history") return <PhotoHistoryView onStatus={onStatus} />;
-  if (tab.kind === "mapping") return <MappingView onStatus={onStatus} handlers={handlers} />;
+  if (tab.kind === "mapping") return <MappingView active={active} onStatus={onStatus} handlers={handlers} />;
   if (tab.kind === "taxonomy-search") return <TaxonomySearchView onOpenPhotos={(taxonId, label) => openTab({ id: `taxon-photos:${taxonId}`, kind: "taxon-photos", title: label, taxonId })} />;
   if (tab.kind === "taxon-detail") return <TaxonomySearchView taxonId={tab.taxonId} onOpenPhotos={(taxonId, label) => openTab({ id: `taxon-photos:${taxonId}`, kind: "taxon-photos", title: label, taxonId })} />;
   if (tab.kind === "formatted-update") return <FormattedUpdateView />;

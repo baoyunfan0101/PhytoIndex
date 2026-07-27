@@ -19,9 +19,11 @@ import { useTaxonSearch } from "./useTaxonSearch";
 export function MappingEditor({
   photo,
   embedded = false,
+  refreshKey = 0,
 }: {
   photo: Photo;
   embedded?: boolean;
+  refreshKey?: number;
 }) {
   const [match, setMatch] = useState<PhotoTaxonMatch | null>(null);
   const [mappedTaxon, setMappedTaxon] = useState<TaxonSummary | null>(null);
@@ -47,7 +49,7 @@ export function MappingEditor({
     } finally {
       setLoading(false);
     }
-  }, [photo.photo_id]);
+  }, [photo.photo_id, refreshKey]);
 
   useEffect(() => {
     void reload();

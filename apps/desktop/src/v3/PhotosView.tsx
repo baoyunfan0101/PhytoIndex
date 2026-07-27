@@ -30,7 +30,7 @@ import {
 } from "./api";
 import { EmptyState, PhotoStage, SectionHeader, VirtualList } from "./components";
 import { usePhotoInteraction, type PhotoOpenHandlers } from "./PhotoInteraction";
-import { emitPhotoMutation, usePhotoMutation } from "./photoMutations";
+import { emitPhotoMutation, useDeferredPhotoMutation, usePhotoMutation } from "./photoMutations";
 import { useCursorPage } from "./useCursorPage";
 import { useCursorTree, type CursorTreeNode } from "./useCursorTree";
 
@@ -400,7 +400,13 @@ export function PhotoHistoryView({ onStatus }: { onStatus: (message: string) => 
   );
 }
 
-export function PhotoMapView({ handlers }: { handlers: PhotoOpenHandlers }) {
+export function PhotoMapView({
+  active,
+  handlers,
+}: {
+  active: boolean;
+  handlers: PhotoOpenHandlers;
+}) {
   const container = useRef<HTMLDivElement>(null);
   const map = useRef<MapLibreMap | null>(null);
   const markers = useRef(new Map<number, maplibregl.Marker>());
@@ -421,9 +427,9 @@ export function PhotoMapView({ handlers }: { handlers: PhotoOpenHandlers }) {
     handlers,
     selectFirst: false,
   });
-  usePhotoMutation(() => {
+  useDeferredPhotoMutation(active, () => {
     void page.reload();
-  });
+  }, (mutation) => mutation.kind === "photo");
 
   useEffect(() => {
     let disposed = false;
