@@ -132,7 +132,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .global-search input, .search-field input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; }
 .suggestions { border-top: 1px solid var(--line); }
 .suggestions button { display: flex; width: 100%; justify-content: space-between; padding: 8px 10px; border: 0; text-align: left; background: transparent; }
-.suggestions button:hover { background: var(--active); }
+.suggestions button:hover, .suggestions button.active { background: var(--active); }
 .suggestions span { color: var(--muted); }
 .tab-content { position: relative; min-width: 0; min-height: 0; overflow: hidden; background: #181818; }
 .tab-panel { position: absolute; inset: 0; min-width: 0; min-height: 0; overflow: hidden; visibility: hidden; pointer-events: none; }

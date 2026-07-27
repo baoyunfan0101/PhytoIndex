@@ -96,6 +96,7 @@ export function App() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [suggestions, setSuggestions] = useState<TaxonSuggestion[]>([]);
+  const [suggestionIndex, setSuggestionIndex] = useState(-1);
   const [status, setStatus] = useState("Ready");
   const searchRef = useRef<HTMLDivElement>(null);
   const searchToggleRef = useRef<HTMLButtonElement>(null);
@@ -130,9 +131,13 @@ export function App() {
     const value = searchQuery.trim();
     if (!searchOpen || !value) {
       setSuggestions([]);
+      setSuggestionIndex(-1);
       return;
     }
-    const timer = window.setTimeout(() => void suggestPhotoTaxa(value).then(setSuggestions), 140);
+    const timer = window.setTimeout(() => void suggestPhotoTaxa(value).then((next) => {
+      setSuggestions(next);
+      setSuggestionIndex(-1);
+    }), 140);
     return () => window.clearTimeout(timer);
   }, [searchOpen, searchQuery]);
 
@@ -182,6 +187,7 @@ export function App() {
     if (!value) return;
     openTab({ id: `search:${value.toLocaleLowerCase()}`, kind: "search-photos", title: `Search: ${value}`, query: value });
     setSearchOpen(false);
+    setSuggestionIndex(-1);
   }
 
   function resetWorkspace(message: string) {
@@ -233,12 +239,53 @@ export function App() {
           </div>
           {searchOpen && (
             <div className="global-search" ref={searchRef}>
-              <label><Search size={15} /><input autoFocus value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} onKeyDown={(event) => {
-                if (event.key === "Enter") submitSearch();
-                if (event.key === "Escape") setSearchOpen(false);
-              }} placeholder="Search filenames and photo taxonomy" /></label>
-              {suggestions.length > 0 && <div className="suggestions">{suggestions.map((item) => (
-                <button type="button" key={item.taxon_id} onClick={() => submitSearch(item.names.sci_name ?? item.names.zh_name ?? item.names.en_name ?? searchQuery)}>
+              <label><Search size={15} /><input
+                autoFocus
+                role="combobox"
+                aria-autocomplete="list"
+                aria-expanded={suggestions.length > 0}
+                aria-activedescendant={suggestionIndex >= 0 ? `photo-suggestion-${suggestionIndex}` : undefined}
+                value={searchQuery}
+                onChange={(event) => {
+                  setSearchQuery(event.target.value);
+                  setSuggestionIndex(-1);
+                }}
+                onKeyDown={(event) => {
+                  if (suggestions.length > 0 && event.key === "ArrowDown") {
+                    event.preventDefault();
+                    setSuggestionIndex((current) => current < suggestions.length - 1 ? current + 1 : 0);
+                    return;
+                  }
+                  if (suggestions.length > 0 && event.key === "ArrowUp") {
+                    event.preventDefault();
+                    setSuggestionIndex((current) => current > 0 ? current - 1 : suggestions.length - 1);
+                    return;
+                  }
+                  if (suggestions.length > 0 && event.key === "ArrowRight" && suggestionIndex >= 0) {
+                    event.preventDefault();
+                    setSearchQuery(suggestionLabel(suggestions[suggestionIndex], searchQuery));
+                    return;
+                  }
+                  if (event.key === "Enter") {
+                    submitSearch(suggestionIndex >= 0
+                      ? suggestionLabel(suggestions[suggestionIndex], searchQuery)
+                      : searchQuery);
+                  }
+                  if (event.key === "Escape") setSearchOpen(false);
+                }}
+                placeholder="Search filenames and photo taxonomy"
+              /></label>
+              {suggestions.length > 0 && <div className="suggestions" role="listbox">{suggestions.map((item, index) => (
+                <button
+                  className={index === suggestionIndex ? "active" : ""}
+                  id={`photo-suggestion-${index}`}
+                  role="option"
+                  aria-selected={index === suggestionIndex}
+                  type="button"
+                  key={item.taxon_id}
+                  onMouseEnter={() => setSuggestionIndex(index)}
+                  onClick={() => submitSearch(suggestionLabel(item, searchQuery))}
+                >
                   <strong>{item.names.sci_name ?? `Taxon ${item.taxon_id}`}</strong><span>{item.rank} / {item.names.zh_name ?? item.names.en_name ?? ""}</span>
                 </button>
               ))}</div>}
@@ -297,6 +344,13 @@ function TabBody({
   if (tab.kind === "search-photos" && tab.query) return <PhotoSet query={tab.query} handlers={handlers} />;
   if (tab.kind === "taxon-photos" && tab.taxonId !== undefined) return <PhotoSet taxonId={tab.taxonId} handlers={handlers} />;
   return null;
+}
+
+function suggestionLabel(suggestion: TaxonSuggestion, fallback: string) {
+  return suggestion.names.sci_name
+    ?? suggestion.names.zh_name
+    ?? suggestion.names.en_name
+    ?? fallback;
 }
 
 function PhotoSet({ query, taxonId, handlers }: { query?: string; taxonId?: number; handlers: PhotoOpenHandlers }) {
