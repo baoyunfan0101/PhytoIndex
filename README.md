@@ -19,7 +19,7 @@ Packages and signed in-app updates are available from [GitHub Releases](https://
 
 ## Features
 
-- Open and index one local photo root at a time.
+- Register multiple independent photo libraries and activate one at a time.
 - Replace the taxonomy base database and apply structured taxonomy updates.
 - Map indexed photos to taxa through configurable six-field filename matching.
 - Browse large photo collections with cursor-based pagination.
@@ -40,7 +40,10 @@ crates/
 docs/
   BUILDING.md               Local and GitHub release instructions
   MAP.md                    Map query and settings backend API
+  NAMING.md                 Name normalization and Rhai hook backend API
+  OPERATIONS.md             Shared operation and audit backend API
   PHOTOS.md                 Photos library backend API
+  STORAGE.md                Database locations and library registry API
   TAXONOMY.md               Taxonomy knowledge base backend API
   UPDATING.md               Application update backend API
 scripts/
@@ -56,6 +59,12 @@ The React application calls typed Rust commands through Tauri IPC. Original phot
 See [docs/TAXONOMY.md](docs/TAXONOMY.md) for the public taxonomy knowledge base backend models, Rust APIs, and Tauri commands.
 
 See [docs/PHOTOS.md](docs/PHOTOS.md) for the public photos library, automatic taxonomy mapping, and sparse taxonomy browsing backend APIs.
+
+See [docs/STORAGE.md](docs/STORAGE.md) for metadata, taxonomy, and photo library database location APIs.
+
+See [docs/OPERATIONS.md](docs/OPERATIONS.md) for the shared photo and taxonomy operation history contract.
+
+See [docs/NAMING.md](docs/NAMING.md) for canonical name normalization, Rhai hooks, and project hook tests.
 
 See [docs/MAP.md](docs/MAP.md) for map-photo pagination and map-provider settings.
 
@@ -118,7 +127,7 @@ The repository also includes a GitHub Actions workflow that builds both platform
 
 ## Data Compatibility
 
-Release builds use the operating system application-data directory. The current SQLite schema version is `2`. Databases with any other schema version are incompatible and rejected.
+Release builds use the operating system application-data directory. The metadata, taxonomy, and photo library databases all use schema version `2`. Databases with any other schema version are incompatible and rejected; no migration interface is provided.
 
 The permanent application identifier is:
 
