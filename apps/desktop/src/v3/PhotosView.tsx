@@ -1,6 +1,6 @@
 import "maplibre-gl/dist/maplibre-gl.css";
 
-import { ChevronRight, Download, Folder, History, Images, RefreshCw, RotateCcw } from "lucide-react";
+import { ChevronDown, ChevronRight, Download, Folder, History, Images, RefreshCw, RotateCcw } from "lucide-react";
 import maplibregl, { type Map as MapLibreMap } from "maplibre-gl";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -21,6 +21,9 @@ import {
   type PhotoDirectory,
   type PhotoDirectoryItem,
   type PhotoLibrary,
+  type MapBounds,
+  type MapPhoto,
+  type Photo,
   type PhotoOperation,
   type PhotoTaxonItem,
   type PhotoTaxonUsage,
@@ -28,6 +31,73 @@ import {
 import { EmptyState, PhotoStage, SectionHeader, VirtualList } from "./components";
 import { usePhotoInteraction, type PhotoOpenHandlers } from "./PhotoInteraction";
 import { useCursorPage } from "./useCursorPage";
+import { useCursorTree, type CursorTreeNode } from "./useCursorTree";
+
+type DirectoryTreeRow =
+  | { kind: "directory"; directory: PhotoDirectory; depth: number }
+  | { kind: "photo"; photo: Photo; depth: number }
+  | { kind: "more"; parentId: number; depth: number; loading: boolean };
+
+type TaxonTreeRow =
+  | { kind: "taxon"; taxon: PhotoTaxonUsage; depth: number }
+  | { kind: "photo"; photo: Photo; depth: number }
+  | { kind: "more"; parentId: number; depth: number; loading: boolean };
+
+function flattenDirectoryItems(
+  items: PhotoDirectoryItem[],
+  nodes: Map<number, CursorTreeNode<PhotoDirectoryItem>>,
+  depth = 0,
+  visited = new Set<number>(),
+): DirectoryTreeRow[] {
+  return items.flatMap((item): DirectoryTreeRow[] => {
+    if (item.kind === "photo") return [{ kind: "photo", photo: item.photo, depth }];
+    const row: DirectoryTreeRow = { kind: "directory", directory: item.directory, depth };
+    const node = nodes.get(item.directory.directory_id);
+    if (!node?.expanded || visited.has(item.directory.directory_id)) return [row];
+    const nextVisited = new Set(visited).add(item.directory.directory_id);
+    const descendants = flattenDirectoryItems(node.items, nodes, depth + 1, nextVisited);
+    const more: DirectoryTreeRow[] = node.loading || node.nextCursor
+      ? [{ kind: "more", parentId: item.directory.directory_id, depth: depth + 1, loading: node.loading }]
+      : [];
+    return [row, ...descendants, ...more];
+  });
+}
+
+function flattenTaxonItems(
+  items: PhotoTaxonItem[],
+  nodes: Map<number, CursorTreeNode<PhotoTaxonItem>>,
+  depth = 0,
+  visited = new Set<number>(),
+): TaxonTreeRow[] {
+  return items.flatMap((item): TaxonTreeRow[] => {
+    if (item.kind === "photo") return [{ kind: "photo", photo: item.photo, depth }];
+    const row: TaxonTreeRow = { kind: "taxon", taxon: item.taxon, depth };
+    const node = nodes.get(item.taxon.taxon_id);
+    if (!node?.expanded || visited.has(item.taxon.taxon_id)) return [row];
+    const nextVisited = new Set(visited).add(item.taxon.taxon_id);
+    const descendants = flattenTaxonItems(node.items, nodes, depth + 1, nextVisited);
+    const more: TaxonTreeRow[] = node.loading || node.nextCursor
+      ? [{ kind: "more", parentId: item.taxon.taxon_id, depth: depth + 1, loading: node.loading }]
+      : [];
+    return [row, ...descendants, ...more];
+  });
+}
+
+function normalizeLongitude(value: number) {
+  return ((value + 180) % 360 + 360) % 360 - 180;
+}
+
+function readMapBounds(value: maplibregl.LngLatBounds): MapBounds {
+  const rawWest = value.getWest();
+  const rawEast = value.getEast();
+  const span = rawEast - rawWest;
+  return {
+    west: span >= 360 ? -180 : normalizeLongitude(rawWest),
+    south: Math.max(-90, value.getSouth()),
+    east: span >= 360 ? 180 : normalizeLongitude(rawEast),
+    north: Math.min(90, value.getNorth()),
+  };
+}
 
 export function FolderPhotosView({
   handlers,
@@ -47,9 +117,16 @@ export function FolderPhotosView({
     enabled: directoryId !== null,
     loadPage: (id, cursor) => browsePhotoDirectory(id!, cursor),
   });
+  const tree = useCursorTree<PhotoDirectoryItem, number>({
+    loadPage: (id, cursor) => browsePhotoDirectory(id, cursor),
+  });
+  const rows = useMemo(
+    () => flattenDirectoryItems(page.items, tree.nodes),
+    [page.items, tree.nodes],
+  );
   const photos = useMemo(
-    () => page.items.flatMap((item) => item.kind === "photo" ? [item.photo] : []),
-    [page.items],
+    () => rows.flatMap((row) => row.kind === "photo" ? [row.photo] : []),
+    [rows],
   );
   const interaction = usePhotoInteraction({
     photos,
@@ -87,6 +164,7 @@ export function FolderPhotosView({
   }
 
   function enter(directory: PhotoDirectory) {
+    tree.clear();
     setTrail((current) => [...current, directory]);
   }
 
@@ -95,10 +173,12 @@ export function FolderPhotosView({
       <header className="workbench-toolbar">
         <div className="breadcrumbs">
           <button type="button" onClick={() => {
+            tree.clear();
             setTrail([]);
           }}>Root</button>
           {trail.map((item, index) => (
             <span key={item.directory_id}><ChevronRight size={12} /><button type="button" onClick={() => {
+              tree.clear();
               setTrail(trail.slice(0, index + 1));
             }}>{item.name}</button></span>
           ))}
@@ -108,23 +188,49 @@ export function FolderPhotosView({
       <div className="explorer-columns">
         <aside className="finder-pane">
           <VirtualList
-            items={page.items}
+            items={rows}
             rowHeight={40}
-            itemKey={(item) => item.kind === "directory" ? `d:${item.directory.directory_id}` : `p:${item.photo.photo_id}`}
+            itemKey={(item) => item.kind === "directory"
+              ? `d:${item.directory.directory_id}`
+              : item.kind === "photo"
+                ? `p:${item.photo.photo_id}`
+                : `m:${item.parentId}`}
             onNearEnd={() => void page.loadMore()}
             renderItem={(item) => (
               item.kind === "directory" ? (
-                <button className="finder-row" type="button" onDoubleClick={() => enter(item.directory)}>
-                  <Folder size={14} /><span>{item.directory.name}</span><ChevronRight size={12} />
-                </button>
-              ) : (
+                <div className="finder-row tree" style={{ paddingLeft: 6 + item.depth * 18 }}>
+                  <button
+                    className="tree-toggle"
+                    type="button"
+                    onClick={() => tree.toggle(item.directory.directory_id)}
+                    title={tree.nodes.get(item.directory.directory_id)?.expanded ? "Collapse folder" : "Expand folder"}
+                  >
+                    {tree.nodes.get(item.directory.directory_id)?.expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                  </button>
+                  <Folder size={14} />
+                  <button className="tree-label" type="button" onDoubleClick={() => enter(item.directory)}>
+                    {item.directory.name}
+                  </button>
+                </div>
+              ) : item.kind === "photo" ? (
                 <button
                   className={`finder-row${interaction.selectedId === item.photo.photo_id ? " active" : ""}`}
+                  style={{ paddingLeft: 30 + item.depth * 18 }}
                   type="button"
                   onClick={() => interaction.selectPhoto(item.photo)}
                   onContextMenu={(event) => interaction.openContextMenu(event, item.photo)}
                 >
                   <Images size={14} /><span>{item.photo.filename}</span>
+                </button>
+              ) : (
+                <button
+                  className="finder-row tree-more"
+                  style={{ paddingLeft: 30 + item.depth * 18 }}
+                  type="button"
+                  disabled={item.loading}
+                  onClick={() => void tree.loadMore(item.parentId)}
+                >
+                  {item.loading ? "Loading" : "Load more"}
                 </button>
               )
             )}
@@ -147,9 +253,16 @@ export function TaxonPhotosView({ handlers }: { handlers: PhotoOpenHandlers }) {
     resetKey: currentId,
     loadPage: (taxonId, cursor) => browsePhotoTaxon(taxonId, false, true, cursor),
   });
+  const tree = useCursorTree<PhotoTaxonItem, number>({
+    loadPage: (taxonId, cursor) => browsePhotoTaxon(taxonId, false, true, cursor),
+  });
+  const rows = useMemo(
+    () => flattenTaxonItems(page.items, tree.nodes),
+    [page.items, tree.nodes],
+  );
   const photos = useMemo(
-    () => page.items.flatMap((item) => item.kind === "photo" ? [item.photo] : []),
-    [page.items],
+    () => rows.flatMap((row) => row.kind === "photo" ? [row.photo] : []),
+    [rows],
   );
   const interaction = usePhotoInteraction({
     photos,
@@ -164,26 +277,60 @@ export function TaxonPhotosView({ handlers }: { handlers: PhotoOpenHandlers }) {
   return (
     <div className="folder-workbench">
       <header className="workbench-toolbar breadcrumbs">
-        <button type="button" onClick={() => setTrail([])}>Taxonomy</button>
+        <button type="button" onClick={() => {
+          tree.clear();
+          setTrail([]);
+        }}>Taxonomy</button>
         {trail.map((item, index) => (
-          <span key={item.taxon_id}><ChevronRight size={12} /><button type="button" onClick={() => setTrail(trail.slice(0, index + 1))}>{item.names.sci_name ?? `Taxon ${item.taxon_id}`}</button></span>
+          <span key={item.taxon_id}><ChevronRight size={12} /><button type="button" onClick={() => {
+            tree.clear();
+            setTrail(trail.slice(0, index + 1));
+          }}>{item.names.sci_name ?? `Taxon ${item.taxon_id}`}</button></span>
         ))}
       </header>
       <div className="explorer-columns">
         <aside className="finder-pane">
           <VirtualList
-            items={page.items}
+            items={rows}
             rowHeight={48}
-            itemKey={(item) => item.kind === "taxon" ? `t:${item.taxon.taxon_id}` : `p:${item.photo.photo_id}`}
+            itemKey={(item) => item.kind === "taxon"
+              ? `t:${item.taxon.taxon_id}`
+              : item.kind === "photo"
+                ? `p:${item.photo.photo_id}`
+                : `m:${item.parentId}`}
             onNearEnd={() => void page.loadMore()}
             renderItem={(item) => (
               item.kind === "taxon" ? (
-                <button className="finder-row taxon" type="button" onClick={() => setTrail((current) => [...current, item.taxon])}>
-                  <span><strong>{item.taxon.names.sci_name ?? `Taxon ${item.taxon.taxon_id}`}</strong><small>{item.taxon.subtree_photo_count} photos</small></span><ChevronRight size={12} />
+                <div className="finder-row tree taxon" style={{ paddingLeft: 6 + item.depth * 18 }}>
+                  <button
+                    className="tree-toggle"
+                    type="button"
+                    onClick={() => tree.toggle(item.taxon.taxon_id)}
+                    title={tree.nodes.get(item.taxon.taxon_id)?.expanded ? "Collapse taxon" : "Expand taxon"}
+                  >
+                    {tree.nodes.get(item.taxon.taxon_id)?.expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                  </button>
+                  <button className="tree-label stacked" type="button" onClick={() => {
+                    tree.clear();
+                    setTrail((current) => [...current, item.taxon]);
+                  }}>
+                    <strong>{item.taxon.names.sci_name ?? `Taxon ${item.taxon.taxon_id}`}</strong>
+                    <small>{item.taxon.subtree_photo_count} photos</small>
+                  </button>
+                </div>
+              ) : item.kind === "photo" ? (
+                <button className={`finder-row${interaction.selectedId === item.photo.photo_id ? " active" : ""}`} style={{ paddingLeft: 30 + item.depth * 18 }} type="button" onClick={() => interaction.selectPhoto(item.photo)} onContextMenu={(event) => interaction.openContextMenu(event, item.photo)}>
+                  <Images size={14} /><span>{item.photo.filename}</span>
                 </button>
               ) : (
-                <button className={`finder-row${interaction.selectedId === item.photo.photo_id ? " active" : ""}`} type="button" onClick={() => interaction.selectPhoto(item.photo)} onContextMenu={(event) => interaction.openContextMenu(event, item.photo)}>
-                  <Images size={14} /><span>{item.photo.filename}</span>
+                <button
+                  className="finder-row tree-more"
+                  style={{ paddingLeft: 30 + item.depth * 18 }}
+                  type="button"
+                  disabled={item.loading}
+                  onClick={() => void tree.loadMore(item.parentId)}
+                >
+                  {item.loading ? "Loading" : "Load more"}
                 </button>
               )
             )}
@@ -245,10 +392,15 @@ export function PhotoMapView({ handlers }: { handlers: PhotoOpenHandlers }) {
   const map = useRef<MapLibreMap | null>(null);
   const markers = useRef(new Map<number, maplibregl.Marker>());
   const [mapReady, setMapReady] = useState(false);
-  const page = useCursorPage({
-    params: null,
-    resetKey: "photo-map",
-    loadPage: (_, cursor) => listMapPhotos(null, cursor),
+  const [bounds, setBounds] = useState<MapBounds | null>(null);
+  const boundsKey = bounds
+    ? `${bounds.west}:${bounds.south}:${bounds.east}:${bounds.north}`
+    : "no-bounds";
+  const page = useCursorPage<MapPhoto, MapBounds | null>({
+    params: bounds,
+    resetKey: boundsKey,
+    enabled: bounds !== null,
+    loadPage: (viewport, cursor) => listMapPhotos(viewport, cursor, 200),
   });
   const photos = useMemo(() => page.items.map((item) => item.photo), [page.items]);
   const interaction = usePhotoInteraction({
@@ -274,7 +426,12 @@ export function PhotoMapView({ handlers }: { handlers: PhotoOpenHandlers }) {
         style: { version: 8, sources: { tiles: { type: "raster", tiles: [rasterUrl], tileSize: 256 } }, layers: [{ id: "tiles", type: "raster", source: "tiles" }] },
       });
       map.current = next;
-      setMapReady(true);
+      const updateBounds = () => setBounds(readMapBounds(next.getBounds()));
+      next.on("load", () => {
+        setMapReady(true);
+        updateBounds();
+      });
+      next.on("moveend", updateBounds);
     });
     return () => {
       disposed = true;
@@ -286,7 +443,12 @@ export function PhotoMapView({ handlers }: { handlers: PhotoOpenHandlers }) {
 
   useEffect(() => {
     if (!mapReady || !map.current) return;
-    const firstMarker = markers.current.size === 0;
+    const visibleIds = new Set(page.items.map((item) => item.photo.photo_id));
+    markers.current.forEach((marker, photoId) => {
+      if (visibleIds.has(photoId)) return;
+      marker.remove();
+      markers.current.delete(photoId);
+    });
     page.items.forEach((item) => {
       if (markers.current.has(item.photo.photo_id)) return;
       const marker = document.createElement("button");
@@ -301,9 +463,6 @@ export function PhotoMapView({ handlers }: { handlers: PhotoOpenHandlers }) {
           .addTo(map.current!),
       );
     });
-    if (firstMarker && page.items[0]) {
-      map.current.jumpTo({ center: [page.items[0].longitude, page.items[0].latitude], zoom: 6 });
-    }
   }, [interaction.selectPhoto, mapReady, page.items]);
 
   useEffect(() => {

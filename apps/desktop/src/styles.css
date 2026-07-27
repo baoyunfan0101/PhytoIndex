@@ -274,6 +274,34 @@ button:disabled { cursor: not-allowed; opacity: .42; }
 .finder-row > span { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .finder-row.taxon > span { display: flex; flex-direction: column; }
 .finder-row small { color: var(--quiet); }
+.finder-row.tree { padding-right: 8px; }
+.finder-row.tree:hover { background: var(--hover); }
+.tree-toggle {
+  display: grid;
+  width: 18px;
+  height: 24px;
+  flex: 0 0 18px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  color: var(--quiet);
+  background: transparent;
+}
+.tree-toggle:hover { color: #fff; }
+.tree-label {
+  min-width: 0;
+  flex: 1;
+  padding: 4px 0;
+  overflow: hidden;
+  border: 0;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: transparent;
+}
+.tree-label.stacked { display: flex; flex-direction: column; }
+.tree-label.stacked small { font-weight: 400; }
+.tree-more { color: var(--accent-bright); }
 .pane-overlay { position: absolute; z-index: 3; right: 0; bottom: 0; left: 0; padding: 7px; color: var(--muted); text-align: center; background: #181818dd; }
 
 .mapping-workbench { display: grid; height: 100%; min-height: 0; grid-template-rows: 44px 30px minmax(0, 1fr); }

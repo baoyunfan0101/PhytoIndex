@@ -757,14 +757,25 @@ export const getMapSettings = () =>
 export const setMapSettings = (settings: MapSettings) =>
   call<MapSettings>("set_map_settings", { settings }, () => settings);
 export const listMapPhotos = (bounds: MapBounds | null = null, cursor: string | null = null, limit = 500) =>
-  call<Page<MapPhoto>>("list_map_photos", { bounds, cursor, limit }, () => ({
-    items: demoPhotos.slice(0, 24).map((photo, index) => ({
+  call<Page<MapPhoto>>("list_map_photos", { bounds, cursor, limit }, () => {
+    const offset = cursor ? Number(cursor) : 0;
+    const matches = demoPhotos.map((photo, index) => ({
       photo,
       longitude: 116.25 + (index % 8) * 0.08,
       latitude: 39.75 + Math.floor(index / 8) * 0.08,
-    })),
-    next_cursor: null,
-  }));
+    })).filter((item) => {
+      if (!bounds) return true;
+      const longitudeMatches = bounds.west <= bounds.east
+        ? item.longitude >= bounds.west && item.longitude <= bounds.east
+        : item.longitude >= bounds.west || item.longitude <= bounds.east;
+      return longitudeMatches && item.latitude >= bounds.south && item.latitude <= bounds.north;
+    });
+    const items = matches.slice(offset, offset + limit);
+    return {
+      items,
+      next_cursor: offset + items.length < matches.length ? String(offset + items.length) : null,
+    };
+  });
 
 export const getNamingHookSettings = () =>
   call<NamingHookSettings>("get_naming_hook_settings", undefined, () => ({ photo_filename: null, synonym_authority: null }));
