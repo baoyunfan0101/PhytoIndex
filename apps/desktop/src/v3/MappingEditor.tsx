@@ -4,12 +4,13 @@ import {
   clearPhotoMapping,
   displayTaxon,
   errorMessage,
-  getPhotoTaxonMatch,
+  getPhotoMapping,
+  getPhotoMappingCandidates,
   getTaxonDetailNode,
-  selectPhotoTaxon,
   setPhotoMapping,
   type Photo,
-  type PhotoTaxonMatch,
+  type PhotoMappingSummary,
+  type PhotoTaxonCandidate,
   type TaxonSummary,
 } from "./api";
 import { Busy, EmptyState, MappingBadge, PhotoStage, TaxonCard, VirtualList } from "./components";
@@ -26,7 +27,8 @@ export function MappingEditor({
   embedded?: boolean;
   refreshKey?: number;
 }) {
-  const [match, setMatch] = useViewState<PhotoTaxonMatch | null>("mapping-editor.match", null);
+  const [mapping, setMapping] = useViewState<PhotoMappingSummary | null>("mapping-editor.mapping", null);
+  const [candidates, setCandidates] = useViewState<PhotoTaxonCandidate[]>("mapping-editor.candidates", []);
   const [mappedTaxon, setMappedTaxon] = useViewState<TaxonSummary | null>("mapping-editor.taxon", null);
   const [query, setQuery] = useViewState("mapping-editor.query", "");
   const [loading, setLoading] = useState(true);
@@ -41,10 +43,14 @@ export function MappingEditor({
     setLoading(true);
     setError("");
     try {
-      const nextMatch = await getPhotoTaxonMatch(photo.photo_id);
-      setMatch(nextMatch);
-      if (nextMatch.mapping.status === "matched" && nextMatch.mapping.taxon_id !== null) {
-        setMappedTaxon((await getTaxonDetailNode(nextMatch.mapping.taxon_id)).summary);
+      const [nextMapping, nextCandidates] = await Promise.all([
+        getPhotoMapping(photo.photo_id),
+        getPhotoMappingCandidates(photo.photo_id),
+      ]);
+      setMapping(nextMapping);
+      setCandidates(nextCandidates);
+      if (nextMapping.status === "matched" && nextMapping.taxon_id !== null) {
+        setMappedTaxon((await getTaxonDetailNode(nextMapping.taxon_id)).summary);
       } else {
         setMappedTaxon(null);
       }
@@ -78,7 +84,7 @@ export function MappingEditor({
       <div className="editor-photo-column">
         <div className="two-line-heading">
           <strong>{photo.filename}</strong>
-          <span>{mappedTaxon ? displayTaxon(mappedTaxon) : match?.mapping.taxon_id ? `Taxon ${match.mapping.taxon_id}` : "No mapped taxon"}</span>
+          <span>{mappedTaxon ? displayTaxon(mappedTaxon) : mapping?.taxon_id ? `Taxon ${mapping.taxon_id}` : "No mapped taxon"}</span>
         </div>
         <PhotoStage photo={photo} />
       </div>
@@ -86,25 +92,25 @@ export function MappingEditor({
         <section className="mapping-current">
           <header>
             <strong>Current mapping</strong>
-            {match && <MappingBadge status={match.mapping.status} />}
+            {mapping && <MappingBadge status={mapping.status} />}
           </header>
           {loading ? (
             <Busy label="Loading mapping" />
-          ) : match?.mapping.status === "matched" ? (
+          ) : mapping?.status === "matched" ? (
             <div className="current-mapping-card">
               <div>
                 <span>{mappedTaxon?.rank ?? "Taxon"}</span>
-                <strong>{mappedTaxon ? displayTaxon(mappedTaxon) : match.mapping.taxon_id}</strong>
+                <strong>{mappedTaxon ? displayTaxon(mappedTaxon) : mapping.taxon_id}</strong>
               </div>
               <button className="secondary-button" type="button" disabled={Boolean(busy)} onClick={() => void mutate("Clearing", () => clearPhotoMapping(photo.photo_id))}>
                 <Link2Off size={13} /> Clear mapping
               </button>
             </div>
-          ) : match?.mapping.status === "ambiguous" ? (
+          ) : mapping?.status === "ambiguous" ? (
             <VirtualList
               stateKey="mapping-editor.candidates"
               className="candidate-stack"
-              items={match.candidates}
+              items={candidates}
               rowHeight={60}
               itemKey={(candidate) => candidate.summary.taxon_id}
               renderItem={(candidate) => (
@@ -112,7 +118,7 @@ export function MappingEditor({
                   compact
                   taxon={candidate.summary}
                   actions={
-                    <button className="small-button" type="button" onClick={() => void mutate("Selecting", () => selectPhotoTaxon(photo.photo_id, candidate.summary.taxon_id))}>
+                    <button className="small-button" type="button" onClick={() => void mutate("Selecting", () => setPhotoMapping(photo.photo_id, candidate.summary.taxon_id))}>
                       Select
                     </button>
                   }

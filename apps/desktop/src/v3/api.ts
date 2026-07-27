@@ -69,7 +69,7 @@ export type PhotoTaxonStatus =
   | "unmatched"
   | "processing";
 
-export type PhotoTaxonMapping = {
+export type PhotoMappingSummary = {
   photo_id: number;
   taxon_id: number | null;
   status: PhotoTaxonStatus;
@@ -77,7 +77,7 @@ export type PhotoTaxonMapping = {
 
 export type PhotoMappingListItem = {
   photo: Photo;
-  mapping: PhotoTaxonMapping;
+  mapping: PhotoMappingSummary;
 };
 
 export type TaxonDisplayNames = {
@@ -166,11 +166,6 @@ export type PhotoTaxonCandidate = {
   accepted_names: TaxonDisplayNames;
 };
 
-export type PhotoTaxonMatch = {
-  mapping: PhotoTaxonMapping;
-  candidates: PhotoTaxonCandidate[];
-};
-
 export type MappingMetadata = {
   mapped_photo_count: number;
   unmatched_photo_count: number;
@@ -196,23 +191,28 @@ export type PhotoTaxonItem =
   | { kind: "taxon"; taxon: PhotoTaxonUsage }
   | { kind: "photo"; photo: Photo };
 
-export type PhotoOperation = {
+export type OperationSummary = {
   operation_id: number;
-  source: "manual_rename" | "taxon_rename" | "taxon_selection_rename";
-  root_path: string;
-  input: Array<{
-    row_number: number;
-    photo_id: number;
-    requested_filename: string | null;
-  }>;
-  items: Array<{
-    row_number: number;
-    photo_id: number;
-    directory_relative_path: string;
-    old_filename: string;
-    new_filename: string;
-  }>;
+  kind: string;
+  source: string;
   applied_at: string;
+  total_items: number;
+  succeeded_items: number;
+  failed_items: number;
+  rollbackable: boolean;
+  has_formatted_input: boolean;
+};
+
+export type OperationAuditRow = {
+  operation_id: number;
+  sequence: number;
+  entity_type: string;
+  entity_id: string | null;
+  action: string;
+  before_json: unknown;
+  after_json: unknown;
+  succeeded: boolean;
+  message: string;
 };
 
 export type TaxonInputRow = {
@@ -258,15 +258,6 @@ export type TaxonomyOperationResult = TaxonomyPreviewResult & {
   total_rows: number;
   succeeded_rows: number;
   failed_rows: number;
-};
-
-export type TaxonomyOperation = {
-  operation_id: number;
-  source: "formatted_update";
-  input: TaxonInputRow[];
-  result: TaxonomyOperationResult;
-  changeset_size: number;
-  applied_at: string;
 };
 
 export type TaxonomyCustomSqlInput = {
@@ -380,7 +371,7 @@ const demoTaxa: TaxonSearchResult[] = [
   demoTaxon(1004, "species", "Ursus arctos", "Brown bear"),
 ];
 
-let demoMappings = new Map<number, PhotoTaxonMapping>(
+let demoMappings = new Map<number, PhotoMappingSummary>(
   demoPhotos.map((photo, index) => [
     photo.photo_id,
     {
@@ -565,42 +556,37 @@ export const revealPhotoInFileManager = (photoId: number) =>
   call<void>("reveal_photo_in_file_manager", { photoId }, () => undefined);
 
 export const getPhotoMapping = (photoId: number) =>
-  call<PhotoTaxonMapping | null>("get_photo_mapping", { photoId }, () => demoMappings.get(photoId) ?? null);
+  call<PhotoMappingSummary>("get_photo_mapping", { photoId }, () =>
+    demoMappings.get(photoId) ?? { photo_id: photoId, taxon_id: null, status: "unmatched" });
 
-export const getPhotoTaxonMatch = (photoId: number) =>
-  call<PhotoTaxonMatch>("get_photo_taxon_match", { photoId }, () => {
+export const getPhotoMappingCandidates = (photoId: number) =>
+  call<PhotoTaxonCandidate[]>("get_photo_mapping_candidates", { photoId }, () => {
     const mapping = demoMappings.get(photoId) ?? { photo_id: photoId, taxon_id: null, status: "unmatched" };
-    return {
-      mapping,
-      candidates: mapping.status === "ambiguous"
-        ? demoTaxa.slice(0, 3).map((taxon) => ({
-            summary: taxon.summary,
-            matched_names: taxon.matches,
-            accepted_names: taxon.summary.names,
-          }))
-        : [],
-    };
+    return mapping.status === "ambiguous"
+      ? demoTaxa.slice(0, 3).map((taxon) => ({
+          summary: taxon.summary,
+          matched_names: taxon.matches,
+          accepted_names: taxon.summary.names,
+        }))
+      : [];
   });
 
 export const clearPhotoMapping = (photoId: number) =>
-  call<PhotoTaxonMapping>("clear_photo_mapping", { photoId }, () => {
-    const mapping: PhotoTaxonMapping = { photo_id: photoId, taxon_id: null, status: "unmatched" };
+  call<PhotoMappingSummary>("clear_photo_mapping", { photoId }, () => {
+    const mapping: PhotoMappingSummary = { photo_id: photoId, taxon_id: null, status: "unmatched" };
     demoMappings.set(photoId, mapping);
     return mapping;
   });
 
 export const setPhotoMapping = (photoId: number, taxonId: number) =>
-  call<PhotoTaxonMapping>("set_photo_mapping", { photoId, taxonId }, () => {
-    const mapping: PhotoTaxonMapping = { photo_id: photoId, taxon_id: taxonId, status: "matched" };
+  call<PhotoMappingSummary>("set_photo_mapping", { photoId, taxonId }, () => {
+    const mapping: PhotoMappingSummary = { photo_id: photoId, taxon_id: taxonId, status: "matched" };
     demoMappings.set(photoId, mapping);
     return mapping;
   });
 
-export const selectPhotoTaxon = (photoId: number, taxonId: number) =>
-  call<PhotoTaxonMapping>("select_photo_taxon", { photoId, taxonId }, () => setPhotoMapping(photoId, taxonId));
-
 export const remapPhoto = (photoId: number) =>
-  call<PhotoTaxonMatch>("remap_photo", { photoId }, () => getPhotoTaxonMatch(photoId));
+  call<PhotoMappingSummary>("remap_photo", { photoId }, () => getPhotoMapping(photoId));
 
 export const getMappingMetadata = () =>
   call<MappingMetadata>("get_mapping_metadata", undefined, () => ({
@@ -695,58 +681,65 @@ export const browsePhotoTaxon = (
   }));
 
 export const listPhotoOperations = (cursor: string | null = null, limit = 80) =>
-  call<Page<PhotoOperation>>("list_photo_operations", { cursor, limit }, () => ({
+  call<Page<OperationSummary>>("list_photo_operations", { cursor, limit }, () => ({
     items: [1, 2, 3].map((id) => ({
       operation_id: id,
+      kind: "photo_rename",
       source: id === 1 ? "manual_rename" : "taxon_rename",
-      root_path: "/Demo/Vividarium Photos",
-      input: [{ row_number: 1, photo_id: id, requested_filename: id === 1 ? `renamed_${id}.jpg` : null }],
-      items: [{
-        row_number: 1,
-        photo_id: id,
-        directory_relative_path: "Mammalia",
-        old_filename: `before_${id}.jpg`,
-        new_filename: `after_${id}.jpg`,
-      }],
       applied_at: `2026-07-${20 + id} 10:30:00`,
+      total_items: 1,
+      succeeded_items: 1,
+      failed_items: 0,
+      rollbackable: true,
+      has_formatted_input: false,
     })),
     next_cursor: null,
   }));
 
-export const revertPhotoOperation = (operationId: number) =>
-  call<void>("revert_photo_operation", { operationId }, () => undefined);
-export const exportPhotoOperationCsv = (operationId: number) =>
-  call<string>("export_photo_operation_csv", { operationId }, () => "operation_id|old_filename|new_filename\n1|before.jpg|after.jpg\n");
-export const exportAllPhotoOperationsCsv = () =>
-  call<string>("export_all_photo_operations_csv", undefined, () => "operation_id|old_filename|new_filename\n1|before.jpg|after.jpg\n");
+export const listPhotoOperationAudit = (operationId: number, cursor: string | null = null, limit = 500) =>
+  call<Page<OperationAuditRow>>("list_photo_operation_audit", { operationId, cursor, limit }, () => ({
+    items: [{
+      operation_id: operationId,
+      sequence: 1,
+      entity_type: "photo",
+      entity_id: String(operationId),
+      action: "rename",
+      before_json: { directory_relative_path: "Mammalia", filename: `before_${operationId}.jpg` },
+      after_json: { directory_relative_path: "Mammalia", filename: `after_${operationId}.jpg` },
+      succeeded: true,
+      message: "renamed",
+    }],
+    next_cursor: null,
+  }));
+export const rollbackPhotoOperation = (operationId: number) =>
+  call<void>("rollback_photo_operation", { operationId }, () => undefined);
+export const exportPhotoOperationAudit = (operationId: number) =>
+  call<string>("export_photo_operation_audit", { operationId }, () => "operation_id|sequence|entity_type|entity_id|action|before_json|after_json|succeeded|message\n");
+export const exportAllPhotoOperationAudit = () =>
+  call<string>("export_all_photo_operation_audit", undefined, () => "operation_id|sequence|entity_type|entity_id|action|before_json|after_json|succeeded|message\n");
 
 export const listTaxonomyOperations = (cursor: string | null = null, limit = 80) =>
-  call<Page<TaxonomyOperation>>("list_taxonomy_operations", { cursor, limit }, () => ({
+  call<Page<OperationSummary>>("list_taxonomy_operations", { cursor, limit }, () => ({
     items: [1, 2].map((id) => ({
       operation_id: id,
+      kind: "taxonomy_update",
       source: "formatted_update",
-      input: [{ species: id === 1 ? "Canis lupus" : "Panthera leo" }],
-      result: {
-        operation_id: id,
-        total_rows: 1,
-        succeeded_rows: 1,
-        failed_rows: 0,
-        delimiter: "|",
-        encoding: "UTF-8",
-        rows: [],
-      },
-      changeset_size: 420 + id,
       applied_at: `2026-07-${22 + id} 14:10:00`,
+      total_items: 1,
+      succeeded_items: 1,
+      failed_items: 0,
+      rollbackable: true,
+      has_formatted_input: true,
     })),
     next_cursor: null,
   }));
 
-export const revertTaxonomyOperation = (operationId: number) =>
-  call<void>("revert_taxonomy_operation", { operationId }, () => undefined);
-export const exportTaxonomyOperationCsv = (operationId: number) =>
-  call<string>("export_taxonomy_operation_csv", { operationId }, () => `kingdom|order|family|genus|species|authority_year|synonyms|zh_name|zh_alias|en_name|en_alias|geological_range|source\n||||Canis lupus||||||||\n`);
-export const exportAllTaxonomyOperationsCsv = () =>
-  call<string>("export_all_taxonomy_operations_csv", undefined, () => `kingdom|order|family|genus|species|authority_year|synonyms|zh_name|zh_alias|en_name|en_alias|geological_range|source\n||||Canis lupus||||||||\n`);
+export const rollbackTaxonomyOperation = (operationId: number) =>
+  call<void>("rollback_taxonomy_operation", { operationId }, () => undefined);
+export const exportTaxonomyOperationInput = (operationId: number) =>
+  call<string>("export_taxonomy_operation_input", { operationId }, () => `kingdom|order|family|genus|species|authority_year|synonyms|zh_name|zh_alias|en_name|en_alias|geological_range|source\n||||Canis lupus||||||||\n`);
+export const exportAllReplayableTaxonomyInputs = () =>
+  call<string>("export_all_replayable_taxonomy_inputs", undefined, () => `kingdom|order|family|genus|species|authority_year|synonyms|zh_name|zh_alias|en_name|en_alias|geological_range|source\n||||Canis lupus||||||||\n`);
 
 export const getTaxonomyTemplate = () =>
   call<string>("get_taxonomy_formatted_update_template", undefined, () => "kingdom|order|family|genus|species|authority_year|synonyms|zh_name|zh_alias|en_name|en_alias|geological_range|source\n");

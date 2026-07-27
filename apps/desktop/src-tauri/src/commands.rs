@@ -3,8 +3,8 @@ use std::path::Path;
 use serde_json::{Value, json};
 use tauri::{AppHandle, State, ipc::Channel};
 use vividarium_core::mapping::{
-    PhotoMappingListItem, PhotoMappingListStatus, PhotoNameMatchSettings, PhotoTaxonItem,
-    PhotoTaxonMapping, PhotoTaxonMatch, PhotoTaxonNode,
+    PhotoMappingListItem, PhotoMappingListStatus, PhotoMappingSummary, PhotoNameMatchSettings,
+    PhotoTaxonCandidate, PhotoTaxonItem, PhotoTaxonNode,
 };
 use vividarium_core::models::{
     DatabaseLocations, DirectoryEntryCounts, MappingMetadata, OperationsStatus, Photo,
@@ -15,14 +15,13 @@ use vividarium_core::naming::{
     NamingHookTestCases, NamingHookTestReport, NamingHookTestResult, ParsedPhotoFilename,
     TaxonomicNameInfo,
 };
-use vividarium_core::photos::{
-    PhotoFilenameFormatSettings, PhotoOperation, PhotoRenameOperationResult,
-};
+use vividarium_core::operations::{OperationAuditRow, OperationPage, OperationSummary};
+use vividarium_core::photos::{PhotoFilenameFormatSettings, PhotoRenameOperationResult};
 use vividarium_core::taxonomy::{
     DeleteTaxonNameInput, PromoteTaxonNameInput, TaxonChild, TaxonDetailNode, TaxonInputRow,
     TaxonRowOutcome, TaxonSearchResult, TaxonSuggestion, TaxonUpdateInput, TaxonomyBaseMetadata,
-    TaxonomyCustomSqlResult, TaxonomyCustomSqlTempTable, TaxonomyOperation,
-    TaxonomyOperationResult, TaxonomyPage, TaxonomyPreviewResult,
+    TaxonomyCustomSqlResult, TaxonomyCustomSqlTempTable, TaxonomyOperationResult, TaxonomyPage,
+    TaxonomyPreviewResult,
 };
 use vividarium_core::{
     map::{self, MapBounds, MapPhoto, MapSettings},
@@ -380,37 +379,53 @@ pub fn list_photo_operations(
     state: State<'_, AppState>,
     cursor: Option<String>,
     limit: Option<usize>,
-) -> CommandResult<PhotoPage<PhotoOperation>> {
-    photos::list_photo_operations(&state.database, cursor.as_deref(), limit.unwrap_or(50))
-        .map_err(error)
+) -> CommandResult<OperationPage<OperationSummary>> {
+    photos::list_operations(&state.database, cursor.as_deref(), limit.unwrap_or(50)).map_err(error)
 }
 
 #[tauri::command]
-pub fn get_photo_operation(
+pub fn list_photo_operation_audit(
     state: State<'_, AppState>,
     operation_id: i64,
-) -> CommandResult<PhotoOperation> {
-    photos::get_photo_operation(&state.database, operation_id)
-        .map_err(error)?
-        .ok_or_else(|| format!("photo operation {operation_id} not found"))
+    cursor: Option<String>,
+    limit: Option<usize>,
+) -> CommandResult<OperationPage<OperationAuditRow>> {
+    photos::list_operation_audit(
+        &state.database,
+        operation_id,
+        cursor.as_deref(),
+        limit.unwrap_or(50),
+    )
+    .map_err(error)
 }
 
 #[tauri::command]
-pub fn revert_photo_operation(state: State<'_, AppState>, operation_id: i64) -> CommandResult<()> {
-    photos::revert_photo_operation(&state.database, operation_id).map_err(error)
+pub fn rollback_photo_operation(
+    state: State<'_, AppState>,
+    operation_id: i64,
+) -> CommandResult<()> {
+    photos::rollback_operation(&state.database, operation_id).map_err(error)
 }
 
 #[tauri::command]
-pub fn export_photo_operation_csv(
+pub fn export_photo_operation_audit(
     state: State<'_, AppState>,
     operation_id: i64,
 ) -> CommandResult<String> {
-    photos::export_photo_operation_csv(&state.database, operation_id).map_err(error)
+    photos::export_operation_audit(&state.database, operation_id).map_err(error)
 }
 
 #[tauri::command]
-pub fn export_all_photo_operations_csv(state: State<'_, AppState>) -> CommandResult<String> {
-    photos::export_all_photo_operations_csv(&state.database).map_err(error)
+pub fn export_photo_operations_audit(
+    state: State<'_, AppState>,
+    operation_ids: Vec<i64>,
+) -> CommandResult<String> {
+    photos::export_operations_audit(&state.database, &operation_ids).map_err(error)
+}
+
+#[tauri::command]
+pub fn export_all_photo_operation_audit(state: State<'_, AppState>) -> CommandResult<String> {
+    photos::export_all_operation_audit(&state.database).map_err(error)
 }
 
 #[tauri::command]
@@ -623,40 +638,75 @@ pub fn list_taxonomy_operations(
     state: State<'_, AppState>,
     cursor: Option<String>,
     limit: Option<usize>,
-) -> CommandResult<TaxonomyPage<TaxonomyOperation>> {
-    taxonomy::list_taxonomy_operations(&state.database, cursor.as_deref(), limit.unwrap_or(50))
+) -> CommandResult<OperationPage<OperationSummary>> {
+    taxonomy::list_operations(&state.database, cursor.as_deref(), limit.unwrap_or(50))
         .map_err(error)
 }
 
 #[tauri::command]
-pub fn get_taxonomy_operation(
+pub fn list_taxonomy_operation_audit(
     state: State<'_, AppState>,
     operation_id: i64,
-) -> CommandResult<TaxonomyOperation> {
-    taxonomy::get_taxonomy_operation(&state.database, operation_id)
-        .map_err(error)?
-        .ok_or_else(|| format!("taxonomy operation {operation_id} not found"))
+    cursor: Option<String>,
+    limit: Option<usize>,
+) -> CommandResult<OperationPage<OperationAuditRow>> {
+    taxonomy::list_operation_audit(
+        &state.database,
+        operation_id,
+        cursor.as_deref(),
+        limit.unwrap_or(50),
+    )
+    .map_err(error)
 }
 
 #[tauri::command]
-pub fn revert_taxonomy_operation(
+pub fn rollback_taxonomy_operation(
     state: State<'_, AppState>,
     operation_id: i64,
 ) -> CommandResult<()> {
-    taxonomy::revert_taxonomy_operation(&state.database, operation_id).map_err(error)
+    taxonomy::rollback_operation(&state.database, operation_id).map_err(error)
 }
 
 #[tauri::command]
-pub fn export_taxonomy_operation_csv(
+pub fn export_taxonomy_operation_audit(
     state: State<'_, AppState>,
     operation_id: i64,
 ) -> CommandResult<String> {
-    taxonomy::export_taxonomy_operation_csv(&state.database, operation_id).map_err(error)
+    taxonomy::export_operation_audit(&state.database, operation_id).map_err(error)
 }
 
 #[tauri::command]
-pub fn export_all_taxonomy_operations_csv(state: State<'_, AppState>) -> CommandResult<String> {
-    taxonomy::export_all_taxonomy_operations_csv(&state.database).map_err(error)
+pub fn export_taxonomy_operations_audit(
+    state: State<'_, AppState>,
+    operation_ids: Vec<i64>,
+) -> CommandResult<String> {
+    taxonomy::export_operations_audit(&state.database, &operation_ids).map_err(error)
+}
+
+#[tauri::command]
+pub fn export_all_taxonomy_operation_audit(state: State<'_, AppState>) -> CommandResult<String> {
+    taxonomy::export_all_operation_audit(&state.database).map_err(error)
+}
+
+#[tauri::command]
+pub fn export_taxonomy_operation_input(
+    state: State<'_, AppState>,
+    operation_id: i64,
+) -> CommandResult<String> {
+    taxonomy::export_operation_input(&state.database, operation_id).map_err(error)
+}
+
+#[tauri::command]
+pub fn export_taxonomy_operations_input(
+    state: State<'_, AppState>,
+    operation_ids: Vec<i64>,
+) -> CommandResult<String> {
+    taxonomy::export_operations_input(&state.database, &operation_ids).map_err(error)
+}
+
+#[tauri::command]
+pub fn export_all_replayable_taxonomy_inputs(state: State<'_, AppState>) -> CommandResult<String> {
+    taxonomy::export_all_replayable_inputs(&state.database).map_err(error)
 }
 
 #[tauri::command]
@@ -727,15 +777,23 @@ pub fn suggest_photo_taxa(
 pub fn get_photo_mapping(
     state: State<'_, AppState>,
     photo_id: i64,
-) -> CommandResult<Option<PhotoTaxonMapping>> {
+) -> CommandResult<PhotoMappingSummary> {
     mapping::get_photo_mapping(&state.database, photo_id).map_err(error)
+}
+
+#[tauri::command]
+pub fn get_photo_mapping_candidates(
+    state: State<'_, AppState>,
+    photo_id: i64,
+) -> CommandResult<Vec<PhotoTaxonCandidate>> {
+    mapping::get_photo_mapping_candidates(&state.database, photo_id).map_err(error)
 }
 
 #[tauri::command]
 pub fn clear_photo_mapping(
     state: State<'_, AppState>,
     photo_id: i64,
-) -> CommandResult<PhotoTaxonMapping> {
+) -> CommandResult<PhotoMappingSummary> {
     mapping::clear_photo_mapping(&state.database, photo_id).map_err(error)
 }
 
@@ -744,12 +802,15 @@ pub fn set_photo_mapping(
     state: State<'_, AppState>,
     photo_id: i64,
     taxon_id: i64,
-) -> CommandResult<PhotoTaxonMapping> {
+) -> CommandResult<PhotoMappingSummary> {
     mapping::set_photo_mapping(&state.database, photo_id, taxon_id).map_err(error)
 }
 
 #[tauri::command]
-pub fn remap_photo(state: State<'_, AppState>, photo_id: i64) -> CommandResult<PhotoTaxonMatch> {
+pub fn remap_photo(
+    state: State<'_, AppState>,
+    photo_id: i64,
+) -> CommandResult<PhotoMappingSummary> {
     mapping::remap_photo(&state.database, photo_id).map_err(error)
 }
 
@@ -767,23 +828,6 @@ pub fn list_taxon_photos(
         limit.unwrap_or(50),
     )
     .map_err(error)
-}
-
-#[tauri::command]
-pub fn get_photo_taxon_match(
-    state: State<'_, AppState>,
-    photo_id: i64,
-) -> CommandResult<PhotoTaxonMatch> {
-    mapping::get_photo_taxon_match(&state.database, photo_id).map_err(error)
-}
-
-#[tauri::command]
-pub fn select_photo_taxon(
-    state: State<'_, AppState>,
-    photo_id: i64,
-    taxon_id: i64,
-) -> CommandResult<PhotoTaxonMapping> {
-    mapping::select_photo_taxon(&state.database, photo_id, taxon_id).map_err(error)
 }
 
 #[tauri::command]

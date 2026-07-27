@@ -5,6 +5,7 @@ pub mod mapping;
 mod metadata;
 pub mod models;
 pub mod naming;
+pub mod operations;
 pub mod photos;
 pub mod taxonomy;
 

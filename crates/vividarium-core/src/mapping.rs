@@ -20,8 +20,8 @@ mod status;
 mod tree;
 
 pub use actions::{
-    clear_photo_mapping, get_metadata, get_photo_mapping, get_photo_taxon_match, remap_photo,
-    select_photo_taxon, set_photo_mapping,
+    clear_photo_mapping, get_metadata, get_photo_mapping, get_photo_mapping_candidates,
+    remap_photo, set_photo_mapping,
 };
 pub use name_match::{
     PhotoNameField, PhotoNameMatchSettings, get_photo_name_match_settings,
@@ -64,7 +64,7 @@ impl PhotoTaxonStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PhotoTaxonMapping {
+pub struct PhotoMappingSummary {
     pub photo_id: i64,
     pub taxon_id: Option<i64>,
     pub status: PhotoTaxonStatus,
@@ -82,12 +82,6 @@ pub struct PhotoTaxonCandidate {
     pub summary: TaxonSummary,
     pub matched_names: Vec<PhotoMatchedName>,
     pub accepted_names: TaxonDisplayNames,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PhotoTaxonMatch {
-    pub mapping: PhotoTaxonMapping,
-    pub candidates: Vec<PhotoTaxonCandidate>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -135,7 +129,7 @@ impl PhotoMappingListStatus {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PhotoMappingListItem {
     pub photo: Photo,
-    pub mapping: PhotoTaxonMapping,
+    pub mapping: PhotoMappingSummary,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -625,9 +619,9 @@ fn apply_usage_deltas(
     Ok(())
 }
 
-fn mapping_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PhotoTaxonMapping> {
+fn mapping_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PhotoMappingSummary> {
     let status = row.get::<_, String>(2)?;
-    Ok(PhotoTaxonMapping {
+    Ok(PhotoMappingSummary {
         photo_id: row.get(0)?,
         taxon_id: row.get(1)?,
         status: PhotoTaxonStatus::from_str(&status).map_err(|error| {
@@ -816,11 +810,15 @@ mod tests {
         let photo = photos::list_photos(&database).unwrap().remove(0);
         let mut progress = |_: u64, _: Option<u64>, _: &str| {};
         process_pending_photo_matches(&database, &mut progress).unwrap();
-        let species_match = get_photo_taxon_match(&database, photo.photo_id).unwrap();
-        assert_eq!(species_match.mapping.status, PhotoTaxonStatus::Matched);
-        assert!(species_match.candidates.is_empty());
+        let species_mapping = get_photo_mapping(&database, photo.photo_id).unwrap();
+        assert_eq!(species_mapping.status, PhotoTaxonStatus::Matched);
+        assert!(
+            get_photo_mapping_candidates(&database, photo.photo_id)
+                .unwrap()
+                .is_empty()
+        );
         let species_summary =
-            crate::taxonomy::get_taxon_summary(&database, species_match.mapping.taxon_id.unwrap())
+            crate::taxonomy::get_taxon_summary(&database, species_mapping.taxon_id.unwrap())
                 .unwrap()
                 .unwrap();
         assert_eq!(species_summary.names.zh_name.as_deref(), Some("wolf"));
@@ -840,11 +838,15 @@ mod tests {
         )
         .unwrap();
         process_pending_photo_matches(&database, &mut progress).unwrap();
-        let family_match = get_photo_taxon_match(&database, photo.photo_id).unwrap();
-        assert_eq!(family_match.mapping.status, PhotoTaxonStatus::Matched);
-        assert!(family_match.candidates.is_empty());
+        let family_mapping = get_photo_mapping(&database, photo.photo_id).unwrap();
+        assert_eq!(family_mapping.status, PhotoTaxonStatus::Matched);
+        assert!(
+            get_photo_mapping_candidates(&database, photo.photo_id)
+                .unwrap()
+                .is_empty()
+        );
         let family_summary =
-            crate::taxonomy::get_taxon_summary(&database, family_match.mapping.taxon_id.unwrap())
+            crate::taxonomy::get_taxon_summary(&database, family_mapping.taxon_id.unwrap())
                 .unwrap()
                 .unwrap();
         assert_eq!(family_summary.rank, TaxonRank::Family);
@@ -894,10 +896,14 @@ mod tests {
         let mut progress = |_: u64, _: Option<u64>, _: &str| {};
         process_pending_photo_matches(&database, &mut progress).unwrap();
         let photo = photos::list_photos(&database).unwrap().remove(0);
-        let matched = get_photo_taxon_match(&database, photo.photo_id).unwrap();
-        assert_eq!(matched.mapping.status, PhotoTaxonStatus::Matched);
-        assert!(matched.candidates.is_empty());
-        let species_id = matched.mapping.taxon_id.unwrap();
+        let mapping = get_photo_mapping(&database, photo.photo_id).unwrap();
+        assert_eq!(mapping.status, PhotoTaxonStatus::Matched);
+        assert!(
+            get_photo_mapping_candidates(&database, photo.photo_id)
+                .unwrap()
+                .is_empty()
+        );
+        let species_id = mapping.taxon_id.unwrap();
         let species_summary = crate::taxonomy::get_taxon_summary(&database, species_id)
             .unwrap()
             .unwrap();
@@ -905,7 +911,6 @@ mod tests {
             species_summary.names.sci_name.as_deref(),
             Some("Canis lupus")
         );
-        let mapping = matched.mapping;
         assert_eq!(mapping.taxon_id, Some(species_id));
         let node = get_photo_taxon_node(&database, mapping.taxon_id, false).unwrap();
         assert_eq!(node.taxon.as_ref().unwrap().direct_photo_count, 1);
@@ -930,16 +935,14 @@ mod tests {
         .unwrap();
         process_pending_photo_matches(&database, &mut progress).unwrap();
         let old_taxon_id = mapping.taxon_id;
-        let mapping = get_photo_mapping(&database, mapping.photo_id)
-            .unwrap()
-            .unwrap();
+        let mapping = get_photo_mapping(&database, mapping.photo_id).unwrap();
         assert_eq!(mapping.status, PhotoTaxonStatus::Matched);
         assert_ne!(mapping.taxon_id, old_taxon_id);
         assert!(get_photo_taxon_node(&database, old_taxon_id, false).is_err());
     }
 
     #[test]
-    fn accepts_a_user_choice_only_from_ambiguous_candidates() {
+    fn persists_ambiguous_candidates_and_accepts_a_forced_mapping() {
         let data = tempfile::tempdir().unwrap();
         let root = tempfile::tempdir().unwrap();
         fs::write(root.path().join("Shared name.jpg"), b"photo").unwrap();
@@ -973,19 +976,17 @@ mod tests {
         refresh_directory(&database, library.root_directory_id).unwrap();
         let photo = photos::list_photos(&database).unwrap().remove(0);
         assert_eq!(
-            get_photo_mapping(&database, photo.photo_id)
-                .unwrap()
-                .unwrap()
-                .status,
+            get_photo_mapping(&database, photo.photo_id).unwrap().status,
             PhotoTaxonStatus::Processing
         );
         let mut progress = |_: u64, _: Option<u64>, _: &str| {};
         process_pending_photo_matches(&database, &mut progress).unwrap();
-        let matched = get_photo_taxon_match(&database, photo.photo_id).unwrap();
-        assert_eq!(matched.mapping.status, PhotoTaxonStatus::Ambiguous);
-        assert_eq!(matched.candidates.len(), 2);
-        assert_eq!(matched.candidates[0].matched_names.len(), 2);
-        assert_eq!(matched.candidates[1].matched_names.len(), 1);
+        let mapping = get_photo_mapping(&database, photo.photo_id).unwrap();
+        let candidates = get_photo_mapping_candidates(&database, photo.photo_id).unwrap();
+        assert_eq!(mapping.status, PhotoTaxonStatus::Ambiguous);
+        assert_eq!(candidates.len(), 2);
+        assert_eq!(candidates[0].matched_names.len(), 2);
+        assert_eq!(candidates[1].matched_names.len(), 1);
         let connection = database.connect().unwrap();
         assert_eq!(
             connection
@@ -1008,21 +1009,27 @@ mod tests {
             3
         );
         drop(connection);
-        let selected_taxon_id = matched.candidates[0].summary.taxon_id;
+        let selected_taxon_id = candidates[0].summary.taxon_id;
         let mut taxonomy = database.connect_taxonomy().unwrap();
         let transaction = taxonomy.transaction().unwrap();
         crate::taxonomy::sync::record_event(&transaction, None, [selected_taxon_id], false)
             .unwrap();
         transaction.commit().unwrap();
         crate::taxonomy::sync::synchronize_all_photo_libraries(&database).unwrap();
-        let processing = get_photo_taxon_match(&database, photo.photo_id).unwrap();
-        assert_eq!(processing.mapping.status, PhotoTaxonStatus::Processing);
-        assert!(processing.candidates.is_empty());
+        let processing = get_photo_mapping(&database, photo.photo_id).unwrap();
+        assert_eq!(processing.status, PhotoTaxonStatus::Processing);
+        assert_eq!(processing.taxon_id, None);
+        assert!(
+            get_photo_mapping_candidates(&database, photo.photo_id)
+                .unwrap()
+                .is_empty()
+        );
         process_pending_photo_matches(&database, &mut progress).unwrap();
-        let matched = get_photo_taxon_match(&database, photo.photo_id).unwrap();
-        assert_eq!(matched.mapping.status, PhotoTaxonStatus::Ambiguous);
-        assert_eq!(matched.candidates.len(), 2);
-        let selected = select_photo_taxon(&database, photo.photo_id, selected_taxon_id).unwrap();
+        let mapping = get_photo_mapping(&database, photo.photo_id).unwrap();
+        let candidates = get_photo_mapping_candidates(&database, photo.photo_id).unwrap();
+        assert_eq!(mapping.status, PhotoTaxonStatus::Ambiguous);
+        assert_eq!(candidates.len(), 2);
+        let selected = set_photo_mapping(&database, photo.photo_id, selected_taxon_id).unwrap();
         assert_eq!(selected.status, PhotoTaxonStatus::Matched);
         assert_eq!(selected.taxon_id, Some(selected_taxon_id));
         assert_eq!(
@@ -1037,8 +1044,8 @@ mod tests {
                 .unwrap(),
             0
         );
-        let error = select_photo_taxon(&database, photo.photo_id, i64::MAX).unwrap_err();
-        assert!(error.to_string().contains("not a current candidate"));
+        let error = set_photo_mapping(&database, photo.photo_id, i64::MAX).unwrap_err();
+        assert!(error.to_string().contains("taxon"));
     }
 
     #[test]
@@ -1067,7 +1074,6 @@ mod tests {
         assert_eq!(
             get_photo_mapping(&database, photo.photo_id)
                 .unwrap()
-                .unwrap()
                 .taxon_id,
             Some(1)
         );
@@ -1089,9 +1095,13 @@ mod tests {
         assert!(get_photo_taxon_node(&database, Some(2), false).is_err());
 
         let remapped = remap_photo(&database, photo.photo_id).unwrap();
-        assert_eq!(remapped.mapping.status, PhotoTaxonStatus::Matched);
-        assert_eq!(remapped.mapping.taxon_id, Some(1));
-        assert!(remapped.candidates.is_empty());
+        assert_eq!(remapped.status, PhotoTaxonStatus::Matched);
+        assert_eq!(remapped.taxon_id, Some(1));
+        assert!(
+            get_photo_mapping_candidates(&database, photo.photo_id)
+                .unwrap()
+                .is_empty()
+        );
         assert!(set_photo_mapping(&database, photo.photo_id, i64::MAX).is_err());
         assert!(clear_photo_mapping(&database, i64::MAX).is_err());
         assert!(remap_photo(&database, i64::MAX).is_err());
@@ -1102,7 +1112,10 @@ mod tests {
         let data = tempfile::tempdir().unwrap();
         let database = Database::open(data.path().join("vividarium.db")).unwrap();
 
-        assert_eq!(get_photo_mapping(&database, 404).unwrap(), None);
+        assert!(matches!(
+            get_photo_mapping(&database, 404).unwrap_err(),
+            CoreError::NotFound(_)
+        ));
     }
 
     #[test]
@@ -1131,8 +1144,8 @@ mod tests {
                 .contains("neither a mapping nor a mapping queue entry")
         );
 
-        let match_error = get_photo_taxon_match(&database, photo.photo_id).unwrap_err();
-        assert!(matches!(match_error, CoreError::Consistency(_)));
+        let candidates_error = get_photo_mapping_candidates(&database, photo.photo_id).unwrap_err();
+        assert!(matches!(candidates_error, CoreError::Consistency(_)));
     }
 
     #[test]
@@ -1196,18 +1209,12 @@ mod tests {
             0
         );
         assert_eq!(
-            get_photo_mapping(&database, photo.photo_id)
-                .unwrap()
-                .unwrap()
-                .status,
+            get_photo_mapping(&database, photo.photo_id).unwrap().status,
             PhotoTaxonStatus::Processing
         );
         process_pending_photo_matches(&database, &mut progress).unwrap();
         assert_eq!(
-            get_photo_mapping(&database, photo.photo_id)
-                .unwrap()
-                .unwrap()
-                .status,
+            get_photo_mapping(&database, photo.photo_id).unwrap().status,
             PhotoTaxonStatus::Unmatched
         );
     }
@@ -1307,20 +1314,17 @@ mod tests {
         assert_eq!(
             get_photo_mapping(&database, felis_photo.photo_id)
                 .unwrap()
-                .unwrap()
                 .status,
             PhotoTaxonStatus::Processing
         );
         assert_eq!(
             get_photo_mapping(&database, canis_photo.photo_id)
                 .unwrap()
-                .unwrap()
                 .status,
             PhotoTaxonStatus::Matched
         );
         assert_eq!(
             get_photo_mapping(&database, domestic_cat_photo.photo_id)
-                .unwrap()
                 .unwrap()
                 .status,
             PhotoTaxonStatus::Unmatched

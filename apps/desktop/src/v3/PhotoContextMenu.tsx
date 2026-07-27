@@ -15,7 +15,7 @@ import {
   renamePhotoFromTaxon,
   revealPhotoInFileManager,
   type Photo,
-  type PhotoTaxonMapping,
+  type PhotoMappingSummary,
 } from "./api";
 import { MappingBadge, Modal } from "./components";
 
@@ -33,7 +33,7 @@ export function PhotoContextMenu({
   onOpenMappingEditor,
 }: {
   photo: Photo;
-  mapping: PhotoTaxonMapping | null;
+  mapping: PhotoMappingSummary | null;
   loading: boolean;
   x: number;
   y: number;

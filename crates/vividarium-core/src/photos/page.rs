@@ -62,9 +62,6 @@ pub(crate) enum PhotoCursor {
         taxon_id: i64,
         photo_id: i64,
     },
-    Operations {
-        operation_id: i64,
-    },
 }
 
 pub(crate) fn photo_page_limit(limit: usize) -> usize {

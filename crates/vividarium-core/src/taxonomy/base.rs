@@ -95,14 +95,14 @@ fn replace_from_attached_database(
     let transaction = connection.transaction()?;
     transaction.execute_batch(
         r#"
-        DELETE FROM taxonomy_operations;
+        DELETE FROM operations;
         DELETE FROM taxonomy_base_metadata;
         DELETE FROM taxonomy_sync_events;
         UPDATE taxa SET parent_taxon_id = NULL;
         DELETE FROM taxon_names;
         DELETE FROM taxa;
         DELETE FROM sqlite_sequence
-        WHERE name IN ('taxonomy_operations', 'taxon_names', 'taxa');
+        WHERE name IN ('operations', 'taxon_names', 'taxa');
 
         INSERT INTO taxa (taxon_id, parent_taxon_id, rank, geological_range)
         SELECT taxon_id, parent_taxon_id, rank, geological_range
@@ -318,7 +318,7 @@ fn taxonomy_base_metadata_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Taxon
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::taxonomy::{TaxonInputRow, apply_rows, get_taxon_detail, list_taxonomy_operations};
+    use crate::taxonomy::{TaxonInputRow, apply_rows, get_taxon_detail, list_operations};
 
     #[test]
     fn replaces_taxonomy_preserves_base_ids_and_queues_all_photos() {
@@ -389,7 +389,7 @@ mod tests {
         assert!(get_taxon_detail(&database, 101).unwrap().is_some());
         assert!(get_taxon_detail(&database, 102).unwrap().is_some());
         assert!(
-            list_taxonomy_operations(&database, None, 10)
+            list_operations(&database, None, 10)
                 .unwrap()
                 .items
                 .is_empty()
@@ -441,13 +441,7 @@ mod tests {
         }
         assert_eq!(parent_taxon_id(&database, taxon_ids[1]), Some(taxon_ids[0]));
         assert_eq!(parent_taxon_id(&database, taxon_ids[2]), Some(taxon_ids[1]));
-        assert_eq!(
-            list_taxonomy_operations(&database, None, 10)
-                .unwrap()
-                .items
-                .len(),
-            1
-        );
+        assert_eq!(list_operations(&database, None, 10).unwrap().items.len(), 1);
     }
 
     #[test]

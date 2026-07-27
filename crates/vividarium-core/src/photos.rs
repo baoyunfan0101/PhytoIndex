@@ -19,7 +19,6 @@ pub use crate::models::{PhotoDirectoryItem, PhotoPage};
 
 mod media;
 mod naming;
-mod operation_export;
 mod operations;
 mod page;
 mod search;
@@ -31,12 +30,11 @@ pub use naming::{
     PhotoFilenameFormatSettings, format_photo_filename, get_photo_filename_format_settings,
     set_photo_filename_format_settings,
 };
-pub use operation_export::{export_all_photo_operations_csv, export_photo_operation_csv};
 pub use operations::{
-    PhotoOperation, PhotoOperationInput, PhotoOperationItem, PhotoOperationSource,
-    get_photo_operation, list_photo_operations, revert_photo_operation,
+    PhotoOperationInput, PhotoOperationSource, export_all_operation_audit, export_operation_audit,
+    export_operations_audit, list_operation_audit, list_operations, rollback_operation,
 };
-use operations::{insert_photo_operation, insert_photo_operation_item};
+use operations::{insert_photo_operation, insert_photo_operation_item, record_operation_outcomes};
 pub(crate) use page::{
     PhotoCursor, PhotoPageSection, decode_photo_cursor, encode_photo_cursor, invalid_photo_cursor,
     photo_page_limit,
@@ -544,6 +542,27 @@ pub fn rename_photos_from_taxa(
             Err(error) => return Err(error),
         });
     }
+    let audit_rows = rows
+        .iter()
+        .filter_map(|row| match row.status {
+            PhotoRenameRowStatus::Applied => None,
+            PhotoRenameRowStatus::NoChange => Some((
+                row.row_number,
+                row.photo_id,
+                "no_change",
+                true,
+                row.message.clone(),
+            )),
+            PhotoRenameRowStatus::Failed => Some((
+                row.row_number,
+                row.photo_id,
+                "rename",
+                false,
+                row.message.clone(),
+            )),
+        })
+        .collect::<Vec<_>>();
+    record_operation_outcomes(database, operation_id, &audit_rows)?;
     Ok(PhotoRenameOperationResult { operation_id, rows })
 }
 
@@ -1047,7 +1066,6 @@ mod tests {
         assert_eq!(
             mapping::get_photo_mapping(&database, photo.photo_id)
                 .unwrap()
-                .unwrap()
                 .status,
             mapping::PhotoTaxonStatus::Processing
         );
@@ -1110,7 +1128,6 @@ mod tests {
         assert_eq!(
             mapping::get_photo_mapping(&database, photo.photo_id)
                 .unwrap()
-                .unwrap()
                 .status,
             mapping::PhotoTaxonStatus::Unmatched
         );
@@ -1130,21 +1147,18 @@ mod tests {
 
         rename_photo(&database, photo.photo_id, "after.jpg").unwrap();
 
-        let operations = list_photo_operations(&database, None, 10).unwrap().items;
+        let operations = list_operations(&database, None, 10).unwrap().items;
         assert_eq!(operations.len(), 1);
-        assert_eq!(operations[0].source, PhotoOperationSource::ManualRename);
-        assert_eq!(
-            operations[0].root_path,
-            root.path().canonicalize().unwrap().to_str().unwrap()
-        );
-        assert_eq!(operations[0].items.len(), 1);
-        assert_eq!(operations[0].items[0].row_number, 1);
-        assert_eq!(operations[0].items[0].photo_id, photo.photo_id);
-        assert_eq!(operations[0].items[0].directory_relative_path, "");
-        assert_eq!(operations[0].items[0].old_filename, "before.jpg");
-        assert_eq!(operations[0].items[0].new_filename, "after.jpg");
+        assert_eq!(operations[0].source, "manual_rename");
+        assert_eq!(operations[0].total_items, 1);
+        assert_eq!(operations[0].succeeded_items, 1);
+        let audit = list_operation_audit(&database, operations[0].operation_id, None, 10).unwrap();
+        assert_eq!(audit.items.len(), 1);
+        let photo_id = photo.photo_id.to_string();
+        assert_eq!(audit.items[0].entity_id.as_deref(), Some(photo_id.as_str()));
+        assert_eq!(audit.items[0].action, "rename");
 
-        revert_photo_operation(&database, operations[0].operation_id).unwrap();
+        rollback_operation(&database, operations[0].operation_id).unwrap();
 
         assert!(root.path().join("before.jpg").is_file());
         assert!(!root.path().join("after.jpg").exists());
@@ -1156,12 +1170,12 @@ mod tests {
             "before.jpg"
         );
         assert!(
-            list_photo_operations(&database, None, 10)
+            list_operations(&database, None, 10)
                 .unwrap()
                 .items
                 .is_empty()
         );
-        let error = revert_photo_operation(&database, operations[0].operation_id).unwrap_err();
+        let error = rollback_operation(&database, operations[0].operation_id).unwrap_err();
         assert!(error.to_string().contains("not found"));
     }
 
@@ -1176,24 +1190,24 @@ mod tests {
         let photo = list_photos(&database).unwrap().remove(0);
         rename_photo(&database, photo.photo_id, "second.jpg").unwrap();
         let first_operation_id =
-            list_photo_operations(&database, None, 10).unwrap().items[0].operation_id;
+            list_operations(&database, None, 10).unwrap().items[0].operation_id;
         rename_photo(&database, photo.photo_id, "third.jpg").unwrap();
         let second_operation_id =
-            list_photo_operations(&database, None, 10).unwrap().items[0].operation_id;
-        let newest_operation = list_photo_operations(&database, None, 1).unwrap();
+            list_operations(&database, None, 10).unwrap().items[0].operation_id;
+        let newest_operation = list_operations(&database, None, 1).unwrap();
         assert_eq!(newest_operation.items[0].operation_id, second_operation_id);
         assert!(newest_operation.next_cursor.is_some());
         let older_operation =
-            list_photo_operations(&database, newest_operation.next_cursor.as_deref(), 1).unwrap();
+            list_operations(&database, newest_operation.next_cursor.as_deref(), 1).unwrap();
         assert_eq!(older_operation.items[0].operation_id, first_operation_id);
         assert_eq!(older_operation.next_cursor, None);
-        let error = revert_photo_operation(&database, first_operation_id).unwrap_err();
+        let error = rollback_operation(&database, first_operation_id).unwrap_err();
         assert!(error.to_string().contains("expected 'second.jpg'"));
         assert!(root.path().join("third.jpg").is_file());
 
-        revert_photo_operation(&database, second_operation_id).unwrap();
+        rollback_operation(&database, second_operation_id).unwrap();
         assert!(root.path().join("second.jpg").is_file());
-        revert_photo_operation(&database, first_operation_id).unwrap();
+        rollback_operation(&database, first_operation_id).unwrap();
         assert!(root.path().join("first.jpg").is_file());
     }
 
@@ -1271,19 +1285,21 @@ mod tests {
                 .iter()
                 .all(|row| row.status == PhotoRenameRowStatus::Applied)
         );
-        let operation = list_photo_operations(&database, None, 10)
+        let operation = list_operations(&database, None, 10)
             .unwrap()
             .items
             .remove(0);
         assert_eq!(renamed.operation_id, Some(operation.operation_id));
-        assert_eq!(operation.source, PhotoOperationSource::TaxonSelectionRename);
-        assert_eq!(operation.items.len(), 2);
-        assert_eq!(operation.items[0].row_number, 1);
-        assert_eq!(operation.items[1].row_number, 2);
-        let exported = export_photo_operation_csv(&database, operation.operation_id).unwrap();
+        assert_eq!(operation.source, "taxon_selection_rename");
+        assert_eq!(operation.succeeded_items, 2);
+        let audit = list_operation_audit(&database, operation.operation_id, None, 10).unwrap();
+        assert_eq!(audit.items.len(), 2);
+        assert_eq!(audit.items[0].sequence, 1);
+        assert_eq!(audit.items[1].sequence, 2);
+        let exported = export_operation_audit(&database, operation.operation_id).unwrap();
         assert_eq!(exported.lines().count(), 3);
 
-        revert_photo_operation(&database, operation.operation_id).unwrap();
+        rollback_operation(&database, operation.operation_id).unwrap();
         assert!(root.path().join("first.jpg").is_file());
         assert!(root.path().join("second.png").is_file());
     }
@@ -1408,17 +1424,17 @@ mod tests {
         );
         assert_eq!(result.rows[2].status, PhotoRenameRowStatus::Applied);
         assert!(result.rows[2].operation_id.is_some());
-        let operation = get_photo_operation(&database, result.operation_id.unwrap())
-            .unwrap()
-            .unwrap();
+        let operation =
+            list_operation_audit(&database, result.operation_id.unwrap(), None, 10).unwrap();
         assert_eq!(
             operation
                 .items
                 .iter()
-                .map(|item| item.row_number)
+                .map(|item| item.sequence)
                 .collect::<Vec<_>>(),
-            [1, 3]
+            [1, 2, 3]
         );
+        assert!(!operation.items[1].succeeded);
         assert!(root.path().join("Canis lupus.jpg").is_file());
         assert!(root.path().join("second.jpg").is_file());
         assert!(root.path().join("Canis lupus.png").is_file());
@@ -1528,7 +1544,7 @@ mod tests {
         refresh_directory(&database, library.root_directory_id).unwrap();
         let photo = list_photos(&database).unwrap().remove(0);
         rename_photo(&database, photo.photo_id, "abc.jpg").unwrap();
-        let operation_id = list_photo_operations(&database, None, 1).unwrap().items[0].operation_id;
+        let operation_id = list_operations(&database, None, 1).unwrap().items[0].operation_id;
         let connection = database.connect().unwrap();
         connection
             .execute_batch(
@@ -1542,7 +1558,7 @@ mod tests {
             )
             .unwrap();
 
-        let error = revert_photo_operation(&database, operation_id).unwrap_err();
+        let error = rollback_operation(&database, operation_id).unwrap_err();
 
         assert!(error.to_string().contains("forced photo revert failure"));
         assert_eq!(

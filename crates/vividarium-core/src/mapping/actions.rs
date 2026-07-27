@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
 
 use super::{
-    PhotoTaxonMapping, PhotoTaxonMatch, PhotoTaxonStatus, apply_usage_deltas, candidates,
+    PhotoMappingSummary, PhotoTaxonCandidate, PhotoTaxonStatus, apply_usage_deltas, candidates,
     delete_queued_photo_ids, mapping_from_row, remap_photo_ids,
 };
 use crate::models::MappingMetadata;
@@ -46,10 +46,7 @@ pub fn get_metadata(database: &Database) -> CoreResult<MappingMetadata> {
     })
 }
 
-pub fn get_photo_mapping(
-    database: &Database,
-    photo_id: i64,
-) -> CoreResult<Option<PhotoTaxonMapping>> {
+pub fn get_photo_mapping(database: &Database, photo_id: i64) -> CoreResult<PhotoMappingSummary> {
     let connection = database.connect()?;
     let stored = connection
         .query_row(
@@ -65,7 +62,7 @@ pub fn get_photo_mapping(
             |row| row.get::<_, bool>(0),
         )?
     {
-        return Ok(None);
+        return Err(CoreError::NotFound(format!("photo {photo_id}")));
     }
     let processing = connection.query_row(
         "SELECT EXISTS(SELECT 1 FROM photo_mapping_queue WHERE photo_id = ?)",
@@ -73,13 +70,13 @@ pub fn get_photo_mapping(
         |row| row.get::<_, bool>(0),
     )?;
     if processing {
-        Ok(Some(PhotoTaxonMapping {
+        Ok(PhotoMappingSummary {
             photo_id,
-            taxon_id: stored.and_then(|mapping| mapping.taxon_id),
+            taxon_id: None,
             status: PhotoTaxonStatus::Processing,
-        }))
+        })
     } else {
-        stored.map(Some).ok_or_else(|| {
+        stored.ok_or_else(|| {
             CoreError::Consistency(format!(
                 "photo {photo_id} has neither a mapping nor a mapping queue entry"
             ))
@@ -87,44 +84,24 @@ pub fn get_photo_mapping(
     }
 }
 
-pub fn get_photo_taxon_match(database: &Database, photo_id: i64) -> CoreResult<PhotoTaxonMatch> {
-    let mapping = get_photo_mapping(database, photo_id)?
-        .ok_or_else(|| CoreError::NotFound(format!("photo {photo_id}")))?;
+pub fn get_photo_mapping_candidates(
+    database: &Database,
+    photo_id: i64,
+) -> CoreResult<Vec<PhotoTaxonCandidate>> {
+    let mapping = get_photo_mapping(database, photo_id)?;
     let connection = database.connect()?;
-    let candidates = if mapping.status == PhotoTaxonStatus::Ambiguous {
+    Ok(if mapping.status == PhotoTaxonStatus::Ambiguous {
         candidates::load(&connection, photo_id)?
     } else {
         Vec::new()
-    };
-    Ok(PhotoTaxonMatch {
-        mapping,
-        candidates,
     })
-}
-
-pub fn select_photo_taxon(
-    database: &Database,
-    photo_id: i64,
-    taxon_id: i64,
-) -> CoreResult<PhotoTaxonMapping> {
-    let mut connection = database.connect()?;
-    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    ensure_photo_exists(&transaction, photo_id)?;
-    if !candidates::is_current_candidate(&transaction, photo_id, taxon_id)? {
-        return Err(CoreError::InvalidArgument(format!(
-            "taxon {taxon_id} is not a current candidate for photo {photo_id}"
-        )));
-    }
-    let mapping = replace_photo_mapping(&transaction, photo_id, Some(taxon_id))?;
-    transaction.commit()?;
-    Ok(mapping)
 }
 
 pub fn set_photo_mapping(
     database: &Database,
     photo_id: i64,
     taxon_id: i64,
-) -> CoreResult<PhotoTaxonMapping> {
+) -> CoreResult<PhotoMappingSummary> {
     let mut connection = database.connect()?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     ensure_photo_exists(&transaction, photo_id)?;
@@ -134,7 +111,7 @@ pub fn set_photo_mapping(
     Ok(mapping)
 }
 
-pub fn clear_photo_mapping(database: &Database, photo_id: i64) -> CoreResult<PhotoTaxonMapping> {
+pub fn clear_photo_mapping(database: &Database, photo_id: i64) -> CoreResult<PhotoMappingSummary> {
     let mut connection = database.connect()?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     ensure_photo_exists(&transaction, photo_id)?;
@@ -143,14 +120,14 @@ pub fn clear_photo_mapping(database: &Database, photo_id: i64) -> CoreResult<Pho
     Ok(mapping)
 }
 
-pub fn remap_photo(database: &Database, photo_id: i64) -> CoreResult<PhotoTaxonMatch> {
+pub fn remap_photo(database: &Database, photo_id: i64) -> CoreResult<PhotoMappingSummary> {
     let mut connection = database.connect()?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     ensure_photo_exists(&transaction, photo_id)?;
     remap_photo_ids(&transaction, &[photo_id])?;
     delete_queued_photo_ids(&transaction, &[photo_id])?;
     transaction.commit()?;
-    get_photo_taxon_match(database, photo_id)
+    get_photo_mapping(database, photo_id)
 }
 
 fn ensure_photo_exists(connection: &rusqlite::Connection, photo_id: i64) -> CoreResult<()> {
@@ -181,7 +158,7 @@ fn replace_photo_mapping(
     transaction: &Transaction<'_>,
     photo_id: i64,
     taxon_id: Option<i64>,
-) -> CoreResult<PhotoTaxonMapping> {
+) -> CoreResult<PhotoMappingSummary> {
     let old_taxon_id = transaction
         .query_row(
             r#"
@@ -220,7 +197,7 @@ fn replace_photo_mapping(
         apply_usage_deltas(transaction, &deltas)?;
     }
     delete_queued_photo_ids(transaction, &[photo_id])?;
-    Ok(PhotoTaxonMapping {
+    Ok(PhotoMappingSummary {
         photo_id,
         taxon_id,
         status,

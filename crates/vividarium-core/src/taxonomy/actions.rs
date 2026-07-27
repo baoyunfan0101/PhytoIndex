@@ -16,6 +16,7 @@ use super::{
     TaxonInputRow, TaxonRank, TaxonRowStatus, TaxonomyNameType, TaxonomyOperationResult,
     apply_rows, preview_rows,
 };
+use crate::operations::{self, NewAuditRow, NewOperation};
 use crate::{CoreError, CoreResult, Database};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -45,6 +46,7 @@ pub struct PromoteTaxonNameInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TaxonomyCustomSqlResult {
+    pub operation_id: i64,
     pub changeset_size: usize,
 }
 
@@ -272,6 +274,7 @@ pub fn delete_taxon_name(database: &Database, input: DeleteTaxonNameInput) -> Co
             "the unique sci_name cannot be deleted".into(),
         ));
     }
+    let mut session = start_taxonomy_session(&transaction)?;
     let deleted = transaction.execute(
         "DELETE FROM taxon_names WHERE taxon_id = ? AND name_id = ?",
         params![input.taxon_id, input.name_id],
@@ -283,7 +286,48 @@ pub fn delete_taxon_name(database: &Database, input: DeleteTaxonNameInput) -> Co
         )));
     }
     validate_taxonomy(&transaction)?;
-    super::sync::record_event(&transaction, None, [input.taxon_id], false)?;
+    let mut changeset_blob = Vec::new();
+    session.changeset_strm(&mut changeset_blob)?;
+    drop(session);
+    let operation_id = operations::insert_operation(
+        &transaction,
+        NewOperation {
+            kind: "taxonomy_delete",
+            source: "ui_delete",
+            total_items: 1,
+            succeeded_items: 1,
+            failed_items: 0,
+            rollbackable: true,
+            has_formatted_input: false,
+        },
+    )?;
+    transaction.execute(
+        r#"
+        INSERT INTO operation_changesets (operation_id, changeset_blob)
+        VALUES (?, ?)
+        "#,
+        params![operation_id, changeset_blob],
+    )?;
+    operations::insert_audit_row(
+        &transaction,
+        operation_id,
+        NewAuditRow {
+            sequence: 1,
+            entity_type: "taxon_name",
+            entity_id: Some(input.name_id.to_string()),
+            action: "delete",
+            before_json: Some(serde_json::json!({
+                "taxon_id": input.taxon_id,
+                "name_id": input.name_id,
+                "name_type": name_type,
+                "name": name,
+            })),
+            after_json: None,
+            succeeded: true,
+            message: "deleted taxonomy name",
+        },
+    )?;
+    super::sync::record_event(&transaction, Some(operation_id), [input.taxon_id], false)?;
     transaction.commit()?;
     super::sync::synchronize_all_photo_libraries(database)?;
     Ok(())
@@ -292,14 +336,24 @@ pub fn delete_taxon_name(database: &Database, input: DeleteTaxonNameInput) -> Co
 pub fn delete_taxon(database: &Database, taxon_id: i64) -> CoreResult<()> {
     let mut connection = database.connect_taxonomy_context()?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let exists: bool = transaction.query_row(
-        "SELECT EXISTS(SELECT 1 FROM taxa WHERE taxon_id = ?)",
-        [taxon_id],
-        |row| row.get(0),
-    )?;
-    if !exists {
-        return Err(CoreError::NotFound(format!("taxon {taxon_id}")));
-    }
+    let taxon = transaction
+        .query_row(
+            r#"
+        SELECT parent_taxon_id, rank, geological_range
+        FROM taxa
+        WHERE taxon_id = ?
+        "#,
+            [taxon_id],
+            |row| {
+                Ok((
+                    row.get::<_, Option<i64>>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                ))
+            },
+        )
+        .optional()?
+        .ok_or_else(|| CoreError::NotFound(format!("taxon {taxon_id}")))?;
     let child_count: i64 = transaction.query_row(
         "SELECT COUNT(*) FROM taxa WHERE parent_taxon_id = ?",
         [taxon_id],
@@ -310,8 +364,50 @@ pub fn delete_taxon(database: &Database, taxon_id: i64) -> CoreResult<()> {
             "taxon {taxon_id} cannot be deleted because it has child taxa"
         )));
     }
+    let mut session = start_taxonomy_session(&transaction)?;
     transaction.execute("DELETE FROM taxa WHERE taxon_id = ?", [taxon_id])?;
-    super::sync::record_event(&transaction, None, [taxon_id], false)?;
+    let mut changeset_blob = Vec::new();
+    session.changeset_strm(&mut changeset_blob)?;
+    drop(session);
+    let operation_id = operations::insert_operation(
+        &transaction,
+        NewOperation {
+            kind: "taxonomy_delete",
+            source: "ui_delete",
+            total_items: 1,
+            succeeded_items: 1,
+            failed_items: 0,
+            rollbackable: true,
+            has_formatted_input: false,
+        },
+    )?;
+    transaction.execute(
+        r#"
+        INSERT INTO operation_changesets (operation_id, changeset_blob)
+        VALUES (?, ?)
+        "#,
+        params![operation_id, changeset_blob],
+    )?;
+    operations::insert_audit_row(
+        &transaction,
+        operation_id,
+        NewAuditRow {
+            sequence: 1,
+            entity_type: "taxon",
+            entity_id: Some(taxon_id.to_string()),
+            action: "delete",
+            before_json: Some(serde_json::json!({
+                "taxon_id": taxon_id,
+                "parent_taxon_id": taxon.0,
+                "rank": taxon.1,
+                "geological_range": taxon.2,
+            })),
+            after_json: None,
+            succeeded: true,
+            message: "deleted taxon",
+        },
+    )?;
+    super::sync::record_event(&transaction, Some(operation_id), [taxon_id], false)?;
     transaction.commit()?;
     super::sync::synchronize_all_photo_libraries(database)?;
     Ok(())
@@ -356,16 +452,90 @@ pub fn execute_custom_taxonomy_sql(
     session.changeset_strm(&mut changeset_blob)?;
     let changeset_size = changeset_blob.len();
     drop(session);
-    if changeset_blob.is_empty() {
-        transaction.commit()?;
-        return Ok(TaxonomyCustomSqlResult { changeset_size });
+    let affected_taxon_ids = if changeset_blob.is_empty() {
+        BTreeSet::new()
+    } else {
+        validate_taxonomy(&transaction)?;
+        affected_taxon_ids_from_changeset(&transaction, &changeset_blob)?
+    };
+    let operation_id =
+        insert_custom_sql_operation(&transaction, &changeset_blob, &affected_taxon_ids)?;
+    if !changeset_blob.is_empty() {
+        super::sync::record_event(&transaction, Some(operation_id), affected_taxon_ids, false)?;
     }
-    validate_taxonomy(&transaction)?;
-    let affected_taxon_ids = affected_taxon_ids_from_changeset(&transaction, &changeset_blob)?;
-    super::sync::record_event(&transaction, None, affected_taxon_ids, false)?;
     transaction.commit()?;
-    super::sync::synchronize_all_photo_libraries(database)?;
-    Ok(TaxonomyCustomSqlResult { changeset_size })
+    if changeset_size > 0 {
+        super::sync::synchronize_all_photo_libraries(database)?;
+    }
+    Ok(TaxonomyCustomSqlResult {
+        operation_id,
+        changeset_size,
+    })
+}
+
+fn insert_custom_sql_operation(
+    transaction: &Transaction<'_>,
+    changeset_blob: &[u8],
+    affected_taxon_ids: &BTreeSet<i64>,
+) -> CoreResult<i64> {
+    let total_items = affected_taxon_ids.len().max(1);
+    let operation_id = operations::insert_operation(
+        transaction,
+        NewOperation {
+            kind: "taxonomy_custom_sql",
+            source: "custom_sql",
+            total_items,
+            succeeded_items: total_items,
+            failed_items: 0,
+            rollbackable: !changeset_blob.is_empty(),
+            has_formatted_input: false,
+        },
+    )?;
+    if !changeset_blob.is_empty() {
+        transaction.execute(
+            r#"
+            INSERT INTO operation_changesets (operation_id, changeset_blob)
+            VALUES (?, ?)
+            "#,
+            params![operation_id, changeset_blob],
+        )?;
+    }
+    if affected_taxon_ids.is_empty() {
+        operations::insert_audit_row(
+            transaction,
+            operation_id,
+            NewAuditRow {
+                sequence: 1,
+                entity_type: "taxonomy",
+                entity_id: None,
+                action: "custom_sql",
+                before_json: None,
+                after_json: None,
+                succeeded: true,
+                message: "custom SQL made no taxonomy changes",
+            },
+        )?;
+    } else {
+        for (index, taxon_id) in affected_taxon_ids.iter().enumerate() {
+            operations::insert_audit_row(
+                transaction,
+                operation_id,
+                NewAuditRow {
+                    sequence: index + 1,
+                    entity_type: "taxon",
+                    entity_id: Some(taxon_id.to_string()),
+                    action: "custom_sql",
+                    before_json: None,
+                    after_json: Some(serde_json::json!({
+                        "changeset_size": changeset_blob.len(),
+                    })),
+                    succeeded: true,
+                    message: "custom SQL changed taxonomy data",
+                },
+            )?;
+        }
+    }
+    Ok(operation_id)
 }
 
 fn authorize_custom_sql(transaction: &Transaction<'_>, sql: &str) -> CoreResult<()> {
@@ -827,6 +997,24 @@ mod tests {
                 )
                 .unwrap()
         );
+        let operation = crate::taxonomy::list_operations(&database, None, 1)
+            .unwrap()
+            .items
+            .remove(0);
+        assert_eq!(operation.kind, "taxonomy_delete");
+        assert!(!operation.has_formatted_input);
+        crate::taxonomy::rollback_operation(&database, operation.operation_id).unwrap();
+        assert!(
+            database
+                .connect()
+                .unwrap()
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM taxon_names WHERE name_id = ?)",
+                    [synonym_id],
+                    |row| row.get::<_, bool>(0),
+                )
+                .unwrap()
+        );
     }
 
     #[test]
@@ -907,12 +1095,18 @@ mod tests {
             .unwrap();
         drop(connection);
 
-        execute_custom_taxonomy_sql(
+        let result = execute_custom_taxonomy_sql(
             &database,
             &format!("DELETE FROM taxa WHERE taxon_id = {taxon_id}"),
             None,
         )
         .unwrap();
+        assert!(
+            crate::taxonomy::export_operation_input(&database, result.operation_id)
+                .unwrap_err()
+                .to_string()
+                .contains("formatted input")
+        );
 
         let connection = database.connect_taxonomy_context().unwrap();
         let queued: i64 = connection

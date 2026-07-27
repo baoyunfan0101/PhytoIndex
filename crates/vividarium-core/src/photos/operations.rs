@@ -1,18 +1,19 @@
 use std::path::PathBuf;
 
-use rusqlite::{OptionalExtension, Transaction, params};
+use rusqlite::{Transaction, params};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
-use super::page::{
-    PhotoCursor, decode_photo_cursor, encode_photo_cursor, invalid_photo_cursor, photo_page_limit,
-};
 use super::{
     PHOTO_WRITE_LOCK, get_photo, library_root, load_directory, rename_file, safe_directory_path,
 };
-use crate::db::Database;
-use crate::error::{CoreError, CoreResult};
 use crate::mapping;
-use crate::models::PhotoPage;
+use crate::operations::{
+    self, NewAuditRow, NewOperation, OperationAuditRow, OperationPage, OperationSummary,
+};
+use crate::{CoreError, CoreResult, Database};
+
+const PHOTO_RENAME_KIND: &str = "photo_rename";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -30,17 +31,6 @@ impl PhotoOperationSource {
             Self::TaxonSelectionRename => "taxon_selection_rename",
         }
     }
-
-    fn from_str(value: &str) -> CoreResult<Self> {
-        match value {
-            "manual_rename" => Ok(Self::ManualRename),
-            "taxon_rename" => Ok(Self::TaxonRename),
-            "taxon_selection_rename" => Ok(Self::TaxonSelectionRename),
-            _ => Err(CoreError::InvalidArgument(format!(
-                "invalid photo operation source: {value}"
-            ))),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -51,40 +41,37 @@ pub struct PhotoOperationInput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PhotoOperationItem {
-    pub row_number: usize,
-    pub photo_id: i64,
-    pub directory_relative_path: String,
-    pub old_filename: String,
-    pub new_filename: String,
+struct PhotoRenameState {
+    directory_relative_path: String,
+    filename: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PhotoOperation {
-    pub operation_id: i64,
-    pub source: PhotoOperationSource,
-    pub root_path: String,
-    pub input: Vec<PhotoOperationInput>,
-    pub items: Vec<PhotoOperationItem>,
-    pub applied_at: String,
+#[derive(Debug, Clone)]
+struct PhotoOperationItem {
+    sequence: usize,
+    photo_id: i64,
+    before: PhotoRenameState,
+    after: PhotoRenameState,
 }
 
 pub(super) fn insert_photo_operation(
     transaction: &Transaction<'_>,
     source: PhotoOperationSource,
-    root_path: &str,
+    _root_path: &str,
     input: &[PhotoOperationInput],
 ) -> CoreResult<i64> {
-    let input_json = serde_json::to_string(input)
-        .map_err(|error| CoreError::InvalidArgument(format!("invalid photo input: {error}")))?;
-    transaction.execute(
-        r#"
-        INSERT INTO photo_operations (source, root_path, input_json)
-        VALUES (?, ?, ?)
-        "#,
-        params![source.as_str(), root_path, input_json],
-    )?;
-    Ok(transaction.last_insert_rowid())
+    operations::insert_operation(
+        transaction,
+        NewOperation {
+            kind: PHOTO_RENAME_KIND,
+            source: source.as_str(),
+            total_items: input.len(),
+            succeeded_items: 0,
+            failed_items: input.len(),
+            rollbackable: true,
+            has_formatted_input: false,
+        },
+    )
 }
 
 pub(super) fn insert_photo_operation_item(
@@ -96,149 +83,181 @@ pub(super) fn insert_photo_operation_item(
     old_filename: &str,
     new_filename: &str,
 ) -> CoreResult<()> {
-    transaction.execute(
-        r#"
-        INSERT INTO photo_operation_items (
-            operation_id, row_number, photo_id,
-            directory_relative_path, old_filename, new_filename
-        ) VALUES (?, ?, ?, ?, ?, ?)
-        "#,
-        params![
-            operation_id,
-            row_number as i64,
-            photo_id,
-            directory_relative_path,
-            old_filename,
-            new_filename
-        ],
+    operations::insert_audit_row(
+        transaction,
+        operation_id,
+        NewAuditRow {
+            sequence: row_number,
+            entity_type: "photo",
+            entity_id: Some(photo_id.to_string()),
+            action: "rename",
+            before_json: Some(json!({
+                "directory_relative_path": directory_relative_path,
+                "filename": old_filename,
+            })),
+            after_json: Some(json!({
+                "directory_relative_path": directory_relative_path,
+                "filename": new_filename,
+            })),
+            succeeded: true,
+            message: "renamed",
+        },
     )?;
+    let (total_items, succeeded_items) = transaction.query_row(
+        r#"
+        SELECT operations.total_items, COUNT(operation_audit_rows.sequence)
+        FROM operations
+        LEFT JOIN operation_audit_rows USING (operation_id)
+        WHERE operations.operation_id = ?
+          AND operation_audit_rows.succeeded = 1
+        "#,
+        [operation_id],
+        |row| {
+            Ok((
+                row.get::<_, i64>(0)? as usize,
+                row.get::<_, i64>(1)? as usize,
+            ))
+        },
+    )?;
+    operations::update_operation_counts(
+        transaction,
+        operation_id,
+        total_items,
+        succeeded_items,
+        total_items.saturating_sub(succeeded_items),
+    )
+}
+
+pub(super) fn record_operation_outcomes(
+    database: &Database,
+    operation_id: Option<i64>,
+    rows: &[(usize, i64, &'static str, bool, String)],
+) -> CoreResult<()> {
+    let Some(operation_id) = operation_id else {
+        return Ok(());
+    };
+    let mut connection = database.connect()?;
+    let transaction = connection.transaction()?;
+    for (sequence, photo_id, action, succeeded, message) in rows {
+        operations::insert_audit_row(
+            &transaction,
+            operation_id,
+            NewAuditRow {
+                sequence: *sequence,
+                entity_type: "photo",
+                entity_id: Some(photo_id.to_string()),
+                action,
+                before_json: None,
+                after_json: None,
+                succeeded: *succeeded,
+                message,
+            },
+        )?;
+    }
+    let (total_items, succeeded_items, failed_items) = transaction.query_row(
+        r#"
+        SELECT operations.total_items,
+               COALESCE(SUM(operation_audit_rows.succeeded = 1), 0),
+               COALESCE(SUM(operation_audit_rows.succeeded = 0), 0)
+        FROM operations
+        LEFT JOIN operation_audit_rows USING (operation_id)
+        WHERE operations.operation_id = ?
+        "#,
+        [operation_id],
+        |row| {
+            Ok((
+                row.get::<_, i64>(0)? as usize,
+                row.get::<_, i64>(1)? as usize,
+                row.get::<_, i64>(2)? as usize,
+            ))
+        },
+    )?;
+    operations::update_operation_counts(
+        &transaction,
+        operation_id,
+        total_items,
+        succeeded_items,
+        failed_items,
+    )?;
+    transaction.commit()?;
     Ok(())
 }
 
-pub fn list_photo_operations(
+pub fn list_operations(
     database: &Database,
     cursor: Option<&str>,
     limit: usize,
-) -> CoreResult<PhotoPage<PhotoOperation>> {
-    let connection = database.connect()?;
-    let operation_cursor = match decode_photo_cursor(cursor)? {
-        None => None,
-        Some(PhotoCursor::Operations { operation_id }) => Some(operation_id),
-        Some(_) => return Err(invalid_photo_cursor()),
-    };
-    let limit = photo_page_limit(limit);
-    let fetch_limit = limit + 1;
-    let mut headers = if let Some(operation_id) = operation_cursor {
-        let mut statement = connection.prepare(
-            r#"
-            SELECT operation_id, source, root_path, input_json, applied_at
-            FROM photo_operations
-            WHERE operation_id < ?1
-            ORDER BY operation_id DESC
-            LIMIT ?2
-            "#,
-        )?;
-        statement
-            .query_map(
-                params![operation_id, fetch_limit as i64],
-                photo_operation_header_row,
-            )?
-            .collect::<Result<Vec<_>, _>>()?
-    } else {
-        let mut statement = connection.prepare(
-            r#"
-            SELECT operation_id, source, root_path, input_json, applied_at
-            FROM photo_operations
-            ORDER BY operation_id DESC
-            LIMIT ?1
-            "#,
-        )?;
-        statement
-            .query_map([fetch_limit as i64], photo_operation_header_row)?
-            .collect::<Result<Vec<_>, _>>()?
-    };
-    let next_cursor = if headers.len() > limit {
-        headers.truncate(limit);
-        headers
-            .last()
-            .map(|header| {
-                encode_photo_cursor(&PhotoCursor::Operations {
-                    operation_id: header.operation_id,
-                })
-            })
-            .transpose()?
-    } else {
-        None
-    };
-    let items = headers
-        .into_iter()
-        .map(|header| photo_operation_from_header(&connection, header))
-        .collect::<CoreResult<Vec<_>>>()?;
-    Ok(PhotoPage { items, next_cursor })
+) -> CoreResult<OperationPage<OperationSummary>> {
+    operations::list_operations(&database.connect()?, cursor, limit)
 }
 
-pub fn get_photo_operation(
+pub fn list_operation_audit(
     database: &Database,
     operation_id: i64,
-) -> CoreResult<Option<PhotoOperation>> {
-    let connection = database.connect()?;
-    connection
-        .query_row(
-            r#"
-            SELECT operation_id, source, root_path, input_json, applied_at
-            FROM photo_operations
-            WHERE operation_id = ?
-            "#,
-            [operation_id],
-            photo_operation_header_row,
-        )
-        .optional()?
-        .map(|header| photo_operation_from_header(&connection, header))
-        .transpose()
+    cursor: Option<&str>,
+    limit: usize,
+) -> CoreResult<OperationPage<OperationAuditRow>> {
+    operations::list_operation_audit(&database.connect()?, operation_id, cursor, limit)
 }
 
-pub fn revert_photo_operation(database: &Database, operation_id: i64) -> CoreResult<()> {
+pub fn export_operation_audit(database: &Database, operation_id: i64) -> CoreResult<String> {
+    operations::export_operation_audit(&database.connect()?, Some(&[operation_id]))
+}
+
+pub fn export_operations_audit(database: &Database, operation_ids: &[i64]) -> CoreResult<String> {
+    operations::export_operation_audit(&database.connect()?, Some(operation_ids))
+}
+
+pub fn export_all_operation_audit(database: &Database) -> CoreResult<String> {
+    operations::export_operation_audit(&database.connect()?, None)
+}
+
+pub fn rollback_operation(database: &Database, operation_id: i64) -> CoreResult<()> {
     let _guard = PHOTO_WRITE_LOCK
         .lock()
         .map_err(|_| CoreError::InvalidArgument("photo workspace lock is poisoned".into()))?;
-    let operation = get_photo_operation(database, operation_id)?
-        .ok_or_else(|| CoreError::NotFound(format!("photo operation {operation_id}")))?;
     let connection = database.connect()?;
-    let root = library_root(&connection)?;
-    if root.to_str() != Some(operation.root_path.as_str()) {
+    let summary = operations::get_operation(&connection, operation_id)?
+        .ok_or_else(|| CoreError::NotFound(format!("operation {operation_id}")))?;
+    if summary.kind != PHOTO_RENAME_KIND || !summary.rollbackable {
         return Err(CoreError::InvalidArgument(format!(
-            "photo operation {operation_id} belongs to another photo library"
+            "operation {operation_id} cannot be rolled back"
         )));
     }
-    let mut revert_items = Vec::with_capacity(operation.items.len());
-    for item in &operation.items {
+    let items = load_operation_items(&connection, operation_id)?;
+    let root = library_root(&connection)?;
+    let mut revert_items = Vec::with_capacity(items.len());
+    for item in items {
         let photo = get_photo(database, item.photo_id)?
             .ok_or_else(|| CoreError::NotFound(format!("photo {}", item.photo_id)))?;
-        if photo.filename != item.new_filename {
+        if photo.filename != item.after.filename {
             return Err(CoreError::InvalidArgument(format!(
                 "photo {} filename is '{}', expected '{}'",
-                item.photo_id, photo.filename, item.new_filename
+                item.photo_id, photo.filename, item.after.filename
             )));
         }
         let directory = load_directory(&connection, photo.directory_id)?.ok_or_else(|| {
             CoreError::NotFound(format!("photo directory {}", photo.directory_id))
         })?;
-        if directory.relative_path != item.directory_relative_path {
+        if directory.relative_path != item.after.directory_relative_path {
             return Err(CoreError::InvalidArgument(format!(
                 "photo {} is no longer in the recorded directory",
                 item.photo_id
             )));
         }
         let directory_path = safe_directory_path(&root, &directory.relative_path)?;
+        let source = directory_path.join(&item.after.filename);
+        let destination = directory_path.join(&item.before.filename);
+        let temporary = directory_path.join(format!(
+            ".vividarium-revert-{operation_id}-{}.tmp",
+            item.sequence
+        ));
         revert_items.push(RevertItem {
-            item: item.clone(),
+            item,
             directory_id: photo.directory_id,
-            source: directory_path.join(&item.new_filename),
-            destination: directory_path.join(&item.old_filename),
-            temporary: directory_path.join(format!(
-                ".vividarium-revert-{operation_id}-{}.tmp",
-                item.row_number
-            )),
+            source,
+            destination,
+            temporary,
         });
     }
     let mut renamed = Vec::new();
@@ -249,21 +268,61 @@ pub fn revert_photo_operation(database: &Database, operation_id: i64) -> CoreRes
         }
         renamed.push(item);
     }
-    let result = revert_photo_operation_database(database, &operation, &revert_items);
+    let result = rollback_operation_database(database, operation_id, &revert_items);
     match result {
         Ok(()) => Ok(()),
         Err(error) => match rollback_reverted_files(&renamed) {
             Ok(()) => Err(error),
             Err(rollback_error) => Err(CoreError::Consistency(format!(
-                "photo operation revert failed: {error}; filesystem rollback failed: {rollback_error}"
+                "photo operation rollback failed: {error}; filesystem rollback failed: {rollback_error}"
             ))),
         },
     }
 }
 
-fn revert_photo_operation_database(
+fn load_operation_items(
+    connection: &rusqlite::Connection,
+    operation_id: i64,
+) -> CoreResult<Vec<PhotoOperationItem>> {
+    let mut statement = connection.prepare(
+        r#"
+        SELECT sequence, entity_id, before_json, after_json
+        FROM operation_audit_rows
+        WHERE operation_id = ? AND entity_type = 'photo'
+          AND action = 'rename' AND succeeded = 1
+        ORDER BY sequence
+        "#,
+    )?;
+    let stored = statement
+        .query_map([operation_id], |row| {
+            Ok((
+                row.get::<_, i64>(0)? as usize,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    stored
+        .into_iter()
+        .map(|(sequence, photo_id, before, after)| {
+            Ok(PhotoOperationItem {
+                sequence,
+                photo_id: photo_id.parse().map_err(|_| {
+                    CoreError::Consistency(format!(
+                        "operation {operation_id} has an invalid photo id"
+                    ))
+                })?,
+                before: serde_json::from_str(&before).map_err(invalid_photo_audit)?,
+                after: serde_json::from_str(&after).map_err(invalid_photo_audit)?,
+            })
+        })
+        .collect()
+}
+
+fn rollback_operation_database(
     database: &Database,
-    operation: &PhotoOperation,
+    operation_id: i64,
     items: &[RevertItem],
 ) -> CoreResult<()> {
     let mut connection = database.connect()?;
@@ -277,16 +336,16 @@ fn revert_photo_operation_database(
             WHERE photo_id = ? AND directory_id = ? AND filename = ?
             "#,
             params![
-                item.item.old_filename,
+                item.item.before.filename,
                 item.item.photo_id,
                 item.directory_id,
-                item.item.new_filename
+                item.item.after.filename
             ],
         )?;
         if updated != 1 {
             return Err(CoreError::InvalidArgument(format!(
                 "photo {} no longer matches operation {}",
-                item.item.photo_id, operation.operation_id
+                item.item.photo_id, operation_id
             )));
         }
         photo_ids.push(item.item.photo_id);
@@ -298,16 +357,7 @@ fn revert_photo_operation_database(
             [photo_id],
         )?;
     }
-    let deleted = transaction.execute(
-        "DELETE FROM photo_operations WHERE operation_id = ?",
-        [operation.operation_id],
-    )?;
-    if deleted != 1 {
-        return Err(CoreError::InvalidArgument(format!(
-            "photo operation {} is no longer applied",
-            operation.operation_id
-        )));
-    }
+    operations::delete_operation(&transaction, operation_id)?;
     transaction.commit()?;
     Ok(())
 }
@@ -328,56 +378,6 @@ struct RevertItem {
     temporary: PathBuf,
 }
 
-#[derive(Debug)]
-struct PhotoOperationHeader {
-    operation_id: i64,
-    source: String,
-    root_path: String,
-    input_json: String,
-    applied_at: String,
-}
-
-fn photo_operation_header_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PhotoOperationHeader> {
-    Ok(PhotoOperationHeader {
-        operation_id: row.get(0)?,
-        source: row.get(1)?,
-        root_path: row.get(2)?,
-        input_json: row.get(3)?,
-        applied_at: row.get(4)?,
-    })
-}
-
-fn photo_operation_from_header(
-    connection: &rusqlite::Connection,
-    header: PhotoOperationHeader,
-) -> CoreResult<PhotoOperation> {
-    let input = serde_json::from_str(&header.input_json)
-        .map_err(|error| CoreError::InvalidArgument(format!("invalid photo input: {error}")))?;
-    let mut statement = connection.prepare(
-        r#"
-        SELECT row_number, photo_id, directory_relative_path, old_filename, new_filename
-        FROM photo_operation_items
-        WHERE operation_id = ?
-        ORDER BY row_number
-        "#,
-    )?;
-    let items = statement
-        .query_map([header.operation_id], |row| {
-            Ok(PhotoOperationItem {
-                row_number: row.get::<_, i64>(0)? as usize,
-                photo_id: row.get(1)?,
-                directory_relative_path: row.get(2)?,
-                old_filename: row.get(3)?,
-                new_filename: row.get(4)?,
-            })
-        })?
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(PhotoOperation {
-        operation_id: header.operation_id,
-        source: PhotoOperationSource::from_str(&header.source)?,
-        root_path: header.root_path,
-        input,
-        items,
-        applied_at: header.applied_at,
-    })
+fn invalid_photo_audit(error: serde_json::Error) -> CoreError {
+    CoreError::Consistency(format!("invalid photo operation audit: {error}"))
 }

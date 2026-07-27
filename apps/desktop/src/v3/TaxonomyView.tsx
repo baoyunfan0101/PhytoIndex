@@ -15,8 +15,8 @@ import {
   downloadCsv,
   errorMessage,
   executeCustomTaxonomySql,
-  exportAllTaxonomyOperationsCsv,
-  exportTaxonomyOperationCsv,
+  exportAllReplayableTaxonomyInputs,
+  exportTaxonomyOperationInput,
   getTaxonDetailNode,
   getTaxonomyNameSeparator,
   getTaxonomyTemplate,
@@ -25,7 +25,7 @@ import {
   parseCustomTaxonomyInputCsv,
   parseTaxonomyCsv,
   previewTaxonomyRows,
-  revertTaxonomyOperation,
+  rollbackTaxonomyOperation,
   type TaxonChild,
   type TaxonDetail,
   type TaxonDetailNode,
@@ -33,7 +33,7 @@ import {
   type TaxonRowOutcome,
   type TaxonSearchResult,
   type TaxonSummary,
-  type TaxonomyOperation,
+  type OperationSummary,
 } from "./api";
 import { EmptyState, SectionHeader, TaxonCard, VirtualList } from "./components";
 import { CodeEditor } from "./CodeEditor";
@@ -394,7 +394,7 @@ export function CustomUpdateView() {
 }
 
 export function TaxonomyHistoryView() {
-  const page = useCursorPage<TaxonomyOperation, null>({
+  const page = useCursorPage<OperationSummary, null>({
     params: null,
     resetKey: "taxonomy-history",
     stateKey: "taxonomy-history.page",
@@ -404,7 +404,7 @@ export function TaxonomyHistoryView() {
   return (
     <div className="history-view">
       <SectionHeader title="Taxonomy update history" detail={`${page.items.length} operations${page.hasMore ? " loaded" : ""}`} actions={
-        <button className="secondary-button" type="button" onClick={() => void exportAllTaxonomyOperationsCsv().then((csv) => downloadCsv("taxonomy-operations.csv", csv))}><Download size={13} />Export all</button>
+        <button className="secondary-button" type="button" onClick={() => void exportAllReplayableTaxonomyInputs().then((csv) => downloadCsv("taxonomy-operations.csv", csv))}><Download size={13} />Export replayable</button>
       } />
       {page.error ? <EmptyState title="Unable to load history" detail={page.error} /> : (
         <VirtualList
@@ -416,10 +416,10 @@ export function TaxonomyHistoryView() {
           onNearEnd={() => void page.loadMore()}
           renderItem={(item) => (
             <article className="operation-row">
-              <div><strong>Operation {item.operation_id}</strong><span>{item.applied_at} / {item.result.succeeded_rows} succeeded / {item.result.failed_rows} failed</span></div>
+              <div><strong>Operation {item.operation_id}</strong><span>{item.applied_at} / {item.succeeded_items} succeeded / {item.failed_items} failed</span></div>
               <div className="operation-actions">
-                <button type="button" title="Export input" onClick={() => void exportTaxonomyOperationCsv(item.operation_id).then((csv) => downloadCsv(`taxonomy-operation-${item.operation_id}.csv`, csv))}><Download size={14} /></button>
-                <button type="button" title="Revert" onClick={() => void revertTaxonomyOperation(item.operation_id).then(() => page.reload())}><RotateCcw size={14} /></button>
+                {item.has_formatted_input && <button type="button" title="Export input" onClick={() => void exportTaxonomyOperationInput(item.operation_id).then((csv) => downloadCsv(`taxonomy-operation-${item.operation_id}.csv`, csv))}><Download size={14} /></button>}
+                {item.rollbackable && <button type="button" title="Rollback" onClick={() => void rollbackTaxonomyOperation(item.operation_id).then(() => page.reload())}><RotateCcw size={14} /></button>}
               </div>
             </article>
           )}

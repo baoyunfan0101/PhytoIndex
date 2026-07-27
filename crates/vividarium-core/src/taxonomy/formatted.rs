@@ -15,11 +15,11 @@ use rusqlite::{
 };
 use serde::{Deserialize, Serialize};
 
-use super::page::{
-    TaxonomyCursor, TaxonomyPage, decode_cursor, encode_cursor, invalid_cursor, page_limit,
-};
 use super::view::{TaxonSummary, load_taxon_summaries, load_taxon_summary};
 use crate::naming::{SynonymAuthorityParser, normalize_taxonomy_name};
+use crate::operations::{
+    self, NewAuditRow, NewOperation, OperationAuditRow, OperationPage, OperationSummary,
+};
 use crate::{CoreError, CoreResult, Database};
 
 pub const TAXONOMY_INPUT_COLUMNS: [&str; 13] = [
@@ -273,15 +273,6 @@ impl TaxonomyOperationSource {
     fn as_str(self) -> &'static str {
         "formatted_update"
     }
-
-    fn from_str(value: &str) -> CoreResult<Self> {
-        match value {
-            "formatted_update" => Ok(Self::FormattedUpdate),
-            _ => Err(CoreError::InvalidArgument(format!(
-                "invalid taxonomy operation source: {value}"
-            ))),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -293,16 +284,6 @@ pub struct TaxonomyOperationResult {
     pub delimiter: String,
     pub encoding: String,
     pub rows: Vec<TaxonomyOperationRowLog>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct TaxonomyOperation {
-    pub operation_id: i64,
-    pub source: TaxonomyOperationSource,
-    pub input: Vec<TaxonInputRow>,
-    pub result: TaxonomyOperationResult,
-    pub changeset_size: usize,
-    pub applied_at: String,
 }
 
 pub fn preview_rows(
@@ -341,23 +322,22 @@ pub fn apply_rows(
             row
         })
         .collect::<Vec<_>>();
-    let input_json = serialize_json(&stored_input, "taxonomy operation input")?;
-    transaction.execute(
-        r#"
-        INSERT INTO taxonomy_operations (source, input_json, result_json, changeset_blob)
-        VALUES (?, ?, '{}', ?)
-        "#,
-        params![
-            TaxonomyOperationSource::FormattedUpdate.as_str(),
-            input_json,
-            changeset_blob
-        ],
-    )?;
-    let operation_id = transaction.last_insert_rowid();
     let failed_rows = outcomes
         .iter()
         .filter(|row| row.operation_types.iter().any(|value| value.is_failure()))
         .count();
+    let operation_id = operations::insert_operation(
+        &transaction,
+        NewOperation {
+            kind: "taxonomy_update",
+            source: TaxonomyOperationSource::FormattedUpdate.as_str(),
+            total_items: outcomes.len(),
+            succeeded_items: outcomes.len() - failed_rows,
+            failed_items: failed_rows,
+            rollbackable: true,
+            has_formatted_input: true,
+        },
+    )?;
     let result = TaxonomyOperationResult {
         operation_id,
         total_rows: outcomes.len(),
@@ -368,17 +348,87 @@ pub fn apply_rows(
         rows: outcomes,
     };
     transaction.execute(
-        "UPDATE taxonomy_operations SET result_json = ? WHERE operation_id = ?",
-        params![
-            serialize_json(&result, "taxonomy operation result")?,
-            operation_id
-        ],
+        r#"
+        INSERT INTO operation_changesets (operation_id, changeset_blob)
+        VALUES (?, ?)
+        "#,
+        params![operation_id, changeset_blob],
     )?;
+    let mut insert_input = transaction.prepare_cached(
+        r#"
+        INSERT INTO operation_formatted_inputs (
+            operation_id, sequence, input_json
+        ) VALUES (?, ?, ?)
+        "#,
+    )?;
+    for (index, input) in stored_input.iter().enumerate() {
+        insert_input.execute(params![
+            operation_id,
+            (index + 1) as i64,
+            serialize_json(input, "taxonomy operation input")?
+        ])?;
+    }
+    drop(insert_input);
+    insert_operation_audit(&transaction, operation_id, &result.rows)?;
     let affected_taxon_ids = affected_taxon_ids_from_changeset(&transaction, &changeset_blob)?;
     super::sync::record_event(&transaction, Some(operation_id), affected_taxon_ids, false)?;
     transaction.commit()?;
     super::sync::synchronize_all_photo_libraries(database)?;
     Ok(result)
+}
+
+fn insert_operation_audit(
+    transaction: &Transaction<'_>,
+    operation_id: i64,
+    outcomes: &[TaxonRowOutcome],
+) -> CoreResult<()> {
+    for outcome in outcomes {
+        let succeeded = !outcome
+            .operation_types
+            .iter()
+            .any(|status| status.is_failure());
+        let before = outcome
+            .changes
+            .iter()
+            .map(|change| {
+                serde_json::json!({
+                    "field": change.field,
+                    "value": change.old_value,
+                })
+            })
+            .collect::<Vec<_>>();
+        let after = outcome
+            .changes
+            .iter()
+            .map(|change| {
+                serde_json::json!({
+                    "field": change.field,
+                    "value": change.new_value,
+                })
+            })
+            .collect::<Vec<_>>();
+        operations::insert_audit_row(
+            transaction,
+            operation_id,
+            NewAuditRow {
+                sequence: outcome.row_number,
+                entity_type: "taxon",
+                entity_id: outcome
+                    .target
+                    .as_ref()
+                    .map(|target| target.taxon_id.to_string()),
+                action: "formatted_update",
+                before_json: Some(serde_json::json!({ "fields": before })),
+                after_json: Some(serde_json::json!({
+                    "operation_types": outcome.operation_types,
+                    "fields": after,
+                })),
+                succeeded,
+                message: &outcome.message,
+            },
+        )?;
+    }
+    Ok(())
 }
 
 fn process_rows(
@@ -1429,119 +1479,50 @@ pub fn taxonomy_log_csv(rows: &[TaxonRowOutcome]) -> CoreResult<String> {
         .map_err(|error| CoreError::InvalidArgument(format!("invalid UTF-8 log: {error}")))
 }
 
-pub fn list_taxonomy_operations(
+pub fn list_operations(
     database: &Database,
     cursor: Option<&str>,
     limit: usize,
-) -> CoreResult<TaxonomyPage<TaxonomyOperation>> {
-    let before_id = match decode_cursor(cursor)? {
-        Some(TaxonomyCursor::Operations { operation_id }) => Some(operation_id),
-        Some(_) => return Err(invalid_cursor()),
-        None => None,
-    };
-    let connection = database.connect_taxonomy_context()?;
-    let limit = page_limit(limit);
-    let mut items = if let Some(operation_id) = before_id {
-        let mut statement = connection.prepare(
-            r#"
-            SELECT operation_id, source, input_json, result_json,
-                   length(changeset_blob), applied_at
-            FROM taxonomy_operations
-            WHERE operation_id < ?
-            ORDER BY operation_id DESC LIMIT ?
-            "#,
-        )?;
-        statement
-            .query_map(params![operation_id, (limit + 1) as i64], operation_row)?
-            .map(operation_from_row)
-            .collect::<CoreResult<Vec<_>>>()?
-    } else {
-        let mut statement = connection.prepare(
-            r#"
-            SELECT operation_id, source, input_json, result_json,
-                   length(changeset_blob), applied_at
-            FROM taxonomy_operations
-            ORDER BY operation_id DESC LIMIT ?
-            "#,
-        )?;
-        statement
-            .query_map([(limit + 1) as i64], operation_row)?
-            .map(operation_from_row)
-            .collect::<CoreResult<Vec<_>>>()?
-    };
-    let has_more = items.len() > limit;
-    items.truncate(limit);
-    let next_cursor = if has_more {
-        items
-            .last()
-            .map(|operation| {
-                encode_cursor(&TaxonomyCursor::Operations {
-                    operation_id: operation.operation_id,
-                })
-            })
-            .transpose()?
-    } else {
-        None
-    };
-    Ok(TaxonomyPage { items, next_cursor })
+) -> CoreResult<OperationPage<OperationSummary>> {
+    operations::list_operations(&database.connect_taxonomy_context()?, cursor, limit)
 }
 
-pub fn get_taxonomy_operation(
+pub fn list_operation_audit(
     database: &Database,
     operation_id: i64,
-) -> CoreResult<Option<TaxonomyOperation>> {
-    database
-        .connect()?
-        .query_row(
-            r#"
-            SELECT operation_id, source, input_json, result_json,
-                   length(changeset_blob), applied_at
-            FROM taxonomy_operations WHERE operation_id = ?
-            "#,
-            [operation_id],
-            operation_row,
-        )
-        .optional()?
-        .map(|row| operation_from_row(Ok(row)))
-        .transpose()
-}
-
-type StoredOperationRow = (i64, String, String, String, i64, String);
-
-fn operation_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredOperationRow> {
-    Ok((
-        row.get(0)?,
-        row.get(1)?,
-        row.get(2)?,
-        row.get(3)?,
-        row.get(4)?,
-        row.get(5)?,
-    ))
-}
-
-fn operation_from_row(row: rusqlite::Result<StoredOperationRow>) -> CoreResult<TaxonomyOperation> {
-    let (operation_id, source, input, result, changeset_size, applied_at) = row?;
-    Ok(TaxonomyOperation {
+    cursor: Option<&str>,
+    limit: usize,
+) -> CoreResult<OperationPage<OperationAuditRow>> {
+    operations::list_operation_audit(
+        &database.connect_taxonomy_context()?,
         operation_id,
-        source: TaxonomyOperationSource::from_str(&source)?,
-        input: deserialize_json(&input, "taxonomy operation input")?,
-        result: deserialize_json(&result, "taxonomy operation result")?,
-        changeset_size: changeset_size as usize,
-        applied_at,
-    })
+        cursor,
+        limit,
+    )
 }
 
-pub fn revert_taxonomy_operation(database: &Database, operation_id: i64) -> CoreResult<()> {
+pub fn rollback_operation(database: &Database, operation_id: i64) -> CoreResult<()> {
     let mut connection = database.connect_taxonomy_context()?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let summary = operations::get_operation(&transaction, operation_id)?
+        .ok_or_else(|| CoreError::NotFound(format!("operation {operation_id}")))?;
+    if !summary.rollbackable {
+        return Err(CoreError::InvalidArgument(format!(
+            "operation {operation_id} cannot be rolled back"
+        )));
+    }
     let changeset_blob = transaction
         .query_row(
-            "SELECT changeset_blob FROM taxonomy_operations WHERE operation_id = ?",
+            "SELECT changeset_blob FROM operation_changesets WHERE operation_id = ?",
             [operation_id],
             |row| row.get::<_, Vec<u8>>(0),
         )
         .optional()?
-        .ok_or_else(|| CoreError::NotFound(format!("taxonomy operation {operation_id}")))?;
+        .ok_or_else(|| {
+            CoreError::Consistency(format!(
+                "operation {operation_id} has no rollback changeset"
+            ))
+        })?;
     let affected_taxon_ids = affected_taxon_ids_from_changeset(&transaction, &changeset_blob)?;
     if !changeset_blob.is_empty() {
         let mut inverted = Vec::new();
@@ -1562,10 +1543,7 @@ pub fn revert_taxonomy_operation(database: &Database, operation_id: i64) -> Core
     }
     validate_taxonomy(&transaction)?;
     super::sync::record_event(&transaction, None, affected_taxon_ids, false)?;
-    transaction.execute(
-        "DELETE FROM taxonomy_operations WHERE operation_id = ?",
-        [operation_id],
-    )?;
+    operations::delete_operation(&transaction, operation_id)?;
     transaction.commit()?;
     super::sync::synchronize_all_photo_libraries(database)?;
     Ok(())
@@ -1732,11 +1710,6 @@ pub(super) fn serialize_json<T: Serialize + ?Sized>(value: &T, label: &str) -> C
         .map_err(|error| CoreError::InvalidArgument(format!("invalid {label}: {error}")))
 }
 
-fn deserialize_json<T: for<'de> Deserialize<'de>>(value: &str, label: &str) -> CoreResult<T> {
-    serde_json::from_str(value)
-        .map_err(|error| CoreError::InvalidArgument(format!("invalid {label}: {error}")))
-}
-
 #[cfg(test)]
 mod tests {
     use tempfile::TempDir;
@@ -1861,11 +1834,14 @@ mod tests {
                 .unwrap()
         );
         let result = apply_rows(&database, &[input]).unwrap();
-        revert_taxonomy_operation(&database, result.operation_id).unwrap();
+        rollback_operation(&database, result.operation_id).unwrap();
         assert!(
-            get_taxonomy_operation(&database, result.operation_id)
-                .unwrap()
-                .is_none()
+            operations::get_operation(
+                &database.connect_taxonomy_context().unwrap(),
+                result.operation_id,
+            )
+            .unwrap()
+            .is_none()
         );
     }
 

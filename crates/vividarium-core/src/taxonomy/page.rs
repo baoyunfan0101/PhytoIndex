@@ -20,9 +20,6 @@ pub(super) enum TaxonomyCursor {
         rank: TaxonRank,
         taxon_id: i64,
     },
-    Operations {
-        operation_id: i64,
-    },
 }
 
 pub(super) fn page_limit(limit: usize) -> usize {

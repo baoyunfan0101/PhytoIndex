@@ -1,49 +1,118 @@
+use std::collections::BTreeSet;
+
 use csv::WriterBuilder;
-use rusqlite::OptionalExtension;
+use rusqlite::params_from_iter;
 
 use super::formatted::{TAXONOMY_INPUT_COLUMNS, TaxonInputRow, get_taxonomy_name_separator};
+use crate::operations;
 use crate::{CoreError, CoreResult, Database};
 
-pub fn export_taxonomy_operation_csv(database: &Database, operation_id: i64) -> CoreResult<String> {
-    validate_operation_id(operation_id)?;
-    let connection = database.connect_taxonomy_context()?;
-    let input_json = connection
-        .query_row(
-            "SELECT input_json FROM taxonomy_operations WHERE operation_id = ?",
-            [operation_id],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()?
-        .ok_or_else(|| CoreError::NotFound(format!("taxonomy operation {operation_id}")))?;
-    export_taxonomy_inputs(database, std::iter::once(input_json))
+pub fn export_operation_audit(database: &Database, operation_id: i64) -> CoreResult<String> {
+    operations::export_operation_audit(&database.connect_taxonomy_context()?, Some(&[operation_id]))
 }
 
-pub fn export_all_taxonomy_operations_csv(database: &Database) -> CoreResult<String> {
-    let connection = database.connect_taxonomy_context()?;
-    let mut statement =
-        connection.prepare("SELECT input_json FROM taxonomy_operations ORDER BY operation_id")?;
-    let input_json = statement
-        .query_map([], |row| row.get::<_, String>(0))?
-        .collect::<Result<Vec<_>, _>>()?;
-    export_taxonomy_inputs(database, input_json)
+pub fn export_operations_audit(database: &Database, operation_ids: &[i64]) -> CoreResult<String> {
+    operations::export_operation_audit(&database.connect_taxonomy_context()?, Some(operation_ids))
 }
 
-fn export_taxonomy_inputs(
-    database: &Database,
-    operation_inputs: impl IntoIterator<Item = String>,
-) -> CoreResult<String> {
+pub fn export_all_operation_audit(database: &Database) -> CoreResult<String> {
+    operations::export_operation_audit(&database.connect_taxonomy_context()?, None)
+}
+
+pub fn export_operation_input(database: &Database, operation_id: i64) -> CoreResult<String> {
+    export_inputs(database, Some(&[operation_id]))
+}
+
+pub fn export_operations_input(database: &Database, operation_ids: &[i64]) -> CoreResult<String> {
+    export_inputs(database, Some(operation_ids))
+}
+
+pub fn export_all_replayable_inputs(database: &Database) -> CoreResult<String> {
+    export_inputs(database, None)
+}
+
+fn export_inputs(database: &Database, operation_ids: Option<&[i64]>) -> CoreResult<String> {
     let separator = get_taxonomy_name_separator(database)?;
+    let connection = database.connect_taxonomy_context()?;
+    if let Some(operation_ids) = operation_ids {
+        validate_replayable_operations(&connection, operation_ids)?;
+    }
     let mut writer = WriterBuilder::new().delimiter(b'|').from_writer(Vec::new());
     writer.write_record(TAXONOMY_INPUT_COLUMNS)?;
-    for input_json in operation_inputs {
-        let rows: Vec<TaxonInputRow> = serde_json::from_str(&input_json).map_err(|error| {
-            CoreError::InvalidArgument(format!("invalid taxonomy operation input: {error}"))
+    let filter = operation_ids
+        .map(|operation_ids| {
+            let unique = operation_ids.iter().copied().collect::<BTreeSet<_>>();
+            let placeholders = std::iter::repeat_n("?", unique.len())
+                .collect::<Vec<_>>()
+                .join(",");
+            (
+                format!("WHERE formatted.operation_id IN ({placeholders})"),
+                unique.into_iter().collect::<Vec<_>>(),
+            )
+        })
+        .unwrap_or_else(|| {
+            (
+                "WHERE operations.has_formatted_input = 1".into(),
+                Vec::new(),
+            )
+        });
+    let mut statement = connection.prepare(&format!(
+        r#"
+        SELECT formatted.input_json
+        FROM operation_formatted_inputs AS formatted
+        JOIN operations USING (operation_id)
+        {}
+        ORDER BY formatted.operation_id, formatted.sequence
+        "#,
+        filter.0
+    ))?;
+    let mut rows = statement.query(params_from_iter(filter.1))?;
+    while let Some(row) = rows.next()? {
+        let input_json = row.get::<_, String>(0)?;
+        let input: TaxonInputRow = serde_json::from_str(&input_json).map_err(|error| {
+            CoreError::Consistency(format!("invalid formatted operation input: {error}"))
         })?;
-        for row in rows {
-            writer.write_record(input_record(row, &separator))?;
-        }
+        writer.write_record(input_record(input, &separator))?;
     }
     finish_csv(writer)
+}
+
+fn validate_replayable_operations(
+    connection: &rusqlite::Connection,
+    operation_ids: &[i64],
+) -> CoreResult<()> {
+    if operation_ids.is_empty() {
+        return Err(CoreError::InvalidArgument(
+            "at least one operation id is required".into(),
+        ));
+    }
+    let operation_ids = operation_ids.iter().copied().collect::<BTreeSet<_>>();
+    if operation_ids.iter().any(|value| *value <= 0) {
+        return Err(CoreError::InvalidArgument(
+            "operation ids must be positive".into(),
+        ));
+    }
+    let placeholders = std::iter::repeat_n("?", operation_ids.len())
+        .collect::<Vec<_>>()
+        .join(",");
+    let supported = connection.query_row(
+        &format!(
+            r#"
+            SELECT COUNT(*)
+            FROM operations
+            WHERE operation_id IN ({placeholders})
+              AND has_formatted_input = 1
+            "#
+        ),
+        params_from_iter(operation_ids.iter()),
+        |row| row.get::<_, usize>(0),
+    )?;
+    if supported != operation_ids.len() {
+        return Err(CoreError::InvalidArgument(
+            "every selected operation must have formatted input".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn input_record(row: TaxonInputRow, separator: &str) -> Vec<String> {
@@ -64,15 +133,6 @@ fn input_record(row: TaxonInputRow, separator: &str) -> Vec<String> {
     ]
 }
 
-fn validate_operation_id(operation_id: i64) -> CoreResult<()> {
-    if operation_id <= 0 {
-        return Err(CoreError::InvalidArgument(
-            "operation id must be positive".into(),
-        ));
-    }
-    Ok(())
-}
-
 fn finish_csv(writer: csv::Writer<Vec<u8>>) -> CoreResult<String> {
     let bytes = writer.into_inner().map_err(|error| error.into_error())?;
     String::from_utf8(bytes).map_err(|error| {
@@ -86,7 +146,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn exports_one_or_all_operation_inputs_as_formatted_update_csv() {
+    fn exports_selected_or_all_replayable_inputs_with_one_header() {
         let directory = tempfile::tempdir().unwrap();
         let database = Database::open(directory.path().join("test.db")).unwrap();
         let first = apply_rows(
@@ -104,7 +164,7 @@ mod tests {
             ],
         )
         .unwrap();
-        apply_rows(
+        let second = apply_rows(
             &database,
             &[TaxonInputRow {
                 kingdom: Some("Animalia".into()),
@@ -114,28 +174,22 @@ mod tests {
         )
         .unwrap();
 
-        let single = export_taxonomy_operation_csv(&database, first.operation_id).unwrap();
+        let selected =
+            export_operations_input(&database, &[first.operation_id, second.operation_id]).unwrap();
         assert_eq!(
-            single.lines().next().unwrap(),
+            selected.lines().next().unwrap(),
             TAXONOMY_INPUT_COLUMNS.join("|")
         );
-        let single_rows = parse_taxonomy_input_csv(&database, &single).unwrap();
-        assert_eq!(single_rows.len(), 2);
-        assert_eq!(single_rows[0].kingdom.as_deref(), Some("Animalia"));
-        assert_eq!(single_rows[0].synonyms, ["Metazoa"]);
-        assert_eq!(single_rows[1].order.as_deref(), Some("Unmatched order"));
+        let rows = parse_taxonomy_input_csv(&database, &selected).unwrap();
+        assert_eq!(rows.len(), 3);
 
-        let all = export_all_taxonomy_operations_csv(&database).unwrap();
+        let all = export_all_replayable_inputs(&database).unwrap();
         assert_eq!(
             all.lines()
                 .filter(|line| *line == TAXONOMY_INPUT_COLUMNS.join("|"))
                 .count(),
             1
         );
-        let all_rows = parse_taxonomy_input_csv(&database, &all).unwrap();
-        assert_eq!(all_rows.len(), 3);
-        assert_eq!(all_rows[0].kingdom.as_deref(), Some("Animalia"));
-        assert_eq!(all_rows[1].order.as_deref(), Some("Unmatched order"));
-        assert_eq!(all_rows[2].order.as_deref(), Some("Carnivora"));
+        assert_eq!(parse_taxonomy_input_csv(&database, &all).unwrap().len(), 3);
     }
 }

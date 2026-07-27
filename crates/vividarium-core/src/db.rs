@@ -847,14 +847,53 @@ CREATE TRIGGER taxon_names_au AFTER UPDATE OF name ON taxon_names BEGIN
     INSERT INTO taxon_names_fts(rowid, name) VALUES (new.name_id, new.name);
 END;
 
-CREATE TABLE taxonomy_operations (
+CREATE TABLE operations (
     operation_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,
     source TEXT NOT NULL,
-    input_json TEXT NOT NULL,
-    result_json TEXT NOT NULL,
-    changeset_blob BLOB NOT NULL,
     applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CHECK (source = 'formatted_update')
+    total_items INTEGER NOT NULL,
+    succeeded_items INTEGER NOT NULL,
+    failed_items INTEGER NOT NULL,
+    rollbackable INTEGER NOT NULL,
+    has_formatted_input INTEGER NOT NULL,
+    CHECK (total_items >= 0),
+    CHECK (succeeded_items >= 0),
+    CHECK (failed_items >= 0),
+    CHECK (succeeded_items + failed_items = total_items),
+    CHECK (rollbackable IN (0, 1)),
+    CHECK (has_formatted_input IN (0, 1))
+);
+
+CREATE TABLE operation_audit_rows (
+    operation_id INTEGER NOT NULL,
+    sequence INTEGER NOT NULL,
+    entity_type TEXT NOT NULL,
+    entity_id TEXT,
+    action TEXT NOT NULL,
+    before_json TEXT,
+    after_json TEXT,
+    succeeded INTEGER NOT NULL,
+    message TEXT NOT NULL,
+    PRIMARY KEY (operation_id, sequence),
+    CHECK (sequence > 0),
+    CHECK (succeeded IN (0, 1)),
+    FOREIGN KEY (operation_id) REFERENCES operations(operation_id) ON DELETE CASCADE
+);
+
+CREATE TABLE operation_changesets (
+    operation_id INTEGER PRIMARY KEY,
+    changeset_blob BLOB NOT NULL,
+    FOREIGN KEY (operation_id) REFERENCES operations(operation_id) ON DELETE CASCADE
+);
+
+CREATE TABLE operation_formatted_inputs (
+    operation_id INTEGER NOT NULL,
+    sequence INTEGER NOT NULL,
+    input_json TEXT NOT NULL,
+    PRIMARY KEY (operation_id, sequence),
+    CHECK (sequence > 0),
+    FOREIGN KEY (operation_id) REFERENCES operations(operation_id) ON DELETE CASCADE
 );
 
 CREATE TABLE taxonomy_base_metadata (
@@ -897,8 +936,10 @@ CREATE INDEX idx_taxon_names_type_taxon ON taxon_names(name_type, taxon_id);
 CREATE INDEX idx_taxon_names_name ON taxon_names(name);
 CREATE INDEX idx_taxon_names_name_search
     ON taxon_names(normalized_name, taxon_id);
-CREATE INDEX idx_taxonomy_operations_applied
-    ON taxonomy_operations(applied_at DESC, operation_id DESC);
+CREATE INDEX idx_operations_applied
+    ON operations(applied_at DESC, operation_id DESC);
+CREATE INDEX idx_operation_audit_entity
+    ON operation_audit_rows(entity_type, entity_id, operation_id, sequence);
 CREATE INDEX idx_taxonomy_sync_events_created
     ON taxonomy_sync_events(sync_id);
 
@@ -1038,29 +1079,39 @@ CREATE TABLE photo_mapping_queue (
     FOREIGN KEY (photo_id) REFERENCES photos(photo_id) ON DELETE CASCADE
 );
 
-CREATE TABLE photo_operations (
+CREATE TABLE operations (
     operation_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,
     source TEXT NOT NULL,
-    root_path TEXT NOT NULL,
-    input_json TEXT NOT NULL,
     applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CHECK (source IN (
-        'manual_rename', 'taxon_rename', 'taxon_selection_rename'
-    ))
+    total_items INTEGER NOT NULL,
+    succeeded_items INTEGER NOT NULL,
+    failed_items INTEGER NOT NULL,
+    rollbackable INTEGER NOT NULL,
+    has_formatted_input INTEGER NOT NULL,
+    CHECK (total_items >= 0),
+    CHECK (succeeded_items >= 0),
+    CHECK (failed_items >= 0),
+    CHECK (succeeded_items + failed_items = total_items),
+    CHECK (rollbackable IN (0, 1)),
+    CHECK (has_formatted_input IN (0, 1))
 );
 
-CREATE TABLE photo_operation_items (
+CREATE TABLE operation_audit_rows (
     operation_id INTEGER NOT NULL,
-    row_number INTEGER NOT NULL,
-    photo_id INTEGER NOT NULL,
-    directory_relative_path TEXT NOT NULL,
-    old_filename TEXT NOT NULL,
-    new_filename TEXT NOT NULL,
-    PRIMARY KEY (operation_id, row_number),
-    CHECK (row_number > 0),
-    CHECK (old_filename <> new_filename),
+    sequence INTEGER NOT NULL,
+    entity_type TEXT NOT NULL,
+    entity_id TEXT,
+    action TEXT NOT NULL,
+    before_json TEXT,
+    after_json TEXT,
+    succeeded INTEGER NOT NULL,
+    message TEXT NOT NULL,
+    PRIMARY KEY (operation_id, sequence),
+    CHECK (sequence > 0),
+    CHECK (succeeded IN (0, 1)),
     FOREIGN KEY (operation_id)
-        REFERENCES photo_operations(operation_id) ON DELETE CASCADE
+        REFERENCES operations(operation_id) ON DELETE CASCADE
 );
 
 CREATE INDEX idx_photo_directories_parent_name
@@ -1079,10 +1130,10 @@ CREATE INDEX idx_photo_taxon_usage_subtree
     ON photo_taxon_usage(subtree_photo_count, taxon_id);
 CREATE INDEX idx_photo_mapping_queue_reason
     ON photo_mapping_queue(reason, photo_id);
-CREATE INDEX idx_photo_operation_items_photo
-    ON photo_operation_items(photo_id, operation_id);
-CREATE INDEX idx_photo_operations_applied
-    ON photo_operations(applied_at DESC, operation_id DESC);
+CREATE INDEX idx_operation_audit_entity
+    ON operation_audit_rows(entity_type, entity_id, operation_id, sequence);
+CREATE INDEX idx_operations_applied
+    ON operations(applied_at DESC, operation_id DESC);
 
 PRAGMA user_version = 2;
 "#;

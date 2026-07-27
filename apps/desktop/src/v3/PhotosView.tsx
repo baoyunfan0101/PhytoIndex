@@ -8,15 +8,16 @@ import {
   browsePhotoTaxon,
   downloadCsv,
   errorMessage,
-  exportAllPhotoOperationsCsv,
-  exportPhotoOperationCsv,
+  exportAllPhotoOperationAudit,
+  exportPhotoOperationAudit,
   getMapSettings,
   getPhotoDirectoryCounts,
   getPhotoLibrary,
   listMapPhotos,
+  listPhotoOperationAudit,
   listPhotoOperations,
   refreshPhotoDirectory,
-  revertPhotoOperation,
+  rollbackPhotoOperation,
   waitForOperation,
   type PhotoDirectory,
   type PhotoDirectoryItem,
@@ -24,7 +25,8 @@ import {
   type MapBounds,
   type MapPhoto,
   type Photo,
-  type PhotoOperation,
+  type OperationAuditRow,
+  type OperationSummary,
   type PhotoTaxonItem,
   type PhotoTaxonUsage,
 } from "./api";
@@ -352,22 +354,35 @@ export function TaxonPhotosView({ handlers }: { handlers: PhotoOpenHandlers }) {
 }
 
 export function PhotoHistoryView({ onStatus }: { onStatus: (message: string) => void }) {
-  const page = useCursorPage<PhotoOperation, null>({
+  const page = useCursorPage<OperationSummary, null>({
     params: null,
     resetKey: "photo-history",
     stateKey: "photo-history.page",
     loadPage: (_, cursor) => listPhotoOperations(cursor),
   });
-  const records = useMemo(
-    () => page.items.flatMap((operation) => operation.items.map((item) => ({ operation, item }))),
-    [page.items],
-  );
+  const [records, setRecords] = useState<Array<{ operation: OperationSummary; item: OperationAuditRow }>>([]);
+  useEffect(() => {
+    let cancelled = false;
+    void Promise.all(page.items.map(async (operation) => ({
+      operation,
+      audit: await listPhotoOperationAudit(operation.operation_id),
+    }))).then((loaded) => {
+      if (!cancelled) {
+        setRecords(loaded.flatMap(({ operation, audit }) => (
+          audit.items.map((item) => ({ operation, item }))
+        )));
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [page.items]);
   usePhotoMutation((mutation) => {
     if (mutation.kind === "photo") void page.reload();
   });
 
   async function exportAll() {
-    downloadCsv("photo-rename-operations.csv", await exportAllPhotoOperationsCsv());
+    downloadCsv("photo-rename-operations.csv", await exportAllPhotoOperationAudit());
   }
 
   return (
@@ -381,24 +396,27 @@ export function PhotoHistoryView({ onStatus }: { onStatus: (message: string) => 
           className="history-list"
           items={records}
           rowHeight={82}
-          itemKey={({ operation, item }) => `${operation.operation_id}:${item.row_number}`}
+          itemKey={({ operation, item }) => `${operation.operation_id}:${item.sequence}`}
           onNearEnd={() => void page.loadMore()}
           renderItem={({ operation, item }) => (
             <article className="operation-row">
               <History size={15} />
               <div className="rename-audit-fields">
-                <span><b>Path</b>{item.directory_relative_path || operation.root_path}</span>
-                <span><b>Old filename</b>{item.old_filename}</span>
-                <span><b>New filename</b>{item.new_filename}</span>
+                <span><b>Path</b>{auditValue(item.before_json, "directory_relative_path")}</span>
+                <span><b>Old filename</b>{auditValue(item.before_json, "filename")}</span>
+                <span><b>New filename</b>{auditValue(item.after_json, "filename")}</span>
                 <small>{operation.applied_at} / {operation.source}</small>
               </div>
               <div className="operation-actions">
-                <button type="button" title={`Export operation ${operation.operation_id}`} onClick={() => void exportPhotoOperationCsv(operation.operation_id).then((csv) => downloadCsv(`photo-operation-${operation.operation_id}.csv`, csv))}><Download size={14} /></button>
-                <button type="button" title={`Revert operation ${operation.operation_id}`} onClick={() => void revertPhotoOperation(operation.operation_id).then(() => {
-                  onStatus(`Reverted operation ${operation.operation_id}`);
+                <button type="button" title={`Export operation ${operation.operation_id}`} onClick={() => void exportPhotoOperationAudit(operation.operation_id).then((csv) => downloadCsv(`photo-operation-${operation.operation_id}.csv`, csv))}><Download size={14} /></button>
+                <button type="button" title={`Rollback operation ${operation.operation_id}`} onClick={() => void rollbackPhotoOperation(operation.operation_id).then(() => {
+                  onStatus(`Rolled back operation ${operation.operation_id}`);
                   emitPhotoMutation({
                     photoId: null,
-                    photoIds: operation.items.map((record) => record.photo_id),
+                    photoIds: records
+                      .filter((record) => record.operation.operation_id === operation.operation_id)
+                      .map((record) => Number(record.item.entity_id))
+                      .filter(Number.isFinite),
                     kind: "photo",
                   });
                 })}><RotateCcw size={14} /></button>
@@ -409,6 +427,12 @@ export function PhotoHistoryView({ onStatus }: { onStatus: (message: string) => 
       )}
     </div>
   );
+}
+
+function auditValue(value: unknown, key: string): string {
+  if (typeof value !== "object" || value === null || !(key in value)) return "";
+  const field = (value as Record<string, unknown>)[key];
+  return typeof field === "string" ? field : "";
 }
 
 export function PhotoMapView({

@@ -1,6 +1,6 @@
 use rusqlite::{params_from_iter, types::Value as SqlValue};
 
-use super::{PhotoMappingListItem, PhotoMappingListStatus, PhotoTaxonMapping, PhotoTaxonStatus};
+use super::{PhotoMappingListItem, PhotoMappingListStatus, PhotoMappingSummary, PhotoTaxonStatus};
 use crate::models::PhotoPage;
 use crate::photos::{
     self, PhotoCursor, decode_photo_cursor, encode_photo_cursor, invalid_photo_cursor,
@@ -179,9 +179,9 @@ fn mapping_list_item_from_row(
 ) -> rusqlite::Result<PhotoMappingListItem> {
     let photo = crate::db::photo_from_row(row)?;
     let mapping = match status {
-        PhotoMappingListStatus::Processing => PhotoTaxonMapping {
+        PhotoMappingListStatus::Processing => PhotoMappingSummary {
             photo_id: photo.photo_id,
-            taxon_id: row.get("mapping_taxon_id")?,
+            taxon_id: None,
             status: PhotoTaxonStatus::Processing,
         },
         _ => {
@@ -193,7 +193,7 @@ fn mapping_list_item_from_row(
                     Box::new(error),
                 )
             })?;
-            PhotoTaxonMapping {
+            PhotoMappingSummary {
                 photo_id: photo.photo_id,
                 taxon_id: row.get("mapping_taxon_id")?,
                 status: stored_status,

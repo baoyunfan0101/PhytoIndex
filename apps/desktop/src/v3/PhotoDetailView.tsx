@@ -4,8 +4,8 @@ import {
   displayTaxon,
   errorMessage,
   formatBytes,
+  getPhotoMapping,
   getPhotoMetadata,
-  getPhotoTaxonMatch,
   getTaxonDetailNode,
   type Photo,
   type PhotoMetadata,
@@ -25,9 +25,9 @@ export function PhotoDetailView({ photo }: { photo: Photo }) {
     let active = true;
     Promise.all([
       getPhotoMetadata(photo.photo_id),
-      getPhotoTaxonMatch(photo.photo_id).then(async (match) => {
-        if (match.mapping.status !== "matched" || match.mapping.taxon_id === null) return "";
-        return displayTaxon((await getTaxonDetailNode(match.mapping.taxon_id)).summary);
+      getPhotoMapping(photo.photo_id).then(async (mapping) => {
+        if (mapping.status !== "matched" || mapping.taxon_id === null) return "";
+        return displayTaxon((await getTaxonDetailNode(mapping.taxon_id)).summary);
       }),
     ]).then(([nextMetadata, nextTaxon]) => {
       if (!active) return;

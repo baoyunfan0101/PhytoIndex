@@ -232,13 +232,16 @@ mod tests {
     #[test]
     fn photo_and_taxon_navigation_use_current_mapping_tree() {
         let (_directory, database) = database();
-        let matched = get_photo_mapping(&database, 1).unwrap().unwrap();
+        let matched = get_photo_mapping(&database, 1).unwrap();
         assert_eq!(matched.status, PhotoTaxonStatus::Matched);
         assert_eq!(matched.taxon_id, Some(11));
-        let unmatched = get_photo_mapping(&database, 3).unwrap().unwrap();
+        let unmatched = get_photo_mapping(&database, 3).unwrap();
         assert_eq!(unmatched.status, PhotoTaxonStatus::Unmatched);
         assert_eq!(unmatched.taxon_id, None);
-        assert_eq!(get_photo_mapping(&database, 999).unwrap(), None);
+        assert!(matches!(
+            get_photo_mapping(&database, 999).unwrap_err(),
+            crate::CoreError::NotFound(_)
+        ));
         let initial = list_taxon_photos(&database, 10, None, 1).unwrap();
         assert_eq!(initial.items[0].photo_id, 1);
         assert!(initial.next_cursor.is_some());
@@ -251,9 +254,9 @@ mod tests {
             )
             .unwrap();
         drop(connection);
-        let processing = get_photo_mapping(&database, 1).unwrap().unwrap();
+        let processing = get_photo_mapping(&database, 1).unwrap();
         assert_eq!(processing.status, PhotoTaxonStatus::Processing);
-        assert_eq!(processing.taxon_id, Some(11));
+        assert_eq!(processing.taxon_id, None);
 
         let current = list_taxon_photos(&database, 10, None, 1).unwrap();
         assert_eq!(current.items[0].photo_id, 2);

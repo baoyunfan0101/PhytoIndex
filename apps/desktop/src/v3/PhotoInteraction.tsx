@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState, type MouseEvent } from "react";
-import { getPhotoMapping, type Photo, type PhotoTaxonMapping } from "./api";
+import { getPhotoMapping, type Photo, type PhotoMappingSummary } from "./api";
 import { PhotoContextMenu } from "./PhotoContextMenu";
 import { emitPhotoMutation } from "./photoMutations";
 import { useViewState } from "./viewState";
@@ -12,7 +12,7 @@ export type PhotoOpenHandlers = {
 
 type PhotoContextState = {
   photo: Photo;
-  mapping: PhotoTaxonMapping | null;
+  mapping: PhotoMappingSummary | null;
   loading: boolean;
   x: number;
   y: number;
@@ -27,7 +27,7 @@ export function usePhotoInteraction({
 }: {
   photos: Photo[];
   handlers: PhotoOpenHandlers;
-  knownMapping?: (photo: Photo) => PhotoTaxonMapping | null | undefined;
+  knownMapping?: (photo: Photo) => PhotoMappingSummary | null | undefined;
   selectFirst?: boolean;
   stateKey?: string;
 }) {

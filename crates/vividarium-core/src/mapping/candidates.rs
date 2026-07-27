@@ -55,33 +55,6 @@ pub(super) fn clear(transaction: &Transaction<'_>, photo_id: i64) -> CoreResult<
     Ok(())
 }
 
-pub(super) fn is_current_candidate(
-    connection: &Connection,
-    photo_id: i64,
-    taxon_id: i64,
-) -> CoreResult<bool> {
-    Ok(connection.query_row(
-        r#"
-        SELECT EXISTS(
-            SELECT 1
-            FROM photo_taxon_mapping
-            JOIN photo_taxon_candidates USING (photo_id)
-            WHERE photo_taxon_mapping.photo_id = ?
-              AND photo_taxon_mapping.status = 'ambiguous'
-              AND photo_taxon_candidates.taxon_id = ?
-              AND NOT EXISTS (
-                  SELECT 1
-                  FROM photo_mapping_queue
-                  WHERE photo_mapping_queue.photo_id =
-                        photo_taxon_mapping.photo_id
-              )
-        )
-        "#,
-        params![photo_id, taxon_id],
-        |row| row.get(0),
-    )?)
-}
-
 pub(super) fn load(connection: &Connection, photo_id: i64) -> CoreResult<Vec<PhotoTaxonCandidate>> {
     let taxon_ids = {
         let mut statement = connection.prepare(
