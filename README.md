@@ -36,7 +36,7 @@ apps/
     src/                    React and TypeScript user interface
     src-tauri/              Tauri adapter, IPC commands, and platform config
 crates/
-  phytoindex-core/          Rust domain services, SQLite, scanning, and imports
+  vividarium-core/          Rust domain services, SQLite, scanning, and imports
 docs/
   BUILDING.md               Local and GitHub release instructions
   MAP.md                    Map query and settings backend API
@@ -51,7 +51,7 @@ scripts/
 Cargo.toml                  Rust workspace and release profile
 ```
 
-The React application calls typed Rust commands through Tauri IPC. Original photos and generated thumbnails are served through a private `phytoindex://` protocol. The core crate does not depend on Tauri, so its services can be tested separately from the desktop shell.
+The React application calls typed Rust commands through Tauri IPC. Original photos and generated thumbnails are served through a private `vividarium://` protocol. The core crate does not depend on Tauri, so its services can be tested separately from the desktop shell.
 
 See [docs/TAXONOMY.md](docs/TAXONOMY.md) for the public taxonomy knowledge base backend models, Rust APIs, and Tauri commands.
 
@@ -85,7 +85,7 @@ cd apps/desktop
 cargo tauri dev
 ```
 
-Development builds store application data in the repository `data/` directory. Set `PHYTOINDEX_DATA_DIR` to override that location.
+Development builds store application data in the repository `data/` directory. Set `VIVIDARIUM_DATA_DIR` to override that location.
 
 ## Map Providers
 
@@ -123,7 +123,7 @@ Release builds use the operating system application-data directory. The current 
 The permanent application identifier is:
 
 ```text
-io.github.baoyunfan0101.phytoindex
+io.github.baoyunfan0101.vividarium
 ```
 
 ## License

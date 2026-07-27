@@ -1,33 +1,33 @@
 use std::path::Path;
 
-use phytoindex_core::mapping::{
+use serde_json::{Value, json};
+use tauri::{AppHandle, State, ipc::Channel};
+use vividarium_core::mapping::{
     PhotoMappingListItem, PhotoMappingListStatus, PhotoNameMatchSettings, PhotoTaxonItem,
     PhotoTaxonMapping, PhotoTaxonMatch, PhotoTaxonNode,
 };
-use phytoindex_core::models::{
+use vividarium_core::models::{
     DirectoryEntryCounts, MappingMetadata, OperationsStatus, Photo, PhotoDirectoryItem,
     PhotoLibrary, PhotoMetadata, PhotoPage,
 };
-use phytoindex_core::naming::{
+use vividarium_core::naming::{
     NamingHookKind, NamingHookSettings, NamingHookTemplates, NamingHookTestCase,
     NamingHookTestCases, NamingHookTestReport, NamingHookTestResult, ParsedPhotoFilename,
     TaxonomicNameInfo,
 };
-use phytoindex_core::photos::{
+use vividarium_core::photos::{
     PhotoFilenameFormatSettings, PhotoOperation, PhotoRenameOperationResult,
 };
-use phytoindex_core::taxonomy::{
+use vividarium_core::taxonomy::{
     DeleteTaxonNameInput, PromoteTaxonNameInput, TaxonChild, TaxonDetailNode, TaxonInputRow,
     TaxonRowOutcome, TaxonSearchResult, TaxonSuggestion, TaxonUpdateInput, TaxonomyBaseMetadata,
     TaxonomyCustomSqlResult, TaxonomyCustomSqlTempTable, TaxonomyOperation,
     TaxonomyOperationResult, TaxonomyPage, TaxonomyPreviewResult,
 };
-use phytoindex_core::{
+use vividarium_core::{
     map::{self, MapBounds, MapPhoto, MapSettings},
     mapping, naming, photos, taxonomy,
 };
-use serde_json::{Value, json};
-use tauri::{AppHandle, State, ipc::Channel};
 
 use crate::state::AppState;
 use crate::updater::{AppUpdateEvent, AppUpdateInfo, PendingAppUpdate};

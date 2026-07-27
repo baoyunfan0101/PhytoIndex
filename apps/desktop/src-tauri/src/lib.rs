@@ -21,7 +21,7 @@ pub fn run() {
             app.manage(updater::PendingAppUpdate::default());
             Ok(())
         })
-        .register_uri_scheme_protocol("phytoindex", |_context, request| media::handle(request))
+        .register_uri_scheme_protocol("vividarium", |_context, request| media::handle(request))
         .invoke_handler(tauri::generate_handler![
             commands::get_photo_library,
             commands::get_photo_library_count,

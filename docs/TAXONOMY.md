@@ -1,7 +1,7 @@
 # Taxonomy Backend Public API
 
 This document describes the public API exported by
-`phytoindex_core::taxonomy`. The desktop commands are adapters over the same
+`vividarium_core::taxonomy`. The desktop commands are adapters over the same
 types and behavior.
 
 Shared normalization and configurable synonym parsing are documented in
@@ -219,7 +219,7 @@ pub fn split_scientific_name_authority(
 parsed `name` and optional `authority_year`.
 
 Formatted updates use the database-aware synonym parser from
-`phytoindex_core::naming`. It runs the configured Rhai hook or bundled Rhai
+`vividarium_core::naming`. It runs the configured Rhai hook or bundled Rhai
 template, then applies shared name normalization. See
 [the naming backend API](NAMING.md) for parameters, return values, and the
 hook contract.

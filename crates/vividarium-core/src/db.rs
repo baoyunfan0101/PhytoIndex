@@ -772,7 +772,7 @@ mod tests {
     fn refuses_to_open_different_schema_versions() {
         for version in [1, 3] {
             let directory = tempfile::tempdir().unwrap();
-            let path = directory.path().join("phytoindex.db");
+            let path = directory.path().join("vividarium.db");
             let connection = Connection::open(&path).unwrap();
             connection
                 .execute_batch(&format!("PRAGMA user_version = {version};"))

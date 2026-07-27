@@ -32,7 +32,7 @@ src-tauri/
 `search_photos`; a taxon PhotoSet loads `list_taxon_photos`. Both use the same
 cursor-paged virtual list and virtual grid.
 
-The interface never receives arbitrary file-system privileges. Photos are requested by database ID through the private `phytoindex://` protocol, and Rust validates the configured photo root before reading a file.
+The interface never receives arbitrary file-system privileges. Photos are requested by database ID through the private `vividarium://` protocol, and Rust validates the configured photo root before reading a file.
 
 ## Develop
 

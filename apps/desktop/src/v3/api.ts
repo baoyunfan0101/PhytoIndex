@@ -1,7 +1,7 @@
 import { Channel, convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import defaultPhotoFilenameHook from "../../../../crates/phytoindex-core/src/naming/templates/photo_filename.rhai?raw";
-import defaultSynonymAuthorityHook from "../../../../crates/phytoindex-core/src/naming/templates/synonym_authority.rhai?raw";
+import defaultPhotoFilenameHook from "../../../../crates/vividarium-core/src/naming/templates/photo_filename.rhai?raw";
+import defaultSynonymAuthorityHook from "../../../../crates/vividarium-core/src/naming/templates/synonym_authority.rhai?raw";
 
 export type Page<T> = { items: T[]; next_cursor: string | null };
 
@@ -448,7 +448,7 @@ export function photoUrl(photo: Photo, thumbnail = false): string {
     return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
   }
   const resource = thumbnail ? "thumbnail" : "photo";
-  return `${convertFileSrc(`${resource}/${photo.photo_id}`, "phytoindex")}?v=${photo.modified_at_ns}:${photo.file_size}`;
+  return `${convertFileSrc(`${resource}/${photo.photo_id}`, "vividarium")}?v=${photo.modified_at_ns}:${photo.file_size}`;
 }
 
 export const getPhotoLibrary = () =>
