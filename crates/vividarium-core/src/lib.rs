@@ -1,4 +1,4 @@
-pub mod db;
+mod db;
 pub mod error;
 pub mod map;
 pub mod mapping;
@@ -7,8 +7,9 @@ pub mod models;
 pub mod naming;
 pub mod operations;
 pub mod photos;
+pub mod storage;
 pub mod taxonomy;
 
-pub use db::Database;
 pub use error::{CoreError, CoreResult};
 pub use models::*;
+pub use storage::Database;

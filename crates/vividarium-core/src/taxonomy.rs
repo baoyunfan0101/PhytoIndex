@@ -19,10 +19,10 @@ pub use base::{
 };
 pub use formatted::{
     TaxonChange, TaxonChangeKind, TaxonInputRow, TaxonRank, TaxonRowOutcome, TaxonRowStatus,
-    TaxonomyNameType, TaxonomyOperationResult, TaxonomyOperationRowLog, TaxonomyOperationSource,
-    TaxonomyPreviewResult, apply_rows, get_taxonomy_name_separator, list_operation_audit,
-    list_operations, parse_taxonomy_input_csv, preview_rows, rollback_operation,
-    set_taxonomy_name_separator, taxonomy_formatted_update_template, taxonomy_log_csv,
+    TaxonomyNameType, TaxonomyOperationResult, TaxonomyPreviewResult, apply_rows,
+    get_taxonomy_name_separator, list_operation_audit, list_operations, parse_taxonomy_input_csv,
+    preview_rows, rollback_operation, set_taxonomy_name_separator,
+    taxonomy_formatted_update_template, taxonomy_log_csv,
 };
 pub use name_parser::{ScientificNameParts, split_scientific_name_authority};
 pub use operation_export::{

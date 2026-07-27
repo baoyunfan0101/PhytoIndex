@@ -41,11 +41,6 @@ impl Database {
         Ok(database)
     }
 
-    pub fn path(&self) -> PathBuf {
-        self.taxonomy_path()
-            .unwrap_or_else(|_| self.metadata_path())
-    }
-
     pub fn metadata_path(&self) -> PathBuf {
         self.paths
             .read()
@@ -347,15 +342,15 @@ impl Database {
         self.locations()
     }
 
-    pub fn connect(&self) -> CoreResult<Connection> {
+    pub(crate) fn connect(&self) -> CoreResult<Connection> {
         self.connect_photo_library()
     }
 
-    pub fn connect_metadata(&self) -> CoreResult<Connection> {
+    pub(crate) fn connect_metadata(&self) -> CoreResult<Connection> {
         open_connection(&self.metadata_path())
     }
 
-    pub fn connect_taxonomy(&self) -> CoreResult<Connection> {
+    pub(crate) fn connect_taxonomy(&self) -> CoreResult<Connection> {
         open_connection(&self.taxonomy_path()?)
     }
 
@@ -373,7 +368,7 @@ impl Database {
         Ok(connection)
     }
 
-    pub fn connect_photo_library(&self) -> CoreResult<Connection> {
+    pub(crate) fn connect_photo_library(&self) -> CoreResult<Connection> {
         let library = self.active_photo_library()?.ok_or_else(|| {
             CoreError::InvalidArgument("no active photo library is registered".into())
         })?;

@@ -17,7 +17,7 @@ const PHOTO_RENAME_KIND: &str = "photo_rename";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum PhotoOperationSource {
+pub(super) enum PhotoOperationSource {
     ManualRename,
     TaxonRename,
     TaxonSelectionRename,
@@ -34,13 +34,6 @@ impl PhotoOperationSource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PhotoOperationInput {
-    pub row_number: usize,
-    pub photo_id: i64,
-    pub requested_filename: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct PhotoRenameState {
     directory_relative_path: String,
     filename: String,
@@ -54,24 +47,27 @@ struct PhotoOperationItem {
     after: PhotoRenameState,
 }
 
-pub(super) fn insert_photo_operation(
-    transaction: &Transaction<'_>,
+pub(super) fn start_photo_operation(
+    database: &Database,
     source: PhotoOperationSource,
-    _root_path: &str,
-    input: &[PhotoOperationInput],
+    total_items: usize,
 ) -> CoreResult<i64> {
-    operations::insert_operation(
-        transaction,
+    let mut connection = database.connect()?;
+    let transaction = connection.transaction()?;
+    let operation_id = operations::insert_operation(
+        &transaction,
         NewOperation {
             kind: PHOTO_RENAME_KIND,
             source: source.as_str(),
-            total_items: input.len(),
+            total_items,
             succeeded_items: 0,
-            failed_items: input.len(),
+            failed_items: total_items,
             rollbackable: true,
             has_formatted_input: false,
         },
-    )
+    )?;
+    transaction.commit()?;
+    Ok(operation_id)
 }
 
 pub(super) fn insert_photo_operation_item(

@@ -26,7 +26,7 @@ pub struct PhotoMetadata {
 }
 
 #[derive(Debug, Clone)]
-pub struct NewPhoto {
+pub(crate) struct NewPhoto {
     pub directory_id: i64,
     pub filename: String,
     pub file_size: i64,

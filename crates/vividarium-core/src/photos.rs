@@ -30,11 +30,14 @@ pub use naming::{
     PhotoFilenameFormatSettings, format_photo_filename, get_photo_filename_format_settings,
     set_photo_filename_format_settings,
 };
-pub use operations::{
-    PhotoOperationInput, PhotoOperationSource, export_all_operation_audit, export_operation_audit,
-    export_operations_audit, list_operation_audit, list_operations, rollback_operation,
+use operations::{
+    PhotoOperationSource, insert_photo_operation_item, record_operation_outcomes,
+    start_photo_operation,
 };
-use operations::{insert_photo_operation, insert_photo_operation_item, record_operation_outcomes};
+pub use operations::{
+    export_all_operation_audit, export_operation_audit, export_operations_audit,
+    list_operation_audit, list_operations, rollback_operation,
+};
 pub(crate) use page::{
     PhotoCursor, PhotoPageSection, decode_photo_cursor, encode_photo_cursor, invalid_photo_cursor,
     photo_page_limit,
@@ -438,45 +441,57 @@ pub fn rename_photo(database: &Database, photo_id: i64, new_filename: &str) -> C
     let _guard = PHOTO_WRITE_LOCK
         .lock()
         .map_err(|_| CoreError::InvalidArgument("photo workspace lock is poisoned".into()))?;
-    let mut operation_id = None;
-    let input = [PhotoOperationInput {
-        row_number: 1,
-        photo_id,
-        requested_filename: Some(new_filename.to_string()),
-    }];
-    Ok(rename_photo_locked(
+    let operation_id = start_photo_operation(database, PhotoOperationSource::ManualRename, 1)?;
+    finish_single_photo_rename(
         database,
+        operation_id,
         photo_id,
-        new_filename,
-        PhotoOperationSource::ManualRename,
-        1,
-        &mut operation_id,
-        &input,
-    )?
-    .photo)
+        rename_photo_locked(database, photo_id, new_filename, 1, operation_id),
+    )
+}
+
+fn finish_single_photo_rename(
+    database: &Database,
+    operation_id: i64,
+    photo_id: i64,
+    result: CoreResult<PhotoRenameResult>,
+) -> CoreResult<Photo> {
+    match result {
+        Ok(result) => {
+            if result.operation_id.is_none() {
+                record_operation_outcomes(
+                    database,
+                    Some(operation_id),
+                    &[(1, photo_id, "no_change", true, "no change".into())],
+                )?;
+            }
+            Ok(result.photo)
+        }
+        Err(error) => {
+            let audit_result = record_operation_outcomes(
+                database,
+                Some(operation_id),
+                &[(1, photo_id, "rename", false, error.to_string())],
+            );
+            match audit_result {
+                Ok(()) => Err(error),
+                Err(audit_error) => Err(CoreError::Consistency(format!(
+                    "photo rename failed: {error}; audit update failed: {audit_error}"
+                ))),
+            }
+        }
+    }
 }
 
 pub fn rename_photo_from_taxon(database: &Database, photo_id: i64) -> CoreResult<Photo> {
     let _guard = PHOTO_WRITE_LOCK
         .lock()
         .map_err(|_| CoreError::InvalidArgument("photo workspace lock is poisoned".into()))?;
-    let new_filename = taxon_filename(database, photo_id)?;
-    let mut operation_id = None;
-    let input = [PhotoOperationInput {
-        row_number: 1,
-        photo_id,
-        requested_filename: None,
-    }];
-    Ok(rename_photo_locked(
-        database,
-        photo_id,
-        &new_filename,
-        PhotoOperationSource::TaxonRename,
-        1,
-        &mut operation_id,
-        &input,
-    )?
-    .photo)
+    let operation_id = start_photo_operation(database, PhotoOperationSource::TaxonRename, 1)?;
+    let result = taxon_filename(database, photo_id).and_then(|new_filename| {
+        rename_photo_locked(database, photo_id, &new_filename, 1, operation_id)
+    });
+    finish_single_photo_rename(database, operation_id, photo_id, result)
 }
 
 pub fn rename_photos_from_taxa(
@@ -486,30 +501,22 @@ pub fn rename_photos_from_taxa(
     let _guard = PHOTO_WRITE_LOCK
         .lock()
         .map_err(|_| CoreError::InvalidArgument("photo workspace lock is poisoned".into()))?;
-    let input = photo_ids
-        .iter()
-        .copied()
-        .enumerate()
-        .map(|(index, photo_id)| PhotoOperationInput {
-            row_number: index + 1,
-            photo_id,
-            requested_filename: None,
-        })
-        .collect::<Vec<_>>();
-    let mut operation_id = None;
+    if photo_ids.is_empty() {
+        return Ok(PhotoRenameOperationResult {
+            operation_id: None,
+            rows: Vec::new(),
+        });
+    }
+    let operation_id = start_photo_operation(
+        database,
+        PhotoOperationSource::TaxonSelectionRename,
+        photo_ids.len(),
+    )?;
     let mut rows = Vec::with_capacity(photo_ids.len());
     for (index, photo_id) in photo_ids.iter().copied().enumerate() {
         let row_number = index + 1;
         let result = taxon_filename(database, photo_id).and_then(|new_filename| {
-            rename_photo_locked(
-                database,
-                photo_id,
-                &new_filename,
-                PhotoOperationSource::TaxonSelectionRename,
-                row_number,
-                &mut operation_id,
-                &input,
-            )
+            rename_photo_locked(database, photo_id, &new_filename, row_number, operation_id)
         });
         rows.push(match result {
             Ok(result) => {
@@ -521,7 +528,7 @@ pub fn rename_photos_from_taxa(
                 PhotoRenameRowOutcome {
                     row_number,
                     photo_id,
-                    operation_id: result.operation_id,
+                    operation_id: Some(operation_id),
                     status,
                     message: match status {
                         PhotoRenameRowStatus::Applied => "applied".into(),
@@ -534,7 +541,7 @@ pub fn rename_photos_from_taxa(
             Err(error) if is_photo_rename_row_error(&error) => PhotoRenameRowOutcome {
                 row_number,
                 photo_id,
-                operation_id: None,
+                operation_id: Some(operation_id),
                 status: PhotoRenameRowStatus::Failed,
                 message: error.to_string(),
                 photo: None,
@@ -562,8 +569,11 @@ pub fn rename_photos_from_taxa(
             )),
         })
         .collect::<Vec<_>>();
-    record_operation_outcomes(database, operation_id, &audit_rows)?;
-    Ok(PhotoRenameOperationResult { operation_id, rows })
+    record_operation_outcomes(database, Some(operation_id), &audit_rows)?;
+    Ok(PhotoRenameOperationResult {
+        operation_id: Some(operation_id),
+        rows,
+    })
 }
 
 pub fn rename_photos_in_directory_from_taxa(
@@ -624,10 +634,8 @@ fn rename_photo_locked(
     database: &Database,
     photo_id: i64,
     new_filename: &str,
-    operation_source: PhotoOperationSource,
     row_number: usize,
-    operation_id: &mut Option<i64>,
-    operation_input: &[PhotoOperationInput],
+    operation_id: i64,
 ) -> CoreResult<PhotoRenameResult> {
     let new_filename = validate_filename(new_filename)?;
     let old_photo = get_photo(database, photo_id)?
@@ -643,17 +651,13 @@ fn rename_photo_locked(
     let directory = load_directory(&connection, old_photo.directory_id)?.ok_or_else(|| {
         CoreError::NotFound(format!("photo directory {}", old_photo.directory_id))
     })?;
-    let root_path = root
-        .to_str()
-        .ok_or_else(|| CoreError::InvalidArgument("photo root is not valid UTF-8".into()))?;
     let directory_path = safe_directory_path(&root, &directory.relative_path)?;
     let source = directory_path.join(&old_photo.filename);
     let destination = directory_path.join(&new_filename);
     let temporary = directory_path.join(format!(".vividarium-rename-{photo_id}.tmp"));
     rename_file(&source, &destination, &temporary)?;
 
-    let existing_operation_id = *operation_id;
-    let result = (|| -> CoreResult<(Photo, i64)> {
+    let result = (|| -> CoreResult<Photo> {
         let mut connection = database.connect()?;
         let transaction = connection.transaction()?;
         transaction.execute(
@@ -665,15 +669,9 @@ fn rename_photo_locked(
             "DELETE FROM photo_mapping_queue WHERE photo_id = ?",
             [photo_id],
         )?;
-        let current_operation_id = match existing_operation_id {
-            Some(operation_id) => operation_id,
-            None => {
-                insert_photo_operation(&transaction, operation_source, root_path, operation_input)?
-            }
-        };
         insert_photo_operation_item(
             &transaction,
-            current_operation_id,
+            operation_id,
             row_number,
             photo_id,
             &directory.relative_path,
@@ -689,16 +687,13 @@ fn rename_photo_locked(
             .optional()?
             .ok_or_else(|| CoreError::NotFound(format!("photo {photo_id}")))?;
         transaction.commit()?;
-        Ok((photo, current_operation_id))
+        Ok(photo)
     })();
     match result {
-        Ok((photo, current_operation_id)) => {
-            *operation_id = Some(current_operation_id);
-            Ok(PhotoRenameResult {
-                photo,
-                operation_id: Some(current_operation_id),
-            })
-        }
+        Ok(photo) => Ok(PhotoRenameResult {
+            photo,
+            operation_id: Some(operation_id),
+        }),
         Err(error) => match rename_file(&destination, &source, &temporary) {
             Ok(()) => Err(error),
             Err(rollback_error) => Err(CoreError::Consistency(format!(
@@ -1416,7 +1411,7 @@ mod tests {
         assert_eq!(result.rows[0].status, PhotoRenameRowStatus::Applied);
         assert!(result.rows[0].operation_id.is_some());
         assert_eq!(result.rows[1].status, PhotoRenameRowStatus::Failed);
-        assert!(result.rows[1].operation_id.is_none());
+        assert_eq!(result.rows[1].operation_id, result.operation_id);
         assert!(
             result.rows[1]
                 .message
@@ -1438,6 +1433,31 @@ mod tests {
         assert!(root.path().join("Canis lupus.jpg").is_file());
         assert!(root.path().join("second.jpg").is_file());
         assert!(root.path().join("Canis lupus.png").is_file());
+    }
+
+    #[test]
+    fn records_an_operation_when_every_rename_row_fails() {
+        let data = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("unmapped.jpg"), b"photo").unwrap();
+        let database = Database::open(data.path().join("vividarium.db")).unwrap();
+        let library = open_library(&database, root.path().to_str().unwrap()).unwrap();
+        refresh_directory(&database, library.root_directory_id).unwrap();
+        let photo = list_photos(&database).unwrap().remove(0);
+
+        let result = rename_photos_from_taxa(&database, &[photo.photo_id]).unwrap();
+
+        let operation_id = result.operation_id.unwrap();
+        assert_eq!(result.rows[0].status, PhotoRenameRowStatus::Failed);
+        assert_eq!(result.rows[0].operation_id, Some(operation_id));
+        let summary = list_operations(&database, None, 1).unwrap().items.remove(0);
+        assert_eq!(summary.operation_id, operation_id);
+        assert_eq!(summary.total_items, 1);
+        assert_eq!(summary.succeeded_items, 0);
+        assert_eq!(summary.failed_items, 1);
+        let audit = list_operation_audit(&database, operation_id, None, 10).unwrap();
+        assert_eq!(audit.items.len(), 1);
+        assert!(!audit.items[0].succeeded);
     }
 
     #[test]

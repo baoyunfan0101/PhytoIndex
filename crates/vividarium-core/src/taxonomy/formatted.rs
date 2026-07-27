@@ -254,25 +254,11 @@ pub struct TaxonRowOutcome {
     pub changes: Vec<TaxonChange>,
 }
 
-pub type TaxonomyOperationRowLog = TaxonRowOutcome;
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TaxonomyPreviewResult {
     pub delimiter: String,
     pub encoding: String,
     pub rows: Vec<TaxonRowOutcome>,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum TaxonomyOperationSource {
-    FormattedUpdate,
-}
-
-impl TaxonomyOperationSource {
-    fn as_str(self) -> &'static str {
-        "formatted_update"
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -283,7 +269,7 @@ pub struct TaxonomyOperationResult {
     pub failed_rows: usize,
     pub delimiter: String,
     pub encoding: String,
-    pub rows: Vec<TaxonomyOperationRowLog>,
+    pub rows: Vec<TaxonRowOutcome>,
 }
 
 pub fn preview_rows(
@@ -330,7 +316,7 @@ pub fn apply_rows(
         &transaction,
         NewOperation {
             kind: "taxonomy_update",
-            source: TaxonomyOperationSource::FormattedUpdate.as_str(),
+            source: "formatted_update",
             total_items: outcomes.len(),
             succeeded_items: outcomes.len() - failed_rows,
             failed_items: failed_rows,

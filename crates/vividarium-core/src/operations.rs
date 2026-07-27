@@ -562,29 +562,33 @@ mod tests {
                 NewOperation {
                     kind: "test",
                     source: "test",
-                    total_items: 1,
-                    succeeded_items: 1,
+                    total_items: 2,
+                    succeeded_items: 2,
                     failed_items: 0,
                     rollbackable: true,
                     has_formatted_input: false,
                 },
             )
             .unwrap();
-            insert_audit_row(
-                &transaction,
-                operation_id,
-                NewAuditRow {
-                    sequence: 1,
-                    entity_type: "test",
-                    entity_id: Some(index.to_string()),
-                    action: "change",
-                    before_json: None,
-                    after_json: Some(serde_json::json!({ "index": index })),
-                    succeeded: true,
-                    message: "applied",
-                },
-            )
-            .unwrap();
+            for sequence in 1..=2 {
+                insert_audit_row(
+                    &transaction,
+                    operation_id,
+                    NewAuditRow {
+                        sequence,
+                        entity_type: "test",
+                        entity_id: Some(index.to_string()),
+                        action: "change",
+                        before_json: None,
+                        after_json: Some(
+                            serde_json::json!({ "index": index, "sequence": sequence }),
+                        ),
+                        succeeded: true,
+                        message: "applied",
+                    },
+                )
+                .unwrap();
+            }
         }
         transaction.commit().unwrap();
         let first = list_operations(&connection, None, 1).unwrap();
@@ -595,7 +599,25 @@ mod tests {
         let audit = list_operation_audit(&connection, 1, None, 1).unwrap();
         assert_eq!(
             audit.items[0].after_json,
-            Some(serde_json::json!({ "index": 1 }))
+            Some(serde_json::json!({ "index": 1, "sequence": 1 }))
         );
+        assert!(audit.next_cursor.is_some());
+        let next_audit =
+            list_operation_audit(&connection, 1, audit.next_cursor.as_deref(), 1).unwrap();
+        assert_eq!(next_audit.items[0].sequence, 2);
+        assert_eq!(next_audit.next_cursor, None);
+
+        let exported = export_operation_audit(&connection, Some(&[2, 1])).unwrap();
+        let mut csv = csv::ReaderBuilder::new()
+            .delimiter(b'|')
+            .from_reader(exported.as_bytes());
+        assert_eq!(
+            csv.headers().unwrap().iter().collect::<Vec<_>>(),
+            AUDIT_COLUMNS
+        );
+        let records = csv.records().collect::<Result<Vec<_>, _>>().unwrap();
+        assert_eq!(records.len(), 4);
+        assert_eq!(&records[0][0], "1");
+        assert_eq!(&records[2][0], "2");
     }
 }

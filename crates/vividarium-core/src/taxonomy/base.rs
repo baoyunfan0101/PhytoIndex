@@ -45,7 +45,7 @@ pub fn replace_taxonomy_base_database(
     source_path: &Path,
 ) -> CoreResult<TaxonomyBaseReplaceResult> {
     let source_path = fs::canonicalize(source_path)?;
-    let target_path = fs::canonicalize(database.path())?;
+    let target_path = fs::canonicalize(database.taxonomy_path()?)?;
     if source_path == target_path {
         return Err(CoreError::InvalidArgument(
             "taxonomy base database must differ from the application database".into(),

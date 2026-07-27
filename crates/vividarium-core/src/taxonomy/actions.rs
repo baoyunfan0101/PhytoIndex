@@ -668,115 +668,57 @@ fn quote_identifier(value: &str) -> String {
     format!("\"{}\"", value.replace('"', "\"\""))
 }
 
-#[derive(Default)]
-struct CustomSqlAuthorizer {
-    deletes_taxa: bool,
-}
-
 fn custom_sql_authorizer() -> impl for<'a> FnMut(AuthContext<'a>) -> Authorization + Send + 'static
 {
-    let mut authorizer = CustomSqlAuthorizer::default();
-    move |context| authorizer.authorize(context)
+    move |context| authorize_custom_sql_action(context)
 }
 
-impl CustomSqlAuthorizer {
-    fn authorize(&mut self, context: AuthContext<'_>) -> Authorization {
-        match context.action {
-            AuthAction::Select | AuthAction::Recursive => Authorization::Allow,
-            AuthAction::Function { function_name } => {
-                if function_name.eq_ignore_ascii_case("load_extension") {
-                    Authorization::Deny
-                } else {
-                    Authorization::Allow
-                }
+fn authorize_custom_sql_action(context: AuthContext<'_>) -> Authorization {
+    match context.action {
+        AuthAction::Select | AuthAction::Recursive => Authorization::Allow,
+        AuthAction::Function { function_name } => {
+            if function_name.eq_ignore_ascii_case("load_extension") {
+                Authorization::Deny
+            } else {
+                Authorization::Allow
             }
-            AuthAction::Pragma { pragma_name, .. } => {
-                if pragma_name.eq_ignore_ascii_case("data_version") {
-                    Authorization::Allow
-                } else {
-                    Authorization::Deny
-                }
-            }
-            AuthAction::Read { table_name, .. } => {
-                if is_allowed_custom_sql_read(
-                    self.deletes_taxa,
-                    context.database_name,
-                    context.accessor,
-                    table_name,
-                ) {
-                    Authorization::Allow
-                } else {
-                    Authorization::Deny
-                }
-            }
-            AuthAction::Insert { table_name }
-            | AuthAction::Update { table_name, .. }
-            | AuthAction::Delete { table_name } => {
-                if context.accessor.is_none() && table_name == "taxa" {
-                    self.deletes_taxa = true;
-                }
-                if is_allowed_custom_sql_write(self.deletes_taxa, context.accessor, table_name) {
-                    Authorization::Allow
-                } else {
-                    Authorization::Deny
-                }
-            }
-            _ => Authorization::Deny,
         }
+        AuthAction::Pragma { pragma_name, .. } => {
+            if pragma_name.eq_ignore_ascii_case("data_version") {
+                Authorization::Allow
+            } else {
+                Authorization::Deny
+            }
+        }
+        AuthAction::Read { table_name, .. } => {
+            if is_allowed_custom_sql_read(context.database_name, table_name) {
+                Authorization::Allow
+            } else {
+                Authorization::Deny
+            }
+        }
+        AuthAction::Insert { table_name }
+        | AuthAction::Update { table_name, .. }
+        | AuthAction::Delete { table_name } => {
+            if is_allowed_custom_sql_write(context.accessor, table_name) {
+                Authorization::Allow
+            } else {
+                Authorization::Deny
+            }
+        }
+        _ => Authorization::Deny,
     }
 }
 
-fn is_allowed_custom_sql_read(
-    deletes_taxa: bool,
-    database_name: Option<&str>,
-    accessor: Option<&str>,
-    table_name: &str,
-) -> bool {
+fn is_allowed_custom_sql_read(database_name: Option<&str>, table_name: &str) -> bool {
     is_taxonomy_session_table(table_name)
         || table_name.starts_with("taxon_names_fts")
         || (database_name == Some("temp") && table_name == "input")
-        || (accessor == Some("taxa_bd_photo_mapping")
-            && matches!(
-                table_name,
-                "photo_mapping_queue"
-                    | "photo_taxon_mapping"
-                    | "photo_taxon_candidates"
-                    | "photo_taxon_usage"
-                    | "photos"
-                    | "taxa"
-            ))
-        || is_taxa_delete_foreign_key_access(deletes_taxa, accessor, table_name)
 }
 
-fn is_allowed_custom_sql_write(
-    deletes_taxa: bool,
-    accessor: Option<&str>,
-    table_name: &str,
-) -> bool {
+fn is_allowed_custom_sql_write(accessor: Option<&str>, table_name: &str) -> bool {
     is_taxonomy_session_table(table_name)
         || (accessor.is_some() && table_name.starts_with("taxon_names_fts"))
-        || (accessor == Some("taxa_bd_photo_mapping")
-            && matches!(
-                table_name,
-                "photo_mapping_queue" | "photo_taxon_mapping" | "photo_taxon_usage"
-            ))
-        || is_taxa_delete_foreign_key_access(deletes_taxa, accessor, table_name)
-}
-
-fn is_taxa_delete_foreign_key_access(
-    deletes_taxa: bool,
-    accessor: Option<&str>,
-    table_name: &str,
-) -> bool {
-    deletes_taxa
-        && accessor.is_none()
-        && matches!(
-            table_name,
-            "photo_taxon_mapping"
-                | "photo_taxon_candidates"
-                | "photo_taxon_candidate_names"
-                | "photo_taxon_usage"
-        )
 }
 
 #[cfg(test)]
