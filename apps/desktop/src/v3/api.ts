@@ -1,5 +1,5 @@
 import { Channel, convertFileSrc, invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import defaultPhotoFilenameHook from "../../../../crates/vividarium-core/src/naming/templates/photo_filename.rhai?raw";
 import defaultSynonymAuthorityHook from "../../../../crates/vividarium-core/src/naming/templates/synonym_authority.rhai?raw";
 
@@ -713,10 +713,17 @@ export const listPhotoOperationAudit = (operationId: number, cursor: string | nu
   }));
 export const rollbackPhotoOperation = (operationId: number) =>
   call<void>("rollback_photo_operation", { operationId }, () => undefined);
-export const exportPhotoOperationAudit = (operationId: number) =>
-  call<string>("export_photo_operation_audit", { operationId }, () => "operation_id|sequence|entity_type|entity_id|action|before_json|after_json|succeeded|message\n");
-export const exportAllPhotoOperationAudit = () =>
-  call<string>("export_all_photo_operation_audit", undefined, () => "operation_id|sequence|entity_type|entity_id|action|before_json|after_json|succeeded|message\n");
+export async function exportPhotoOperationAudit(operationId: number): Promise<void> {
+  const destinationPath = await chooseAuditDestination(`photo-operation-${operationId}.csv`);
+  if (!destinationPath) return;
+  await call<void>("export_photo_operation_audit", { operationId, destinationPath }, () => undefined);
+}
+
+export async function exportAllPhotoOperationAudit(): Promise<void> {
+  const destinationPath = await chooseAuditDestination("photo-rename-operations.csv");
+  if (!destinationPath) return;
+  await call<void>("export_all_photo_operation_audit", { destinationPath }, () => undefined);
+}
 
 export const listTaxonomyOperations = (cursor: string | null = null, limit = 80) =>
   call<Page<OperationSummary>>("list_taxonomy_operations", { cursor, limit }, () => ({
@@ -878,6 +885,14 @@ export function downloadCsv(filename: string, content: string) {
   anchor.download = filename;
   anchor.click();
   URL.revokeObjectURL(url);
+}
+
+async function chooseAuditDestination(defaultPath: string): Promise<string | null> {
+  if (!desktopRuntime) return null;
+  return save({
+    defaultPath,
+    filters: [{ name: "CSV", extensions: ["csv"] }],
+  });
 }
 
 export function displayTaxon(summary: Pick<TaxonSummary, "taxon_id" | "names">): string {

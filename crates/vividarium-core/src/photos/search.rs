@@ -218,7 +218,7 @@ mod tests {
 
     fn database() -> (TempDir, Database) {
         let directory = TempDir::new().unwrap();
-        let database = Database::open(directory.path().join("test.db")).unwrap();
+        let database = Database::open_test(directory.path().join("test.db")).unwrap();
         let connection = database.connect().unwrap();
         connection
             .execute_batch(

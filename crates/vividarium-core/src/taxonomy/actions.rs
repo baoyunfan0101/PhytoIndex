@@ -96,7 +96,7 @@ pub fn parse_custom_taxonomy_input_csv(input: &str) -> CoreResult<TaxonomyCustom
 }
 
 fn detect_csv_delimiter(input: &str) -> u8 {
-    let candidates = [b',', b'|', b'\t', b';'];
+    let candidates = *b",|\t;";
     let mut counts = [0_usize; 4];
     let bytes = input.as_bytes();
     let mut in_quotes = false;
@@ -111,10 +111,10 @@ fn detect_csv_delimiter(input: &str) -> u8 {
             in_quotes = !in_quotes;
         } else if !in_quotes && matches!(byte, b'\r' | b'\n') {
             break;
-        } else if !in_quotes {
-            if let Some(candidate) = candidates.iter().position(|value| *value == byte) {
-                counts[candidate] += 1;
-            }
+        } else if !in_quotes
+            && let Some(candidate) = candidates.iter().position(|value| *value == byte)
+        {
+            counts[candidate] += 1;
         }
         index += 1;
     }
@@ -198,11 +198,11 @@ pub fn promote_taxon_name(database: &Database, input: PromoteTaxonNameInput) -> 
         ));
     }
     let accepted_type = current_type.accepted_type();
-    let accepted_name_id = transaction
+    let (accepted_name_id, accepted_name) = transaction
         .query_row(
-            "SELECT name_id FROM taxon_names WHERE taxon_id = ? AND name_type = ?",
+            "SELECT name_id, name FROM taxon_names WHERE taxon_id = ? AND name_type = ?",
             params![input.taxon_id, accepted_type.code()],
-            |row| row.get::<_, i64>(0),
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
         )
         .optional()?
         .ok_or_else(|| {
@@ -238,6 +238,7 @@ pub fn promote_taxon_name(database: &Database, input: PromoteTaxonNameInput) -> 
             )));
         }
     }
+    let mut session = start_taxonomy_session(&transaction)?;
     transaction.execute(
         "UPDATE taxon_names SET name_type = ? WHERE taxon_id = ? AND name_id = ?",
         params![current_type.code(), input.taxon_id, accepted_name_id],
@@ -247,9 +248,60 @@ pub fn promote_taxon_name(database: &Database, input: PromoteTaxonNameInput) -> 
         params![accepted_type.code(), input.taxon_id, input.name_id],
     )?;
     validate_taxonomy(&transaction)?;
-    super::sync::record_event(&transaction, None, [input.taxon_id], false)?;
+    let mut changeset_blob = Vec::new();
+    session.changeset_strm(&mut changeset_blob)?;
+    drop(session);
+    let operation_id = operations::insert_operation(
+        &transaction,
+        NewOperation {
+            kind: "taxonomy_name_promote",
+            source: "ui_promote",
+            total_items: 1,
+            succeeded_items: 1,
+            failed_items: 0,
+            rollbackable: true,
+            has_formatted_input: false,
+        },
+    )?;
+    transaction.execute(
+        r#"
+        INSERT INTO operation_changesets (operation_id, changeset_blob)
+        VALUES (?, ?)
+        "#,
+        params![operation_id, changeset_blob],
+    )?;
+    operations::insert_audit_row(
+        &transaction,
+        operation_id,
+        NewAuditRow {
+            sequence: 1,
+            entity_type: "taxon_name",
+            entity_id: Some(input.name_id.to_string()),
+            action: "promote",
+            before_json: Some(serde_json::json!({
+                "taxon_id": input.taxon_id,
+                "accepted_name_id": accepted_name_id,
+                "accepted_name": accepted_name.clone(),
+                "promoted_name_id": input.name_id,
+                "promoted_name": name.clone(),
+                "accepted_name_type": accepted_type.code(),
+                "alias_name_type": current_type.code(),
+            })),
+            after_json: Some(serde_json::json!({
+                "taxon_id": input.taxon_id,
+                "accepted_name_id": input.name_id,
+                "accepted_name": name,
+                "alias_name_id": accepted_name_id,
+                "alias_name": accepted_name,
+                "accepted_name_type": accepted_type.code(),
+                "alias_name_type": current_type.code(),
+            })),
+            succeeded: true,
+            message: "exchanged accepted and alias taxonomy names",
+        },
+    )?;
+    super::sync::record_event(&transaction, Some(operation_id), [input.taxon_id], false)?;
     transaction.commit()?;
-    super::sync::synchronize_all_photo_libraries(database)?;
     Ok(())
 }
 
@@ -329,7 +381,6 @@ pub fn delete_taxon_name(database: &Database, input: DeleteTaxonNameInput) -> Co
     )?;
     super::sync::record_event(&transaction, Some(operation_id), [input.taxon_id], false)?;
     transaction.commit()?;
-    super::sync::synchronize_all_photo_libraries(database)?;
     Ok(())
 }
 
@@ -409,7 +460,6 @@ pub fn delete_taxon(database: &Database, taxon_id: i64) -> CoreResult<()> {
     )?;
     super::sync::record_event(&transaction, Some(operation_id), [taxon_id], false)?;
     transaction.commit()?;
-    super::sync::synchronize_all_photo_libraries(database)?;
     Ok(())
 }
 
@@ -464,9 +514,6 @@ pub fn execute_custom_taxonomy_sql(
         super::sync::record_event(&transaction, Some(operation_id), affected_taxon_ids, false)?;
     }
     transaction.commit()?;
-    if changeset_size > 0 {
-        super::sync::synchronize_all_photo_libraries(database)?;
-    }
     Ok(TaxonomyCustomSqlResult {
         operation_id,
         changeset_size,
@@ -729,7 +776,7 @@ mod tests {
 
     fn database() -> (TempDir, Database) {
         let directory = TempDir::new().unwrap();
-        let database = Database::open(directory.path().join("test.db")).unwrap();
+        let database = Database::open_test(directory.path().join("test.db")).unwrap();
         (directory, database)
     }
 
@@ -841,6 +888,13 @@ mod tests {
         assert_eq!(promoted, TaxonomyNameType::SciName.code());
         assert_eq!(previous, TaxonomyNameType::Synonym.code());
         drop(connection);
+        let operation = crate::taxonomy::list_operations(&database, None, 1)
+            .unwrap()
+            .items
+            .remove(0);
+        assert_eq!(operation.kind, "taxonomy_name_promote");
+        assert!(operation.rollbackable);
+        assert!(!operation.has_formatted_input);
 
         let error = promote_taxon_name(
             &database,
@@ -851,6 +905,29 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("parent genus"));
+
+        crate::taxonomy::rollback_operation(&database, operation.operation_id).unwrap();
+        let connection = database.connect_taxonomy_context().unwrap();
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT name_type FROM taxon_names WHERE name = 'Canis lupus'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            TaxonomyNameType::SciName.code()
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT name_type FROM taxon_names WHERE name = 'Canis lycaon'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            TaxonomyNameType::Synonym.code()
+        );
     }
 
     #[test]
@@ -928,9 +1005,10 @@ mod tests {
             },
         )
         .unwrap();
+        crate::taxonomy::synchronize_pending_photo_libraries(&database).unwrap();
         assert!(
             database
-                .connect()
+                .connect_taxonomy_context()
                 .unwrap()
                 .query_row(
                     "SELECT NOT EXISTS(SELECT 1 FROM taxon_names WHERE name_id = ?)",
@@ -948,7 +1026,7 @@ mod tests {
         crate::taxonomy::rollback_operation(&database, operation.operation_id).unwrap();
         assert!(
             database
-                .connect()
+                .connect_taxonomy_context()
                 .unwrap()
                 .query_row(
                     "SELECT EXISTS(SELECT 1 FROM taxon_names WHERE name_id = ?)",
@@ -1043,6 +1121,7 @@ mod tests {
             None,
         )
         .unwrap();
+        crate::taxonomy::synchronize_pending_photo_libraries(&database).unwrap();
         assert!(
             crate::taxonomy::export_operation_input(&database, result.operation_id)
                 .unwrap_err()

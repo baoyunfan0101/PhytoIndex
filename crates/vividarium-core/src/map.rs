@@ -47,7 +47,10 @@ pub struct MapPhoto {
 }
 
 pub fn get_map_settings(database: &Database) -> CoreResult<MapSettings> {
-    Ok(metadata::get_json(&database.connect()?, MetadataKey::MapSettings)?.unwrap_or_default())
+    Ok(
+        metadata::get_json(&database.connect_metadata()?, MetadataKey::MapSettings)?
+            .unwrap_or_default(),
+    )
 }
 
 pub fn set_map_settings(database: &Database, mut settings: MapSettings) -> CoreResult<MapSettings> {
@@ -55,7 +58,11 @@ pub fn set_map_settings(database: &Database, mut settings: MapSettings) -> CoreR
         .tianditu_token
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
-    metadata::set_json(&database.connect()?, MetadataKey::MapSettings, &settings)?;
+    metadata::set_json(
+        &database.connect_metadata()?,
+        MetadataKey::MapSettings,
+        &settings,
+    )?;
     Ok(settings)
 }
 
@@ -181,7 +188,7 @@ mod tests {
 
     fn database() -> (tempfile::TempDir, Database) {
         let directory = tempfile::tempdir().unwrap();
-        let database = Database::open(directory.path().join("test.db")).unwrap();
+        let database = Database::open_test(directory.path().join("test.db")).unwrap();
         let connection = database.connect().unwrap();
         connection
             .execute_batch(

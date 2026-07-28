@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use rusqlite::{Connection, OptionalExtension, Row, params};
+use rusqlite::{Connection, OptionalExtension, Row, TransactionBehavior, params};
 use uuid::Uuid;
 
 use crate::error::{CoreError, CoreResult};
@@ -14,7 +14,6 @@ pub(crate) const LOCAL_TAXON_ID_FLOOR: i64 = 8_000_000_000_000_000;
 
 const DEFAULT_TAXONOMY_FILENAME: &str = "taxonomy.db";
 const DEFAULT_LIBRARY_DIRECTORY: &str = "photo-libraries";
-const DEFAULT_LIBRARY_FILENAME: &str = "default.db";
 
 #[derive(Debug)]
 struct DatabasePaths {
@@ -38,6 +37,27 @@ impl Database {
             })),
         };
         database.initialize()?;
+        Ok(database)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn open_test(metadata_path: impl Into<PathBuf>) -> CoreResult<Self> {
+        let metadata_path = metadata_path.into();
+        let directory = metadata_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf();
+        let root_path = directory.join("test-photo-root");
+        fs::create_dir_all(&root_path)?;
+        let database = Self::open(metadata_path)?;
+        database.register_photo_library(
+            &root_path,
+            &directory.join("test-photo-library.db"),
+            Some("Test Photo Library"),
+        )?;
+        database
+            .connect()?
+            .execute("DELETE FROM photo_directories", [])?;
         Ok(database)
     }
 
@@ -134,10 +154,33 @@ impl Database {
         database_path: &Path,
         display_name: Option<&str>,
     ) -> CoreResult<PhotoLibraryRegistration> {
+        if !root_path.is_dir() {
+            return Err(CoreError::InvalidArgument(format!(
+                "photo library root is not an existing directory: {}",
+                root_path.display()
+            )));
+        }
         let root_path = canonical_or_absolute(root_path)?;
         let database_path = absolute_path(database_path)?;
+        let registered_database_path = self
+            .connect_metadata()?
+            .query_row(
+                "SELECT db_path FROM photo_libraries WHERE root_path = ?",
+                [path_string(&root_path)],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        if registered_database_path
+            .as_deref()
+            .is_some_and(|path| Path::new(path) != database_path)
+        {
+            return Err(CoreError::InvalidArgument(format!(
+                "photo library root is already registered: {}",
+                root_path.display()
+            )));
+        }
         let library_uuid = if database_path.exists() {
-            initialize_file(&database_path, PHOTO_SCHEMA)?;
+            initialize_existing_file(&database_path, PHOTO_SCHEMA)?;
             read_photo_library_uuid(&database_path)?.unwrap_or_else(new_uuid)
         } else {
             if let Some(parent) = database_path.parent() {
@@ -158,6 +201,7 @@ impl Database {
             })
             .unwrap_or_else(|| "Photo Library".into());
         let taxonomy_identity = self.taxonomy_identity()?;
+        let latest_sync_id = self.latest_taxonomy_sync_id()?;
         {
             let connection = open_connection(&database_path)?;
             connection.execute(
@@ -165,12 +209,17 @@ impl Database {
                 INSERT INTO photo_library (
                     library_id, library_uuid, root_path,
                     bound_taxonomy_identity, last_taxonomy_sync_id
-                ) VALUES (1, ?, ?, ?, 0)
+                ) VALUES (1, ?, ?, ?, ?)
                 ON CONFLICT(library_id) DO UPDATE SET
                     library_uuid = excluded.library_uuid,
                     root_path = excluded.root_path
                 "#,
-                params![library_uuid, path_string(&root_path), taxonomy_identity],
+                params![
+                    library_uuid,
+                    path_string(&root_path),
+                    taxonomy_identity,
+                    latest_sync_id
+                ],
             )?;
             ensure_photo_root(&connection)?;
         }
@@ -197,9 +246,8 @@ impl Database {
     }
 
     pub fn switch_photo_library(&self, library_uuid: &str) -> CoreResult<PhotoLibraryRegistration> {
-        let mut connection = self.connect_metadata()?;
-        let transaction = connection.transaction()?;
-        let library = transaction
+        let library = self
+            .connect_metadata()?
             .query_row(
                 r#"
                 SELECT library_uuid, display_name, root_path, db_path, last_opened_at
@@ -211,7 +259,16 @@ impl Database {
             )
             .optional()?
             .ok_or_else(|| CoreError::NotFound(format!("photo library {library_uuid}")))?;
-        initialize_file(Path::new(&library.db_path), PHOTO_SCHEMA)?;
+        if !Path::new(&library.root_path).is_dir() {
+            return Err(CoreError::NotFound(format!(
+                "photo library root {}",
+                library.root_path
+            )));
+        }
+        initialize_existing_file(Path::new(&library.db_path), PHOTO_SCHEMA)?;
+        crate::taxonomy::sync::synchronize_photo_library(self, &library)?;
+        let mut connection = self.connect_metadata()?;
+        let transaction = connection.transaction()?;
         transaction.execute(
             r#"
             INSERT INTO active_photo_library (active_id, library_uuid)
@@ -225,8 +282,6 @@ impl Database {
             [library_uuid],
         )?;
         transaction.commit()?;
-        crate::taxonomy::sync::synchronize_photo_library(self, &library)?;
-        crate::taxonomy::sync::cleanup_consumed_events(self)?;
         self.active_photo_library()?
             .ok_or_else(|| CoreError::Consistency("active photo library was not stored".into()))
     }
@@ -262,18 +317,42 @@ impl Database {
         library_uuid: &str,
         root_path: &Path,
     ) -> CoreResult<PhotoLibraryRegistration> {
+        if !root_path.is_dir() {
+            return Err(CoreError::InvalidArgument(format!(
+                "photo library root is not an existing directory: {}",
+                root_path.display()
+            )));
+        }
         let root_path = canonical_or_absolute(root_path)?;
         let library = self.photo_library(library_uuid)?;
-        let connection = open_connection(Path::new(&library.db_path))?;
-        connection.execute(
+        let duplicate = self.connect_metadata()?.query_row(
+            r#"
+            SELECT EXISTS(
+                SELECT 1
+                FROM photo_libraries
+                WHERE root_path = ? AND library_uuid != ?
+            )
+            "#,
+            params![path_string(&root_path), library_uuid],
+            |row| row.get::<_, bool>(0),
+        )?;
+        if duplicate {
+            return Err(CoreError::InvalidArgument(format!(
+                "photo library root is already registered: {}",
+                root_path.display()
+            )));
+        }
+        let mut connection = self.connect_photo_library_registration(&library)?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        transaction.execute(
             "UPDATE photo_library SET root_path = ? WHERE library_id = 1",
             [path_string(&root_path)],
         )?;
-        let metadata = self.connect_metadata()?;
-        metadata.execute(
-            "UPDATE photo_libraries SET root_path = ? WHERE library_uuid = ?",
+        transaction.execute(
+            "UPDATE metadata.photo_libraries SET root_path = ? WHERE library_uuid = ?",
             params![path_string(&root_path), library_uuid],
         )?;
+        transaction.commit()?;
         self.photo_library(library_uuid)
     }
 
@@ -396,6 +475,16 @@ impl Database {
             .map_err(Into::into)
     }
 
+    pub(crate) fn latest_taxonomy_sync_id(&self) -> CoreResult<i64> {
+        self.connect_taxonomy()?
+            .query_row(
+                "SELECT COALESCE(MAX(sync_id), 0) FROM taxonomy_sync_events",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(Into::into)
+    }
+
     pub(crate) fn photo_library(&self, library_uuid: &str) -> CoreResult<PhotoLibraryRegistration> {
         self.connect_metadata()?
             .query_row(
@@ -441,9 +530,11 @@ impl Database {
         }
         initialize_file(&self.taxonomy_path()?, TAXONOMY_SCHEMA)?;
         self.ensure_taxonomy_identity()?;
-        self.ensure_default_library(&photo_directory)?;
         self.seed_metadata()?;
-        crate::taxonomy::sync::synchronize_all_photo_libraries(self)?;
+        crate::taxonomy::sync::dispatch_pending_events(self)?;
+        if let Some(active) = self.active_photo_library()? {
+            let _ = crate::taxonomy::sync::synchronize_photo_library(self, &active);
+        }
         Ok(())
     }
 
@@ -456,49 +547,6 @@ impl Database {
             ON CONFLICT(identity_id) DO NOTHING
             "#,
             [new_uuid()],
-        )?;
-        Ok(())
-    }
-
-    fn ensure_default_library(&self, directory: &Path) -> CoreResult<()> {
-        if self.active_photo_library()?.is_some() {
-            return Ok(());
-        }
-        let database_path = directory.join(DEFAULT_LIBRARY_FILENAME);
-        initialize_file(&database_path, PHOTO_SCHEMA)?;
-        let existing_uuid = read_photo_library_uuid(&database_path)?;
-        let library_uuid = existing_uuid.unwrap_or_else(new_uuid);
-        let taxonomy_identity = self.taxonomy_identity()?;
-        {
-            let connection = open_connection(&database_path)?;
-            connection.execute(
-                r#"
-                INSERT INTO photo_library (
-                    library_id, library_uuid, root_path,
-                    bound_taxonomy_identity, last_taxonomy_sync_id
-                ) VALUES (1, ?, '', ?, 0)
-                ON CONFLICT(library_id) DO NOTHING
-                "#,
-                params![library_uuid, taxonomy_identity],
-            )?;
-        }
-        let connection = self.connect_metadata()?;
-        connection.execute(
-            r#"
-            INSERT INTO photo_libraries (
-                library_uuid, display_name, root_path, db_path
-            ) VALUES (?, 'Default', '', ?)
-            ON CONFLICT(library_uuid) DO NOTHING
-            "#,
-            params![library_uuid, path_string(&database_path)],
-        )?;
-        connection.execute(
-            r#"
-            INSERT INTO active_photo_library (active_id, library_uuid)
-            VALUES (1, ?)
-            ON CONFLICT(active_id) DO UPDATE SET library_uuid = excluded.library_uuid
-            "#,
-            [library_uuid],
         )?;
         Ok(())
     }
@@ -530,6 +578,16 @@ fn initialize_file(path: &Path, schema: &str) -> CoreResult<()> {
         }
     }
     Ok(())
+}
+
+fn initialize_existing_file(path: &Path, schema: &str) -> CoreResult<()> {
+    if !path.is_file() {
+        return Err(CoreError::NotFound(format!(
+            "database file {}",
+            path.display()
+        )));
+    }
+    initialize_file(path, schema)
 }
 
 fn open_connection(path: &Path) -> CoreResult<Connection> {
@@ -691,14 +749,42 @@ fn move_database_file(source: &Path, destination: &Path, schema: &str) -> CoreRe
     if let Some(parent) = destination.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::copy(source, destination)?;
-    if let Err(error) = initialize_file(destination, schema) {
+    initialize_existing_file(source, schema)?;
+    let source_connection = open_connection(source)?;
+    let mut destination_connection = Connection::open(destination)?;
+    let backup_result = (|| -> CoreResult<()> {
+        let backup =
+            rusqlite::backup::Backup::new(&source_connection, &mut destination_connection)?;
+        backup.run_to_completion(256, Duration::from_millis(10), None)?;
+        drop(backup);
+        let version: i64 =
+            destination_connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        if version != SCHEMA_VERSION {
+            return Err(CoreError::InvalidArgument(format!(
+                "unsupported database schema version: {version}; expected {SCHEMA_VERSION}"
+            )));
+        }
+        Ok(())
+    })();
+    drop(destination_connection);
+    drop(source_connection);
+    if let Err(error) = backup_result {
         let _ = fs::remove_file(destination);
         return Err(error);
     }
     if let Err(error) = fs::remove_file(source) {
         let _ = fs::remove_file(destination);
         return Err(error.into());
+    }
+    remove_sqlite_sidecar(source, "-wal")?;
+    remove_sqlite_sidecar(source, "-shm")?;
+    Ok(())
+}
+
+fn remove_sqlite_sidecar(database_path: &Path, suffix: &str) -> CoreResult<()> {
+    let sidecar = PathBuf::from(format!("{}{suffix}", database_path.display()));
+    if sidecar.exists() {
+        fs::remove_file(sidecar)?;
     }
     Ok(())
 }
@@ -762,12 +848,40 @@ CREATE TABLE storage_settings (
 CREATE TABLE photo_libraries (
     library_uuid TEXT PRIMARY KEY,
     display_name TEXT NOT NULL,
-    root_path TEXT NOT NULL,
+    root_path TEXT NOT NULL UNIQUE,
     db_path TEXT NOT NULL UNIQUE,
     last_opened_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CHECK (length(library_uuid) > 0),
-    CHECK (length(display_name) > 0)
+    CHECK (length(display_name) > 0),
+    CHECK (length(root_path) > 0)
 );
+
+CREATE TABLE taxonomy_sync_dispatch (
+    dispatch_id INTEGER PRIMARY KEY CHECK (dispatch_id = 1),
+    last_dispatched_sync_id INTEGER NOT NULL DEFAULT 0,
+    CHECK (last_dispatched_sync_id >= 0)
+);
+
+INSERT INTO taxonomy_sync_dispatch (dispatch_id, last_dispatched_sync_id)
+VALUES (1, 0);
+
+CREATE TABLE photo_library_taxonomy_pending (
+    library_uuid TEXT PRIMARY KEY,
+    target_sync_id INTEGER NOT NULL,
+    full_remap_required INTEGER NOT NULL DEFAULT 0,
+    CHECK (target_sync_id >= 0),
+    CHECK (full_remap_required IN (0, 1)),
+    FOREIGN KEY (library_uuid)
+        REFERENCES photo_libraries(library_uuid) ON DELETE CASCADE
+);
+
+CREATE TABLE photo_library_taxonomy_pending_taxa (
+    library_uuid TEXT NOT NULL,
+    taxon_id INTEGER NOT NULL,
+    PRIMARY KEY (library_uuid, taxon_id),
+    FOREIGN KEY (library_uuid)
+        REFERENCES photo_library_taxonomy_pending(library_uuid) ON DELETE CASCADE
+) WITHOUT ROWID;
 
 CREATE TABLE active_photo_library (
     active_id INTEGER PRIMARY KEY CHECK (active_id = 1),
@@ -1150,7 +1264,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn initializes_three_schema_two_databases() {
+    fn initializes_metadata_and_taxonomy_without_a_fake_photo_library() {
         let directory = tempfile::tempdir().unwrap();
         let database = Database::open(directory.path().join("metadata.db")).unwrap();
         let locations = database.locations().unwrap();
@@ -1166,13 +1280,10 @@ mod tests {
             schema_version(&database.connect_taxonomy().unwrap()),
             SCHEMA_VERSION
         );
-        assert_eq!(
-            schema_version(&database.connect_photo_library().unwrap()),
-            SCHEMA_VERSION
-        );
         assert_ne!(locations.metadata_database, locations.taxonomy_database);
-        let active = database.active_photo_library().unwrap().unwrap();
-        assert_ne!(active.db_path, locations.taxonomy_database);
+        assert_eq!(database.active_photo_library().unwrap(), None);
+        assert!(database.list_photo_libraries().unwrap().is_empty());
+        assert_eq!(locations.active_photo_library_uuid, None);
     }
 
     #[test]
@@ -1224,6 +1335,92 @@ mod tests {
             1
         );
         assert_ne!(library_a.library_uuid, library_b.library_uuid);
+    }
+
+    #[test]
+    fn switching_a_missing_registered_database_does_not_recreate_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("photos");
+        fs::create_dir_all(&root).unwrap();
+        let database = Database::open(directory.path().join("metadata.db")).unwrap();
+        let database_path = directory.path().join("library.db");
+        let library = database
+            .register_photo_library(&root, &database_path, Some("Library"))
+            .unwrap();
+        fs::remove_file(&database_path).unwrap();
+
+        let error = database
+            .switch_photo_library(&library.library_uuid)
+            .unwrap_err();
+
+        assert!(matches!(error, CoreError::NotFound(_)));
+        assert!(!database_path.exists());
+    }
+
+    #[test]
+    fn photo_library_roots_are_unique() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("photos");
+        fs::create_dir_all(&root).unwrap();
+        let database = Database::open(directory.path().join("metadata.db")).unwrap();
+        database
+            .register_photo_library(&root, &directory.path().join("first.db"), Some("First"))
+            .unwrap();
+
+        let error = database
+            .register_photo_library(&root, &directory.path().join("second.db"), Some("Second"))
+            .unwrap_err();
+
+        assert!(matches!(error, CoreError::InvalidArgument(_)));
+        assert_eq!(database.list_photo_libraries().unwrap().len(), 1);
+        assert!(!directory.path().join("second.db").exists());
+    }
+
+    #[test]
+    fn relocation_uses_a_consistent_wal_snapshot() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("photos");
+        fs::create_dir_all(&root).unwrap();
+        let database = Database::open(directory.path().join("metadata.db")).unwrap();
+        let source = directory.path().join("source.db");
+        let library = database
+            .register_photo_library(&root, &source, Some("Library"))
+            .unwrap();
+        let connection = database.connect().unwrap();
+        connection
+            .execute(
+                r#"
+                INSERT INTO photos (
+                    directory_id, filename, file_size, modified_at_ns
+                )
+                SELECT directory_id, 'wal-photo.jpg', 1, 1
+                FROM photo_directories
+                WHERE relative_path = ''
+                "#,
+                [],
+            )
+            .unwrap();
+        let destination = directory.path().join("destination.db");
+
+        database
+            .relocate_photo_library_database(&library.library_uuid, &destination)
+            .unwrap();
+        drop(connection);
+
+        assert!(!source.exists());
+        assert!(destination.exists());
+        assert_eq!(
+            database
+                .connect()
+                .unwrap()
+                .query_row(
+                    "SELECT COUNT(*) FROM photos WHERE filename = 'wal-photo.jpg'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            1
+        );
     }
 
     #[test]

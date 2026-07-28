@@ -55,7 +55,7 @@ pub struct NamingHookTestReport {
 }
 
 pub fn get_naming_hook_test_cases(database: &Database) -> CoreResult<NamingHookTestCases> {
-    let connection = database.connect()?;
+    let connection = database.connect_metadata()?;
     Ok(NamingHookTestCases {
         photo_filename: load_cases(&connection, NamingHookKind::PhotoFilename)?,
         synonym_authority: load_cases(&connection, NamingHookKind::SynonymAuthority)?,
@@ -68,7 +68,11 @@ pub fn set_naming_hook_test_cases(
     cases: &[NamingHookTestCase],
 ) -> CoreResult<()> {
     validate_cases(kind, cases)?;
-    metadata::set_json(&database.connect()?, tests_metadata_key(kind), &cases)
+    metadata::set_json(
+        &database.connect_metadata()?,
+        tests_metadata_key(kind),
+        &cases,
+    )
 }
 
 pub fn test_naming_hook(
@@ -84,7 +88,7 @@ pub fn run_naming_hook_tests(
     kind: NamingHookKind,
     script: Option<&str>,
 ) -> CoreResult<NamingHookTestReport> {
-    let connection = database.connect()?;
+    let connection = database.connect_metadata()?;
     let cases = load_cases(&connection, kind)?;
     let runner = match script {
         Some(script) => HookRunner::from_script(kind, script)?,

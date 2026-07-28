@@ -30,7 +30,7 @@ pub fn parse_photo_filename(
     database: &Database,
     filename: &str,
 ) -> CoreResult<ParsedPhotoFilename> {
-    PhotoFilenameParser::load(&database.connect()?)?.parse(filename)
+    PhotoFilenameParser::load(&database.connect_metadata()?)?.parse(filename)
 }
 
 pub fn default_parse_photo_filename(filename: &str) -> CoreResult<ParsedPhotoFilename> {

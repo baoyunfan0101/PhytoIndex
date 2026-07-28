@@ -933,6 +933,7 @@ mod tests {
             None,
         )
         .unwrap();
+        crate::taxonomy::synchronize_pending_photo_libraries(&database).unwrap();
         process_pending_photo_matches(&database, &mut progress).unwrap();
         let old_taxon_id = mapping.taxon_id;
         let mapping = get_photo_mapping(&database, mapping.photo_id).unwrap();
@@ -946,7 +947,7 @@ mod tests {
         let data = tempfile::tempdir().unwrap();
         let root = tempfile::tempdir().unwrap();
         fs::write(root.path().join("Shared name.jpg"), b"photo").unwrap();
-        let database = Database::open(data.path().join("vividarium.db")).unwrap();
+        let database = Database::open_test(data.path().join("vividarium.db")).unwrap();
         let connection = database.connect().unwrap();
         for accepted_name in ["Shared name", "Different name"] {
             connection
@@ -1015,7 +1016,7 @@ mod tests {
         crate::taxonomy::sync::record_event(&transaction, None, [selected_taxon_id], false)
             .unwrap();
         transaction.commit().unwrap();
-        crate::taxonomy::sync::synchronize_all_photo_libraries(&database).unwrap();
+        crate::taxonomy::sync::synchronize_pending_photo_libraries(&database).unwrap();
         let processing = get_photo_mapping(&database, photo.photo_id).unwrap();
         assert_eq!(processing.status, PhotoTaxonStatus::Processing);
         assert_eq!(processing.taxon_id, None);
@@ -1053,7 +1054,7 @@ mod tests {
         let data = tempfile::tempdir().unwrap();
         let root = tempfile::tempdir().unwrap();
         fs::write(root.path().join("Canis lupus.jpg"), b"photo").unwrap();
-        let database = Database::open(data.path().join("vividarium.db")).unwrap();
+        let database = Database::open_test(data.path().join("vividarium.db")).unwrap();
         let connection = database.connect().unwrap();
         connection
             .execute_batch(
@@ -1110,7 +1111,7 @@ mod tests {
     #[test]
     fn does_not_synthesize_processing_for_a_missing_photo() {
         let data = tempfile::tempdir().unwrap();
-        let database = Database::open(data.path().join("vividarium.db")).unwrap();
+        let database = Database::open_test(data.path().join("vividarium.db")).unwrap();
 
         assert!(matches!(
             get_photo_mapping(&database, 404).unwrap_err(),
@@ -1153,7 +1154,7 @@ mod tests {
         let data = tempfile::tempdir().unwrap();
         let root = tempfile::tempdir().unwrap();
         fs::write(root.path().join("Felis catus.jpg"), b"photo").unwrap();
-        let database = Database::open(data.path().join("vividarium.db")).unwrap();
+        let database = Database::open_test(data.path().join("vividarium.db")).unwrap();
         let connection = database.connect().unwrap();
         connection
             .execute("INSERT INTO taxa (rank) VALUES (4)", [])
@@ -1190,6 +1191,7 @@ mod tests {
         );
 
         crate::taxonomy::delete_taxon(&database, taxon_id).unwrap();
+        crate::taxonomy::synchronize_pending_photo_libraries(&database).unwrap();
 
         let connection = database.connect().unwrap();
         let stored_mapping_count: i64 = connection
@@ -1226,7 +1228,7 @@ mod tests {
         fs::write(root.path().join("Canis lupus.jpg"), b"photo").unwrap();
         fs::write(root.path().join("Felis catus.jpg"), b"photo").unwrap();
         fs::write(root.path().join("domestic cat.jpg"), b"photo").unwrap();
-        let database = Database::open(data.path().join("vividarium.db")).unwrap();
+        let database = Database::open_test(data.path().join("vividarium.db")).unwrap();
         let connection = database.connect().unwrap();
         connection
             .execute("INSERT INTO taxa (rank) VALUES (1)", [])
@@ -1310,6 +1312,7 @@ mod tests {
             },
         )
         .unwrap();
+        crate::taxonomy::synchronize_pending_photo_libraries(&database).unwrap();
 
         assert_eq!(
             get_photo_mapping(&database, felis_photo.photo_id)
@@ -1335,7 +1338,7 @@ mod tests {
     #[test]
     fn taxon_browse_cursor_spans_children_and_photos() {
         let data = tempfile::tempdir().unwrap();
-        let database = Database::open(data.path().join("vividarium.db")).unwrap();
+        let database = Database::open_test(data.path().join("vividarium.db")).unwrap();
         let connection = database.connect().unwrap();
         connection
             .execute("INSERT INTO taxa (rank) VALUES (1)", [])
@@ -1467,7 +1470,7 @@ mod tests {
     #[test]
     fn mapping_status_pages_are_logical_and_cursor_scoped() {
         let data = tempfile::tempdir().unwrap();
-        let database = Database::open(data.path().join("vividarium.db")).unwrap();
+        let database = Database::open_test(data.path().join("vividarium.db")).unwrap();
         let connection = database.connect().unwrap();
         connection
             .execute(
@@ -1669,7 +1672,7 @@ mod tests {
     #[test]
     fn batches_usage_deltas_for_shared_ancestors() {
         let data = tempfile::tempdir().unwrap();
-        let database = Database::open(data.path().join("vividarium.db")).unwrap();
+        let database = Database::open_test(data.path().join("vividarium.db")).unwrap();
         let mut connection = database.connect().unwrap();
         connection
             .execute("INSERT INTO taxa (rank) VALUES (1)", [])
@@ -1719,7 +1722,7 @@ mod tests {
     #[test]
     fn large_id_sets_use_a_temporary_table() {
         let data = tempfile::tempdir().unwrap();
-        let database = Database::open(data.path().join("vividarium.db")).unwrap();
+        let database = Database::open_test(data.path().join("vividarium.db")).unwrap();
         let mut connection = database.connect().unwrap();
         let transaction = connection.transaction().unwrap();
         let ids = (1..=501).collect::<Vec<_>>();

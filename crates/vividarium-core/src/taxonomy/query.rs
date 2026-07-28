@@ -721,7 +721,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let database = Database::open(directory.path().join("test.db")).unwrap();
         database
-            .connect()
+            .connect_taxonomy_context()
             .unwrap()
             .execute_batch(
                 r#"

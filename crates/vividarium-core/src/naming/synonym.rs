@@ -26,7 +26,7 @@ pub fn split_scientific_name_authority_with_database(
     database: &Database,
     value: &str,
 ) -> CoreResult<ScientificNameParts> {
-    SynonymAuthorityParser::load(&database.connect()?)?.split(value)
+    SynonymAuthorityParser::load(&database.connect_metadata()?)?.split(value)
 }
 
 pub(crate) struct SynonymAuthorityParser {

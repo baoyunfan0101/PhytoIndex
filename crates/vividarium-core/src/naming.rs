@@ -54,7 +54,7 @@ pub struct NamingHookSettings {
 }
 
 pub fn get_naming_hook_settings(database: &Database) -> CoreResult<NamingHookSettings> {
-    let connection = database.connect()?;
+    let connection = database.connect_metadata()?;
     Ok(NamingHookSettings {
         photo_filename: hooks::load_script(&connection, MetadataKey::PhotoFilenameHook)?,
         synonym_authority: hooks::load_script(&connection, MetadataKey::SynonymAuthorityHook)?,
@@ -70,25 +70,30 @@ pub fn set_naming_hook(
     if let Some(script) = script {
         test_naming_hook(kind, script, hook_sample(kind))?;
     }
-    let mut connection = database.connect()?;
+    let mut connection = database.connect_metadata()?;
     let transaction = connection.transaction()?;
     if let Some(script) = script {
         metadata::set_raw(&transaction, kind.metadata_key(), script)?;
     } else {
         metadata::remove(&transaction, kind.metadata_key())?;
     }
+    transaction.commit()?;
     if kind == NamingHookKind::PhotoFilename {
-        transaction.execute(
-            r#"
+        for library in database.list_photo_libraries()? {
+            let Ok(connection) = database.connect_photo_library_registration(&library) else {
+                continue;
+            };
+            connection.execute(
+                r#"
             INSERT INTO photo_mapping_queue (photo_id, reason)
             SELECT photo_id, 'hook' FROM photos
             WHERE true
             ON CONFLICT(photo_id) DO UPDATE SET reason = excluded.reason
             "#,
-            [],
-        )?;
+                [],
+            )?;
+        }
     }
-    transaction.commit()?;
     Ok(())
 }
 

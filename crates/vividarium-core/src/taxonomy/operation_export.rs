@@ -7,16 +7,35 @@ use super::formatted::{TAXONOMY_INPUT_COLUMNS, TaxonInputRow, get_taxonomy_name_
 use crate::operations;
 use crate::{CoreError, CoreResult, Database};
 
-pub fn export_operation_audit(database: &Database, operation_id: i64) -> CoreResult<String> {
-    operations::export_operation_audit(&database.connect_taxonomy_context()?, Some(&[operation_id]))
+pub fn write_operation_audit<W: std::io::Write>(
+    database: &Database,
+    operation_id: i64,
+    writer: &mut W,
+) -> CoreResult<()> {
+    operations::write_operation_audit(
+        &database.connect_taxonomy_context()?,
+        Some(&[operation_id]),
+        writer,
+    )
 }
 
-pub fn export_operations_audit(database: &Database, operation_ids: &[i64]) -> CoreResult<String> {
-    operations::export_operation_audit(&database.connect_taxonomy_context()?, Some(operation_ids))
+pub fn write_operations_audit<W: std::io::Write>(
+    database: &Database,
+    operation_ids: &[i64],
+    writer: &mut W,
+) -> CoreResult<()> {
+    operations::write_operation_audit(
+        &database.connect_taxonomy_context()?,
+        Some(operation_ids),
+        writer,
+    )
 }
 
-pub fn export_all_operation_audit(database: &Database) -> CoreResult<String> {
-    operations::export_operation_audit(&database.connect_taxonomy_context()?, None)
+pub fn write_all_operation_audit<W: std::io::Write>(
+    database: &Database,
+    writer: &mut W,
+) -> CoreResult<()> {
+    operations::write_operation_audit(&database.connect_taxonomy_context()?, None, writer)
 }
 
 pub fn export_operation_input(database: &Database, operation_id: i64) -> CoreResult<String> {

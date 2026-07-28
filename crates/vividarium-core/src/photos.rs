@@ -35,8 +35,8 @@ use operations::{
     start_photo_operation,
 };
 pub use operations::{
-    export_all_operation_audit, export_operation_audit, export_operations_audit,
-    list_operation_audit, list_operations, rollback_operation,
+    list_operation_audit, list_operations, rollback_operation, write_all_operation_audit,
+    write_operation_audit, write_operations_audit,
 };
 pub(crate) use page::{
     PhotoCursor, PhotoPageSection, decode_photo_cursor, encode_photo_cursor, invalid_photo_cursor,
@@ -114,6 +114,9 @@ pub fn open_library(database: &Database, root: &str) -> CoreResult<PhotoLibrary>
 }
 
 pub fn get_library(database: &Database) -> CoreResult<Option<PhotoLibrary>> {
+    if database.active_photo_library()?.is_none() {
+        return Ok(None);
+    }
     let connection = database.connect()?;
     connection
         .query_row(
@@ -136,6 +139,9 @@ pub fn get_library(database: &Database) -> CoreResult<Option<PhotoLibrary>> {
 }
 
 pub fn get_photo_count(database: &Database) -> CoreResult<i64> {
+    if database.active_photo_library()?.is_none() {
+        return Ok(0);
+    }
     let connection = database.connect()?;
     Ok(connection.query_row("SELECT COUNT(*) FROM photos", [], |row| row.get(0))?)
 }
@@ -441,7 +447,7 @@ pub fn rename_photo(database: &Database, photo_id: i64, new_filename: &str) -> C
     let _guard = PHOTO_WRITE_LOCK
         .lock()
         .map_err(|_| CoreError::InvalidArgument("photo workspace lock is poisoned".into()))?;
-    let operation_id = start_photo_operation(database, PhotoOperationSource::ManualRename, 1)?;
+    let operation_id = start_photo_operation(database, PhotoOperationSource::Manual, 1)?;
     finish_single_photo_rename(
         database,
         operation_id,
@@ -487,7 +493,7 @@ pub fn rename_photo_from_taxon(database: &Database, photo_id: i64) -> CoreResult
     let _guard = PHOTO_WRITE_LOCK
         .lock()
         .map_err(|_| CoreError::InvalidArgument("photo workspace lock is poisoned".into()))?;
-    let operation_id = start_photo_operation(database, PhotoOperationSource::TaxonRename, 1)?;
+    let operation_id = start_photo_operation(database, PhotoOperationSource::Taxon, 1)?;
     let result = taxon_filename(database, photo_id).and_then(|new_filename| {
         rename_photo_locked(database, photo_id, &new_filename, 1, operation_id)
     });
@@ -509,7 +515,7 @@ pub fn rename_photos_from_taxa(
     }
     let operation_id = start_photo_operation(
         database,
-        PhotoOperationSource::TaxonSelectionRename,
+        PhotoOperationSource::TaxonSelection,
         photo_ids.len(),
     )?;
     let mut rows = Vec::with_capacity(photo_ids.len());
@@ -1291,7 +1297,9 @@ mod tests {
         assert_eq!(audit.items.len(), 2);
         assert_eq!(audit.items[0].sequence, 1);
         assert_eq!(audit.items[1].sequence, 2);
-        let exported = export_operation_audit(&database, operation.operation_id).unwrap();
+        let mut output = Vec::new();
+        write_operation_audit(&database, operation.operation_id, &mut output).unwrap();
+        let exported = String::from_utf8(output).unwrap();
         assert_eq!(exported.lines().count(), 3);
 
         rollback_operation(&database, operation.operation_id).unwrap();
@@ -1465,7 +1473,7 @@ mod tests {
         let data = tempfile::tempdir().unwrap();
         let root = tempfile::tempdir().unwrap();
         fs::write(root.path().join("canis lupus.JPG"), b"photo").unwrap();
-        let database = Database::open(data.path().join("vividarium.db")).unwrap();
+        let database = Database::open_test(data.path().join("vividarium.db")).unwrap();
         let connection = database.connect().unwrap();
         connection
             .execute("INSERT INTO taxa (rank) VALUES (5)", [])
@@ -1491,7 +1499,7 @@ mod tests {
         let transaction = taxonomy.transaction().unwrap();
         crate::taxonomy::sync::record_event(&transaction, None, [taxon_id], false).unwrap();
         transaction.commit().unwrap();
-        crate::taxonomy::sync::synchronize_all_photo_libraries(&database).unwrap();
+        crate::taxonomy::sync::synchronize_pending_photo_libraries(&database).unwrap();
         let error = rename_photo_from_taxon(&database, photo.photo_id).unwrap_err();
         assert!(
             error

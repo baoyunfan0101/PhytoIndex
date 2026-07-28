@@ -359,7 +359,6 @@ pub fn apply_rows(
     let affected_taxon_ids = affected_taxon_ids_from_changeset(&transaction, &changeset_blob)?;
     super::sync::record_event(&transaction, Some(operation_id), affected_taxon_ids, false)?;
     transaction.commit()?;
-    super::sync::synchronize_all_photo_libraries(database)?;
     Ok(result)
 }
 
@@ -1531,7 +1530,6 @@ pub fn rollback_operation(database: &Database, operation_id: i64) -> CoreResult<
     super::sync::record_event(&transaction, None, affected_taxon_ids, false)?;
     operations::delete_operation(&transaction, operation_id)?;
     transaction.commit()?;
-    super::sync::synchronize_all_photo_libraries(database)?;
     Ok(())
 }
 
@@ -1813,7 +1811,7 @@ mod tests {
         );
         assert!(
             database
-                .connect()
+                .connect_taxonomy_context()
                 .unwrap()
                 .query_row("SELECT NOT EXISTS(SELECT 1 FROM taxa)", [], |row| row
                     .get::<_, bool>(0),)
@@ -1902,7 +1900,7 @@ mod tests {
             vec![TaxonRowStatus::NoChange]
         );
         let source: String = database
-            .connect()
+            .connect_taxonomy_context()
             .unwrap()
             .query_row(
                 "SELECT source FROM taxon_names WHERE name_type = 1",
@@ -1943,7 +1941,7 @@ mod tests {
             ]
         );
         let source: String = database
-            .connect()
+            .connect_taxonomy_context()
             .unwrap()
             .query_row(
                 "SELECT source FROM taxon_names WHERE name = 'Animalia'",

@@ -26,8 +26,8 @@ pub use formatted::{
 };
 pub use name_parser::{ScientificNameParts, split_scientific_name_authority};
 pub use operation_export::{
-    export_all_operation_audit, export_all_replayable_inputs, export_operation_audit,
-    export_operation_input, export_operations_audit, export_operations_input,
+    export_all_replayable_inputs, export_operation_input, export_operations_input,
+    write_all_operation_audit, write_operation_audit, write_operations_audit,
 };
 pub use page::TaxonomyPage;
 pub use query::{TaxonNameMatch, TaxonSearchResult, TaxonSuggestion, search_taxa, suggest_taxa};
@@ -35,6 +35,7 @@ pub(crate) use query::{
     TaxonSearchCursorKey, search_taxa_page_with_photos_connection,
     suggest_taxa_with_photos_connection, taxon_search_relation,
 };
+pub use sync::{TaxonomySyncResult, TaxonomySyncRun, synchronize_pending_photo_libraries};
 pub(crate) use view::load_taxon_summaries;
 pub use view::{
     TaxonBreadcrumbItem, TaxonChild, TaxonDetail, TaxonDetailNode, TaxonDisplayNames,

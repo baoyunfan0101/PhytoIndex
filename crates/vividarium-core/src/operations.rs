@@ -305,17 +305,6 @@ pub(crate) fn list_operation_audit(
     Ok(OperationPage { items, next_cursor })
 }
 
-pub(crate) fn export_operation_audit(
-    connection: &Connection,
-    operation_ids: Option<&[i64]>,
-) -> CoreResult<String> {
-    let mut output = Vec::new();
-    write_operation_audit(connection, operation_ids, &mut output)?;
-    String::from_utf8(output).map_err(|error| {
-        CoreError::InvalidArgument(format!("invalid UTF-8 operation audit export: {error}"))
-    })
-}
-
 pub(crate) fn write_operation_audit<W: Write>(
     connection: &Connection,
     operation_ids: Option<&[i64]>,
@@ -607,7 +596,9 @@ mod tests {
         assert_eq!(next_audit.items[0].sequence, 2);
         assert_eq!(next_audit.next_cursor, None);
 
-        let exported = export_operation_audit(&connection, Some(&[2, 1])).unwrap();
+        let mut output = Vec::new();
+        write_operation_audit(&connection, Some(&[2, 1]), &mut output).unwrap();
+        let exported = String::from_utf8(output).unwrap();
         let mut csv = csv::ReaderBuilder::new()
             .delimiter(b'|')
             .from_reader(exported.as_bytes());

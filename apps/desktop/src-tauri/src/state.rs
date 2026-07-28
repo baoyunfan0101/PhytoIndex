@@ -61,7 +61,9 @@ impl AppState {
     pub fn new(data_dir: PathBuf) -> Result<Self, vividarium_core::CoreError> {
         let database = Database::open(data_dir.join("metadata.db"))?;
         let thumbnail_dir = data_dir.join("thumbnails");
-        vividarium_core::photos::rebase_thumbnail_paths(&database, &thumbnail_dir)?;
+        if database.active_photo_library()?.is_some() {
+            vividarium_core::photos::rebase_thumbnail_paths(&database, &thumbnail_dir)?;
+        }
         Ok(Self {
             database,
             thumbnail_dir,

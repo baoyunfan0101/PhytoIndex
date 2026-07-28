@@ -21,7 +21,6 @@ pub struct TaxonomyBaseMetadata {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TaxonomyBaseReplaceResult {
     pub metadata: TaxonomyBaseMetadata,
-    pub queued_photo_count: i64,
 }
 
 pub fn get_taxonomy_base_metadata(database: &Database) -> CoreResult<Option<TaxonomyBaseMetadata>> {
@@ -61,28 +60,7 @@ pub fn replace_taxonomy_base_database(
     let result = replace_from_attached_database(&mut connection, &source_path);
     let detach_result = connection.execute_batch("DETACH DATABASE taxonomy_base");
     match (result, detach_result) {
-        (Ok(result), Ok(())) => {
-            sync::synchronize_all_photo_libraries(database)?;
-            let queued_photo_count = database
-                .active_photo_library()?
-                .and_then(|active| {
-                    database
-                        .connect_photo_library_registration(&active)
-                        .ok()
-                        .and_then(|connection| {
-                            connection
-                                .query_row("SELECT COUNT(*) FROM photo_mapping_queue", [], |row| {
-                                    row.get::<_, i64>(0)
-                                })
-                                .ok()
-                        })
-                })
-                .unwrap_or(0);
-            Ok(TaxonomyBaseReplaceResult {
-                metadata: result.metadata,
-                queued_photo_count,
-            })
-        }
+        (Ok(result), Ok(())) => Ok(result),
         (Err(error), _) => Err(error),
         (Ok(_), Err(error)) => Err(error.into()),
     }
@@ -142,10 +120,7 @@ fn replace_from_attached_database(
         taxonomy_base_metadata_row,
     )?;
     transaction.commit()?;
-    Ok(TaxonomyBaseReplaceResult {
-        metadata,
-        queued_photo_count: 0,
-    })
+    Ok(TaxonomyBaseReplaceResult { metadata })
 }
 
 fn import_normalized_names(transaction: &Transaction<'_>) -> CoreResult<()> {
@@ -323,7 +298,7 @@ mod tests {
     #[test]
     fn replaces_taxonomy_preserves_base_ids_and_queues_all_photos() {
         let directory = tempfile::tempdir().unwrap();
-        let database = Database::open(directory.path().join("vividarium.db")).unwrap();
+        let database = Database::open_test(directory.path().join("vividarium.db")).unwrap();
         let old_taxon_ids = seed_old_taxonomy_tree(&database);
         let old_taxon_id = old_taxon_ids[2];
         let connection = database.connect_taxonomy_context().unwrap();
@@ -379,10 +354,11 @@ mod tests {
         let source_path = directory.path().join("base.db");
         create_base_database(&source_path);
         let result = replace_taxonomy_base_database(&database, &source_path).unwrap();
+        let sync = sync::synchronize_pending_photo_libraries(&database).unwrap();
 
         assert_eq!(result.metadata.taxa_count, 2);
         assert_eq!(result.metadata.taxon_names_count, 2);
-        assert_eq!(result.queued_photo_count, 1);
+        assert_eq!(sync.synchronized[0].queued_photo_count, 1);
         for taxon_id in old_taxon_ids {
             assert!(get_taxon_detail(&database, taxon_id).unwrap().is_none());
         }
@@ -572,7 +548,7 @@ mod tests {
 
     fn taxon_id_by_name(database: &Database, name: &str) -> i64 {
         database
-            .connect()
+            .connect_taxonomy_context()
             .unwrap()
             .query_row(
                 "SELECT taxon_id FROM taxon_names WHERE name_type = 1 AND name = ?",
@@ -584,7 +560,7 @@ mod tests {
 
     fn parent_taxon_id(database: &Database, taxon_id: i64) -> Option<i64> {
         database
-            .connect()
+            .connect_taxonomy_context()
             .unwrap()
             .query_row(
                 "SELECT parent_taxon_id FROM taxa WHERE taxon_id = ?",

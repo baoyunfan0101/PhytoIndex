@@ -6,7 +6,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   browsePhotoDirectory,
   browsePhotoTaxon,
-  downloadCsv,
   errorMessage,
   exportAllPhotoOperationAudit,
   exportPhotoOperationAudit,
@@ -382,7 +381,7 @@ export function PhotoHistoryView({ onStatus }: { onStatus: (message: string) => 
   });
 
   async function exportAll() {
-    downloadCsv("photo-rename-operations.csv", await exportAllPhotoOperationAudit());
+    await exportAllPhotoOperationAudit();
   }
 
   return (
@@ -408,7 +407,7 @@ export function PhotoHistoryView({ onStatus }: { onStatus: (message: string) => 
                 <small>{operation.applied_at} / {operation.source}</small>
               </div>
               <div className="operation-actions">
-                <button type="button" title={`Export operation ${operation.operation_id}`} onClick={() => void exportPhotoOperationAudit(operation.operation_id).then((csv) => downloadCsv(`photo-operation-${operation.operation_id}.csv`, csv))}><Download size={14} /></button>
+                <button type="button" title={`Export operation ${operation.operation_id}`} onClick={() => void exportPhotoOperationAudit(operation.operation_id)}><Download size={14} /></button>
                 <button type="button" title={`Rollback operation ${operation.operation_id}`} onClick={() => void rollbackPhotoOperation(operation.operation_id).then(() => {
                   onStatus(`Rolled back operation ${operation.operation_id}`);
                   emitPhotoMutation({

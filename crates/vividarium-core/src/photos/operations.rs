@@ -18,17 +18,17 @@ const PHOTO_RENAME_KIND: &str = "photo_rename";
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum PhotoOperationSource {
-    ManualRename,
-    TaxonRename,
-    TaxonSelectionRename,
+    Manual,
+    Taxon,
+    TaxonSelection,
 }
 
 impl PhotoOperationSource {
     pub(super) fn as_str(self) -> &'static str {
         match self {
-            Self::ManualRename => "manual_rename",
-            Self::TaxonRename => "taxon_rename",
-            Self::TaxonSelectionRename => "taxon_selection_rename",
+            Self::Manual => "manual_rename",
+            Self::Taxon => "taxon_rename",
+            Self::TaxonSelection => "taxon_selection_rename",
         }
     }
 }
@@ -196,16 +196,27 @@ pub fn list_operation_audit(
     operations::list_operation_audit(&database.connect()?, operation_id, cursor, limit)
 }
 
-pub fn export_operation_audit(database: &Database, operation_id: i64) -> CoreResult<String> {
-    operations::export_operation_audit(&database.connect()?, Some(&[operation_id]))
+pub fn write_operation_audit<W: std::io::Write>(
+    database: &Database,
+    operation_id: i64,
+    writer: &mut W,
+) -> CoreResult<()> {
+    operations::write_operation_audit(&database.connect()?, Some(&[operation_id]), writer)
 }
 
-pub fn export_operations_audit(database: &Database, operation_ids: &[i64]) -> CoreResult<String> {
-    operations::export_operation_audit(&database.connect()?, Some(operation_ids))
+pub fn write_operations_audit<W: std::io::Write>(
+    database: &Database,
+    operation_ids: &[i64],
+    writer: &mut W,
+) -> CoreResult<()> {
+    operations::write_operation_audit(&database.connect()?, Some(operation_ids), writer)
 }
 
-pub fn export_all_operation_audit(database: &Database) -> CoreResult<String> {
-    operations::export_operation_audit(&database.connect()?, None)
+pub fn write_all_operation_audit<W: std::io::Write>(
+    database: &Database,
+    writer: &mut W,
+) -> CoreResult<()> {
+    operations::write_operation_audit(&database.connect()?, None, writer)
 }
 
 pub fn rollback_operation(database: &Database, operation_id: i64) -> CoreResult<()> {
