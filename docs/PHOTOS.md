@@ -105,9 +105,9 @@ The photo module exports the common interfaces below:
 | --- | --- | --- |
 | `list_operations` | `cursor: Option<&str>`, `limit: usize` | `OperationPage<OperationSummary>` |
 | `list_operation_audit` | `operation_id: i64`, `cursor: Option<&str>`, `limit: usize` | `OperationPage<OperationAuditRow>` |
-| `export_operation_audit` | `operation_id: i64` | UTF-8 pipe-delimited CSV `String` |
-| `export_operations_audit` | `operation_ids: &[i64]` | UTF-8 pipe-delimited CSV `String` |
-| `export_all_operation_audit` | none | UTF-8 pipe-delimited CSV `String` |
+| `write_operation_audit` | `operation_id: i64`, `writer: &mut W` where `W: Write` | `()` |
+| `write_operations_audit` | `operation_ids: &[i64]`, `writer: &mut W` where `W: Write` | `()` |
+| `write_all_operation_audit` | `writer: &mut W` where `W: Write` | `()` |
 | `rollback_operation` | `operation_id: i64` | `()` |
 
 Successful rollback restores all recorded filenames and deletes the original

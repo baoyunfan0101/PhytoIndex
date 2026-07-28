@@ -57,9 +57,9 @@ Both `photos` and `taxonomy` expose:
 | --- | --- | --- |
 | `list_operations` | `cursor: Option<&str>`, `limit: usize` | `OperationPage<OperationSummary>` |
 | `list_operation_audit` | `operation_id: i64`, `cursor: Option<&str>`, `limit: usize` | `OperationPage<OperationAuditRow>` |
-| `export_operation_audit` | `operation_id: i64` | UTF-8 pipe-delimited CSV `String` |
-| `export_operations_audit` | `operation_ids: &[i64]` | UTF-8 pipe-delimited CSV `String` |
-| `export_all_operation_audit` | none | UTF-8 pipe-delimited CSV `String` |
+| `write_operation_audit` | `operation_id: i64`, `writer: &mut W` where `W: Write` | `()` |
+| `write_operations_audit` | `operation_ids: &[i64]`, `writer: &mut W` where `W: Write` | `()` |
+| `write_all_operation_audit` | `writer: &mut W` where `W: Write` | `()` |
 | `rollback_operation` | `operation_id: i64` | `()` |
 
 Audit CSV columns are identical in both domains:
@@ -68,12 +68,13 @@ Audit CSV columns are identical in both domains:
 operation_id|sequence|entity_type|entity_id|action|before_json|after_json|succeeded|message
 ```
 
-Rows are written directly from the database in operation and sequence order.
-Batch and all-history exports use one header.
+Rows stream directly from the database to the caller-provided writer in
+operation and sequence order. Batch and all-history exports use one header;
+the complete CSV is never materialized by the export interface.
 
 Successful rollback deletes the original operation and its audit data.
-Taxonomy rollback also applies its reverse changeset and emits internal
-synchronization state. No user-visible reverse operation is created.
+Taxonomy rollback also applies its reverse changeset and records pending
+photo-library synchronization. No user-visible reverse operation is created.
 
 ## Taxonomy formatted input
 

@@ -143,8 +143,8 @@ normal `TaxonomyOperationResult`.
 | `delete_taxon_name` | `input: DeleteTaxonNameInput` | `()` | Delete a non-`sci_name` record. |
 | `delete_taxon` | `taxon_id: i64` | `()` | Delete a childless taxon. |
 
-Promotion is not a user history operation. Deletions create audit operations
-without formatted input.
+Promotion and deletion create rollbackable audit operations without formatted
+input.
 
 ## Custom SQL
 
@@ -164,7 +164,7 @@ formatted input.
 
 `TaxonomyBaseMetadata` contains `source_path`, `taxa_count`,
 `taxon_names_count`, and `imported_at`.
-`TaxonomyBaseReplaceResult` adds `queued_photo_count`.
+`TaxonomyBaseReplaceResult` contains the resulting `metadata`.
 
 | Function | Parameters after `database` | Return |
 | --- | --- | --- |
@@ -177,6 +177,26 @@ normalizer. Successful replacement creates a new taxonomy identity, clears
 taxonomy user history, and causes every registered photo library to rebuild
 mapping state when synchronized.
 
+## Photo-library synchronization
+
+`TaxonomySyncResult` contains `library_uuid`, `sync_id`,
+`queued_photo_count`, and `full_remap`.
+
+`TaxonomySyncRun` contains successful per-library `synchronized` results and
+`pending_library_uuids` for libraries that remain unavailable or invalid.
+
+| Function | Parameters after `database` | Return |
+| --- | --- | --- |
+| `synchronize_pending_photo_libraries` | none | `TaxonomySyncRun` |
+
+Taxonomy mutations commit their data, operation audit, and synchronization
+event together, then return without opening photo-library databases. The
+desktop schedules this interface in the background. It merges affected taxon
+IDs per library, gives a full-remap request precedence over local IDs, and
+processes the active library first. A library failure remains pending and does
+not fail the taxonomy mutation. Switching a library invokes the same pending
+consumer before activation.
+
 ## Taxonomy operation interfaces
 
 The taxonomy module exports the common interfaces below:
@@ -185,9 +205,9 @@ The taxonomy module exports the common interfaces below:
 | --- | --- | --- |
 | `list_operations` | `cursor: Option<&str>`, `limit: usize` | `OperationPage<OperationSummary>` |
 | `list_operation_audit` | `operation_id: i64`, `cursor: Option<&str>`, `limit: usize` | `OperationPage<OperationAuditRow>` |
-| `export_operation_audit` | `operation_id: i64` | UTF-8 pipe-delimited CSV `String` |
-| `export_operations_audit` | `operation_ids: &[i64]` | UTF-8 pipe-delimited CSV `String` |
-| `export_all_operation_audit` | none | UTF-8 pipe-delimited CSV `String` |
+| `write_operation_audit` | `operation_id: i64`, `writer: &mut W` where `W: Write` | `()` |
+| `write_operations_audit` | `operation_ids: &[i64]`, `writer: &mut W` where `W: Write` | `()` |
+| `write_all_operation_audit` | `writer: &mut W` where `W: Write` | `()` |
 | `rollback_operation` | `operation_id: i64` | `()` |
 
 Taxonomy adds formatted input export:
@@ -200,5 +220,5 @@ Taxonomy adds formatted input export:
 
 Selected input export fails if any requested operation has no formatted input;
 it never silently skips unsupported operations. Successful rollback applies
-the reverse changeset, synchronizes affected photo libraries, and deletes the
-original operation.
+the reverse changeset, records pending photo-library synchronization, and
+deletes the original operation.
