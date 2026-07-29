@@ -176,7 +176,9 @@ The supplied SQLite file must contain valid `taxa` and `taxon_names` data
 using the current schema. Imported names pass through the shared canonical
 normalizer. Successful replacement creates a new taxonomy identity, clears
 taxonomy user history, and causes every registered photo library to rebuild
-mapping state when synchronized.
+mapping state when synchronized. Immediate synchronization and mapping of the
+active photo library are best-effort follow-up work; no active library or an
+unavailable library does not change a successful replacement result.
 
 ## Photo-library synchronization
 
