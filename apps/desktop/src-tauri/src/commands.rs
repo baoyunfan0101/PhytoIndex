@@ -20,9 +20,10 @@ use vividarium_core::naming::{
 use vividarium_core::operations::{OperationAuditRow, OperationPage, OperationSummary};
 use vividarium_core::photos::{PhotoFilenameFormatSettings, PhotoRenameOperationResult};
 use vividarium_core::taxonomy::{
-    DeleteTaxonNameInput, PromoteTaxonNameInput, TaxonChild, TaxonDetailNode, TaxonInputRow,
-    TaxonRowOutcome, TaxonSearchResult, TaxonSuggestion, TaxonUpdateInput, TaxonomyBaseMetadata,
-    TaxonomyCustomSqlResult, TaxonomyCustomSqlTempTable, TaxonomyOperationResult, TaxonomyPage,
+    CustomTaxonomySqlExportRequest, CustomTaxonomySqlRequest, DeleteTaxonNameInput,
+    PromoteTaxonNameInput, SqlDataSource, SqlExecutionResult, SqlExportResult, SqlSourceSchema,
+    TaxonChild, TaxonDetailNode, TaxonInputRow, TaxonRowOutcome, TaxonSearchResult,
+    TaxonSuggestion, TaxonUpdateInput, TaxonomyBaseMetadata, TaxonomyOperationResult, TaxonomyPage,
     TaxonomyPreviewResult,
 };
 use vividarium_core::{
@@ -636,11 +637,9 @@ pub fn delete_taxon(
 pub fn execute_custom_taxonomy_sql(
     app: AppHandle,
     state: State<'_, AppState>,
-    sql: String,
-    input: Option<TaxonomyCustomSqlTempTable>,
-) -> CommandResult<TaxonomyCustomSqlResult> {
-    let result =
-        taxonomy::execute_custom_taxonomy_sql(&state.database, &sql, input).map_err(error)?;
+    request: CustomTaxonomySqlRequest,
+) -> CommandResult<SqlExecutionResult> {
+    let result = taxonomy::execute_custom_taxonomy_sql(&state.database, &request).map_err(error)?;
     if result.changeset_size > 0 {
         schedule_taxonomy_sync(app, &state);
     }
@@ -648,8 +647,16 @@ pub fn execute_custom_taxonomy_sql(
 }
 
 #[tauri::command]
-pub fn parse_custom_taxonomy_input_csv(input: String) -> CommandResult<TaxonomyCustomSqlTempTable> {
-    taxonomy::parse_custom_taxonomy_input_csv(&input).map_err(error)
+pub fn export_custom_taxonomy_query(
+    state: State<'_, AppState>,
+    request: CustomTaxonomySqlExportRequest,
+) -> CommandResult<SqlExportResult> {
+    taxonomy::export_custom_taxonomy_query(&state.database, &request).map_err(error)
+}
+
+#[tauri::command]
+pub fn inspect_sql_data_source(source: SqlDataSource) -> CommandResult<SqlSourceSchema> {
+    taxonomy::inspect_sql_data_source(&source).map_err(error)
 }
 
 #[tauri::command]

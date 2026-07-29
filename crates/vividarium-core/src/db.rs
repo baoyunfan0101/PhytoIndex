@@ -708,14 +708,22 @@ fn validate_existing_file(path: &Path) -> CoreResult<()> {
 }
 
 fn open_connection(path: &Path) -> CoreResult<Connection> {
-    let connection = Connection::open(path)?;
+    let connection = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_WRITE
+            | OpenFlags::SQLITE_OPEN_CREATE
+            | OpenFlags::SQLITE_OPEN_NO_MUTEX
+            | OpenFlags::SQLITE_OPEN_URI,
+    )?;
     configure_connection(connection)
 }
 
 fn open_existing_connection(path: &Path) -> CoreResult<Connection> {
     let connection = Connection::open_with_flags(
         path,
-        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        OpenFlags::SQLITE_OPEN_READ_WRITE
+            | OpenFlags::SQLITE_OPEN_NO_MUTEX
+            | OpenFlags::SQLITE_OPEN_URI,
     )
     .map_err(|error| {
         if path.is_file() {

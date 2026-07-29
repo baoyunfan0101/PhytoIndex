@@ -5,13 +5,13 @@ mod name_parser;
 mod operation_export;
 mod page;
 mod query;
+mod sql;
 pub(crate) mod sync;
 mod view;
 
 pub use actions::{
-    DeleteTaxonNameInput, PromoteTaxonNameInput, TaxonUpdateInput, TaxonomyCustomSqlResult,
-    TaxonomyCustomSqlTempTable, delete_taxon, delete_taxon_name, execute_custom_taxonomy_sql,
-    parse_custom_taxonomy_input_csv, promote_taxon_name, update_taxon,
+    DeleteTaxonNameInput, PromoteTaxonNameInput, TaxonUpdateInput, delete_taxon, delete_taxon_name,
+    promote_taxon_name, update_taxon,
 };
 pub use base::{
     TaxonomyBaseMetadata, TaxonomyBaseReplaceResult, get_taxonomy_base_metadata,
@@ -34,6 +34,12 @@ pub use query::{TaxonNameMatch, TaxonSearchResult, TaxonSuggestion, search_taxa,
 pub(crate) use query::{
     TaxonSearchCursorKey, search_taxa_page_with_photos_connection,
     suggest_taxa_with_photos_connection, taxon_search_relation,
+};
+pub use sql::{
+    CustomTaxonomySqlExportRequest, CustomTaxonomySqlRequest, SqlColumn, SqlDataSource,
+    SqlExecutionResult, SqlExportResult, SqlObjectType, SqlResultSet, SqlSourceObject,
+    SqlSourceSchema, SqlStatementMessage, SqlValue, execute_custom_taxonomy_sql,
+    export_custom_taxonomy_query, inspect_sql_data_source,
 };
 pub use sync::{TaxonomySyncResult, TaxonomySyncRun, synchronize_pending_photo_libraries};
 pub(crate) use view::load_taxon_summaries;

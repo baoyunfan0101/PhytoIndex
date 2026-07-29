@@ -692,7 +692,8 @@ mod tests {
     use crate::naming::{NamingHookKind, set_naming_hook, take_hook_compile_count};
     use crate::photos::{self, open_library, refresh_directory};
     use crate::taxonomy::{
-        TaxonInputRow, TaxonUpdateInput, apply_rows, execute_custom_taxonomy_sql, update_taxon,
+        CustomTaxonomySqlRequest, TaxonInputRow, TaxonUpdateInput, apply_rows,
+        execute_custom_taxonomy_sql, update_taxon,
     };
     use std::fs;
 
@@ -929,8 +930,12 @@ mod tests {
         assert_eq!(page.next_cursor, None);
         execute_custom_taxonomy_sql(
             &database,
-            "UPDATE taxon_names SET name = 'Canis lycaon' WHERE name = 'Canis lupus'",
-            None,
+            &CustomTaxonomySqlRequest {
+                sql: "UPDATE taxon_names SET name = 'Canis lycaon' WHERE name = 'Canis lupus'"
+                    .into(),
+                sources: Vec::new(),
+                maximum_result_rows: None,
+            },
         )
         .unwrap();
         crate::taxonomy::synchronize_pending_photo_libraries(&database).unwrap();

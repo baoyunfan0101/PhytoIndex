@@ -1,16 +1,7 @@
-use std::collections::BTreeSet;
-use std::ffi::{CStr, CString};
-use std::ptr;
-
-use rusqlite::ffi;
-use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
-use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params, params_from_iter};
+use rusqlite::{OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 
-use super::formatted::{
-    affected_taxon_ids_from_changeset, is_taxonomy_session_table, start_taxonomy_session,
-    validate_taxonomy,
-};
+use super::formatted::{start_taxonomy_session, validate_taxonomy};
 use super::view::load_taxon_summary;
 use super::{
     TaxonInputRow, TaxonRank, TaxonRowStatus, TaxonomyNameType, TaxonomyOperationResult,
@@ -42,89 +33,6 @@ pub struct DeleteTaxonNameInput {
 pub struct PromoteTaxonNameInput {
     pub taxon_id: i64,
     pub name_id: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct TaxonomyCustomSqlResult {
-    pub operation_id: i64,
-    pub changeset_size: usize,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct TaxonomyCustomSqlTempTable {
-    pub columns: Vec<String>,
-    pub rows: Vec<Vec<String>>,
-}
-
-pub fn parse_custom_taxonomy_input_csv(input: &str) -> CoreResult<TaxonomyCustomSqlTempTable> {
-    let input = input.trim_start_matches('\u{feff}');
-    if input.trim().is_empty() {
-        return Err(CoreError::InvalidArgument(
-            "custom sql input csv is empty".into(),
-        ));
-    }
-    let delimiter = detect_csv_delimiter(input);
-    let mut reader = csv::ReaderBuilder::new()
-        .delimiter(delimiter)
-        .has_headers(true)
-        .flexible(false)
-        .from_reader(input.as_bytes());
-    let columns = reader
-        .headers()
-        .map_err(|error| {
-            CoreError::InvalidArgument(format!("invalid custom sql input csv: {error}"))
-        })?
-        .iter()
-        .map(str::to_string)
-        .collect::<Vec<_>>();
-    if columns.is_empty() {
-        return Err(CoreError::InvalidArgument(
-            "custom sql input csv requires a header".into(),
-        ));
-    }
-    let rows = reader
-        .records()
-        .map(|record| {
-            record
-                .map(|record| record.iter().map(str::to_string).collect::<Vec<_>>())
-                .map_err(|error| {
-                    CoreError::InvalidArgument(format!("invalid custom sql input csv: {error}"))
-                })
-        })
-        .collect::<CoreResult<Vec<_>>>()?;
-    Ok(TaxonomyCustomSqlTempTable { columns, rows })
-}
-
-fn detect_csv_delimiter(input: &str) -> u8 {
-    let candidates = *b",|\t;";
-    let mut counts = [0_usize; 4];
-    let bytes = input.as_bytes();
-    let mut in_quotes = false;
-    let mut index = 0;
-    while index < bytes.len() {
-        let byte = bytes[index];
-        if byte == b'"' {
-            if in_quotes && bytes.get(index + 1) == Some(&b'"') {
-                index += 2;
-                continue;
-            }
-            in_quotes = !in_quotes;
-        } else if !in_quotes && matches!(byte, b'\r' | b'\n') {
-            break;
-        } else if !in_quotes
-            && let Some(candidate) = candidates.iter().position(|value| *value == byte)
-        {
-            counts[candidate] += 1;
-        }
-        index += 1;
-    }
-    counts
-        .iter()
-        .enumerate()
-        .max_by_key(|(_, count)| *count)
-        .filter(|(_, count)| **count > 0)
-        .map(|(index, _)| candidates[index])
-        .unwrap_or(b',')
 }
 
 pub fn update_taxon(
@@ -481,293 +389,6 @@ fn set_rank_locator(
     Ok(())
 }
 
-pub fn execute_custom_taxonomy_sql(
-    database: &Database,
-    sql: &str,
-    input: Option<TaxonomyCustomSqlTempTable>,
-) -> CoreResult<TaxonomyCustomSqlResult> {
-    let sql = sql.trim();
-    if sql.is_empty() {
-        return Err(CoreError::InvalidArgument("sql is required".into()));
-    }
-    let mut connection = database.connect_taxonomy_metadata_context()?;
-    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    if let Some(input) = input.as_ref() {
-        create_temp_input_table(&transaction, input)?;
-    }
-    authorize_custom_sql(&transaction, sql)?;
-    let mut session = start_taxonomy_session(&transaction)?;
-    transaction.execute_batch(sql)?;
-    let mut changeset_blob = Vec::new();
-    session.changeset_strm(&mut changeset_blob)?;
-    let changeset_size = changeset_blob.len();
-    drop(session);
-    let affected_taxon_ids = if changeset_blob.is_empty() {
-        BTreeSet::new()
-    } else {
-        validate_taxonomy(&transaction)?;
-        affected_taxon_ids_from_changeset(&transaction, &changeset_blob)?
-    };
-    let operation_id =
-        insert_custom_sql_operation(&transaction, &changeset_blob, &affected_taxon_ids)?;
-    if !changeset_blob.is_empty() {
-        super::sync::record_event(&transaction, Some(operation_id), affected_taxon_ids, false)?;
-    }
-    transaction.commit()?;
-    Ok(TaxonomyCustomSqlResult {
-        operation_id,
-        changeset_size,
-    })
-}
-
-fn insert_custom_sql_operation(
-    transaction: &Transaction<'_>,
-    changeset_blob: &[u8],
-    affected_taxon_ids: &BTreeSet<i64>,
-) -> CoreResult<i64> {
-    let total_items = affected_taxon_ids.len().max(1);
-    let operation_id = operations::insert_operation(
-        transaction,
-        NewOperation {
-            kind: "taxonomy_custom_sql",
-            source: "custom_sql",
-            total_items,
-            succeeded_items: total_items,
-            failed_items: 0,
-            rollbackable: !changeset_blob.is_empty(),
-            has_formatted_input: false,
-        },
-    )?;
-    if !changeset_blob.is_empty() {
-        transaction.execute(
-            r#"
-            INSERT INTO operation_changesets (operation_id, changeset_blob)
-            VALUES (?, ?)
-            "#,
-            params![operation_id, changeset_blob],
-        )?;
-    }
-    if affected_taxon_ids.is_empty() {
-        operations::insert_audit_row(
-            transaction,
-            operation_id,
-            NewAuditRow {
-                sequence: 1,
-                entity_type: "taxonomy",
-                entity_id: None,
-                action: "custom_sql",
-                before_json: None,
-                after_json: None,
-                succeeded: true,
-                message: "custom SQL made no taxonomy changes",
-            },
-        )?;
-    } else {
-        for (index, taxon_id) in affected_taxon_ids.iter().enumerate() {
-            operations::insert_audit_row(
-                transaction,
-                operation_id,
-                NewAuditRow {
-                    sequence: index + 1,
-                    entity_type: "taxon",
-                    entity_id: Some(taxon_id.to_string()),
-                    action: "custom_sql",
-                    before_json: None,
-                    after_json: Some(serde_json::json!({
-                        "changeset_size": changeset_blob.len(),
-                    })),
-                    succeeded: true,
-                    message: "custom SQL changed taxonomy data",
-                },
-            )?;
-        }
-    }
-    Ok(operation_id)
-}
-
-fn authorize_custom_sql(transaction: &Transaction<'_>, sql: &str) -> CoreResult<()> {
-    if sql.to_ascii_lowercase().contains("taxon_names_fts") {
-        return Err(CoreError::InvalidArgument(
-            "custom sql cannot access taxonomy search index tables directly".into(),
-        ));
-    }
-    prepare_custom_sql_batch(transaction, sql)
-}
-
-fn prepare_custom_sql_batch(connection: &rusqlite::Connection, sql: &str) -> CoreResult<()> {
-    let database = unsafe { connection.handle() };
-    let mut offset = 0;
-    while offset < sql.len() {
-        let sql_tail = &sql[offset..];
-        let sql_tail = CString::new(sql_tail)
-            .map_err(|error| CoreError::InvalidArgument(format!("invalid sql: {error}")))?;
-        let mut statement = ptr::null_mut();
-        let mut next_sql = ptr::null();
-        connection.authorizer(Some(custom_sql_authorizer()));
-        let code = unsafe {
-            ffi::sqlite3_prepare_v2(
-                database,
-                sql_tail.as_ptr(),
-                -1,
-                &mut statement,
-                &mut next_sql,
-            )
-        };
-        connection.authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
-        if !statement.is_null() {
-            unsafe {
-                ffi::sqlite3_finalize(statement);
-            }
-        }
-        if code != ffi::SQLITE_OK {
-            return Err(sqlite_error(database, code));
-        }
-        if next_sql.is_null() {
-            break;
-        }
-        let tail_offset = unsafe { next_sql.offset_from(sql_tail.as_ptr()) as usize };
-        if tail_offset == 0 || tail_offset >= sql_tail.as_bytes().len() {
-            break;
-        }
-        offset += tail_offset;
-    }
-    Ok(())
-}
-
-fn sqlite_error(database: *mut ffi::sqlite3, code: i32) -> CoreError {
-    let message = unsafe { CStr::from_ptr(ffi::sqlite3_errmsg(database)) }
-        .to_string_lossy()
-        .into_owned();
-    CoreError::Database(rusqlite::Error::SqliteFailure(
-        ffi::Error::new(code),
-        Some(message),
-    ))
-}
-
-fn create_temp_input_table(
-    transaction: &Transaction<'_>,
-    input: &TaxonomyCustomSqlTempTable,
-) -> CoreResult<()> {
-    if input.columns.is_empty() {
-        return Err(CoreError::InvalidArgument(
-            "custom sql input requires at least one column".into(),
-        ));
-    }
-    let mut seen = BTreeSet::new();
-    let mut columns = Vec::with_capacity(input.columns.len());
-    for column in &input.columns {
-        let column = column.trim();
-        if !is_safe_identifier(column) {
-            return Err(CoreError::InvalidArgument(format!(
-                "invalid custom sql input column: {column}"
-            )));
-        }
-        if !seen.insert(column.to_ascii_lowercase()) {
-            return Err(CoreError::InvalidArgument(format!(
-                "duplicate custom sql input column: {column}"
-            )));
-        }
-        columns.push(column.to_string());
-    }
-    for (index, row) in input.rows.iter().enumerate() {
-        if row.len() != columns.len() {
-            return Err(CoreError::InvalidArgument(format!(
-                "custom sql input row {} has {} values but {} columns were declared",
-                index + 1,
-                row.len(),
-                columns.len()
-            )));
-        }
-    }
-    let definitions = columns
-        .iter()
-        .map(|column| format!("{} TEXT", quote_identifier(column)))
-        .collect::<Vec<_>>()
-        .join(", ");
-    transaction.execute_batch(&format!("CREATE TEMP TABLE input ({definitions})"))?;
-    if !input.rows.is_empty() {
-        let column_list = columns
-            .iter()
-            .map(|column| quote_identifier(column))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let placeholders = std::iter::repeat_n("?", columns.len())
-            .collect::<Vec<_>>()
-            .join(", ");
-        let sql = format!("INSERT INTO temp.input ({column_list}) VALUES ({placeholders})");
-        let mut statement = transaction.prepare(&sql)?;
-        for row in &input.rows {
-            statement.execute(params_from_iter(row.iter()))?;
-        }
-    }
-    Ok(())
-}
-
-fn is_safe_identifier(value: &str) -> bool {
-    let mut chars = value.chars();
-    chars
-        .next()
-        .is_some_and(|first| first == '_' || first.is_ascii_alphabetic())
-        && chars.all(|character| character == '_' || character.is_ascii_alphanumeric())
-}
-
-fn quote_identifier(value: &str) -> String {
-    format!("\"{}\"", value.replace('"', "\"\""))
-}
-
-fn custom_sql_authorizer() -> impl for<'a> FnMut(AuthContext<'a>) -> Authorization + Send + 'static
-{
-    move |context| authorize_custom_sql_action(context)
-}
-
-fn authorize_custom_sql_action(context: AuthContext<'_>) -> Authorization {
-    match context.action {
-        AuthAction::Select | AuthAction::Recursive => Authorization::Allow,
-        AuthAction::Function { function_name } => {
-            if function_name.eq_ignore_ascii_case("load_extension") {
-                Authorization::Deny
-            } else {
-                Authorization::Allow
-            }
-        }
-        AuthAction::Pragma { pragma_name, .. } => {
-            if pragma_name.eq_ignore_ascii_case("data_version") {
-                Authorization::Allow
-            } else {
-                Authorization::Deny
-            }
-        }
-        AuthAction::Read { table_name, .. } => {
-            if is_allowed_custom_sql_read(context.database_name, table_name) {
-                Authorization::Allow
-            } else {
-                Authorization::Deny
-            }
-        }
-        AuthAction::Insert { table_name }
-        | AuthAction::Update { table_name, .. }
-        | AuthAction::Delete { table_name } => {
-            if is_allowed_custom_sql_write(context.accessor, table_name) {
-                Authorization::Allow
-            } else {
-                Authorization::Deny
-            }
-        }
-        _ => Authorization::Deny,
-    }
-}
-
-fn is_allowed_custom_sql_read(database_name: Option<&str>, table_name: &str) -> bool {
-    is_taxonomy_session_table(table_name)
-        || table_name.starts_with("taxon_names_fts")
-        || (database_name == Some("temp") && table_name == "input")
-}
-
-fn is_allowed_custom_sql_write(accessor: Option<&str>, table_name: &str) -> bool {
-    is_taxonomy_session_table(table_name)
-        || (accessor.is_some() && table_name.starts_with("taxon_names_fts"))
-}
-
 #[cfg(test)]
 mod tests {
     use tempfile::TempDir;
@@ -778,28 +399,6 @@ mod tests {
         let directory = TempDir::new().unwrap();
         let database = Database::open_test(directory.path().join("test.db")).unwrap();
         (directory, database)
-    }
-
-    #[test]
-    fn custom_sql_csv_parser_handles_quoted_delimiters_and_newlines() {
-        let comma = parse_custom_taxonomy_input_csv(
-            "name,notes\n\"Felis, catus\",\"line one\nline two\"\n",
-        )
-        .unwrap();
-        assert_eq!(comma.columns, ["name", "notes"]);
-        assert_eq!(
-            comma.rows,
-            [["Felis, catus".to_string(), "line one\nline two".to_string()]]
-        );
-
-        let pipe =
-            parse_custom_taxonomy_input_csv("name|notes\n\"A|B\"|\"quoted \"\"value\"\"\"\n")
-                .unwrap();
-        assert_eq!(pipe.columns, ["name", "notes"]);
-        assert_eq!(
-            pipe.rows,
-            [["A|B".to_string(), "quoted \"value\"".to_string()]]
-        );
     }
 
     #[test]
@@ -1115,15 +714,18 @@ mod tests {
             .unwrap();
         drop(connection);
 
-        let result = execute_custom_taxonomy_sql(
+        let result = crate::taxonomy::execute_custom_taxonomy_sql(
             &database,
-            &format!("DELETE FROM taxa WHERE taxon_id = {taxon_id}"),
-            None,
+            &crate::taxonomy::CustomTaxonomySqlRequest {
+                sql: format!("DELETE FROM taxa WHERE taxon_id = {taxon_id}"),
+                sources: Vec::new(),
+                maximum_result_rows: None,
+            },
         )
         .unwrap();
         crate::taxonomy::synchronize_pending_photo_libraries(&database).unwrap();
         assert!(
-            crate::taxonomy::export_operation_input(&database, result.operation_id)
+            crate::taxonomy::export_operation_input(&database, result.operation_id.unwrap())
                 .unwrap_err()
                 .to_string()
                 .contains("formatted input")
