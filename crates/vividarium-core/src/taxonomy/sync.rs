@@ -123,6 +123,7 @@ fn dispatch_pending_events_unlocked(database: &Database) -> CoreResult<()> {
         })?
         .collect::<Result<Vec<_>, _>>()?;
     if events.is_empty() {
+        cleanup_dispatched_events(&taxonomy, last_dispatched)?;
         return Ok(());
     }
     let latest_sync_id = events
@@ -189,6 +190,20 @@ fn dispatch_pending_events_unlocked(database: &Database) -> CoreResult<()> {
         [latest_sync_id],
     )?;
     transaction.commit()?;
+    cleanup_dispatched_events(&taxonomy, latest_sync_id)?;
+    Ok(())
+}
+
+fn cleanup_dispatched_events(
+    taxonomy: &rusqlite::Connection,
+    dispatched_through: i64,
+) -> CoreResult<()> {
+    if dispatched_through > 0 {
+        taxonomy.execute(
+            "DELETE FROM taxonomy_sync_events WHERE sync_id <= ?",
+            [dispatched_through],
+        )?;
+    }
     Ok(())
 }
 
@@ -568,6 +583,55 @@ mod tests {
                     [&library_a.library_uuid],
                     |row| row.get::<_, i64>(0),
                 )
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            database
+                .connect_taxonomy()
+                .unwrap()
+                .query_row("SELECT COUNT(*) FROM taxonomy_sync_events", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn dispatched_events_are_deleted_without_reusing_sync_ids() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = Database::open(directory.path().join("metadata.db")).unwrap();
+        let mut taxonomy = database.connect_taxonomy().unwrap();
+        let transaction = taxonomy.transaction().unwrap();
+        let first_sync_id = record_event(&transaction, None, [10], false).unwrap();
+        transaction.commit().unwrap();
+        synchronize_pending_photo_libraries(&database).unwrap();
+        assert_eq!(
+            database
+                .connect_taxonomy()
+                .unwrap()
+                .query_row("SELECT COUNT(*) FROM taxonomy_sync_events", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap(),
+            0
+        );
+
+        let mut taxonomy = database.connect_taxonomy().unwrap();
+        let transaction = taxonomy.transaction().unwrap();
+        let second_sync_id = record_event(&transaction, None, [20], false).unwrap();
+        transaction.commit().unwrap();
+        assert!(second_sync_id > first_sync_id);
+        synchronize_pending_photo_libraries(&database).unwrap();
+        assert_eq!(database.latest_taxonomy_sync_id().unwrap(), second_sync_id);
+        assert_eq!(
+            database
+                .connect_taxonomy()
+                .unwrap()
+                .query_row("SELECT COUNT(*) FROM taxonomy_sync_events", [], |row| {
+                    row.get::<_, i64>(0)
+                })
                 .unwrap(),
             0
         );
