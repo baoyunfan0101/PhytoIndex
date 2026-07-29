@@ -823,16 +823,53 @@ pub fn replace_taxonomy_base_database(
 }
 
 fn schedule_taxonomy_sync(app: AppHandle, state: &AppState) {
-    let database = state.database.clone();
-    let _ = state
-        .operations
-        .start(app, "mapping", "taxonomy_sync", move |progress| {
-            progress(0, None, "Synchronizing taxonomy changes");
-            let sync = taxonomy::synchronize_pending_photo_libraries(&database).map_err(error)?;
-            let mapping =
-                mapping::process_pending_photo_matches(&database, progress).map_err(error)?;
-            Ok(json!({ "sync": sync, "mapping": mapping }))
-        });
+    if !state.taxonomy_sync.request() {
+        return;
+    }
+    let state = state.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        loop {
+            if !state.taxonomy_sync.take_request() {
+                if state.taxonomy_sync.release_or_continue() {
+                    continue;
+                }
+                break;
+            }
+            while state
+                .operations
+                .status()
+                .values()
+                .any(|operation| operation.running)
+            {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            let database = state.database.clone();
+            let operation =
+                state
+                    .operations
+                    .start(app.clone(), "mapping", "taxonomy_sync", move |progress| {
+                        progress(0, None, "Synchronizing taxonomy changes");
+                        let sync = taxonomy::synchronize_pending_photo_libraries(&database)
+                            .map_err(error)?;
+                        let mapping = mapping::process_pending_photo_matches(&database, progress)
+                            .map_err(error)?;
+                        Ok(json!({ "sync": sync, "mapping": mapping }))
+                    });
+            let task_id = match operation {
+                Ok(operation) => operation.task_id,
+                Err(_) => {
+                    state.taxonomy_sync.request();
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    continue;
+                }
+            };
+            while state.operations.status().values().any(|operation| {
+                operation.running && operation.task_id.as_deref() == task_id.as_deref()
+            }) {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+        }
+    });
 }
 
 fn audit_writer(destination_path: &str) -> CommandResult<BufWriter<File>> {

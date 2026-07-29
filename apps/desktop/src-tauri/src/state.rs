@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -55,6 +56,7 @@ pub struct AppState {
     pub database: Database,
     pub thumbnail_dir: PathBuf,
     pub operations: OperationManager,
+    pub taxonomy_sync: DeferredWork,
 }
 
 impl AppState {
@@ -68,6 +70,7 @@ impl AppState {
             database,
             thumbnail_dir,
             operations: OperationManager::new(),
+            taxonomy_sync: DeferredWork::new(),
         })
     }
 }
@@ -78,6 +81,41 @@ pub fn set_global(state: AppState) -> Result<(), AppState> {
 
 pub fn global() -> Option<&'static AppState> {
     GLOBAL_STATE.get()
+}
+
+#[derive(Clone)]
+pub struct DeferredWork {
+    requested: Arc<AtomicBool>,
+    worker_active: Arc<AtomicBool>,
+}
+
+impl DeferredWork {
+    fn new() -> Self {
+        Self {
+            requested: Arc::new(AtomicBool::new(false)),
+            worker_active: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    pub fn request(&self) -> bool {
+        self.requested.store(true, Ordering::Release);
+        self.worker_active
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+
+    pub fn take_request(&self) -> bool {
+        self.requested.swap(false, Ordering::AcqRel)
+    }
+
+    pub fn release_or_continue(&self) -> bool {
+        self.worker_active.store(false, Ordering::Release);
+        self.requested.load(Ordering::Acquire)
+            && self
+                .worker_active
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+    }
 }
 
 #[derive(Clone)]
@@ -255,5 +293,20 @@ mod tests {
         assert!(!throttle.should_emit(1, Some(100), "Importing"));
         assert!(throttle.should_emit(100, Some(100), "Importing"));
         assert!(throttle.should_emit(100, None, "Committing"));
+    }
+
+    #[test]
+    fn deferred_work_coalesces_requests_and_restarts_after_release() {
+        let work = DeferredWork::new();
+
+        assert!(work.request());
+        assert!(!work.request());
+        assert!(work.take_request());
+        assert!(!work.take_request());
+        assert!(!work.request());
+        assert!(work.release_or_continue());
+        assert!(work.take_request());
+        assert!(!work.release_or_continue());
+        assert!(work.request());
     }
 }
