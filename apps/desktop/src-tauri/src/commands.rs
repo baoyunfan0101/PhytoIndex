@@ -799,27 +799,53 @@ pub fn replace_taxonomy_base_database(
                 let replacement =
                     taxonomy::replace_taxonomy_base_database(&database, Path::new(&source_path))
                         .map_err(error)?;
-                let sync =
-                    taxonomy::synchronize_pending_photo_libraries(&database).map_err(error)?;
-                let queued_photo_count = sync
-                    .synchronized
-                    .iter()
-                    .find(|item| {
-                        item.library_uuid
-                            == database
-                                .active_photo_library()
-                                .ok()
-                                .flatten()
-                                .map(|library| library.library_uuid)
-                                .unwrap_or_default()
-                    })
-                    .map_or(0, |item| item.queued_photo_count);
-                progress(0, Some(queued_photo_count as u64), "Remapping all photos");
-                let mapping =
-                    mapping::process_pending_photo_matches(&database, progress).map_err(error)?;
-                Ok(json!({ "replacement": replacement, "mapping": mapping }))
+                let follow_up = finish_taxonomy_base_replacement(&database, progress);
+                Ok(json!({ "replacement": replacement, "follow_up": follow_up }))
             })?;
     Ok(json!({ "operation": operation }))
+}
+
+fn finish_taxonomy_base_replacement(
+    database: &vividarium_core::Database,
+    progress: &mut mapping::MappingProgressCallback<'_>,
+) -> Value {
+    let mut errors = Vec::new();
+    let sync = match taxonomy::synchronize_pending_photo_libraries(database) {
+        Ok(sync) => Some(sync),
+        Err(sync_error) => {
+            errors.push(sync_error.to_string());
+            None
+        }
+    };
+    let active_library_uuid = match database.active_photo_library() {
+        Ok(library) => library.map(|library| library.library_uuid),
+        Err(active_error) => {
+            errors.push(active_error.to_string());
+            None
+        }
+    };
+    let active_sync = active_library_uuid.as_deref().and_then(|library_uuid| {
+        sync.as_ref().and_then(|sync| {
+            sync.synchronized
+                .iter()
+                .find(|item| item.library_uuid == library_uuid)
+        })
+    });
+    let mapping = active_sync.and_then(|active_sync| {
+        progress(
+            0,
+            Some(active_sync.queued_photo_count as u64),
+            "Remapping all photos",
+        );
+        match mapping::process_pending_photo_matches(database, progress) {
+            Ok(mapping) => Some(mapping),
+            Err(mapping_error) => {
+                errors.push(mapping_error.to_string());
+                None
+            }
+        }
+    });
+    json!({ "sync": sync, "mapping": mapping, "errors": errors })
 }
 
 fn schedule_taxonomy_sync(app: AppHandle, state: &AppState) {
@@ -1085,4 +1111,52 @@ pub fn get_operations_status(state: State<'_, AppState>) -> OperationsStatus {
 
 fn error(error: impl ToString) -> String {
     error.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn base_replacement_follow_up_tolerates_no_photo_library() {
+        let directory = std::env::temp_dir().join(format!(
+            "vividarium-replacement-no-library-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let database = vividarium_core::Database::open(directory.join("metadata.db")).unwrap();
+        let mut progress = |_: u64, _: Option<u64>, _: &str| {};
+
+        let follow_up = finish_taxonomy_base_replacement(&database, &mut progress);
+
+        assert!(follow_up["mapping"].is_null());
+        assert_eq!(follow_up["errors"], json!([]));
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn base_replacement_follow_up_tolerates_an_offline_active_library() {
+        let directory = std::env::temp_dir().join(format!(
+            "vividarium-replacement-offline-library-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let root = directory.join("photos");
+        std::fs::create_dir_all(&root).unwrap();
+        let library_path = directory.join("library.db");
+        let database = vividarium_core::Database::open(directory.join("metadata.db")).unwrap();
+        let library = database
+            .register_photo_library(&root, &library_path, Some("Library"))
+            .unwrap();
+        std::fs::remove_file(&library_path).unwrap();
+        let mut progress = |_: u64, _: Option<u64>, _: &str| {};
+
+        let follow_up = finish_taxonomy_base_replacement(&database, &mut progress);
+
+        assert!(follow_up["mapping"].is_null());
+        assert_eq!(follow_up["errors"], json!([]));
+        assert_eq!(
+            follow_up["sync"]["pending_library_uuids"],
+            json!([library.library_uuid])
+        );
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 }
