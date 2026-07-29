@@ -61,7 +61,8 @@ detail and breadcrumb content for autocomplete.
 
 Both interfaces use the same canonical normalization and ranked order:
 exact, full prefix, word prefix, substring, then fuzzy. Blank input returns
-an empty vector.
+an empty vector. These taxonomy-only interfaces remain available when the
+active photo library is offline.
 
 ## Formatted update
 
@@ -202,6 +203,10 @@ mapping task is running, the request remains scheduled and starts after the
 conflicting task finishes. Internal taxonomy sync events are deleted after
 their data has been durably merged into per-library pending state; the metadata
 dispatch watermark preserves ordering without an append-only event history.
+When an existing photo library is registered, its persisted taxonomy identity
+and synchronization watermark are compared with current metadata. Any
+mismatch requests one full remap, including when the intermediate sync events
+have already been pruned.
 
 ## Taxonomy operation interfaces
 

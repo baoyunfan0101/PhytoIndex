@@ -35,13 +35,13 @@ interface.
 
 | Interface | Parameters | Return | Description |
 | --- | --- | --- | --- |
-| `Database::open` | `metadata_path` | `CoreResult<Database>` | Open or initialize metadata and taxonomy storage. No photo library is created automatically. |
+| `Database::open` | `metadata_path` | `CoreResult<Database>` | Open or initialize metadata and taxonomy storage. No photo library is created automatically, and an unavailable registered photo library does not block startup. |
 | `Database::metadata_path` | none | `PathBuf` | Return the metadata database path. |
 | `Database::taxonomy_path` | none | `CoreResult<PathBuf>` | Return the configured taxonomy database path. |
 | `Database::locations` | none | `CoreResult<DatabaseLocations>` | Return all current and default locations. |
 | `Database::active_photo_library` | none | `CoreResult<Option<PhotoLibraryRegistration>>` | Return the active registration. |
 | `Database::list_photo_libraries` | none | `CoreResult<Vec<PhotoLibraryRegistration>>` | List registered libraries. |
-| `Database::register_photo_library` | `root_path: &Path`, `database_path: &Path`, `display_name: Option<&str>` | `CoreResult<PhotoLibraryRegistration>` | Register an existing or new photo library DB and activate it. The root must be an existing directory not used by another library. |
+| `Database::register_photo_library` | `root_path: &Path`, `database_path: &Path`, `display_name: Option<&str>` | `CoreResult<PhotoLibraryRegistration>` | Register an existing or new photo library DB and activate it. The root must be an existing directory not used by another library. An existing DB with a different taxonomy identity or synchronization watermark is fully queued for remapping before activation. |
 | `Database::switch_photo_library` | `library_uuid: &str` | `CoreResult<PhotoLibraryRegistration>` | Validate the registered DB, apply its pending taxonomy synchronization, and activate it. A missing DB is reported and never recreated. |
 | `Database::remove_photo_library` | `library_uuid: &str` | `CoreResult<()>` | Remove only the metadata registration; files and the library DB remain. |
 | `Database::rebind_photo_library_root` | `library_uuid: &str`, `root_path: &Path` | `CoreResult<PhotoLibraryRegistration>` | Bind a copied library DB to a new local photo root. |
@@ -61,7 +61,9 @@ database paths are unique among registrations. Callers must prevent concurrent
 mutating operations while relocating a database; the desktop commands enforce
 this operation guard.
 
-All ordinary database connections and attached taxonomy/photo contexts require
-their configured files to exist. A disconnected or missing registered
-database returns `CoreError::NotFound`; no read, search, or mutation interface
-silently creates an empty replacement.
+Metadata and taxonomy storage remain available when the active photo library
+is offline. Pure taxonomy reads, updates, history, settings, and base database
+interfaces do not attach the photo library. Photo interfaces and cross-module
+taxonomy/photo interfaces require the active library DB and return
+`CoreError::NotFound` when it is unavailable. The registration is retained,
+and no interface silently creates an empty replacement DB.
