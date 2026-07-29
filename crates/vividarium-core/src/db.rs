@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use rusqlite::{Connection, OptionalExtension, Row, TransactionBehavior, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, Row, TransactionBehavior, params};
 use uuid::Uuid;
 
 use crate::error::{CoreError, CoreResult};
@@ -426,11 +426,11 @@ impl Database {
     }
 
     pub(crate) fn connect_metadata(&self) -> CoreResult<Connection> {
-        open_connection(&self.metadata_path())
+        open_existing_connection(&self.metadata_path())
     }
 
     pub(crate) fn connect_taxonomy(&self) -> CoreResult<Connection> {
-        open_connection(&self.taxonomy_path()?)
+        open_existing_connection(&self.taxonomy_path()?)
     }
 
     pub(crate) fn connect_taxonomy_context(&self) -> CoreResult<Connection> {
@@ -458,7 +458,7 @@ impl Database {
         &self,
         library: &PhotoLibraryRegistration,
     ) -> CoreResult<Connection> {
-        let connection = open_connection(Path::new(&library.db_path))?;
+        let connection = open_existing_connection(Path::new(&library.db_path))?;
         attach_database(&connection, &self.taxonomy_path()?, "taxonomy")?;
         attach_database(&connection, &self.metadata_path(), "metadata")?;
         create_photo_main_views(&connection)?;
@@ -476,9 +476,13 @@ impl Database {
     }
 
     pub(crate) fn latest_taxonomy_sync_id(&self) -> CoreResult<i64> {
-        self.connect_taxonomy()?
+        self.connect_metadata()?
             .query_row(
-                "SELECT COALESCE(MAX(sync_id), 0) FROM taxonomy_sync_events",
+                r#"
+                SELECT last_dispatched_sync_id
+                FROM taxonomy_sync_dispatch
+                WHERE dispatch_id = 1
+                "#,
                 [],
                 |row| row.get(0),
             )
@@ -567,6 +571,10 @@ fn initialize_file(path: &Path, schema: &str) -> CoreResult<()> {
         fs::create_dir_all(parent)?;
     }
     let connection = open_connection(path)?;
+    initialize_connection(&connection, schema)
+}
+
+fn initialize_connection(connection: &Connection, schema: &str) -> CoreResult<()> {
     let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
     match version {
         0 => connection.execute_batch(schema)?,
@@ -581,17 +589,31 @@ fn initialize_file(path: &Path, schema: &str) -> CoreResult<()> {
 }
 
 fn initialize_existing_file(path: &Path, schema: &str) -> CoreResult<()> {
-    if !path.is_file() {
-        return Err(CoreError::NotFound(format!(
-            "database file {}",
-            path.display()
-        )));
-    }
-    initialize_file(path, schema)
+    let connection = open_existing_connection(path)?;
+    initialize_connection(&connection, schema)
 }
 
 fn open_connection(path: &Path) -> CoreResult<Connection> {
     let connection = Connection::open(path)?;
+    configure_connection(connection)
+}
+
+fn open_existing_connection(path: &Path) -> CoreResult<Connection> {
+    let connection = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|error| {
+        if path.is_file() {
+            CoreError::Database(error)
+        } else {
+            CoreError::NotFound(format!("database file {}", path.display()))
+        }
+    })?;
+    configure_connection(connection)
+}
+
+fn configure_connection(connection: Connection) -> CoreResult<Connection> {
     connection.busy_timeout(Duration::from_secs(30))?;
     connection.execute_batch(
         r#"
@@ -611,6 +633,12 @@ fn attach_database(connection: &Connection, path: &Path, schema: &str) -> CoreRe
         return Err(CoreError::InvalidArgument(
             "invalid attached database schema name".into(),
         ));
+    }
+    if !path.is_file() {
+        return Err(CoreError::NotFound(format!(
+            "database file {}",
+            path.display()
+        )));
     }
     connection.execute(
         &format!("ATTACH DATABASE ? AS {schema}"),
@@ -1354,6 +1382,27 @@ mod tests {
             .unwrap_err();
 
         assert!(matches!(error, CoreError::NotFound(_)));
+        assert!(!database_path.exists());
+    }
+
+    #[test]
+    fn ordinary_connections_do_not_recreate_a_missing_active_library() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("photos");
+        fs::create_dir_all(&root).unwrap();
+        let database = Database::open(directory.path().join("metadata.db")).unwrap();
+        let database_path = directory.path().join("library.db");
+        database
+            .register_photo_library(&root, &database_path, Some("Library"))
+            .unwrap();
+        fs::remove_file(&database_path).unwrap();
+
+        assert!(matches!(database.connect(), Err(CoreError::NotFound(_))));
+        assert!(!database_path.exists());
+        assert!(matches!(
+            database.connect_taxonomy_context(),
+            Err(CoreError::NotFound(_))
+        ));
         assert!(!database_path.exists());
     }
 
