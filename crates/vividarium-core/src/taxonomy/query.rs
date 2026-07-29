@@ -58,7 +58,7 @@ pub fn search_taxa(
     query: &str,
     limit: usize,
 ) -> CoreResult<Vec<TaxonSearchResult>> {
-    let connection = database.connect_taxonomy_context()?;
+    let connection = database.connect_taxonomy_metadata_context()?;
     search_taxa_with_connection(&connection, query, limit)
 }
 
@@ -90,7 +90,7 @@ pub fn suggest_taxa(
     limit: usize,
 ) -> CoreResult<Vec<TaxonSuggestion>> {
     suggest_taxa_with_filter(
-        &database.connect_taxonomy_context()?,
+        &database.connect_taxonomy_metadata_context()?,
         query,
         page_limit(limit),
         false,
@@ -721,7 +721,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let database = Database::open(directory.path().join("test.db")).unwrap();
         database
-            .connect_taxonomy_context()
+            .connect_taxonomy_metadata_context()
             .unwrap()
             .execute_batch(
                 r#"
@@ -759,7 +759,7 @@ mod tests {
     fn ranked_search_cursor_continues_across_match_levels() {
         let directory = tempfile::tempdir().unwrap();
         let database = Database::open(directory.path().join("test.db")).unwrap();
-        let connection = database.connect_taxonomy_context().unwrap();
+        let connection = database.connect_taxonomy_metadata_context().unwrap();
         connection
             .execute_batch(
                 r#"

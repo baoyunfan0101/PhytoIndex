@@ -131,7 +131,7 @@ pub fn update_taxon(
     database: &Database,
     input: TaxonUpdateInput,
 ) -> CoreResult<TaxonomyOperationResult> {
-    let connection = database.connect_taxonomy_context()?;
+    let connection = database.connect_taxonomy_metadata_context()?;
     let summary = load_taxon_summary(&connection, input.taxon_id)?
         .ok_or_else(|| CoreError::NotFound(format!("taxon {}", input.taxon_id)))?;
     drop(connection);
@@ -166,7 +166,7 @@ pub fn update_taxon(
 }
 
 pub fn promote_taxon_name(database: &Database, input: PromoteTaxonNameInput) -> CoreResult<()> {
-    let mut connection = database.connect_taxonomy_context()?;
+    let mut connection = database.connect_taxonomy_metadata_context()?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let (rank, current_type, name) = transaction
         .query_row(
@@ -306,7 +306,7 @@ pub fn promote_taxon_name(database: &Database, input: PromoteTaxonNameInput) -> 
 }
 
 pub fn delete_taxon_name(database: &Database, input: DeleteTaxonNameInput) -> CoreResult<()> {
-    let mut connection = database.connect_taxonomy_context()?;
+    let mut connection = database.connect_taxonomy_metadata_context()?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let (name_type, name) = transaction
         .query_row(
@@ -385,7 +385,7 @@ pub fn delete_taxon_name(database: &Database, input: DeleteTaxonNameInput) -> Co
 }
 
 pub fn delete_taxon(database: &Database, taxon_id: i64) -> CoreResult<()> {
-    let mut connection = database.connect_taxonomy_context()?;
+    let mut connection = database.connect_taxonomy_metadata_context()?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let taxon = transaction
         .query_row(
@@ -490,7 +490,7 @@ pub fn execute_custom_taxonomy_sql(
     if sql.is_empty() {
         return Err(CoreError::InvalidArgument("sql is required".into()));
     }
-    let mut connection = database.connect_taxonomy_context()?;
+    let mut connection = database.connect_taxonomy_metadata_context()?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     if let Some(input) = input.as_ref() {
         create_temp_input_table(&transaction, input)?;
@@ -842,7 +842,7 @@ mod tests {
             ],
         )
         .unwrap();
-        let connection = database.connect_taxonomy_context().unwrap();
+        let connection = database.connect_taxonomy_metadata_context().unwrap();
         let (taxon_id, promoted_name_id, invalid_name_id): (i64, i64, i64) = connection
             .query_row(
                 r#"
@@ -870,7 +870,7 @@ mod tests {
             },
         )
         .unwrap();
-        let connection = database.connect_taxonomy_context().unwrap();
+        let connection = database.connect_taxonomy_metadata_context().unwrap();
         let promoted: i64 = connection
             .query_row(
                 "SELECT name_type FROM taxon_names WHERE name = 'Canis lycaon'",
@@ -907,7 +907,7 @@ mod tests {
         assert!(error.to_string().contains("parent genus"));
 
         crate::taxonomy::rollback_operation(&database, operation.operation_id).unwrap();
-        let connection = database.connect_taxonomy_context().unwrap();
+        let connection = database.connect_taxonomy_metadata_context().unwrap();
         assert_eq!(
             connection
                 .query_row(
@@ -948,7 +948,7 @@ mod tests {
             ],
         )
         .unwrap();
-        let connection = database.connect_taxonomy_context().unwrap();
+        let connection = database.connect_taxonomy_metadata_context().unwrap();
         let (animalia_id, sci_name_id, synonym_id): (i64, i64, i64) = connection
             .query_row(
                 r#"
@@ -1008,7 +1008,7 @@ mod tests {
         crate::taxonomy::synchronize_pending_photo_libraries(&database).unwrap();
         assert!(
             database
-                .connect_taxonomy_context()
+                .connect_taxonomy_metadata_context()
                 .unwrap()
                 .query_row(
                     "SELECT NOT EXISTS(SELECT 1 FROM taxon_names WHERE name_id = ?)",
@@ -1026,7 +1026,7 @@ mod tests {
         crate::taxonomy::rollback_operation(&database, operation.operation_id).unwrap();
         assert!(
             database
-                .connect_taxonomy_context()
+                .connect_taxonomy_metadata_context()
                 .unwrap()
                 .query_row(
                     "SELECT EXISTS(SELECT 1 FROM taxon_names WHERE name_id = ?)",
@@ -1040,7 +1040,7 @@ mod tests {
     #[test]
     fn custom_taxon_delete_queues_old_matches() {
         let (_directory, database) = database();
-        let connection = database.connect_taxonomy_context().unwrap();
+        let connection = database.connect_taxonomy_metadata_context().unwrap();
         connection
             .execute("INSERT INTO taxa (rank) VALUES (5)", [])
             .unwrap();
@@ -1129,7 +1129,7 @@ mod tests {
                 .contains("formatted input")
         );
 
-        let connection = database.connect_taxonomy_context().unwrap();
+        let connection = database.connect_taxonomy_metadata_context().unwrap();
         let queued: i64 = connection
             .query_row(
                 "SELECT COUNT(*) FROM photo_mapping_queue WHERE photo_id IN (1, 2)",

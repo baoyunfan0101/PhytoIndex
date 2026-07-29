@@ -24,7 +24,7 @@ pub struct TaxonomyBaseReplaceResult {
 }
 
 pub fn get_taxonomy_base_metadata(database: &Database) -> CoreResult<Option<TaxonomyBaseMetadata>> {
-    let connection = database.connect_taxonomy_context()?;
+    let connection = database.connect_taxonomy_metadata_context()?;
     connection
         .query_row(
             r#"
@@ -55,7 +55,7 @@ pub fn replace_taxonomy_base_database(
         .to_str()
         .ok_or_else(|| CoreError::InvalidArgument("taxonomy base path is not valid UTF-8".into()))?
         .to_string();
-    let mut connection = database.connect_taxonomy_context()?;
+    let mut connection = database.connect_taxonomy_metadata_context()?;
     connection.execute("ATTACH DATABASE ? AS taxonomy_base", [&source_path])?;
     let result = replace_from_attached_database(&mut connection, &source_path);
     let detach_result = connection.execute_batch("DETACH DATABASE taxonomy_base");
@@ -301,7 +301,7 @@ mod tests {
         let database = Database::open_test(directory.path().join("vividarium.db")).unwrap();
         let old_taxon_ids = seed_old_taxonomy_tree(&database);
         let old_taxon_id = old_taxon_ids[2];
-        let connection = database.connect_taxonomy_context().unwrap();
+        let connection = database.connect_taxonomy_metadata_context().unwrap();
         connection
             .execute(
                 "UPDATE photo_library SET root_path = '/photos' WHERE library_id = 1",
@@ -380,7 +380,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(rebased.operation_id, 1);
-        let connection = database.connect_taxonomy_context().unwrap();
+        let connection = database.connect_taxonomy_metadata_context().unwrap();
         let mapping_count: i64 = connection
             .query_row("SELECT COUNT(*) FROM photo_taxon_mapping", [], |row| {
                 row.get(0)
@@ -548,7 +548,7 @@ mod tests {
 
     fn taxon_id_by_name(database: &Database, name: &str) -> i64 {
         database
-            .connect_taxonomy_context()
+            .connect_taxonomy_metadata_context()
             .unwrap()
             .query_row(
                 "SELECT taxon_id FROM taxon_names WHERE name_type = 1 AND name = ?",
@@ -560,7 +560,7 @@ mod tests {
 
     fn parent_taxon_id(database: &Database, taxon_id: i64) -> Option<i64> {
         database
-            .connect_taxonomy_context()
+            .connect_taxonomy_metadata_context()
             .unwrap()
             .query_row(
                 "SELECT parent_taxon_id FROM taxa WHERE taxon_id = ?",

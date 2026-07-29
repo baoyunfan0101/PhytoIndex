@@ -13,7 +13,7 @@ pub fn write_operation_audit<W: std::io::Write>(
     writer: &mut W,
 ) -> CoreResult<()> {
     operations::write_operation_audit(
-        &database.connect_taxonomy_context()?,
+        &database.connect_taxonomy_metadata_context()?,
         Some(&[operation_id]),
         writer,
     )
@@ -25,7 +25,7 @@ pub fn write_operations_audit<W: std::io::Write>(
     writer: &mut W,
 ) -> CoreResult<()> {
     operations::write_operation_audit(
-        &database.connect_taxonomy_context()?,
+        &database.connect_taxonomy_metadata_context()?,
         Some(operation_ids),
         writer,
     )
@@ -35,7 +35,7 @@ pub fn write_all_operation_audit<W: std::io::Write>(
     database: &Database,
     writer: &mut W,
 ) -> CoreResult<()> {
-    operations::write_operation_audit(&database.connect_taxonomy_context()?, None, writer)
+    operations::write_operation_audit(&database.connect_taxonomy_metadata_context()?, None, writer)
 }
 
 pub fn export_operation_input(database: &Database, operation_id: i64) -> CoreResult<String> {
@@ -52,7 +52,7 @@ pub fn export_all_replayable_inputs(database: &Database) -> CoreResult<String> {
 
 fn export_inputs(database: &Database, operation_ids: Option<&[i64]>) -> CoreResult<String> {
     let separator = get_taxonomy_name_separator(database)?;
-    let connection = database.connect_taxonomy_context()?;
+    let connection = database.connect_taxonomy_metadata_context()?;
     if let Some(operation_ids) = operation_ids {
         validate_replayable_operations(&connection, operation_ids)?;
     }

@@ -276,7 +276,7 @@ pub fn preview_rows(
     database: &Database,
     rows: &[TaxonInputRow],
 ) -> CoreResult<TaxonomyPreviewResult> {
-    let mut connection = database.connect_taxonomy_context()?;
+    let mut connection = database.connect_taxonomy_metadata_context()?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let outcomes = process_rows(&transaction, rows)?;
     transaction.rollback()?;
@@ -291,7 +291,7 @@ pub fn apply_rows(
     database: &Database,
     rows: &[TaxonInputRow],
 ) -> CoreResult<TaxonomyOperationResult> {
-    let mut connection = database.connect_taxonomy_context()?;
+    let mut connection = database.connect_taxonomy_metadata_context()?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let mut session = start_taxonomy_session(&transaction)?;
     let outcomes = process_rows(&transaction, rows)?;
@@ -1335,7 +1335,7 @@ fn describe_changes(changes: &[TaxonChange]) -> String {
 
 pub fn get_taxonomy_name_separator(database: &Database) -> CoreResult<String> {
     Ok(crate::metadata::get_raw(
-        &database.connect_taxonomy_context()?,
+        &database.connect_taxonomy_metadata_context()?,
         crate::metadata::MetadataKey::TaxonomyNameSeparator,
     )?
     .unwrap_or_else(|| ";".to_string()))
@@ -1354,7 +1354,7 @@ pub fn set_taxonomy_name_separator(database: &Database, separator: &str) -> Core
         ));
     }
     crate::metadata::set_raw(
-        &database.connect_taxonomy_context()?,
+        &database.connect_taxonomy_metadata_context()?,
         crate::metadata::MetadataKey::TaxonomyNameSeparator,
         separator,
     )
@@ -1469,7 +1469,11 @@ pub fn list_operations(
     cursor: Option<&str>,
     limit: usize,
 ) -> CoreResult<OperationPage<OperationSummary>> {
-    operations::list_operations(&database.connect_taxonomy_context()?, cursor, limit)
+    operations::list_operations(
+        &database.connect_taxonomy_metadata_context()?,
+        cursor,
+        limit,
+    )
 }
 
 pub fn list_operation_audit(
@@ -1479,7 +1483,7 @@ pub fn list_operation_audit(
     limit: usize,
 ) -> CoreResult<OperationPage<OperationAuditRow>> {
     operations::list_operation_audit(
-        &database.connect_taxonomy_context()?,
+        &database.connect_taxonomy_metadata_context()?,
         operation_id,
         cursor,
         limit,
@@ -1487,7 +1491,7 @@ pub fn list_operation_audit(
 }
 
 pub fn rollback_operation(database: &Database, operation_id: i64) -> CoreResult<()> {
-    let mut connection = database.connect_taxonomy_context()?;
+    let mut connection = database.connect_taxonomy_metadata_context()?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let summary = operations::get_operation(&transaction, operation_id)?
         .ok_or_else(|| CoreError::NotFound(format!("operation {operation_id}")))?;
@@ -1745,7 +1749,7 @@ mod tests {
         .unwrap();
         assert_eq!(rows[0].synonyms, vec!["  Raw_synonym  ", "   "]);
         apply_rows(&database, &rows).unwrap();
-        let connection = database.connect_taxonomy_context().unwrap();
+        let connection = database.connect_taxonomy_metadata_context().unwrap();
         let mut statement = connection
             .prepare(
                 "SELECT name, authority_year FROM taxon_names WHERE name_type = 2 ORDER BY name",
@@ -1811,7 +1815,7 @@ mod tests {
         );
         assert!(
             database
-                .connect_taxonomy_context()
+                .connect_taxonomy_metadata_context()
                 .unwrap()
                 .query_row("SELECT NOT EXISTS(SELECT 1 FROM taxa)", [], |row| row
                     .get::<_, bool>(0),)
@@ -1821,7 +1825,7 @@ mod tests {
         rollback_operation(&database, result.operation_id).unwrap();
         assert!(
             operations::get_operation(
-                &database.connect_taxonomy_context().unwrap(),
+                &database.connect_taxonomy_metadata_context().unwrap(),
                 result.operation_id,
             )
             .unwrap()
@@ -1842,7 +1846,7 @@ mod tests {
             }],
         )
         .unwrap();
-        let connection = database.connect_taxonomy_context().unwrap();
+        let connection = database.connect_taxonomy_metadata_context().unwrap();
         connection
             .execute(
                 "UPDATE taxon_names SET source = NULL WHERE name_type = 1",
@@ -1900,7 +1904,7 @@ mod tests {
             vec![TaxonRowStatus::NoChange]
         );
         let source: String = database
-            .connect_taxonomy_context()
+            .connect_taxonomy_metadata_context()
             .unwrap()
             .query_row(
                 "SELECT source FROM taxon_names WHERE name_type = 1",
@@ -1941,7 +1945,7 @@ mod tests {
             ]
         );
         let source: String = database
-            .connect_taxonomy_context()
+            .connect_taxonomy_metadata_context()
             .unwrap()
             .query_row(
                 "SELECT source FROM taxon_names WHERE name = 'Animalia'",
@@ -1983,7 +1987,7 @@ mod tests {
             result.rows[0].operation_types,
             vec![TaxonRowStatus::Supplement, TaxonRowStatus::NewName]
         );
-        let connection = database.connect_taxonomy_context().unwrap();
+        let connection = database.connect_taxonomy_metadata_context().unwrap();
         let names = connection
             .prepare(
                 r#"

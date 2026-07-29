@@ -64,7 +64,7 @@ impl AppState {
         let database = Database::open(data_dir.join("metadata.db"))?;
         let thumbnail_dir = data_dir.join("thumbnails");
         if database.active_photo_library()?.is_some() {
-            vividarium_core::photos::rebase_thumbnail_paths(&database, &thumbnail_dir)?;
+            let _ = vividarium_core::photos::rebase_thumbnail_paths(&database, &thumbnail_dir);
         }
         Ok(Self {
             database,
@@ -281,6 +281,8 @@ fn now() -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
 
     #[test]
@@ -308,5 +310,27 @@ mod tests {
         assert!(work.take_request());
         assert!(!work.release_or_continue());
         assert!(work.request());
+    }
+
+    #[test]
+    fn startup_tolerates_a_missing_active_photo_library() {
+        let data_dir =
+            std::env::temp_dir().join(format!("vividarium-state-{}", Uuid::new_v4().simple()));
+        let root = data_dir.join("photos");
+        fs::create_dir_all(&root).unwrap();
+        let library_path = data_dir.join("library.db");
+        {
+            let database = Database::open(data_dir.join("metadata.db")).unwrap();
+            database
+                .register_photo_library(&root, &library_path, Some("Library"))
+                .unwrap();
+        }
+        fs::remove_file(&library_path).unwrap();
+
+        let state = AppState::new(data_dir.clone()).unwrap();
+
+        assert!(state.database.active_photo_library().unwrap().is_some());
+        assert!(!library_path.exists());
+        fs::remove_dir_all(data_dir).unwrap();
     }
 }

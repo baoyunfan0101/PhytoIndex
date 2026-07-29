@@ -45,7 +45,7 @@ pub fn search_photo_taxa(
         Some(_) => return Err(invalid_photo_cursor()),
     };
     let limit = photo_page_limit(limit);
-    let connection = database.connect()?;
+    let connection = database.connect_taxonomy_photo_context()?;
     let mut results =
         search_taxa_page_with_photos_connection(&connection, &query, after.as_ref(), limit + 1)?;
     let has_more = results.len() > limit;
@@ -78,7 +78,7 @@ pub fn suggest_photo_taxa(
     query: &str,
     limit: usize,
 ) -> CoreResult<Vec<TaxonSuggestion>> {
-    suggest_taxa_with_photos_connection(&database.connect()?, query, limit)
+    suggest_taxa_with_photos_connection(&database.connect_taxonomy_photo_context()?, query, limit)
 }
 
 pub fn list_taxon_photos(

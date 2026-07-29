@@ -433,17 +433,23 @@ impl Database {
         open_existing_connection(&self.taxonomy_path()?)
     }
 
-    pub(crate) fn connect_taxonomy_context(&self) -> CoreResult<Connection> {
+    pub(crate) fn connect_taxonomy_metadata_context(&self) -> CoreResult<Connection> {
         let connection = self.connect_taxonomy()?;
         attach_database(&connection, &self.metadata_path(), "metadata")?;
-        if let Some(library) = self.active_photo_library()? {
-            attach_database(
-                &connection,
-                Path::new(&library.db_path),
-                "active_photo_library",
-            )?;
-            create_cross_database_views(&connection)?;
-        }
+        Ok(connection)
+    }
+
+    pub(crate) fn connect_taxonomy_photo_context(&self) -> CoreResult<Connection> {
+        let connection = self.connect_taxonomy_metadata_context()?;
+        let library = self.active_photo_library()?.ok_or_else(|| {
+            CoreError::InvalidArgument("no active photo library is registered".into())
+        })?;
+        attach_database(
+            &connection,
+            Path::new(&library.db_path),
+            "active_photo_library",
+        )?;
+        create_cross_database_views(&connection)?;
         Ok(connection)
     }
 
@@ -1399,11 +1405,21 @@ mod tests {
 
         assert!(matches!(database.connect(), Err(CoreError::NotFound(_))));
         assert!(!database_path.exists());
+        database.connect_taxonomy_metadata_context().unwrap();
         assert!(matches!(
-            database.connect_taxonomy_context(),
+            database.connect_taxonomy_photo_context(),
             Err(CoreError::NotFound(_))
         ));
         assert!(!database_path.exists());
+        assert!(
+            crate::taxonomy::suggest_taxa(&database, "missing", 10)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            crate::taxonomy::get_taxonomy_name_separator(&database).unwrap(),
+            ";"
+        );
     }
 
     #[test]
