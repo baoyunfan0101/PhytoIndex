@@ -1040,7 +1040,7 @@ mod tests {
     #[test]
     fn custom_taxon_delete_queues_old_matches() {
         let (_directory, database) = database();
-        let connection = database.connect_taxonomy_metadata_context().unwrap();
+        let connection = database.connect().unwrap();
         connection
             .execute("INSERT INTO taxa (rank) VALUES (5)", [])
             .unwrap();
@@ -1129,7 +1129,7 @@ mod tests {
                 .contains("formatted input")
         );
 
-        let connection = database.connect_taxonomy_metadata_context().unwrap();
+        let connection = database.connect().unwrap();
         let queued: i64 = connection
             .query_row(
                 "SELECT COUNT(*) FROM photo_mapping_queue WHERE photo_id IN (1, 2)",

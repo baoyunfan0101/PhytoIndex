@@ -301,7 +301,7 @@ mod tests {
         let database = Database::open_test(directory.path().join("vividarium.db")).unwrap();
         let old_taxon_ids = seed_old_taxonomy_tree(&database);
         let old_taxon_id = old_taxon_ids[2];
-        let connection = database.connect_taxonomy_metadata_context().unwrap();
+        let connection = database.connect().unwrap();
         connection
             .execute(
                 "UPDATE photo_library SET root_path = '/photos' WHERE library_id = 1",
@@ -380,7 +380,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(rebased.operation_id, 1);
-        let connection = database.connect_taxonomy_metadata_context().unwrap();
+        let connection = database.connect().unwrap();
         let mapping_count: i64 = connection
             .query_row("SELECT COUNT(*) FROM photo_taxon_mapping", [], |row| {
                 row.get(0)
