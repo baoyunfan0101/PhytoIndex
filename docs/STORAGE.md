@@ -60,3 +60,8 @@ Every photo library must represent one real photo root. Root paths and
 database paths are unique among registrations. Callers must prevent concurrent
 mutating operations while relocating a database; the desktop commands enforce
 this operation guard.
+
+All ordinary database connections and attached taxonomy/photo contexts require
+their configured files to exist. A disconnected or missing registered
+database returns `CoreError::NotFound`; no read, search, or mutation interface
+silently creates an empty replacement.

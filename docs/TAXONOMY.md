@@ -197,6 +197,12 @@ processes the active library first. A library failure remains pending and does
 not fail the taxonomy mutation. Switching a library invokes the same pending
 consumer before activation.
 
+Desktop synchronization requests are coalesced. If refresh, remap, or another
+mapping task is running, the request remains scheduled and starts after the
+conflicting task finishes. Internal taxonomy sync events are deleted after
+their data has been durably merged into per-library pending state; the metadata
+dispatch watermark preserves ordering without an append-only event history.
+
 ## Taxonomy operation interfaces
 
 The taxonomy module exports the common interfaces below:
