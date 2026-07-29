@@ -20,10 +20,12 @@ use vividarium_core::naming::{
 use vividarium_core::operations::{OperationAuditRow, OperationPage, OperationSummary};
 use vividarium_core::photos::{PhotoFilenameFormatSettings, PhotoRenameOperationResult};
 use vividarium_core::taxonomy::{
-    CustomTaxonomySqlExportRequest, CustomTaxonomySqlRequest, DeleteTaxonNameInput,
-    PromoteTaxonNameInput, SqlDataSource, SqlExecutionResult, SqlExportResult, SqlSourceSchema,
-    TaxonChild, TaxonDetailNode, TaxonInputRow, TaxonRowOutcome, TaxonSearchResult,
-    TaxonSuggestion, TaxonUpdateInput, TaxonomyBaseMetadata, TaxonomyOperationResult, TaxonomyPage,
+    AddBaseImportCsvSourceRequest, AddBaseImportSqliteSourceRequest, BaseImportSession,
+    BaseImportValidationResult, CustomTaxonomySqlExportRequest, CustomTaxonomySqlRequest,
+    DeleteTaxonNameInput, ExecuteBaseImportSqlRequest, PromoteTaxonNameInput, SqlDataSource,
+    SqlExecutionResult, SqlExportResult, SqlSourceSchema, TaxonChild, TaxonDetailNode,
+    TaxonInputRow, TaxonRowOutcome, TaxonSearchResult, TaxonSuggestion, TaxonUpdateInput,
+    TaxonomyBaseMetadata, TaxonomyBaseReplaceResult, TaxonomyOperationResult, TaxonomyPage,
     TaxonomyPreviewResult,
 };
 use vividarium_core::{
@@ -805,6 +807,86 @@ pub fn get_taxonomy_base_metadata(
     state: State<'_, AppState>,
 ) -> CommandResult<Option<TaxonomyBaseMetadata>> {
     taxonomy::get_taxonomy_base_metadata(&state.database).map_err(error)
+}
+
+#[tauri::command]
+pub fn create_base_import_session(state: State<'_, AppState>) -> CommandResult<BaseImportSession> {
+    taxonomy::create_base_import_session(&state.database).map_err(error)
+}
+
+#[tauri::command]
+pub fn add_base_import_csv_source(
+    state: State<'_, AppState>,
+    request: AddBaseImportCsvSourceRequest,
+) -> CommandResult<SqlSourceSchema> {
+    taxonomy::add_base_import_csv_source(&state.database, &request).map_err(error)
+}
+
+#[tauri::command]
+pub fn add_base_import_sqlite_source(
+    state: State<'_, AppState>,
+    request: AddBaseImportSqliteSourceRequest,
+) -> CommandResult<SqlSourceSchema> {
+    taxonomy::add_base_import_sqlite_source(&state.database, &request).map_err(error)
+}
+
+#[tauri::command]
+pub fn inspect_base_import_sources(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> CommandResult<Vec<SqlSourceSchema>> {
+    taxonomy::inspect_base_import_sources(&state.database, &session_id).map_err(error)
+}
+
+#[tauri::command]
+pub fn execute_base_import_sql(
+    state: State<'_, AppState>,
+    request: ExecuteBaseImportSqlRequest,
+) -> CommandResult<SqlExecutionResult> {
+    taxonomy::execute_base_import_sql(&state.database, &request).map_err(error)
+}
+
+#[tauri::command]
+pub fn validate_base_import(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> CommandResult<BaseImportValidationResult> {
+    taxonomy::validate_base_import(&state.database, &session_id).map_err(error)
+}
+
+#[tauri::command]
+pub fn apply_base_import(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    session_id: String,
+) -> CommandResult<TaxonomyBaseReplaceResult> {
+    ensure_database_relocation_allowed(&state)?;
+    let result = taxonomy::apply_base_import(&state.database, &session_id).map_err(error)?;
+    schedule_taxonomy_sync(app, &state);
+    Ok(result)
+}
+
+#[tauri::command]
+pub fn discard_base_import_session(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> CommandResult<()> {
+    taxonomy::discard_base_import_session(&state.database, &session_id).map_err(error)
+}
+
+#[tauri::command]
+pub fn get_default_base_import_sql(state: State<'_, AppState>) -> CommandResult<String> {
+    taxonomy::get_default_base_import_sql(&state.database).map_err(error)
+}
+
+#[tauri::command]
+pub fn save_default_base_import_sql(state: State<'_, AppState>, sql: String) -> CommandResult<()> {
+    taxonomy::save_default_base_import_sql(&state.database, &sql).map_err(error)
+}
+
+#[tauri::command]
+pub fn reset_default_base_import_sql(state: State<'_, AppState>) -> CommandResult<String> {
+    taxonomy::reset_default_base_import_sql(&state.database).map_err(error)
 }
 
 #[tauri::command]
