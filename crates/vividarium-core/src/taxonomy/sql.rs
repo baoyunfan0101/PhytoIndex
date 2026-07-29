@@ -620,7 +620,7 @@ fn inspect_csv_source(alias: &str, path: &Path) -> CoreResult<SqlSourceSchema> {
     })
 }
 
-fn inspect_sqlite_source(alias: &str, path: &Path) -> CoreResult<SqlSourceSchema> {
+pub(super) fn inspect_sqlite_source(alias: &str, path: &Path) -> CoreResult<SqlSourceSchema> {
     let connection = Connection::open_with_flags(
         path,
         OpenFlags::SQLITE_OPEN_READ_ONLY
@@ -687,12 +687,13 @@ fn inspect_object_columns(connection: &Connection, object: &str) -> CoreResult<V
         .map_err(Into::into)
 }
 
-fn validated_columns<'a>(columns: impl Iterator<Item = &'a str>) -> CoreResult<Vec<String>> {
+pub(super) fn validated_columns<'a>(
+    columns: impl Iterator<Item = &'a str>,
+) -> CoreResult<Vec<String>> {
     let mut seen = BTreeSet::new();
     let mut output = Vec::new();
     for column in columns {
-        let column = column.trim();
-        if !is_safe_identifier(column) {
+        if column.trim().is_empty() || column.contains('\0') {
             return Err(CoreError::InvalidArgument(format!(
                 "invalid sql source column: {column}"
             )));

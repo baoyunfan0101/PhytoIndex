@@ -1,5 +1,6 @@
 mod actions;
 mod base;
+mod base_import;
 mod formatted;
 mod name_parser;
 mod operation_export;
@@ -16,6 +17,14 @@ pub use actions::{
 pub use base::{
     TaxonomyBaseMetadata, TaxonomyBaseReplaceResult, get_taxonomy_base_metadata,
     replace_taxonomy_base_database,
+};
+pub use base_import::{
+    AddBaseImportCsvSourceRequest, AddBaseImportSqliteSourceRequest, BaseImportIssue,
+    BaseImportSession, BaseImportValidationResult, ExecuteBaseImportSqlRequest, NameTypeCount,
+    add_base_import_csv_source, add_base_import_sqlite_source, apply_base_import,
+    create_base_import_session, discard_base_import_session, execute_base_import_sql,
+    get_default_base_import_sql, inspect_base_import_sources, reset_default_base_import_sql,
+    save_default_base_import_sql, validate_base_import,
 };
 pub use formatted::{
     TaxonChange, TaxonChangeKind, TaxonInputRow, TaxonRank, TaxonRowOutcome, TaxonRowStatus,

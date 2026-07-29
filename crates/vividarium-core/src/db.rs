@@ -576,6 +576,79 @@ impl Database {
             .map_err(Into::into)
     }
 
+    pub(crate) fn replace_taxonomy_database_file(&self, replacement: &Path) -> CoreResult<()> {
+        initialize_existing_file(replacement, TAXONOMY_SCHEMA)?;
+        let replacement_identity = open_existing_connection(replacement)?
+            .query_row(
+                "SELECT taxonomy_identity FROM taxonomy_identity WHERE identity_id = 1",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        if replacement_identity.as_deref().is_none_or(str::is_empty) {
+            return Err(CoreError::InvalidArgument(
+                "replacement taxonomy database has no identity".into(),
+            ));
+        }
+        let target = self.taxonomy_path()?;
+        let candidate = target.with_file_name(format!(
+            ".taxonomy-replacement-candidate-{}.db",
+            Uuid::new_v4()
+        ));
+        copy_database_file(replacement, &candidate, TAXONOMY_SCHEMA)?;
+        let replacement_result = (|| -> CoreResult<()> {
+            {
+                let mut metadata = self.connect_metadata()?;
+                let transaction =
+                    metadata.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                let target_sync_id = transaction.query_row(
+                    r#"
+                    SELECT last_dispatched_sync_id
+                    FROM taxonomy_sync_dispatch
+                    WHERE dispatch_id = 1
+                    "#,
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )?;
+                transaction.execute(
+                    r#"
+                    INSERT INTO photo_library_taxonomy_pending (
+                        library_uuid, target_sync_id, full_remap_required
+                    )
+                    SELECT library_uuid, ?, 1
+                    FROM photo_libraries
+                    WHERE true
+                    ON CONFLICT(library_uuid) DO UPDATE SET
+                        target_sync_id = excluded.target_sync_id,
+                        full_remap_required = 1
+                    "#,
+                    [target_sync_id],
+                )?;
+                transaction.execute("DELETE FROM photo_library_taxonomy_pending_taxa", [])?;
+                transaction.commit()?;
+            }
+            open_existing_connection(&target)?.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")?;
+            remove_sqlite_sidecar(&target, "-wal")?;
+            remove_sqlite_sidecar(&target, "-shm")?;
+            let backup = target.with_file_name(format!(
+                ".taxonomy-replacement-backup-{}.db",
+                Uuid::new_v4()
+            ));
+            fs::rename(&target, &backup)?;
+            if let Err(error) = fs::rename(&candidate, &target) {
+                let _ = fs::rename(&backup, &target);
+                return Err(error.into());
+            }
+            let _ = fs::remove_file(&backup);
+            Ok(())
+        })();
+        if let Err(error) = replacement_result {
+            let _ = fs::remove_file(&candidate);
+            return Err(error);
+        }
+        Ok(())
+    }
+
     #[cfg(test)]
     pub(crate) fn latest_taxonomy_sync_id(&self) -> CoreResult<i64> {
         self.connect_metadata()?
@@ -674,6 +747,21 @@ fn initialize_file(path: &Path, schema: &str) -> CoreResult<()> {
     }
     let connection = open_connection(path)?;
     initialize_connection(&connection, schema)
+}
+
+pub(crate) fn initialize_taxonomy_database_file(path: &Path) -> CoreResult<()> {
+    initialize_file(path, TAXONOMY_SCHEMA)?;
+    let connection = open_existing_connection(path)?;
+    connection.execute(
+        r#"
+        INSERT INTO taxonomy_identity (identity_id, taxonomy_identity)
+        VALUES (1, ?)
+        ON CONFLICT(identity_id) DO UPDATE
+        SET taxonomy_identity = excluded.taxonomy_identity
+        "#,
+        [new_uuid()],
+    )?;
+    Ok(())
 }
 
 fn initialize_connection(connection: &Connection, schema: &str) -> CoreResult<()> {
@@ -976,6 +1064,42 @@ fn move_database_file(source: &Path, destination: &Path, schema: &str) -> CoreRe
     }
     remove_sqlite_sidecar(source, "-wal")?;
     remove_sqlite_sidecar(source, "-shm")?;
+    Ok(())
+}
+
+fn copy_database_file(source: &Path, destination: &Path, schema: &str) -> CoreResult<()> {
+    if destination.exists() {
+        return Err(CoreError::InvalidArgument(format!(
+            "database destination already exists: {}",
+            destination.display()
+        )));
+    }
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    initialize_existing_file(source, schema)?;
+    let source_connection = open_existing_connection(source)?;
+    let mut destination_connection = Connection::open(destination)?;
+    let backup_result = (|| -> CoreResult<()> {
+        let backup =
+            rusqlite::backup::Backup::new(&source_connection, &mut destination_connection)?;
+        backup.run_to_completion(256, Duration::from_millis(10), None)?;
+        drop(backup);
+        let version: i64 =
+            destination_connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        if version != SCHEMA_VERSION {
+            return Err(CoreError::InvalidArgument(format!(
+                "unsupported database schema version: {version}; expected {SCHEMA_VERSION}"
+            )));
+        }
+        Ok(())
+    })();
+    drop(destination_connection);
+    drop(source_connection);
+    if let Err(error) = backup_result {
+        let _ = fs::remove_file(destination);
+        return Err(error);
+    }
     Ok(())
 }
 
