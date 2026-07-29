@@ -179,16 +179,20 @@ impl Database {
                 root_path.display()
             )));
         }
-        let library_uuid = if database_path.exists() {
+        let stored_state = if database_path.exists() {
             initialize_existing_file(&database_path, PHOTO_SCHEMA)?;
-            read_photo_library_uuid(&database_path)?.unwrap_or_else(new_uuid)
+            read_photo_library_sync_state(&database_path)?
         } else {
             if let Some(parent) = database_path.parent() {
                 fs::create_dir_all(parent)?;
             }
             initialize_file(&database_path, PHOTO_SCHEMA)?;
-            new_uuid()
+            None
         };
+        let library_uuid = stored_state
+            .as_ref()
+            .map(|state| state.library_uuid.clone())
+            .unwrap_or_else(new_uuid);
         let display_name = display_name
             .map(str::trim)
             .filter(|value| !value.is_empty())
@@ -201,9 +205,20 @@ impl Database {
             })
             .unwrap_or_else(|| "Photo Library".into());
         let taxonomy_identity = self.taxonomy_identity()?;
-        let latest_sync_id = self.latest_taxonomy_sync_id()?;
+        let mut metadata = self.connect_metadata()?;
+        let metadata_transaction =
+            metadata.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let latest_sync_id = metadata_transaction.query_row(
+            r#"
+            SELECT last_dispatched_sync_id
+            FROM taxonomy_sync_dispatch
+            WHERE dispatch_id = 1
+            "#,
+            [],
+            |row| row.get::<_, i64>(0),
+        )?;
         {
-            let connection = open_connection(&database_path)?;
+            let connection = open_existing_connection(&database_path)?;
             connection.execute(
                 r#"
                 INSERT INTO photo_library (
@@ -223,8 +238,7 @@ impl Database {
             )?;
             ensure_photo_root(&connection)?;
         }
-        let connection = self.connect_metadata()?;
-        connection.execute(
+        metadata_transaction.execute(
             r#"
             INSERT INTO photo_libraries (
                 library_uuid, display_name, root_path, db_path, last_opened_at
@@ -242,6 +256,30 @@ impl Database {
                 path_string(&database_path)
             ],
         )?;
+        if stored_state.as_ref().is_some_and(|state| {
+            state.bound_taxonomy_identity != taxonomy_identity
+                || state.last_taxonomy_sync_id != latest_sync_id
+        }) {
+            metadata_transaction.execute(
+                r#"
+                INSERT INTO photo_library_taxonomy_pending (
+                    library_uuid, target_sync_id, full_remap_required
+                ) VALUES (?, ?, 1)
+                ON CONFLICT(library_uuid) DO UPDATE SET
+                    target_sync_id = excluded.target_sync_id,
+                    full_remap_required = 1
+                "#,
+                params![library_uuid, latest_sync_id],
+            )?;
+            metadata_transaction.execute(
+                r#"
+                DELETE FROM photo_library_taxonomy_pending_taxa
+                WHERE library_uuid = ?
+                "#,
+                [&library_uuid],
+            )?;
+        }
+        metadata_transaction.commit()?;
         self.switch_photo_library(&library_uuid)
     }
 
@@ -481,6 +519,7 @@ impl Database {
             .map_err(Into::into)
     }
 
+    #[cfg(test)]
     pub(crate) fn latest_taxonomy_sync_id(&self) -> CoreResult<i64> {
         self.connect_metadata()?
             .query_row(
@@ -745,13 +784,29 @@ fn create_photo_main_views(connection: &Connection) -> CoreResult<()> {
     Ok(())
 }
 
-fn read_photo_library_uuid(path: &Path) -> CoreResult<Option<String>> {
-    let connection = open_connection(path)?;
+struct PhotoLibrarySyncState {
+    library_uuid: String,
+    bound_taxonomy_identity: String,
+    last_taxonomy_sync_id: i64,
+}
+
+fn read_photo_library_sync_state(path: &Path) -> CoreResult<Option<PhotoLibrarySyncState>> {
+    let connection = open_existing_connection(path)?;
     connection
         .query_row(
-            "SELECT library_uuid FROM photo_library WHERE library_id = 1",
+            r#"
+            SELECT library_uuid, bound_taxonomy_identity, last_taxonomy_sync_id
+            FROM photo_library
+            WHERE library_id = 1
+            "#,
             [],
-            |row| row.get(0),
+            |row| {
+                Ok(PhotoLibrarySyncState {
+                    library_uuid: row.get(0)?,
+                    bound_taxonomy_identity: row.get(1)?,
+                    last_taxonomy_sync_id: row.get(2)?,
+                })
+            },
         )
         .optional()
         .map_err(Into::into)
@@ -1439,6 +1494,93 @@ mod tests {
         assert!(matches!(error, CoreError::InvalidArgument(_)));
         assert_eq!(database.list_photo_libraries().unwrap().len(), 1);
         assert!(!directory.path().join("second.db").exists());
+    }
+
+    #[test]
+    fn registering_a_stale_library_queues_a_full_remap() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = Database::open(directory.path().join("metadata.db")).unwrap();
+        let taxonomy_identity = database.taxonomy_identity().unwrap();
+        {
+            let mut taxonomy = database.connect_taxonomy().unwrap();
+            let transaction = taxonomy
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .unwrap();
+            crate::taxonomy::sync::record_event(&transaction, None, [42], false).unwrap();
+            transaction.commit().unwrap();
+        }
+        crate::taxonomy::sync::synchronize_pending_photo_libraries(&database).unwrap();
+        let latest_sync_id = database.latest_taxonomy_sync_id().unwrap();
+        assert!(latest_sync_id > 0);
+        assert_eq!(
+            database
+                .connect_taxonomy()
+                .unwrap()
+                .query_row("SELECT COUNT(*) FROM taxonomy_sync_events", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap(),
+            0
+        );
+
+        let root = directory.path().join("photos");
+        fs::create_dir_all(&root).unwrap();
+        let library_path = directory.path().join("stale.db");
+        initialize_file(&library_path, PHOTO_SCHEMA).unwrap();
+        let library_uuid = new_uuid();
+        {
+            let connection = open_existing_connection(&library_path).unwrap();
+            connection
+                .execute(
+                    r#"
+                    INSERT INTO photo_library (
+                        library_id, library_uuid, root_path,
+                        bound_taxonomy_identity, last_taxonomy_sync_id
+                    ) VALUES (1, ?, ?, ?, 0)
+                    "#,
+                    params![library_uuid, path_string(&root), taxonomy_identity],
+                )
+                .unwrap();
+            ensure_photo_root(&connection).unwrap();
+            connection
+                .execute(
+                    r#"
+                    INSERT INTO photos (
+                        directory_id, filename, file_size, modified_at_ns
+                    )
+                    SELECT directory_id, 'stale.jpg', 1, 1
+                    FROM photo_directories
+                    WHERE relative_path = ''
+                    "#,
+                    [],
+                )
+                .unwrap();
+        }
+
+        let registered = database
+            .register_photo_library(&root, &library_path, Some("Stale"))
+            .unwrap();
+
+        assert_eq!(registered.library_uuid, library_uuid);
+        let connection = database.connect().unwrap();
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT last_taxonomy_sync_id FROM photo_library WHERE library_id = 1",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            latest_sync_id
+        );
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM photo_mapping_queue", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap(),
+            1
+        );
     }
 
     #[test]
