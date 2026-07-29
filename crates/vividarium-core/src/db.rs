@@ -256,27 +256,12 @@ impl Database {
                 path_string(&database_path)
             ],
         )?;
-        if stored_state.as_ref().is_some_and(|state| {
-            state.bound_taxonomy_identity != taxonomy_identity
-                || state.last_taxonomy_sync_id != latest_sync_id
-        }) {
-            metadata_transaction.execute(
-                r#"
-                INSERT INTO photo_library_taxonomy_pending (
-                    library_uuid, target_sync_id, full_remap_required
-                ) VALUES (?, ?, 1)
-                ON CONFLICT(library_uuid) DO UPDATE SET
-                    target_sync_id = excluded.target_sync_id,
-                    full_remap_required = 1
-                "#,
-                params![library_uuid, latest_sync_id],
-            )?;
-            metadata_transaction.execute(
-                r#"
-                DELETE FROM photo_library_taxonomy_pending_taxa
-                WHERE library_uuid = ?
-                "#,
-                [&library_uuid],
+        if let Some(stored_state) = stored_state.as_ref() {
+            mark_full_remap_if_stale(
+                &metadata_transaction,
+                stored_state,
+                &taxonomy_identity,
+                latest_sync_id,
             )?;
         }
         metadata_transaction.commit()?;
@@ -389,6 +374,78 @@ impl Database {
         transaction.execute(
             "UPDATE metadata.photo_libraries SET root_path = ? WHERE library_uuid = ?",
             params![path_string(&root_path), library_uuid],
+        )?;
+        transaction.commit()?;
+        self.photo_library(library_uuid)
+    }
+
+    pub fn rebind_photo_library_database(
+        &self,
+        library_uuid: &str,
+        existing_database_path: &Path,
+    ) -> CoreResult<PhotoLibraryRegistration> {
+        self.photo_library(library_uuid)?;
+        let database_path = absolute_path(existing_database_path)?;
+        validate_existing_file(&database_path)?;
+        let stored_state = read_photo_library_sync_state(&database_path)
+            .map_err(|state_error| {
+                CoreError::InvalidArgument(format!(
+                    "invalid photo library database {}: {state_error}",
+                    database_path.display()
+                ))
+            })?
+            .ok_or_else(|| {
+                CoreError::InvalidArgument(format!(
+                    "photo library database has no persisted identity: {}",
+                    database_path.display()
+                ))
+            })?;
+        if stored_state.library_uuid != library_uuid {
+            return Err(CoreError::InvalidArgument(format!(
+                "photo library database identity does not match registration {library_uuid}"
+            )));
+        }
+        let taxonomy_identity = self.taxonomy_identity()?;
+        let mut metadata = self.connect_metadata()?;
+        let transaction = metadata.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let duplicate = transaction.query_row(
+            r#"
+            SELECT EXISTS(
+                SELECT 1
+                FROM photo_libraries
+                WHERE db_path = ? AND library_uuid != ?
+            )
+            "#,
+            params![path_string(&database_path), library_uuid],
+            |row| row.get::<_, bool>(0),
+        )?;
+        if duplicate {
+            return Err(CoreError::InvalidArgument(format!(
+                "photo library database is already registered: {}",
+                database_path.display()
+            )));
+        }
+        let latest_sync_id = transaction.query_row(
+            r#"
+            SELECT last_dispatched_sync_id
+            FROM taxonomy_sync_dispatch
+            WHERE dispatch_id = 1
+            "#,
+            [],
+            |row| row.get::<_, i64>(0),
+        )?;
+        let updated = transaction.execute(
+            "UPDATE photo_libraries SET db_path = ? WHERE library_uuid = ?",
+            params![path_string(&database_path), library_uuid],
+        )?;
+        if updated != 1 {
+            return Err(CoreError::NotFound(format!("photo library {library_uuid}")));
+        }
+        mark_full_remap_if_stale(
+            &transaction,
+            &stored_state,
+            &taxonomy_identity,
+            latest_sync_id,
         )?;
         transaction.commit()?;
         self.photo_library(library_uuid)
@@ -638,6 +695,18 @@ fn initialize_existing_file(path: &Path, schema: &str) -> CoreResult<()> {
     initialize_connection(&connection, schema)
 }
 
+fn validate_existing_file(path: &Path) -> CoreResult<()> {
+    let connection = open_existing_connection(path)?;
+    let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    if version == SCHEMA_VERSION {
+        Ok(())
+    } else {
+        Err(CoreError::InvalidArgument(format!(
+            "unsupported database schema version: {version}; expected {SCHEMA_VERSION}"
+        )))
+    }
+}
+
 fn open_connection(path: &Path) -> CoreResult<Connection> {
     let connection = Connection::open(path)?;
     configure_connection(connection)
@@ -810,6 +879,38 @@ fn read_photo_library_sync_state(path: &Path) -> CoreResult<Option<PhotoLibraryS
         )
         .optional()
         .map_err(Into::into)
+}
+
+fn mark_full_remap_if_stale(
+    transaction: &rusqlite::Transaction<'_>,
+    stored_state: &PhotoLibrarySyncState,
+    taxonomy_identity: &str,
+    latest_sync_id: i64,
+) -> CoreResult<()> {
+    if stored_state.bound_taxonomy_identity == taxonomy_identity
+        && stored_state.last_taxonomy_sync_id == latest_sync_id
+    {
+        return Ok(());
+    }
+    transaction.execute(
+        r#"
+        INSERT INTO photo_library_taxonomy_pending (
+            library_uuid, target_sync_id, full_remap_required
+        ) VALUES (?, ?, 1)
+        ON CONFLICT(library_uuid) DO UPDATE SET
+            target_sync_id = excluded.target_sync_id,
+            full_remap_required = 1
+        "#,
+        params![stored_state.library_uuid, latest_sync_id],
+    )?;
+    transaction.execute(
+        r#"
+        DELETE FROM photo_library_taxonomy_pending_taxa
+        WHERE library_uuid = ?
+        "#,
+        [&stored_state.library_uuid],
+    )?;
+    Ok(())
 }
 
 fn ensure_photo_root(connection: &Connection) -> CoreResult<()> {
@@ -1474,6 +1575,119 @@ mod tests {
         assert_eq!(
             crate::taxonomy::get_taxonomy_name_separator(&database).unwrap(),
             ";"
+        );
+    }
+
+    #[test]
+    fn rebinds_a_missing_active_library_database_and_restores_sync() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("photos");
+        fs::create_dir_all(&root).unwrap();
+        let database = Database::open(directory.path().join("metadata.db")).unwrap();
+        let old_path = directory.path().join("old.db");
+        let new_path = directory.path().join("new.db");
+        let library = database
+            .register_photo_library(&root, &old_path, Some("Library"))
+            .unwrap();
+        database
+            .connect()
+            .unwrap()
+            .execute(
+                r#"
+                INSERT INTO photos (
+                    directory_id, filename, file_size, modified_at_ns
+                )
+                SELECT directory_id, 'photo.jpg', 1, 1
+                FROM photo_directories
+                WHERE relative_path = ''
+                "#,
+                [],
+            )
+            .unwrap();
+        fs::rename(&old_path, &new_path).unwrap();
+        assert!(matches!(database.connect(), Err(CoreError::NotFound(_))));
+
+        {
+            let mut taxonomy = database.connect_taxonomy().unwrap();
+            let transaction = taxonomy
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .unwrap();
+            crate::taxonomy::sync::record_event(&transaction, None, [42], false).unwrap();
+            transaction.commit().unwrap();
+        }
+        crate::taxonomy::sync::synchronize_pending_photo_libraries(&database).unwrap();
+        let latest_sync_id = database.latest_taxonomy_sync_id().unwrap();
+        database
+            .connect_metadata()
+            .unwrap()
+            .execute(
+                "DELETE FROM photo_library_taxonomy_pending WHERE library_uuid = ?",
+                [&library.library_uuid],
+            )
+            .unwrap();
+
+        let rebound = database
+            .rebind_photo_library_database(&library.library_uuid, &new_path)
+            .unwrap();
+
+        assert_eq!(rebound.db_path, path_string(&new_path));
+        assert_eq!(
+            database
+                .connect_metadata()
+                .unwrap()
+                .query_row(
+                    r#"
+                    SELECT target_sync_id, full_remap_required
+                    FROM photo_library_taxonomy_pending
+                    WHERE library_uuid = ?
+                    "#,
+                    [&library.library_uuid],
+                    |row| Ok((row.get::<_, i64>(0)?, row.get::<_, bool>(1)?)),
+                )
+                .unwrap(),
+            (latest_sync_id, true)
+        );
+        crate::taxonomy::sync::synchronize_pending_photo_libraries(&database).unwrap();
+        assert_eq!(
+            database
+                .connect()
+                .unwrap()
+                .query_row("SELECT COUNT(*) FROM photo_mapping_queue", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn rejects_rebinding_to_a_different_library_database() {
+        let directory = tempfile::tempdir().unwrap();
+        let root_a = directory.path().join("photos-a");
+        let root_b = directory.path().join("photos-b");
+        fs::create_dir_all(&root_a).unwrap();
+        fs::create_dir_all(&root_b).unwrap();
+        let database = Database::open(directory.path().join("metadata.db")).unwrap();
+        let path_a = directory.path().join("a.db");
+        let path_b = directory.path().join("b.db");
+        let library_a = database
+            .register_photo_library(&root_a, &path_a, Some("A"))
+            .unwrap();
+        database
+            .register_photo_library(&root_b, &path_b, Some("B"))
+            .unwrap();
+
+        let error = database
+            .rebind_photo_library_database(&library_a.library_uuid, &path_b)
+            .unwrap_err();
+
+        assert!(matches!(error, CoreError::InvalidArgument(_)));
+        assert_eq!(
+            database
+                .photo_library(&library_a.library_uuid)
+                .unwrap()
+                .db_path,
+            path_string(&path_a)
         );
     }
 

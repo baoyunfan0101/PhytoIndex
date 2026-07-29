@@ -139,6 +139,22 @@ pub fn rebind_photo_library_root(
 }
 
 #[tauri::command]
+pub fn rebind_photo_library_database(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    library_uuid: String,
+    database_path: String,
+) -> CommandResult<PhotoLibraryRegistration> {
+    ensure_database_relocation_allowed(&state)?;
+    let library = state
+        .database
+        .rebind_photo_library_database(&library_uuid, Path::new(&database_path))
+        .map_err(error)?;
+    schedule_taxonomy_sync(app, &state);
+    Ok(library)
+}
+
+#[tauri::command]
 pub fn relocate_photo_library_database(
     state: State<'_, AppState>,
     library_uuid: String,

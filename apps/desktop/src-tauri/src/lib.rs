@@ -31,6 +31,7 @@ pub fn run() {
             commands::register_photo_library,
             commands::switch_photo_library,
             commands::rebind_photo_library_root,
+            commands::rebind_photo_library_database,
             commands::relocate_photo_library_database,
             commands::remove_photo_library,
             commands::relocate_taxonomy_database,
