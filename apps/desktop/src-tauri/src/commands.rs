@@ -9,8 +9,8 @@ use vividarium_core::mapping::{
     PhotoTaxonCandidate, PhotoTaxonItem, PhotoTaxonNode,
 };
 use vividarium_core::models::{
-    DatabaseLocations, DirectoryEntryCounts, MappingMetadata, OperationsStatus, Photo,
-    PhotoDirectoryItem, PhotoLibrary, PhotoLibraryRegistration, PhotoMetadata, PhotoPage,
+    DatabaseLocations, DirectoryEntryCounts, MappingMetadata, OperationState, OperationsStatus,
+    Photo, PhotoDirectoryItem, PhotoLibrary, PhotoLibraryRegistration, PhotoMetadata, PhotoPage,
 };
 use vividarium_core::naming::{
     NamingHookKind, NamingHookSettings, NamingHookTemplates, NamingHookTestCase,
@@ -20,13 +20,13 @@ use vividarium_core::naming::{
 use vividarium_core::operations::{OperationAuditRow, OperationPage, OperationSummary};
 use vividarium_core::photos::{PhotoFilenameFormatSettings, PhotoRenameOperationResult};
 use vividarium_core::taxonomy::{
-    AddBaseImportCsvSourceRequest, AddBaseImportSqliteSourceRequest, BaseImportSession,
-    BaseImportValidationResult, CustomTaxonomySqlExportRequest, CustomTaxonomySqlRequest,
-    DeleteTaxonNameInput, ExecuteBaseImportSqlRequest, PromoteTaxonNameInput, SqlDataSource,
-    SqlExecutionResult, SqlExportResult, SqlSourceSchema, TaxonChild, TaxonDetailNode,
-    TaxonInputRow, TaxonRowOutcome, TaxonSearchResult, TaxonSuggestion, TaxonUpdateInput,
-    TaxonomyBaseMetadata, TaxonomyBaseReplaceResult, TaxonomyOperationResult, TaxonomyPage,
-    TaxonomyPreviewResult,
+    AddBaseImportCsvSourceRequest, AddBaseImportSqliteSourceRequest, BaseImportExecutionResult,
+    BaseImportSession, BaseImportValidationResult, CustomSqlExecutionResult,
+    CustomTaxonomySqlExportRequest, CustomTaxonomySqlRequest, DeleteTaxonNameInput,
+    ExecuteBaseImportSqlRequest, PromoteTaxonNameInput, SqlDataSource, SqlExportResult,
+    SqlSourceSchema, TaxonChild, TaxonDetailNode, TaxonInputRow, TaxonRowOutcome,
+    TaxonSearchResult, TaxonSuggestion, TaxonUpdateInput, TaxonomyBaseMetadata,
+    TaxonomyOperationResult, TaxonomyPage, TaxonomyPreviewResult,
 };
 use vividarium_core::{
     map::{self, MapBounds, MapPhoto, MapSettings},
@@ -640,7 +640,7 @@ pub fn execute_custom_taxonomy_sql(
     app: AppHandle,
     state: State<'_, AppState>,
     request: CustomTaxonomySqlRequest,
-) -> CommandResult<SqlExecutionResult> {
+) -> CommandResult<CustomSqlExecutionResult> {
     let result = taxonomy::execute_custom_taxonomy_sql(&state.database, &request).map_err(error)?;
     if result.changeset_size > 0 {
         schedule_taxonomy_sync(app, &state);
@@ -842,7 +842,7 @@ pub fn inspect_base_import_sources(
 pub fn execute_base_import_sql(
     state: State<'_, AppState>,
     request: ExecuteBaseImportSqlRequest,
-) -> CommandResult<SqlExecutionResult> {
+) -> CommandResult<BaseImportExecutionResult> {
     taxonomy::execute_base_import_sql(&state.database, &request).map_err(error)
 }
 
@@ -859,11 +859,19 @@ pub fn apply_base_import(
     app: AppHandle,
     state: State<'_, AppState>,
     session_id: String,
-) -> CommandResult<TaxonomyBaseReplaceResult> {
-    ensure_database_relocation_allowed(&state)?;
-    let result = taxonomy::apply_base_import(&state.database, &session_id).map_err(error)?;
-    schedule_taxonomy_sync(app, &state);
-    Ok(result)
+) -> CommandResult<OperationState> {
+    let database = state.database.clone();
+    let background_state = state.inner().clone();
+    let sync_app = app.clone();
+    state
+        .operations
+        .start(app, "mapping", "apply_base_import", move |progress| {
+            progress(0, None, "Validating base import candidate");
+            let result = taxonomy::apply_base_import(&database, &session_id).map_err(error)?;
+            progress(1, Some(1), "Taxonomy base import applied");
+            schedule_taxonomy_sync(sync_app, &background_state);
+            serde_json::to_value(result).map_err(error)
+        })
 }
 
 #[tauri::command]
