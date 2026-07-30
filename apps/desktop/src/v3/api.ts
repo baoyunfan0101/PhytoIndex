@@ -91,7 +91,7 @@ export type PhotoTaxonStatus =
   | "unmatched"
   | "processing";
 
-export type PhotoTaxonMapping = {
+export type PhotoMappingSummary = {
   photo_id: number;
   taxon_id: number | null;
   status: PhotoTaxonStatus;
@@ -99,7 +99,7 @@ export type PhotoTaxonMapping = {
 
 export type PhotoMappingListItem = {
   photo: Photo;
-  mapping: PhotoTaxonMapping;
+  mapping: PhotoMappingSummary;
 };
 
 export type TaxonDisplayNames = {
@@ -188,8 +188,8 @@ export type PhotoTaxonCandidate = {
   accepted_names: TaxonDisplayNames;
 };
 
-export type PhotoTaxonMatch = {
-  mapping: PhotoTaxonMapping;
+export type PhotoMappingDetail = {
+  mapping: PhotoMappingSummary;
   candidates: PhotoTaxonCandidate[];
 };
 
@@ -217,25 +217,6 @@ export type PhotoTaxonNode = {
 export type PhotoTaxonItem =
   | { kind: "taxon"; taxon: PhotoTaxonUsage }
   | { kind: "photo"; photo: Photo };
-
-export type PhotoOperation = {
-  operation_id: number;
-  source: "manual_rename" | "taxon_rename" | "taxon_selection_rename";
-  root_path: string;
-  input: Array<{
-    row_number: number;
-    photo_id: number;
-    requested_filename: string | null;
-  }>;
-  items: Array<{
-    row_number: number;
-    photo_id: number;
-    directory_relative_path: string;
-    old_filename: string;
-    new_filename: string;
-  }>;
-  applied_at: string;
-};
 
 export type TaxonInputRow = {
   selected_taxon_id?: number | null;
@@ -280,15 +261,6 @@ export type TaxonomyOperationResult = TaxonomyPreviewResult & {
   total_rows: number;
   succeeded_rows: number;
   failed_rows: number;
-};
-
-export type TaxonomyOperation = {
-  operation_id: number;
-  source: "formatted_update";
-  input: TaxonInputRow[];
-  result: TaxonomyOperationResult;
-  changeset_size: number;
-  applied_at: string;
 };
 
 export type OperationSummary = {
@@ -392,11 +364,6 @@ export type BaseImportValidationResult = {
   total_error_count: number;
   warnings: BaseImportIssue[];
   errors: BaseImportIssue[];
-};
-
-export type TaxonomyCustomSqlInput = {
-  columns: string[];
-  rows: string[][];
 };
 
 export type TaxonomyBaseMetadata = {
@@ -505,7 +472,7 @@ const demoTaxa: TaxonSearchResult[] = [
   demoTaxon(1004, "species", "Ursus arctos", "Brown bear"),
 ];
 
-let demoMappings = new Map<number, PhotoTaxonMapping>(
+let demoMappings = new Map<number, PhotoMappingSummary>(
   demoPhotos.map((photo, index) => [
     photo.photo_id,
     {
@@ -515,8 +482,6 @@ let demoMappings = new Map<number, PhotoTaxonMapping>(
     },
   ]),
 );
-let demoTaxonomyBaseMetadata: TaxonomyBaseMetadata | null = null;
-
 function demoTaxon(
   taxonId: number,
   rank: TaxonRank,
@@ -723,18 +688,6 @@ export async function selectCsvDestination(defaultPath?: string): Promise<string
   return save({ defaultPath, filters: [{ name: "CSV", extensions: ["csv"] }] });
 }
 
-export async function selectTaxonomyBaseDatabase(): Promise<string | null> {
-  if (!desktopRuntime) {
-    return "/Demo/Vividarium Base.db";
-  }
-  const selected = await open({
-    directory: false,
-    multiple: false,
-    filters: [{ name: "SQLite database", extensions: ["db", "sqlite", "sqlite3"] }],
-  });
-  return typeof selected === "string" ? selected : null;
-}
-
 export const browsePhotoDirectory = (directoryId: number, cursor: string | null = null, limit = 100) =>
   call<Page<PhotoDirectoryItem>>("browse_photo_directory", { directoryId, cursor, limit }, () => {
     const directories: PhotoDirectoryItem[] = directoryId === 1
@@ -806,42 +759,37 @@ export const revealPhotoInFileManager = (photoId: number) =>
   call<void>("reveal_photo_in_file_manager", { photoId }, () => undefined);
 
 export const getPhotoMapping = (photoId: number) =>
-  call<PhotoTaxonMapping | null>("get_photo_mapping", { photoId }, () => demoMappings.get(photoId) ?? null);
+  call<PhotoMappingSummary>("get_photo_mapping", { photoId }, () =>
+    demoMappings.get(photoId) ?? { photo_id: photoId, taxon_id: null, status: "unmatched" });
 
-export const getPhotoTaxonMatch = (photoId: number) =>
-  call<PhotoTaxonMatch>("get_photo_taxon_match", { photoId }, () => {
-    const mapping = demoMappings.get(photoId) ?? { photo_id: photoId, taxon_id: null, status: "unmatched" };
-    return {
-      mapping,
-      candidates: mapping.status === "ambiguous"
-        ? demoTaxa.slice(0, 3).map((taxon) => ({
-            summary: taxon.summary,
-            matched_names: taxon.matches,
-            accepted_names: taxon.summary.names,
-          }))
-        : [],
-    };
+export const getPhotoMappingCandidates = (photoId: number) =>
+  call<PhotoTaxonCandidate[]>("get_photo_mapping_candidates", { photoId }, () => {
+    const mapping = demoMappings.get(photoId);
+    return mapping?.status === "ambiguous"
+      ? demoTaxa.slice(0, 3).map((taxon) => ({
+          summary: taxon.summary,
+          matched_names: taxon.matches,
+          accepted_names: taxon.summary.names,
+        }))
+      : [];
   });
 
 export const clearPhotoMapping = (photoId: number) =>
-  call<PhotoTaxonMapping>("clear_photo_mapping", { photoId }, () => {
-    const mapping: PhotoTaxonMapping = { photo_id: photoId, taxon_id: null, status: "unmatched" };
+  call<PhotoMappingSummary>("clear_photo_mapping", { photoId }, () => {
+    const mapping: PhotoMappingSummary = { photo_id: photoId, taxon_id: null, status: "unmatched" };
     demoMappings.set(photoId, mapping);
     return mapping;
   });
 
 export const setPhotoMapping = (photoId: number, taxonId: number) =>
-  call<PhotoTaxonMapping>("set_photo_mapping", { photoId, taxonId }, () => {
-    const mapping: PhotoTaxonMapping = { photo_id: photoId, taxon_id: taxonId, status: "matched" };
+  call<PhotoMappingSummary>("set_photo_mapping", { photoId, taxonId }, () => {
+    const mapping: PhotoMappingSummary = { photo_id: photoId, taxon_id: taxonId, status: "matched" };
     demoMappings.set(photoId, mapping);
     return mapping;
   });
 
-export const selectPhotoTaxon = (photoId: number, taxonId: number) =>
-  call<PhotoTaxonMapping>("select_photo_taxon", { photoId, taxonId }, () => setPhotoMapping(photoId, taxonId));
-
 export const remapPhoto = (photoId: number) =>
-  call<PhotoTaxonMatch>("remap_photo", { photoId }, () => getPhotoTaxonMatch(photoId));
+  call<PhotoMappingSummary>("remap_photo", { photoId }, () => getPhotoMapping(photoId));
 
 export const getMappingMetadata = () =>
   call<MappingMetadata>("get_mapping_metadata", undefined, () => ({
@@ -935,32 +883,6 @@ export const browsePhotoTaxon = (
     next_cursor: null,
   }));
 
-export const listPhotoOperations = (cursor: string | null = null, limit = 80) =>
-  call<Page<PhotoOperation>>("list_photo_operations", { cursor, limit }, () => ({
-    items: [1, 2, 3].map((id) => ({
-      operation_id: id,
-      source: id === 1 ? "manual_rename" : "taxon_rename",
-      root_path: "/Demo/Vividarium Photos",
-      input: [{ row_number: 1, photo_id: id, requested_filename: id === 1 ? `renamed_${id}.jpg` : null }],
-      items: [{
-        row_number: 1,
-        photo_id: id,
-        directory_relative_path: "Mammalia",
-        old_filename: `before_${id}.jpg`,
-        new_filename: `after_${id}.jpg`,
-      }],
-      applied_at: `2026-07-${20 + id} 10:30:00`,
-    })),
-    next_cursor: null,
-  }));
-
-export const revertPhotoOperation = (operationId: number) =>
-  call<void>("revert_photo_operation", { operationId }, () => undefined);
-export const exportPhotoOperationCsv = (operationId: number) =>
-  call<string>("export_photo_operation_csv", { operationId }, () => "operation_id|old_filename|new_filename\n1|before.jpg|after.jpg\n");
-export const exportAllPhotoOperationsCsv = () =>
-  call<string>("export_all_photo_operations_csv", undefined, () => "operation_id|old_filename|new_filename\n1|before.jpg|after.jpg\n");
-
 function demoOperationSummaries(domain: "photo" | "taxonomy"): OperationSummary[] {
   return [1, 2, 3].map((operationId) => ({
     operation_id: operationId,
@@ -1005,34 +927,6 @@ export const exportPhotoOperationAudit = (operationId: number, destinationPath: 
 
 export const exportAllPhotoOperationAudit = (destinationPath: string) =>
   call<void>("export_all_photo_operation_audit", { destinationPath }, () => undefined);
-
-export const listTaxonomyOperations = (cursor: string | null = null, limit = 80) =>
-  call<Page<TaxonomyOperation>>("list_taxonomy_operations", { cursor, limit }, () => ({
-    items: [1, 2].map((id) => ({
-      operation_id: id,
-      source: "formatted_update",
-      input: [{ species: id === 1 ? "Canis lupus" : "Panthera leo" }],
-      result: {
-        operation_id: id,
-        total_rows: 1,
-        succeeded_rows: 1,
-        failed_rows: 0,
-        delimiter: "|",
-        encoding: "UTF-8",
-        rows: [],
-      },
-      changeset_size: 420 + id,
-      applied_at: `2026-07-${22 + id} 14:10:00`,
-    })),
-    next_cursor: null,
-  }));
-
-export const revertTaxonomyOperation = (operationId: number) =>
-  call<void>("revert_taxonomy_operation", { operationId }, () => undefined);
-export const exportTaxonomyOperationCsv = (operationId: number) =>
-  call<string>("export_taxonomy_operation_csv", { operationId }, () => `kingdom|order|family|genus|species|authority_year|synonyms|zh_name|zh_alias|en_name|en_alias|geological_range|source\n||||Canis lupus||||||||\n`);
-export const exportAllTaxonomyOperationsCsv = () =>
-  call<string>("export_all_taxonomy_operations_csv", undefined, () => `kingdom|order|family|genus|species|authority_year|synonyms|zh_name|zh_alias|en_name|en_alias|geological_range|source\n||||Canis lupus||||||||\n`);
 
 export const listTaxonomyOperationSummaries = (cursor: string | null = null, limit = 80) =>
   call<Page<OperationSummary>>("list_taxonomy_operations", { cursor, limit }, () => ({
@@ -1198,22 +1092,8 @@ export const saveDefaultBaseImportSql = (sql: string) =>
 
 export const resetDefaultBaseImportSql = () =>
   call<string>("reset_default_base_import_sql", undefined, getDefaultBaseImportSql);
-export const executeCustomTaxonomySql = (sql: string, input: { columns: string[]; rows: string[][] } | null) =>
-  call<{ changeset_size: number }>("execute_custom_taxonomy_sql", { sql, input }, () => ({ changeset_size: sql.length + (input?.rows.length ?? 0) }));
-export const parseCustomTaxonomyInputCsv = (input: string) =>
-  call<TaxonomyCustomSqlInput>("parse_custom_taxonomy_input_csv", { input }, () => parseDelimitedCsv(input));
 export const getTaxonomyBaseMetadata = () =>
-  call<TaxonomyBaseMetadata | null>("get_taxonomy_base_metadata", undefined, () => demoTaxonomyBaseMetadata);
-export const replaceTaxonomyBaseDatabase = (sourcePath: string) =>
-  call<{ operation: OperationState }>("replace_taxonomy_base_database", { sourcePath }, () => {
-    demoTaxonomyBaseMetadata = {
-      source_path: sourcePath,
-      taxa_count: 125_000,
-      taxon_names_count: 185_000,
-      imported_at: new Date().toISOString(),
-    };
-    return { operation: demoOperation("mapping", "Base database replaced") };
-  });
+  call<TaxonomyBaseMetadata | null>("get_taxonomy_base_metadata", undefined, () => null);
 
 export const getMapSettings = () =>
   call<MapSettings>("get_map_settings", undefined, () => ({ provider: "osm", tianditu_token: null }));
@@ -1319,70 +1199,6 @@ export function formatBytes(value: number): string {
   if (value < 1024) return `${value} B`;
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
   return `${(value / 1024 / 1024).toFixed(1)} MB`;
-}
-
-function parseDelimitedCsv(input: string): TaxonomyCustomSqlInput {
-  const source = input.replace(/^\uFEFF/, "");
-  if (!source.trim()) throw new Error("Custom SQL input CSV is empty");
-  const delimiters = [",", "|", "\t", ";"];
-  const counts = delimiters.map(() => 0);
-  let quoted = false;
-  for (let index = 0; index < source.length; index += 1) {
-    const character = source[index];
-    if (character === "\"") {
-      if (quoted && source[index + 1] === "\"") {
-        index += 1;
-      } else {
-        quoted = !quoted;
-      }
-    } else if (!quoted && (character === "\r" || character === "\n")) {
-      break;
-    } else if (!quoted) {
-      const delimiterIndex = delimiters.indexOf(character);
-      if (delimiterIndex >= 0) counts[delimiterIndex] += 1;
-    }
-  }
-  const maximum = Math.max(...counts);
-  const delimiter = maximum === 0 ? "," : delimiters[counts.indexOf(maximum)];
-  const records: string[][] = [];
-  let record: string[] = [];
-  let field = "";
-  quoted = false;
-  for (let index = 0; index < source.length; index += 1) {
-    const character = source[index];
-    if (character === "\"") {
-      if (quoted && source[index + 1] === "\"") {
-        field += "\"";
-        index += 1;
-      } else {
-        quoted = !quoted;
-      }
-    } else if (!quoted && character === delimiter) {
-      record.push(field);
-      field = "";
-    } else if (!quoted && (character === "\r" || character === "\n")) {
-      record.push(field);
-      records.push(record);
-      record = [];
-      field = "";
-      if (character === "\r" && source[index + 1] === "\n") index += 1;
-    } else {
-      field += character;
-    }
-  }
-  if (quoted) throw new Error("Custom SQL input CSV has an unclosed quoted field");
-  if (field || record.length > 0) {
-    record.push(field);
-    records.push(record);
-  }
-  const [columns, ...rows] = records;
-  if (!columns?.length) throw new Error("Custom SQL input CSV requires a header");
-  rows.forEach((value, index) => {
-    if (value.length !== columns.length) {
-      throw new Error(`Custom SQL input CSV row ${index + 1} has ${value.length} values; expected ${columns.length}`);
-    }
-  });
-  return { columns, rows };
 }
 
 export function errorMessage(error: unknown): string {
