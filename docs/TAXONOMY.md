@@ -167,7 +167,7 @@ query in `sql`, `sources`, and an absolute `destination_path`.
 
 | Type | Fields | Description |
 | --- | --- | --- |
-| `SqlExecutionResult` | `operation_id`, `changeset_size`, `result_sets`, `messages` | Combined result for the full script. |
+| `CustomSqlExecutionResult` | `operation_id`, `changeset_size`, `result_sets`, `messages` | Combined result for the full Custom SQL script. |
 | `SqlResultSet` | `statement_index`, `columns`, `rows`, `truncated` | One statement result. |
 | `SqlColumn` | `name`, `declared_type` | Result or source column metadata. |
 | `SqlStatementMessage` | `statement_index`, `affected_rows`, `message` | Per-statement execution summary. |
@@ -176,7 +176,9 @@ query in `sql`, `sources`, and an absolute `destination_path`.
 `SqlValue` is tagged by `type` and has the variants `null`, `integer`, `real`,
 `text`, and `blob`. Blob values use Base64 in both IPC results and CSV export.
 The normal execution limit defaults to and is capped at 1000 rows per result
-set. A truncated result still executes the complete statement.
+set. A read-only statement stops after reading the limit plus one row.
+Statements that may mutate data always run to completion, including
+`UPDATE ... RETURNING`, while retaining only the limited preview rows.
 
 `SqlSourceSchema` contains `alias` and `objects`. Each `SqlSourceObject`
 contains `name`, `object_type`, and ordered `columns`. `SqlObjectType` values
@@ -184,7 +186,7 @@ are `table`, `view`, and `virtual_table`.
 
 | Function | Parameters after `database` | Return |
 | --- | --- | --- |
-| `execute_custom_taxonomy_sql` | `request: &CustomTaxonomySqlRequest` | `SqlExecutionResult` |
+| `execute_custom_taxonomy_sql` | `request: &CustomTaxonomySqlRequest` | `CustomSqlExecutionResult` |
 | `export_custom_taxonomy_query` | `request: &CustomTaxonomySqlExportRequest` | `SqlExportResult` |
 | `inspect_sql_data_source` | no `database`; `source: &SqlDataSource` | `SqlSourceSchema` |
 
@@ -201,6 +203,11 @@ changeset, and photo-library synchronization impact without formatted input.
 The export interface accepts exactly one read-only query and streams rows
 directly to the destination CSV.
 
+CSV sources are created and populated in one explicit transaction per source.
+The reader streams records through one prepared insert statement. A read or
+insert failure reports the CSV row number and rolls back the entire temporary
+table.
+
 ## Base database
 
 `TaxonomyBaseMetadata` contains `source_path`, `taxa_count`,
@@ -216,7 +223,8 @@ isolated import workspace.
 | --- | --- |
 | `AddBaseImportCsvSourceRequest` | `session_id`, `table_name`, `path` |
 | `AddBaseImportSqliteSourceRequest` | `session_id`, `path` |
-| `ExecuteBaseImportSqlRequest` | `session_id`, `sql`, `maximum_result_rows` |
+| `ExecuteBaseImportSqlRequest` | `session_id`, `sql` |
+| `BaseImportExecutionResult` | `statements_executed`, `session_revision` |
 | `NameTypeCount` | `name_type`, `count` |
 | `BaseImportIssue` | `code`, `message`, `table`, `row_identifier` |
 | `BaseImportValidationResult` | `can_apply`, `taxa_count`, `name_counts`, `normalization_changes`, `total_warning_count`, `total_error_count`, `warnings`, `errors` |
@@ -232,7 +240,7 @@ fields remain authoritative.
 | `add_base_import_csv_source` | `request: &AddBaseImportCsvSourceRequest` | `SqlSourceSchema` |
 | `add_base_import_sqlite_source` | `request: &AddBaseImportSqliteSourceRequest` | `SqlSourceSchema` |
 | `inspect_base_import_sources` | `session_id: &str` | `Vec<SqlSourceSchema>` |
-| `execute_base_import_sql` | `request: &ExecuteBaseImportSqlRequest` | `SqlExecutionResult` |
+| `execute_base_import_sql` | `request: &ExecuteBaseImportSqlRequest` | `BaseImportExecutionResult` |
 | `validate_base_import` | `session_id: &str` | `BaseImportValidationResult` |
 | `apply_base_import` | `session_id: &str` | `TaxonomyBaseReplaceResult` |
 | `discard_base_import_session` | `session_id: &str` | `()` |
@@ -243,22 +251,38 @@ fields remain authoritative.
 An SQLite source becomes the session's `main` database and must be added
 before any CSV table. CSV sources become persistent `main.<table_name>` tables
 inside the isolated source database, use their UTF-8 header order, store every
-value as `TEXT`, and preserve empty fields as empty text.
+value as `TEXT`, and preserve empty fields as empty text. Each CSV table is
+loaded through one explicit transaction and one reusable prepared insert; any
+bad row rolls back the complete table and reports its row number.
 
 Base Import SQL can read the isolated source and can attach only the
 backend-selected `vividarium_base.db` path with the `base` alias. It may create
 and mutate staging objects only in `base`; the execution result never creates
-a taxonomy operation. The script must finish its transaction and produce
-`base.taxa` and `base.taxon_names`.
+a taxonomy operation or return Custom SQL result sets. The script must finish
+its transaction and produce `base.taxa` and `base.taxon_names`.
 
 `validate_base_import` separately checks file integrity, foreign keys, required
 schema and constraints, supported ranks and name types, canonical
-normalization, and the complete taxonomy invariants. `apply_base_import`
-revalidates, constructs the official schema and search indexes from canonical
-names, creates a new taxonomy identity, atomically replaces the taxonomy
-database, clears taxonomy history, and marks every registered photo library
+normalization, and the complete taxonomy invariants. Validation builds and
+stores the official candidate database in bounded 10,000-name batches. The
+session revision and a source/staging fingerprint invalidate the candidate
+after any source, SQL, or staging change.
+
+`apply_base_import` requires that unchanged validated candidate, performs a
+quick integrity and fingerprint check, and replaces the taxonomy database
+without rebuilding or repeating normalization. The candidate already contains
+the new taxonomy identity, official indexes, and FTS data. Successful
+replacement clears taxonomy history and marks every registered photo library
 for a full remap. Failed validation or construction leaves the current
 taxonomy database unchanged.
+
+The desktop `apply_base_import` command starts a managed background operation
+and returns its `OperationState`. The operation holds the core taxonomy
+replacement guard for candidate verification and replacement, then schedules
+photo-library synchronization after releasing it. During replacement, other
+base applies, Custom SQL, formatted or direct taxonomy mutations, rollback,
+legacy base replacement, synchronization, and taxonomy relocation fail with a
+busy error. Read-only taxonomy interfaces remain available.
 
 The default SQL APIs store an exact application-metadata override. Save does
 not reformat the text. Reset deletes the override and returns the built-in SQL.

@@ -47,7 +47,7 @@ interface.
 | `Database::rebind_photo_library_root` | `library_uuid: &str`, `root_path: &Path` | `CoreResult<PhotoLibraryRegistration>` | Bind a copied library DB to a new local photo root. |
 | `Database::rebind_photo_library_database` | `library_uuid: &str`, `existing_database_path: &Path` | `CoreResult<PhotoLibraryRegistration>` | Point an existing registration at an existing DB without copying or moving it. The schema and persisted library UUID must match. A taxonomy identity or synchronization watermark mismatch creates a full-remap request. |
 | `Database::relocate_photo_library_database` | `library_uuid: &str`, `destination: &Path` | `CoreResult<PhotoLibraryRegistration>` | Move one library DB through a consistent SQLite online-backup snapshot and update metadata. |
-| `Database::relocate_taxonomy_database` | `destination: &Path` | `CoreResult<DatabaseLocations>` | Move taxonomy storage through a consistent SQLite online-backup snapshot and update metadata. |
+| `Database::relocate_taxonomy_database` | `destination: &Path` | `CoreResult<DatabaseLocations>` | Move taxonomy storage through a consistent SQLite online-backup snapshot and update metadata. It fails while a taxonomy replacement holds exclusive access. |
 | `Database::set_default_taxonomy_directory` | `directory: &Path` | `CoreResult<DatabaseLocations>` | Set the default taxonomy creation directory. |
 | `Database::set_default_photo_library_directory` | `directory: &Path` | `CoreResult<DatabaseLocations>` | Set the default photo library creation directory. |
 | `photo_library_location` | `database: &Database`, `library_uuid: &str` | `CoreResult<PhotoLibraryLocation>` | Return typed paths for one registration. |
@@ -59,8 +59,10 @@ history.
 
 Every photo library must represent one real photo root. Root paths and
 database paths are unique among registrations. Callers must prevent concurrent
-mutating operations while relocating a database or rebinding its path; the
-desktop commands enforce this operation guard.
+mutating operations while relocating a photo database or rebinding its path;
+the desktop commands enforce this operation guard. Taxonomy relocation also
+uses the core replacement access guard, so it cannot overlap a base apply or
+other taxonomy replacement.
 
 Metadata and taxonomy storage remain available when the active photo library
 is offline. Pure taxonomy reads, updates, history, settings, and base database
