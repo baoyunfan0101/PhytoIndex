@@ -1,3 +1,5 @@
+//! Map settings and cursor-based geotagged photo queries.
+
 use rusqlite::{params_from_iter, types::Value as SqlValue};
 use serde::{Deserialize, Serialize};
 

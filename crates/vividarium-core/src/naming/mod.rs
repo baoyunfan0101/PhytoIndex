@@ -1,3 +1,8 @@
+//! Shared taxonomy-name normalization and configurable Rhai naming hooks.
+//!
+//! Use this module for filename parsing, synonym-authority splitting, hook
+//! settings, bundled templates, and project hook tests.
+
 mod hooks;
 mod normalize;
 mod photo_filename;

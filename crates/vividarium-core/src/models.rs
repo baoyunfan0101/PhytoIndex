@@ -1,3 +1,5 @@
+//! Shared serializable data-transfer objects used across backend modules.
+
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};

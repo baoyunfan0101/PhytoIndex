@@ -1,3 +1,5 @@
+//! Error variants and the shared backend result type.
+
 use std::path::PathBuf;
 
 #[derive(Debug, thiserror::Error)]

@@ -1,3 +1,9 @@
+//! Backend services and serializable contracts shared by Vividarium clients.
+//!
+//! Feature APIs are grouped by domain. Callers create a [`Database`] through
+//! [`storage`] and pass it to functions in [`photos`], [`mapping`],
+//! [`taxonomy`], [`naming`], or [`map`].
+
 mod db;
 pub mod error;
 pub mod map;

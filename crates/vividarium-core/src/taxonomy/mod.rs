@@ -1,8 +1,13 @@
+//! Taxonomy search, detail views, mutations, import workflows, and history.
+//!
+//! This module is the public taxonomy facade. SQL execution details, session
+//! storage, validation, and synchronization remain private implementation
+//! details.
+
 mod actions;
 mod base;
 mod base_import;
 mod formatted;
-mod name_parser;
 mod operation_export;
 mod page;
 mod query;
@@ -11,6 +16,7 @@ mod sql_support;
 pub(crate) mod sync;
 mod view;
 
+pub use crate::naming::{ScientificNameParts, split_scientific_name_authority};
 pub use actions::{
     DeleteTaxonNameInput, PromoteTaxonNameInput, TaxonUpdateInput, delete_taxon, delete_taxon_name,
     promote_taxon_name, update_taxon,
@@ -34,7 +40,6 @@ pub use formatted::{
     preview_rows, rollback_operation, set_taxonomy_name_separator,
     taxonomy_formatted_update_template, taxonomy_log_csv,
 };
-pub use name_parser::{ScientificNameParts, split_scientific_name_authority};
 pub use operation_export::{
     export_all_replayable_inputs, export_operation_input, export_operations_input,
     write_all_operation_audit, write_operation_audit, write_operations_audit,
