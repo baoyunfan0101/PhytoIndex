@@ -1,7 +1,7 @@
 [workspace]
 members = [
   "apps/desktop/src-tauri",
-  "crates/vividarium-core",
+  "crates/phytoindex-core",
 ]
 resolver = "2"
 

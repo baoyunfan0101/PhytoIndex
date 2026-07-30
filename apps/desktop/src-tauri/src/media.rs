@@ -32,8 +32,8 @@ fn response(path: &str) -> Result<Response<Vec<u8>>, (StatusCode, String)> {
         .parse::<i64>()
         .map_err(|_| (StatusCode::BAD_REQUEST, "invalid photo id".into()))?;
     let file = match parts[0] {
-        "photo" => vividarium_core::photos::photo_file_path(&state.database, photo_id),
-        "thumbnail" => vividarium_core::photos::get_or_create_thumbnail(
+        "photo" => phytoindex_core::photos::photo_file_path(&state.database, photo_id),
+        "thumbnail" => phytoindex_core::photos::get_or_create_thumbnail(
             &state.database,
             photo_id,
             &state.thumbnail_dir,

@@ -1,33 +1,33 @@
 use std::path::Path;
 
-use serde_json::{Value, json};
-use tauri::{AppHandle, State, ipc::Channel};
-use vividarium_core::mapping::{
+use phytoindex_core::mapping::{
     PhotoMappingListItem, PhotoMappingListStatus, PhotoNameMatchSettings, PhotoTaxonItem,
     PhotoTaxonMapping, PhotoTaxonMatch, PhotoTaxonNode,
 };
-use vividarium_core::models::{
+use phytoindex_core::models::{
     DirectoryEntryCounts, MappingMetadata, OperationsStatus, Photo, PhotoDirectoryItem,
     PhotoLibrary, PhotoMetadata, PhotoPage,
 };
-use vividarium_core::naming::{
+use phytoindex_core::naming::{
     NamingHookKind, NamingHookSettings, NamingHookTemplates, NamingHookTestCase,
     NamingHookTestCases, NamingHookTestReport, NamingHookTestResult, ParsedPhotoFilename,
     TaxonomicNameInfo,
 };
-use vividarium_core::photos::{
+use phytoindex_core::photos::{
     PhotoFilenameFormatSettings, PhotoOperation, PhotoRenameOperationResult,
 };
-use vividarium_core::taxonomy::{
+use phytoindex_core::taxonomy::{
     DeleteTaxonNameInput, PromoteTaxonNameInput, TaxonChild, TaxonDetailNode, TaxonInputRow,
     TaxonRowOutcome, TaxonSearchResult, TaxonSuggestion, TaxonUpdateInput, TaxonomyBaseMetadata,
     TaxonomyCustomSqlResult, TaxonomyCustomSqlTempTable, TaxonomyOperation,
     TaxonomyOperationResult, TaxonomyPage, TaxonomyPreviewResult,
 };
-use vividarium_core::{
+use phytoindex_core::{
     map::{self, MapBounds, MapPhoto, MapSettings},
     mapping, naming, photos, taxonomy,
 };
+use serde_json::{Value, json};
+use tauri::{AppHandle, State, ipc::Channel};
 
 use crate::state::AppState;
 use crate::updater::{AppUpdateEvent, AppUpdateInfo, PendingAppUpdate};
@@ -459,11 +459,6 @@ pub fn execute_custom_taxonomy_sql(
     input: Option<TaxonomyCustomSqlTempTable>,
 ) -> CommandResult<TaxonomyCustomSqlResult> {
     taxonomy::execute_custom_taxonomy_sql(&state.database, &sql, input).map_err(error)
-}
-
-#[tauri::command]
-pub fn parse_custom_taxonomy_input_csv(input: String) -> CommandResult<TaxonomyCustomSqlTempTable> {
-    taxonomy::parse_custom_taxonomy_input_csv(&input).map_err(error)
 }
 
 #[tauri::command]

@@ -5,10 +5,10 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use chrono::Local;
+use phytoindex_core::{Database, OperationState, OperationsStatus};
 use serde_json::Value;
 use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
-use vividarium_core::{Database, OperationState, OperationsStatus};
 
 static GLOBAL_STATE: OnceLock<AppState> = OnceLock::new();
 const PROGRESS_EVENT_INTERVAL: Duration = Duration::from_millis(100);
@@ -58,10 +58,10 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(data_dir: PathBuf) -> Result<Self, vividarium_core::CoreError> {
+    pub fn new(data_dir: PathBuf) -> Result<Self, phytoindex_core::CoreError> {
         let database = Database::open(data_dir.join("vividarium.db"))?;
         let thumbnail_dir = data_dir.join("thumbnails");
-        vividarium_core::photos::rebase_thumbnail_paths(&database, &thumbnail_dir)?;
+        phytoindex_core::photos::rebase_thumbnail_paths(&database, &thumbnail_dir)?;
         Ok(Self {
             database,
             thumbnail_dir,

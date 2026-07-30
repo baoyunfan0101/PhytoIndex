@@ -3,11 +3,11 @@
 This document describes the public backend contract for the photo library.
 It covers:
 
-- `vividarium_core::photos`: library, directory, file, metadata, thumbnail,
+- `phytoindex_core::photos`: library, directory, file, metadata, thumbnail,
   refresh, and rename APIs.
-- `vividarium_core::mapping`: photo-to-taxon matching and taxon-based photo
+- `phytoindex_core::mapping`: photo-to-taxon matching and taxon-based photo
   browsing APIs.
-- `vividarium_core::naming`: shared name normalization and filename hook APIs,
+- `phytoindex_core::naming`: shared name normalization and filename hook APIs,
   documented in [the naming backend API](NAMING.md).
 - Desktop Tauri commands, operation events, and media URLs that expose those
   core APIs.
@@ -15,8 +15,8 @@ It covers:
 The Rust surfaces are imported from:
 
 ```rust
-use vividarium_core::mapping::*;
-use vividarium_core::photos::*;
+use phytoindex_core::mapping::*;
+use phytoindex_core::photos::*;
 ```
 
 Shared taxonomy types such as `TaxonRank`, `TaxonomyNameType`,
@@ -194,7 +194,7 @@ file rename items.
 | `old_filename` | `String` | Exact filename before the rename. |
 | `new_filename` | `String` | Exact filename after the rename. |
 
-## `vividarium_core::photos`
+## `phytoindex_core::photos`
 
 Every function below takes `database: &Database`. The parameter is omitted
 from the parameter descriptions because it always identifies the current
@@ -729,7 +729,7 @@ The four photo-status counts are mutually exclusive.
 `PhotoNameMatchSettings` contains `priority: Vec<PhotoNameField>`. The list
 must contain all six fields exactly once and is evaluated from first to last.
 
-## `vividarium_core::mapping`
+## `phytoindex_core::mapping`
 
 Every function below takes `database: &Database`.
 
@@ -1162,7 +1162,7 @@ The event payload is the latest `OperationState`.
 ### Media URLs
 
 The desktop custom protocol exposes photo bytes without returning filesystem
-paths to the frontend. Pass the resource path and the `vividarium` protocol to
+paths to the frontend. Pass the resource path and the `phytoindex` protocol to
 Tauri's `convertFileSrc`; the final URL syntax is platform-dependent.
 
 | Resource path | Return |
