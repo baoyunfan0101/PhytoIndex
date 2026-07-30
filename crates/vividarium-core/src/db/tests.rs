@@ -258,6 +258,31 @@ fn photo_library_roots_are_unique() {
 }
 
 #[test]
+fn renames_a_photo_library_registration() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("photos");
+    fs::create_dir_all(&root).unwrap();
+    let database = Database::open(directory.path().join("metadata.db")).unwrap();
+    let library = database
+        .register_photo_library(&root, &directory.path().join("library.db"), Some("Before"))
+        .unwrap();
+
+    let renamed = database
+        .rename_photo_library(&library.library_uuid, "  After  ")
+        .unwrap();
+
+    assert_eq!(renamed.display_name, "After");
+    assert_eq!(
+        database.list_photo_libraries().unwrap()[0].display_name,
+        "After"
+    );
+    assert!(matches!(
+        database.rename_photo_library(&library.library_uuid, "  "),
+        Err(CoreError::InvalidArgument(_))
+    ));
+}
+
+#[test]
 fn registering_a_stale_library_queues_a_full_remap() {
     let directory = tempfile::tempdir().unwrap();
     let database = Database::open(directory.path().join("metadata.db")).unwrap();

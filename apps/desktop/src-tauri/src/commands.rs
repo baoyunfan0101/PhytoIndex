@@ -2,6 +2,7 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
 
+use serde::Serialize;
 use serde_json::{Value, json};
 use tauri::{AppHandle, State, ipc::Channel};
 use vividarium_core::mapping::{
@@ -37,6 +38,18 @@ use crate::state::AppState;
 use crate::updater::{AppUpdateEvent, AppUpdateInfo, PendingAppUpdate};
 
 type CommandResult<T> = Result<T, String>;
+
+#[derive(Debug, Serialize)]
+pub struct PhotoLibraryWorkspace {
+    pub library_uuid: String,
+    pub display_name: String,
+    pub root_path: String,
+    pub db_path: String,
+    pub last_opened_at: String,
+    pub active: bool,
+    pub root_available: bool,
+    pub database_available: bool,
+}
 
 #[tauri::command]
 pub fn get_app_version(app: AppHandle) -> String {
@@ -91,8 +104,31 @@ pub fn get_database_locations(state: State<'_, AppState>) -> CommandResult<Datab
 #[tauri::command]
 pub fn list_photo_libraries(
     state: State<'_, AppState>,
-) -> CommandResult<Vec<PhotoLibraryRegistration>> {
-    state.database.list_photo_libraries().map_err(error)
+) -> CommandResult<Vec<PhotoLibraryWorkspace>> {
+    let active_library_uuid = state
+        .database
+        .locations()
+        .map_err(error)?
+        .active_photo_library_uuid;
+    state
+        .database
+        .list_photo_libraries()
+        .map_err(error)
+        .map(|libraries| {
+            libraries
+                .into_iter()
+                .map(|library| PhotoLibraryWorkspace {
+                    active: active_library_uuid.as_deref() == Some(&library.library_uuid),
+                    root_available: Path::new(&library.root_path).is_dir(),
+                    database_available: Path::new(&library.db_path).is_file(),
+                    library_uuid: library.library_uuid,
+                    display_name: library.display_name,
+                    root_path: library.root_path,
+                    db_path: library.db_path,
+                    last_opened_at: library.last_opened_at,
+                })
+                .collect()
+        })
 }
 
 #[tauri::command]
@@ -179,6 +215,18 @@ pub fn remove_photo_library(state: State<'_, AppState>, library_uuid: String) ->
 }
 
 #[tauri::command]
+pub fn rename_photo_library(
+    state: State<'_, AppState>,
+    library_uuid: String,
+    display_name: String,
+) -> CommandResult<PhotoLibraryRegistration> {
+    state
+        .database
+        .rename_photo_library(&library_uuid, &display_name)
+        .map_err(error)
+}
+
+#[tauri::command]
 pub fn relocate_taxonomy_database(
     state: State<'_, AppState>,
     database_path: String,
@@ -191,7 +239,7 @@ pub fn relocate_taxonomy_database(
 }
 
 #[tauri::command]
-pub fn set_default_taxonomy_directory(
+pub fn set_default_taxonomy_database_directory(
     state: State<'_, AppState>,
     directory: String,
 ) -> CommandResult<DatabaseLocations> {
@@ -202,7 +250,7 @@ pub fn set_default_taxonomy_directory(
 }
 
 #[tauri::command]
-pub fn set_default_photo_library_directory(
+pub fn set_default_photo_library_database_directory(
     state: State<'_, AppState>,
     directory: String,
 ) -> CommandResult<DatabaseLocations> {
@@ -897,70 +945,6 @@ pub fn reset_default_base_import_sql(state: State<'_, AppState>) -> CommandResul
     taxonomy::reset_default_base_import_sql(&state.database).map_err(error)
 }
 
-#[tauri::command]
-pub fn replace_taxonomy_base_database(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    source_path: String,
-) -> CommandResult<Value> {
-    let database = state.database.clone();
-    let operation =
-        state
-            .operations
-            .start(app, "mapping", "replace_taxonomy_base", move |progress| {
-                progress(0, None, "Replacing taxonomy base database");
-                let replacement =
-                    taxonomy::replace_taxonomy_base_database(&database, Path::new(&source_path))
-                        .map_err(error)?;
-                let follow_up = finish_taxonomy_base_replacement(&database, progress);
-                Ok(json!({ "replacement": replacement, "follow_up": follow_up }))
-            })?;
-    Ok(json!({ "operation": operation }))
-}
-
-fn finish_taxonomy_base_replacement(
-    database: &vividarium_core::Database,
-    progress: &mut mapping::MappingProgressCallback<'_>,
-) -> Value {
-    let mut errors = Vec::new();
-    let sync = match taxonomy::synchronize_pending_photo_libraries(database) {
-        Ok(sync) => Some(sync),
-        Err(sync_error) => {
-            errors.push(sync_error.to_string());
-            None
-        }
-    };
-    let active_library_uuid = match database.active_photo_library() {
-        Ok(library) => library.map(|library| library.library_uuid),
-        Err(active_error) => {
-            errors.push(active_error.to_string());
-            None
-        }
-    };
-    let active_sync = active_library_uuid.as_deref().and_then(|library_uuid| {
-        sync.as_ref().and_then(|sync| {
-            sync.synchronized
-                .iter()
-                .find(|item| item.library_uuid == library_uuid)
-        })
-    });
-    let mapping = active_sync.and_then(|active_sync| {
-        progress(
-            0,
-            Some(active_sync.queued_photo_count as u64),
-            "Remapping all photos",
-        );
-        match mapping::process_pending_photo_matches(database, progress) {
-            Ok(mapping) => Some(mapping),
-            Err(mapping_error) => {
-                errors.push(mapping_error.to_string());
-                None
-            }
-        }
-    });
-    json!({ "sync": sync, "mapping": mapping, "errors": errors })
-}
-
 fn schedule_taxonomy_sync(app: AppHandle, state: &AppState) {
     if !state.taxonomy_sync.request() {
         return;
@@ -1224,52 +1208,4 @@ pub fn get_operations_status(state: State<'_, AppState>) -> OperationsStatus {
 
 fn error(error: impl ToString) -> String {
     error.to_string()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn base_replacement_follow_up_tolerates_no_photo_library() {
-        let directory = std::env::temp_dir().join(format!(
-            "vividarium-replacement-no-library-{}",
-            uuid::Uuid::new_v4().simple()
-        ));
-        let database = vividarium_core::Database::open(directory.join("metadata.db")).unwrap();
-        let mut progress = |_: u64, _: Option<u64>, _: &str| {};
-
-        let follow_up = finish_taxonomy_base_replacement(&database, &mut progress);
-
-        assert!(follow_up["mapping"].is_null());
-        assert_eq!(follow_up["errors"], json!([]));
-        std::fs::remove_dir_all(directory).unwrap();
-    }
-
-    #[test]
-    fn base_replacement_follow_up_tolerates_an_offline_active_library() {
-        let directory = std::env::temp_dir().join(format!(
-            "vividarium-replacement-offline-library-{}",
-            uuid::Uuid::new_v4().simple()
-        ));
-        let root = directory.join("photos");
-        std::fs::create_dir_all(&root).unwrap();
-        let library_path = directory.join("library.db");
-        let database = vividarium_core::Database::open(directory.join("metadata.db")).unwrap();
-        let library = database
-            .register_photo_library(&root, &library_path, Some("Library"))
-            .unwrap();
-        std::fs::remove_file(&library_path).unwrap();
-        let mut progress = |_: u64, _: Option<u64>, _: &str| {};
-
-        let follow_up = finish_taxonomy_base_replacement(&database, &mut progress);
-
-        assert!(follow_up["mapping"].is_null());
-        assert_eq!(follow_up["errors"], json!([]));
-        assert_eq!(
-            follow_up["sync"]["pending_library_uuids"],
-            json!([library.library_uuid])
-        );
-        std::fs::remove_dir_all(directory).unwrap();
-    }
 }
