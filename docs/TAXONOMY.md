@@ -194,19 +194,14 @@ Custom SQL may read taxonomy tables, views, search structures, history, and
 internal metadata, but it may directly mutate only `taxa` and `taxon_names`.
 Schema changes, transaction control, attachment control, internal-table
 writes, unsafe pragmas, and extension loading are denied while each statement
-is prepared and stepped.
+executes.
 
-The application runs the complete script in one transaction and validates the
-resulting taxonomy. A pure query returns no operation or synchronization
-impact. A successful mutation creates a rollbackable operation, audit,
-changeset, and photo-library synchronization impact without formatted input.
-The export interface accepts exactly one read-only query and streams rows
-directly to the destination CSV.
-
-CSV sources are created and populated in one explicit transaction per source.
-The reader streams records through one prepared insert statement. A read or
-insert failure reports the CSV row number and rolls back the entire temporary
-table.
+The complete script succeeds or fails as one unit and the resulting taxonomy
+must remain valid. A pure query creates no operation. A successful mutation
+creates a rollbackable operation without formatted input and records the
+required photo-library synchronization. The export interface accepts exactly
+one read-only query and writes its rows directly to the destination CSV. CSV
+source errors identify the failing input row.
 
 ## Base database
 
@@ -250,10 +245,9 @@ fields remain authoritative.
 
 An SQLite source becomes the session's `main` database and must be added
 before any CSV table. CSV sources become persistent `main.<table_name>` tables
-inside the isolated source database, use their UTF-8 header order, store every
-value as `TEXT`, and preserve empty fields as empty text. Each CSV table is
-loaded through one explicit transaction and one reusable prepared insert; any
-bad row rolls back the complete table and reports its row number.
+inside the isolated source database. They use their UTF-8 header order, store
+every value as `TEXT`, and preserve empty fields as empty text. A bad row
+rejects the complete source and reports its row number.
 
 Base Import SQL can read the isolated source and can attach only the
 backend-selected `vividarium_base.db` path with the `base` alias. It may create
@@ -263,26 +257,14 @@ its transaction and produce `base.taxa` and `base.taxon_names`.
 
 `validate_base_import` separately checks file integrity, foreign keys, required
 schema and constraints, supported ranks and name types, canonical
-normalization, and the complete taxonomy invariants. Validation builds and
-stores the official candidate database in bounded 10,000-name batches. The
-session revision and a source/staging fingerprint invalidate the candidate
-after any source, SQL, or staging change.
+normalization, and the complete taxonomy invariants. The result reports
+whether apply is allowed, authoritative totals, and bounded warning and error
+samples. Any later source or SQL change requires validation again.
 
-`apply_base_import` requires that unchanged validated candidate, performs a
-quick integrity and fingerprint check, and replaces the taxonomy database
-without rebuilding or repeating normalization. The candidate already contains
-the new taxonomy identity, official indexes, and FTS data. Successful
-replacement clears taxonomy history and marks every registered photo library
-for a full remap. Failed validation or construction leaves the current
-taxonomy database unchanged.
-
-The desktop `apply_base_import` command starts a managed background operation
-and returns its `OperationState`. The operation holds the core taxonomy
-replacement guard for candidate verification and replacement, then schedules
-photo-library synchronization after releasing it. During replacement, other
-base applies, Custom SQL, formatted or direct taxonomy mutations, rollback,
-legacy base replacement, synchronization, and taxonomy relocation fail with a
-busy error. Read-only taxonomy interfaces remain available.
+`apply_base_import` accepts only the latest successfully validated session.
+Successful replacement assigns a new taxonomy identity, clears taxonomy
+history, and marks every registered photo library for a full remap. A failed
+validation or replacement leaves the current taxonomy database unchanged.
 
 The default SQL APIs store an exact application-metadata override. Save does
 not reformat the text. Reset deletes the override and returns the built-in SQL.
@@ -315,22 +297,13 @@ unavailable library does not change a successful replacement result.
 | `synchronize_pending_photo_libraries` | none | `TaxonomySyncRun` |
 
 Taxonomy mutations commit their data, operation audit, and synchronization
-event together, then return without opening photo-library databases. The
-desktop schedules this interface in the background. It merges affected taxon
-IDs per library, gives a full-remap request precedence over local IDs, and
-processes the active library first. A library failure remains pending and does
-not fail the taxonomy mutation. Switching a library invokes the same pending
-consumer before activation.
-
-Desktop synchronization requests are coalesced. If refresh, remap, or another
-mapping task is running, the request remains scheduled and starts after the
-conflicting task finishes. Internal taxonomy sync events are deleted after
-their data has been durably merged into per-library pending state; the metadata
-dispatch watermark preserves ordering without an append-only event history.
-When an existing photo library is registered, its persisted taxonomy identity
-and synchronization watermark are compared with current metadata. Any
-mismatch requests one full remap, including when the intermediate sync events
-have already been pruned.
+request together, then return without opening photo-library databases.
+`synchronize_pending_photo_libraries` processes the active library first,
+merges repeated affected-taxon requests, and lets a full-remap request replace
+local requests. Its return value separates successful libraries from
+unavailable or invalid libraries that remain pending. A library failure never
+changes the already successful taxonomy mutation. Registering or activating a
+library also checks whether a full remap is required.
 
 ## Taxonomy operation interfaces
 

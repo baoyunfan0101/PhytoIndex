@@ -38,8 +38,10 @@ apps/
 crates/
   vividarium-core/          Rust domain services, SQLite, scanning, and imports
 docs/
+  README.md                 Backend API module index
   BUILDING.md               Local and GitHub release instructions
   MAP.md                    Map query and settings backend API
+  MAPPING.md                Photo-to-taxon mapping backend API
   NAMING.md                 Name normalization and Rhai hook backend API
   OPERATIONS.md             Shared operation and audit backend API
   PHOTOS.md                 Photos library backend API
@@ -56,9 +58,13 @@ Cargo.toml                  Rust workspace and release profile
 
 The React application calls typed Rust commands through Tauri IPC. Original photos and generated thumbnails are served through a private `vividarium://` protocol. The core crate does not depend on Tauri, so its services can be tested separately from the desktop shell.
 
+See [docs/README.md](docs/README.md) for the public backend module index.
+
 See [docs/TAXONOMY.md](docs/TAXONOMY.md) for the public taxonomy knowledge base backend models, Rust APIs, and Tauri commands.
 
-See [docs/PHOTOS.md](docs/PHOTOS.md) for the public photos library, automatic taxonomy mapping, and sparse taxonomy browsing backend APIs.
+See [docs/PHOTOS.md](docs/PHOTOS.md) for the public photo-library backend API.
+
+See [docs/MAPPING.md](docs/MAPPING.md) for automatic photo-to-taxon mapping and photographed-taxonomy browsing.
 
 See [docs/STORAGE.md](docs/STORAGE.md) for metadata, taxonomy, and photo library database location APIs.
 
