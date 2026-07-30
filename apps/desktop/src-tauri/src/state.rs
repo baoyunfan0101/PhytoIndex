@@ -1,14 +1,15 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use chrono::Local;
-use phytoindex_core::{Database, OperationState, OperationsStatus};
 use serde_json::Value;
 use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
+use vividarium_core::{Database, OperationState, OperationsStatus};
 
 static GLOBAL_STATE: OnceLock<AppState> = OnceLock::new();
 const PROGRESS_EVENT_INTERVAL: Duration = Duration::from_millis(100);
@@ -55,17 +56,21 @@ pub struct AppState {
     pub database: Database,
     pub thumbnail_dir: PathBuf,
     pub operations: OperationManager,
+    pub taxonomy_sync: DeferredWork,
 }
 
 impl AppState {
-    pub fn new(data_dir: PathBuf) -> Result<Self, phytoindex_core::CoreError> {
-        let database = Database::open(data_dir.join("vividarium.db"))?;
+    pub fn new(data_dir: PathBuf) -> Result<Self, vividarium_core::CoreError> {
+        let database = Database::open(data_dir.join("metadata.db"))?;
         let thumbnail_dir = data_dir.join("thumbnails");
-        phytoindex_core::photos::rebase_thumbnail_paths(&database, &thumbnail_dir)?;
+        if database.active_photo_library()?.is_some() {
+            let _ = vividarium_core::photos::rebase_thumbnail_paths(&database, &thumbnail_dir);
+        }
         Ok(Self {
             database,
             thumbnail_dir,
             operations: OperationManager::new(),
+            taxonomy_sync: DeferredWork::new(),
         })
     }
 }
@@ -76,6 +81,41 @@ pub fn set_global(state: AppState) -> Result<(), AppState> {
 
 pub fn global() -> Option<&'static AppState> {
     GLOBAL_STATE.get()
+}
+
+#[derive(Clone)]
+pub struct DeferredWork {
+    requested: Arc<AtomicBool>,
+    worker_active: Arc<AtomicBool>,
+}
+
+impl DeferredWork {
+    fn new() -> Self {
+        Self {
+            requested: Arc::new(AtomicBool::new(false)),
+            worker_active: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    pub fn request(&self) -> bool {
+        self.requested.store(true, Ordering::Release);
+        self.worker_active
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+
+    pub fn take_request(&self) -> bool {
+        self.requested.swap(false, Ordering::AcqRel)
+    }
+
+    pub fn release_or_continue(&self) -> bool {
+        self.worker_active.store(false, Ordering::Release);
+        self.requested.load(Ordering::Acquire)
+            && self
+                .worker_active
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+    }
 }
 
 #[derive(Clone)]
@@ -241,6 +281,8 @@ fn now() -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
 
     #[test]
@@ -253,5 +295,42 @@ mod tests {
         assert!(!throttle.should_emit(1, Some(100), "Importing"));
         assert!(throttle.should_emit(100, Some(100), "Importing"));
         assert!(throttle.should_emit(100, None, "Committing"));
+    }
+
+    #[test]
+    fn deferred_work_coalesces_requests_and_restarts_after_release() {
+        let work = DeferredWork::new();
+
+        assert!(work.request());
+        assert!(!work.request());
+        assert!(work.take_request());
+        assert!(!work.take_request());
+        assert!(!work.request());
+        assert!(work.release_or_continue());
+        assert!(work.take_request());
+        assert!(!work.release_or_continue());
+        assert!(work.request());
+    }
+
+    #[test]
+    fn startup_tolerates_a_missing_active_photo_library() {
+        let data_dir =
+            std::env::temp_dir().join(format!("vividarium-state-{}", Uuid::new_v4().simple()));
+        let root = data_dir.join("photos");
+        fs::create_dir_all(&root).unwrap();
+        let library_path = data_dir.join("library.db");
+        {
+            let database = Database::open(data_dir.join("metadata.db")).unwrap();
+            database
+                .register_photo_library(&root, &library_path, Some("Library"))
+                .unwrap();
+        }
+        fs::remove_file(&library_path).unwrap();
+
+        let state = AppState::new(data_dir.clone()).unwrap();
+
+        assert!(state.database.active_photo_library().unwrap().is_some());
+        assert!(!library_path.exists());
+        fs::remove_dir_all(data_dir).unwrap();
     }
 }

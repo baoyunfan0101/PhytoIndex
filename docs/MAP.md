@@ -1,6 +1,6 @@
 # Map Backend API
 
-The `phytoindex_core::map` module owns map-photo queries and map settings.
+The `vividarium_core::map` module owns map-photo queries and map settings.
 All fallible functions return `CoreResult<T>`.
 
 ## Models
@@ -39,7 +39,7 @@ the antimeridian.
 | `longitude` | `f64` | Stored photo longitude. |
 | `latitude` | `f64` | Stored photo latitude. |
 
-## `phytoindex_core::map`
+## `vividarium_core::map`
 
 ### `get_map_settings`
 
