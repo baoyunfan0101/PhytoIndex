@@ -15,6 +15,7 @@ rhai = { version = "1.25", features = ["serde"] }
 rusqlite = { version = "0.37", features = ["backup", "bundled", "functions", "session"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
 thiserror = "2"
 uuid = { version = "1", features = ["v4"] }
 walkdir = "2.5"

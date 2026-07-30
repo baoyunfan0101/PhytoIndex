@@ -52,6 +52,7 @@ pub(crate) fn record_event(
 }
 
 pub fn synchronize_pending_photo_libraries(database: &Database) -> CoreResult<TaxonomySyncRun> {
+    let _taxonomy_guard = database.try_taxonomy_mutation()?;
     let _guard = SYNC_LOCK
         .lock()
         .map_err(|_| CoreError::Consistency("taxonomy sync lock is poisoned".into()))?;

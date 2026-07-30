@@ -74,6 +74,7 @@ pub fn update_taxon(
 }
 
 pub fn promote_taxon_name(database: &Database, input: PromoteTaxonNameInput) -> CoreResult<()> {
+    let _guard = database.try_taxonomy_mutation()?;
     let mut connection = database.connect_taxonomy_metadata_context()?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let (rank, current_type, name) = transaction
@@ -214,6 +215,7 @@ pub fn promote_taxon_name(database: &Database, input: PromoteTaxonNameInput) -> 
 }
 
 pub fn delete_taxon_name(database: &Database, input: DeleteTaxonNameInput) -> CoreResult<()> {
+    let _guard = database.try_taxonomy_mutation()?;
     let mut connection = database.connect_taxonomy_metadata_context()?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let (name_type, name) = transaction
@@ -293,6 +295,7 @@ pub fn delete_taxon_name(database: &Database, input: DeleteTaxonNameInput) -> Co
 }
 
 pub fn delete_taxon(database: &Database, taxon_id: i64) -> CoreResult<()> {
+    let _guard = database.try_taxonomy_mutation()?;
     let mut connection = database.connect_taxonomy_metadata_context()?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let taxon = transaction

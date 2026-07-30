@@ -7,6 +7,7 @@ mod operation_export;
 mod page;
 mod query;
 mod sql;
+mod sql_support;
 pub(crate) mod sync;
 mod view;
 
@@ -19,9 +20,9 @@ pub use base::{
     replace_taxonomy_base_database,
 };
 pub use base_import::{
-    AddBaseImportCsvSourceRequest, AddBaseImportSqliteSourceRequest, BaseImportIssue,
-    BaseImportSession, BaseImportValidationResult, ExecuteBaseImportSqlRequest, NameTypeCount,
-    add_base_import_csv_source, add_base_import_sqlite_source, apply_base_import,
+    AddBaseImportCsvSourceRequest, AddBaseImportSqliteSourceRequest, BaseImportExecutionResult,
+    BaseImportIssue, BaseImportSession, BaseImportValidationResult, ExecuteBaseImportSqlRequest,
+    NameTypeCount, add_base_import_csv_source, add_base_import_sqlite_source, apply_base_import,
     create_base_import_session, discard_base_import_session, execute_base_import_sql,
     get_default_base_import_sql, inspect_base_import_sources, reset_default_base_import_sql,
     save_default_base_import_sql, validate_base_import,
@@ -45,10 +46,10 @@ pub(crate) use query::{
     suggest_taxa_with_photos_connection, taxon_search_relation,
 };
 pub use sql::{
-    CustomTaxonomySqlExportRequest, CustomTaxonomySqlRequest, SqlColumn, SqlDataSource,
-    SqlExecutionResult, SqlExportResult, SqlObjectType, SqlResultSet, SqlSourceObject,
-    SqlSourceSchema, SqlStatementMessage, SqlValue, execute_custom_taxonomy_sql,
-    export_custom_taxonomy_query, inspect_sql_data_source,
+    CustomSqlExecutionResult, CustomTaxonomySqlExportRequest, CustomTaxonomySqlRequest, SqlColumn,
+    SqlDataSource, SqlExportResult, SqlObjectType, SqlResultSet, SqlSourceObject, SqlSourceSchema,
+    SqlStatementMessage, SqlValue, execute_custom_taxonomy_sql, export_custom_taxonomy_query,
+    inspect_sql_data_source,
 };
 pub use sync::{TaxonomySyncResult, TaxonomySyncRun, synchronize_pending_photo_libraries};
 pub(crate) use view::load_taxon_summaries;

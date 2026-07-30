@@ -291,6 +291,7 @@ pub fn apply_rows(
     database: &Database,
     rows: &[TaxonInputRow],
 ) -> CoreResult<TaxonomyOperationResult> {
+    let _guard = database.try_taxonomy_mutation()?;
     let mut connection = database.connect_taxonomy_metadata_context()?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let mut session = start_taxonomy_session(&transaction)?;
@@ -1491,6 +1492,7 @@ pub fn list_operation_audit(
 }
 
 pub fn rollback_operation(database: &Database, operation_id: i64) -> CoreResult<()> {
+    let _guard = database.try_taxonomy_mutation()?;
     let mut connection = database.connect_taxonomy_metadata_context()?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let summary = operations::get_operation(&transaction, operation_id)?

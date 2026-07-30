@@ -43,6 +43,7 @@ pub fn replace_taxonomy_base_database(
     database: &Database,
     source_path: &Path,
 ) -> CoreResult<TaxonomyBaseReplaceResult> {
+    let _guard = database.try_taxonomy_replacement()?;
     let source_path = fs::canonicalize(source_path)?;
     let target_path = fs::canonicalize(database.taxonomy_path()?)?;
     if source_path == target_path {

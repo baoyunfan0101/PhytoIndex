@@ -5,7 +5,6 @@ use std::io::BufWriter;
 use std::path::{Path, PathBuf};
 use std::ptr;
 
-use base64::Engine;
 use rusqlite::ffi;
 use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
 use rusqlite::{Connection, OpenFlags, Transaction, TransactionBehavior, params, params_from_iter};
@@ -13,6 +12,9 @@ use serde::{Deserialize, Serialize};
 
 use super::formatted::{
     affected_taxon_ids_from_changeset, start_taxonomy_session, validate_taxonomy,
+};
+use super::sql_support::{
+    RawStatement, execute_preview_statement_raw, sqlite_error, statement_columns, statement_row,
 };
 use crate::operations::{self, NewAuditRow, NewOperation};
 use crate::{CoreError, CoreResult, Database};
@@ -43,7 +45,7 @@ pub struct CustomTaxonomySqlExportRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct SqlExecutionResult {
+pub struct CustomSqlExecutionResult {
     pub operation_id: Option<i64>,
     pub changeset_size: usize,
     pub result_sets: Vec<SqlResultSet>,
@@ -122,18 +124,19 @@ pub enum SqlObjectType {
 pub fn execute_custom_taxonomy_sql(
     database: &Database,
     request: &CustomTaxonomySqlRequest,
-) -> CoreResult<SqlExecutionResult> {
+) -> CoreResult<CustomSqlExecutionResult> {
+    let _guard = database.try_taxonomy_mutation()?;
     let sql = require_sql(&request.sql)?;
     let maximum_result_rows = request
         .maximum_result_rows
         .unwrap_or(DEFAULT_SQL_RESULT_ROW_LIMIT)
         .min(DEFAULT_SQL_RESULT_ROW_LIMIT);
     let mut connection = database.connect_taxonomy()?;
-    let attached = prepare_sources(&connection, &request.sources)?;
+    let attached = prepare_sources(&mut connection, &request.sources)?;
     let execution = (|| {
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let mut session = start_taxonomy_session(&transaction)?;
-        let mut result = execute_script(
+        let mut result = execute_custom_script(
             &transaction,
             sql,
             maximum_result_rows,
@@ -180,8 +183,8 @@ pub fn export_custom_taxonomy_query(
             "sql export destination must be an absolute path".into(),
         ));
     }
-    let connection = database.connect_taxonomy()?;
-    let attached = prepare_sources(&connection, &request.sources)?;
+    let mut connection = database.connect_taxonomy()?;
+    let attached = prepare_sources(&mut connection, &request.sources)?;
     let export = export_single_query(&connection, sql, &request.destination_path);
     let detach = detach_sources(&connection, &attached);
     match (export, detach) {
@@ -199,12 +202,12 @@ pub fn inspect_sql_data_source(source: &SqlDataSource) -> CoreResult<SqlSourceSc
     }
 }
 
-pub(super) fn execute_script<F, A>(
+fn execute_custom_script<F, A>(
     connection: &Connection,
     sql: &str,
     maximum_result_rows: usize,
     mut authorizer_factory: F,
-) -> CoreResult<SqlExecutionResult>
+) -> CoreResult<CustomSqlExecutionResult>
 where
     F: FnMut() -> A,
     A: for<'a> FnMut(AuthContext<'a>) -> Authorization + Send + 'static,
@@ -215,8 +218,9 @@ where
     let mut messages = Vec::new();
     while offset < sql.len() {
         connection.authorizer(Some(authorizer_factory()));
-        let execution =
-            unsafe { execute_one_statement_raw(connection, &sql[offset..], maximum_result_rows) };
+        let execution = unsafe {
+            execute_preview_statement_raw(connection, &sql[offset..], maximum_result_rows)
+        };
         connection.authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
         let execution = execution?;
         offset += execution.tail_offset;
@@ -229,7 +233,7 @@ where
                 statement_index,
                 columns: execution.columns,
                 rows: execution.rows,
-                truncated: execution.total_rows > maximum_result_rows as u64,
+                truncated: execution.truncated,
             });
         }
         let affected_rows = if execution.read_only {
@@ -239,7 +243,10 @@ where
         };
         let message = match affected_rows {
             Some(count) => format!("statement affected {count} rows"),
-            None => format!("statement returned {} rows", execution.total_rows),
+            None if execution.truncated => {
+                format!("statement returned more than {maximum_result_rows} rows")
+            }
+            None => format!("statement returned {} rows", execution.returned_rows),
         };
         messages.push(SqlStatementMessage {
             statement_index,
@@ -247,169 +254,12 @@ where
             message,
         });
     }
-    Ok(SqlExecutionResult {
+    Ok(CustomSqlExecutionResult {
         operation_id: None,
         changeset_size: 0,
         result_sets,
         messages,
     })
-}
-
-struct RawScriptStep {
-    tail_offset: usize,
-    statement: Option<RawStatementExecution>,
-}
-
-struct RawStatementExecution {
-    columns: Vec<SqlColumn>,
-    rows: Vec<Vec<SqlValue>>,
-    total_rows: u64,
-    read_only: bool,
-    affected_rows: u64,
-}
-
-unsafe fn execute_one_statement_raw(
-    connection: &Connection,
-    sql_tail: &str,
-    maximum_result_rows: usize,
-) -> CoreResult<RawScriptStep> {
-    let database = unsafe { connection.handle() };
-    let sql_tail = CString::new(sql_tail)
-        .map_err(|error| CoreError::InvalidArgument(format!("invalid sql: {error}")))?;
-    let mut raw_statement = ptr::null_mut();
-    let mut next_sql = ptr::null();
-    let code = unsafe {
-        ffi::sqlite3_prepare_v2(
-            database,
-            sql_tail.as_ptr(),
-            -1,
-            &mut raw_statement,
-            &mut next_sql,
-        )
-    };
-    if code != ffi::SQLITE_OK {
-        return Err(sqlite_error(database, code));
-    }
-    let tail_offset = if next_sql.is_null() {
-        sql_tail.as_bytes().len()
-    } else {
-        unsafe { next_sql.offset_from(sql_tail.as_ptr()) as usize }
-    };
-    if tail_offset == 0 {
-        return Err(CoreError::InvalidArgument(
-            "sql parser did not advance".into(),
-        ));
-    }
-    if raw_statement.is_null() {
-        return Ok(RawScriptStep {
-            tail_offset,
-            statement: None,
-        });
-    }
-    let statement = RawStatement(raw_statement);
-    let column_count = unsafe { ffi::sqlite3_column_count(statement.0) as usize };
-    let columns = unsafe { statement_columns(statement.0, column_count) };
-    let read_only = unsafe { ffi::sqlite3_stmt_readonly(statement.0) != 0 };
-    let mut rows = Vec::new();
-    let mut total_rows = 0_u64;
-    loop {
-        let step = unsafe { ffi::sqlite3_step(statement.0) };
-        match step {
-            ffi::SQLITE_ROW => {
-                total_rows += 1;
-                if rows.len() < maximum_result_rows {
-                    rows.push(unsafe { statement_row(statement.0, column_count) });
-                }
-            }
-            ffi::SQLITE_DONE => break,
-            code => return Err(sqlite_error(database, code)),
-        }
-    }
-    Ok(RawScriptStep {
-        tail_offset,
-        statement: Some(RawStatementExecution {
-            columns,
-            rows,
-            total_rows,
-            read_only,
-            affected_rows: unsafe { ffi::sqlite3_changes64(database) }.max(0) as u64,
-        }),
-    })
-}
-
-unsafe fn statement_columns(
-    statement: *mut ffi::sqlite3_stmt,
-    column_count: usize,
-) -> Vec<SqlColumn> {
-    (0..column_count)
-        .map(|index| {
-            let index = index as i32;
-            SqlColumn {
-                name: unsafe { sqlite_text(ffi::sqlite3_column_name(statement, index)) }
-                    .unwrap_or_default(),
-                declared_type: unsafe {
-                    sqlite_text(ffi::sqlite3_column_decltype(statement, index))
-                },
-            }
-        })
-        .collect()
-}
-
-unsafe fn statement_row(statement: *mut ffi::sqlite3_stmt, column_count: usize) -> Vec<SqlValue> {
-    (0..column_count)
-        .map(|index| unsafe { statement_value(statement, index as i32) })
-        .collect()
-}
-
-unsafe fn statement_value(statement: *mut ffi::sqlite3_stmt, index: i32) -> SqlValue {
-    match unsafe { ffi::sqlite3_column_type(statement, index) } {
-        ffi::SQLITE_NULL => SqlValue::Null,
-        ffi::SQLITE_INTEGER => {
-            SqlValue::Integer(unsafe { ffi::sqlite3_column_int64(statement, index) })
-        }
-        ffi::SQLITE_FLOAT => {
-            SqlValue::Real(unsafe { ffi::sqlite3_column_double(statement, index) })
-        }
-        ffi::SQLITE_TEXT => {
-            let pointer = unsafe { ffi::sqlite3_column_text(statement, index) };
-            let length = unsafe { ffi::sqlite3_column_bytes(statement, index) }.max(0) as usize;
-            let bytes = if pointer.is_null() {
-                &[]
-            } else {
-                unsafe { std::slice::from_raw_parts(pointer, length) }
-            };
-            SqlValue::Text(String::from_utf8_lossy(bytes).into_owned())
-        }
-        ffi::SQLITE_BLOB => {
-            let pointer = unsafe { ffi::sqlite3_column_blob(statement, index) };
-            let length = unsafe { ffi::sqlite3_column_bytes(statement, index) }.max(0) as usize;
-            let bytes = if pointer.is_null() {
-                &[]
-            } else {
-                unsafe { std::slice::from_raw_parts(pointer.cast::<u8>(), length) }
-            };
-            SqlValue::Blob(base64::engine::general_purpose::STANDARD.encode(bytes))
-        }
-        _ => SqlValue::Null,
-    }
-}
-
-unsafe fn sqlite_text(pointer: *const std::ffi::c_char) -> Option<String> {
-    (!pointer.is_null()).then(|| {
-        unsafe { CStr::from_ptr(pointer) }
-            .to_string_lossy()
-            .into_owned()
-    })
-}
-
-struct RawStatement(*mut ffi::sqlite3_stmt);
-
-impl Drop for RawStatement {
-    fn drop(&mut self) {
-        unsafe {
-            ffi::sqlite3_finalize(self.0);
-        }
-    }
 }
 
 fn export_single_query(
@@ -491,7 +341,10 @@ unsafe fn export_single_query_raw(
     })
 }
 
-fn prepare_sources(connection: &Connection, sources: &[SqlDataSource]) -> CoreResult<Vec<String>> {
+fn prepare_sources(
+    connection: &mut Connection,
+    sources: &[SqlDataSource],
+) -> CoreResult<Vec<String>> {
     validate_sources(sources)?;
     let mut attached = Vec::new();
     for source in sources {
@@ -520,7 +373,7 @@ fn detach_sources(connection: &Connection, aliases: &[String]) -> CoreResult<()>
     Ok(())
 }
 
-fn load_csv_table(connection: &Connection, alias: &str, path: &Path) -> CoreResult<()> {
+fn load_csv_table(connection: &mut Connection, alias: &str, path: &Path) -> CoreResult<()> {
     let mut reader = csv::ReaderBuilder::new()
         .has_headers(true)
         .flexible(false)
@@ -531,7 +384,8 @@ fn load_csv_table(connection: &Connection, alias: &str, path: &Path) -> CoreResu
         .map(|column| format!("{} TEXT", quote_identifier(column)))
         .collect::<Vec<_>>()
         .join(", ");
-    connection.execute_batch(&format!(
+    let transaction = connection.transaction()?;
+    transaction.execute_batch(&format!(
         "CREATE TEMP TABLE {} ({definitions})",
         quote_identifier(alias)
     ))?;
@@ -547,11 +401,22 @@ fn load_csv_table(connection: &Connection, alias: &str, path: &Path) -> CoreResu
         "INSERT INTO temp.{} ({column_list}) VALUES ({placeholders})",
         quote_identifier(alias)
     );
-    let mut insert = connection.prepare(&sql)?;
-    for record in reader.records() {
-        let record = record?;
-        insert.execute(params_from_iter(record.iter()))?;
+    let mut insert = transaction.prepare(&sql)?;
+    for (index, record) in reader.records().enumerate() {
+        let row_number = index + 2;
+        let record = record.map_err(|error| {
+            CoreError::InvalidArgument(format!("CSV row {row_number} could not be read: {error}"))
+        })?;
+        insert
+            .execute(params_from_iter(record.iter()))
+            .map_err(|error| {
+                CoreError::InvalidArgument(format!(
+                    "CSV row {row_number} could not be inserted: {error}"
+                ))
+            })?;
     }
+    drop(insert);
+    transaction.commit()?;
     Ok(())
 }
 
@@ -877,19 +742,13 @@ fn insert_custom_sql_operation(
     Ok(operation_id)
 }
 
-fn sqlite_error(database: *mut ffi::sqlite3, code: i32) -> CoreError {
-    let message = unsafe { CStr::from_ptr(ffi::sqlite3_errmsg(database)) }
-        .to_string_lossy()
-        .into_owned();
-    CoreError::Database(rusqlite::Error::SqliteFailure(
-        ffi::Error::new(code),
-        Some(message),
-    ))
-}
-
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use rusqlite::Connection;
+    use rusqlite::functions::FunctionFlags;
 
     use super::*;
     use crate::taxonomy::{TaxonInputRow, apply_rows, list_operations};
@@ -962,25 +821,82 @@ mod tests {
     }
 
     #[test]
-    fn truncates_returned_rows_without_stopping_statement_execution() {
-        let (_directory, database) = database();
-        let mut limited = request(
+    fn read_only_preview_stops_after_limit_plus_one_rows() {
+        let connection = Connection::open_in_memory().unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let function_calls = calls.clone();
+        connection
+            .create_scalar_function(
+                "observe_row",
+                1,
+                FunctionFlags::SQLITE_UTF8,
+                move |context| {
+                    function_calls.fetch_add(1, Ordering::Relaxed);
+                    context.get::<i64>(0)
+                },
+            )
+            .unwrap();
+        let result = execute_custom_script(
+            &connection,
             r#"
             WITH RECURSIVE values_cte(value) AS (
                 VALUES (1)
                 UNION ALL
-                SELECT value + 1 FROM values_cte WHERE value < 5
+                SELECT value + 1 FROM values_cte WHERE value < 1000
             )
-            SELECT value FROM values_cte ORDER BY value;
+            SELECT observe_row(value) FROM values_cte;
             "#,
+            2,
+            custom_sql_authorizer,
+        )
+        .unwrap();
+
+        assert_eq!(result.result_sets[0].rows.len(), 2);
+        assert!(result.result_sets[0].truncated);
+        assert_eq!(calls.load(Ordering::Relaxed), 3);
+        assert_eq!(
+            result.messages[0].message,
+            "statement returned more than 2 rows"
         );
+    }
+
+    #[test]
+    fn mutation_returning_runs_to_completion_after_preview_limit() {
+        let (_directory, database) = database();
+        apply_rows(
+            &database,
+            &[
+                TaxonInputRow {
+                    kingdom: Some("Archaea".into()),
+                    ..TaxonInputRow::default()
+                },
+                TaxonInputRow {
+                    kingdom: Some("Bacteria".into()),
+                    ..TaxonInputRow::default()
+                },
+            ],
+        )
+        .unwrap();
+        let mut limited = request("UPDATE taxa SET geological_range = 'Recent' RETURNING taxon_id");
         limited.maximum_result_rows = Some(2);
 
         let result = execute_custom_taxonomy_sql(&database, &limited).unwrap();
 
         assert_eq!(result.result_sets[0].rows.len(), 2);
         assert!(result.result_sets[0].truncated);
-        assert_eq!(result.messages[0].message, "statement returned 5 rows");
+        assert_eq!(result.messages[0].affected_rows, Some(3));
+        assert_eq!(
+            database
+                .connect_taxonomy()
+                .unwrap()
+                .query_row(
+                    "SELECT COUNT(*) FROM taxa WHERE geological_range = 'Recent'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            3
+        );
     }
 
     #[test]
@@ -1045,6 +961,44 @@ mod tests {
         })
         .unwrap();
         assert_eq!(schema.objects[0].columns[0].name, "name");
+    }
+
+    #[test]
+    fn csv_load_uses_one_atomic_transaction() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("broken.csv");
+        std::fs::write(&path, "name,value\nvalid,1\nbroken\n").unwrap();
+        let mut connection = Connection::open_in_memory().unwrap();
+
+        let error = load_csv_table(&mut connection, "source", &path).unwrap_err();
+
+        assert!(error.to_string().contains("CSV row 3"));
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_temp_schema WHERE name = 'source'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            0
+        );
+
+        let mut large_csv = String::from("value\n");
+        for value in 0..5_000 {
+            large_csv.push_str(&format!("{value}\n"));
+        }
+        let large_path = directory.path().join("large.csv");
+        std::fs::write(&large_path, large_csv).unwrap();
+        load_csv_table(&mut connection, "large_source", &large_path).unwrap();
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM large_source", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap(),
+            5_000
+        );
     }
 
     #[test]

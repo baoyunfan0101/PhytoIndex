@@ -1,6 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard, TryLockError};
 use std::time::Duration;
 
 use rusqlite::{Connection, OpenFlags, OptionalExtension, Row, TransactionBehavior, params};
@@ -23,6 +23,11 @@ struct DatabasePaths {
 #[derive(Debug, Clone)]
 pub struct Database {
     paths: Arc<RwLock<DatabasePaths>>,
+    taxonomy_access: Arc<RwLock<()>>,
+}
+
+pub(crate) struct TaxonomyReplacementGuard<'a> {
+    _guard: RwLockWriteGuard<'a, ()>,
 }
 
 impl Database {
@@ -35,6 +40,7 @@ impl Database {
             paths: Arc::new(RwLock::new(DatabasePaths {
                 metadata: metadata_path,
             })),
+            taxonomy_access: Arc::new(RwLock::new(())),
         };
         database.initialize()?;
         Ok(database)
@@ -472,6 +478,7 @@ impl Database {
     }
 
     pub fn relocate_taxonomy_database(&self, destination: &Path) -> CoreResult<DatabaseLocations> {
+        let _guard = self.try_taxonomy_mutation()?;
         let source = self.taxonomy_path()?;
         let destination = absolute_path(destination)?;
         move_database_file(&source, &destination, TAXONOMY_SCHEMA)?;
@@ -576,7 +583,38 @@ impl Database {
             .map_err(Into::into)
     }
 
-    pub(crate) fn replace_taxonomy_database_file(&self, replacement: &Path) -> CoreResult<()> {
+    pub(crate) fn try_taxonomy_mutation(&self) -> CoreResult<RwLockReadGuard<'_, ()>> {
+        self.taxonomy_access
+            .try_read()
+            .map_err(|error| match error {
+                TryLockError::WouldBlock => {
+                    CoreError::InvalidArgument("taxonomy replacement is in progress".into())
+                }
+                TryLockError::Poisoned(_) => {
+                    CoreError::Consistency("taxonomy access lock is poisoned".into())
+                }
+            })
+    }
+
+    pub(crate) fn try_taxonomy_replacement(&self) -> CoreResult<TaxonomyReplacementGuard<'_>> {
+        self.taxonomy_access
+            .try_write()
+            .map(|guard| TaxonomyReplacementGuard { _guard: guard })
+            .map_err(|error| match error {
+                TryLockError::WouldBlock => {
+                    CoreError::InvalidArgument("taxonomy database is busy".into())
+                }
+                TryLockError::Poisoned(_) => {
+                    CoreError::Consistency("taxonomy access lock is poisoned".into())
+                }
+            })
+    }
+
+    pub(crate) fn replace_taxonomy_database_file(
+        &self,
+        _guard: &TaxonomyReplacementGuard<'_>,
+        replacement: &Path,
+    ) -> CoreResult<()> {
         initialize_existing_file(replacement, TAXONOMY_SCHEMA)?;
         let replacement_identity = open_existing_connection(replacement)?
             .query_row(
