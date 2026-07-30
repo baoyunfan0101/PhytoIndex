@@ -33,6 +33,7 @@ import {
   getTaxonomyNameSeparator,
   installAppUpdate,
   listPhotoLibraries,
+  photoLibraryAvailabilityLabel,
   rebindPhotoLibraryDatabase,
   rebindPhotoLibraryRoot,
   registerPhotoLibrary,
@@ -294,12 +295,13 @@ function PhotoLibrariesSettings({ onChanged }: { onChanged?: (resetPhotoTabs: bo
             <div className="library-heading">
               <strong>{library.display_name}</strong>
               <span className={library.root_available && library.database_available ? "available" : "unavailable"}>
-                {library.root_available && library.database_available ? "Available" : "Unavailable"}
+                {photoLibraryAvailabilityLabel(library)}
               </span>
               {library.active && <b>Active</b>}
             </div>
             <code>{library.root_path}</code>
             <code>{library.db_path}</code>
+            <small>Last opened: {library.last_opened_at}</small>
             <div className="library-actions">
               <button type="button" disabled={library.active || !library.root_available || !library.database_available} onClick={() => void mutate("Switching library", () => switchPhotoLibrary(library.library_uuid), true)}>Open</button>
               <button type="button" onClick={() => {

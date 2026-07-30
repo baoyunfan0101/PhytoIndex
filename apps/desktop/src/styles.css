@@ -627,6 +627,7 @@ button:disabled { cursor: not-allowed; opacity: .42; }
 .library-popover button > i.unavailable { background: var(--amber); }
 .library-popover button > span { display: flex; min-width: 0; flex: 1; flex-direction: column; }
 .library-popover small { overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
+.library-popover em { max-width: 90px; color: var(--muted); font-size: 10px; font-style: normal; text-align: right; }
 .library-popover .popover-action { min-height: 30px; border-top: 1px solid var(--line); }
 .operations-popover { right: 34px; width: 310px; }
 .operations-popover > div { display: grid; gap: 3px; padding: 7px; border-top: 1px solid var(--line); }

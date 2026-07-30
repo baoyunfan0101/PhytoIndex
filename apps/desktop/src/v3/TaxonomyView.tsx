@@ -252,7 +252,7 @@ const inputFields: Array<keyof TaxonInputRow> = [
   "zh_name", "zh_alias", "en_name", "en_alias", "geological_range", "source",
 ];
 
-export function FormattedUpdateView() {
+export function FormattedUpdateView({ mutationDisabled = false }: { mutationDisabled?: boolean }) {
   const [rows, setRows] = useState<TaxonInputRow[]>([{ species: "" }]);
   const [outcomes, setOutcomes] = useState<TaxonRowOutcome[]>([]);
   const [message, setMessage] = useState("");
@@ -313,7 +313,7 @@ export function FormattedUpdateView() {
           }} /></label>
           <button className="secondary-button" type="button" onClick={() => void getTaxonomyTemplate().then((csv) => downloadCsv("taxonomy-template.csv", csv))}><Download size={13} />Template</button>
           <button className="secondary-button" type="button" disabled={busy} onClick={() => void run("preview")}>Preview</button>
-          <button className="primary-button" type="button" disabled={busy} onClick={() => void run("apply")}><Play size={13} />Apply</button>
+          <button className="primary-button" type="button" disabled={busy || mutationDisabled} onClick={() => void run("apply")}><Play size={13} />Apply</button>
         </>
       } />
       <div className="input-table">

@@ -1195,6 +1195,13 @@ export function displayTaxon(summary: Pick<TaxonSummary, "taxon_id" | "names">):
   return summary.names.sci_name ?? summary.names.zh_name ?? summary.names.en_name ?? `Taxon ${summary.taxon_id}`;
 }
 
+export function photoLibraryAvailabilityLabel(library: PhotoLibraryWorkspace): string {
+  if (!library.database_available && !library.root_available) return "Database and photo root missing";
+  if (!library.database_available) return "Database missing";
+  if (!library.root_available) return "Photo root missing";
+  return "Available";
+}
+
 export function formatBytes(value: number): string {
   if (value < 1024) return `${value} B`;
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;

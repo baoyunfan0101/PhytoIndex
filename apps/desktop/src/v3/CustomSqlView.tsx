@@ -19,7 +19,13 @@ import { EmptyState, SectionHeader, VirtualList } from "./components";
 import { useViewState } from "./viewState";
 import { emitTaxonomyMutation } from "./taxonomyMutations";
 
-export function CustomSqlView({ onStatus }: { onStatus: (message: string) => void }) {
+export function CustomSqlView({
+  onStatus,
+  mutationDisabled = false,
+}: {
+  onStatus: (message: string) => void;
+  mutationDisabled?: boolean;
+}) {
   const [sql, setSql] = useViewState(
     "custom-sql.draft",
     "SELECT taxon_id, rank, geological_range\nFROM taxa\nORDER BY taxon_id\nLIMIT 100;",
@@ -101,7 +107,7 @@ export function CustomSqlView({ onStatus }: { onStatus: (message: string) => voi
             <button className="secondary-button" type="button" disabled={Boolean(busy)} onClick={() => void addSource("sqlite")}>
               <Database size={13} />SQLite source
             </button>
-            <button className="primary-button" type="button" disabled={Boolean(busy) || !sql.trim()} onClick={() => void execute()}>
+            <button className="primary-button" type="button" disabled={Boolean(busy) || !sql.trim() || mutationDisabled} onClick={() => void execute()}>
               <Play size={13} />Run
             </button>
           </>

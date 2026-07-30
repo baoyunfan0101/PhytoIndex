@@ -25,6 +25,7 @@ import {
   listPhotoLibraries,
   listTaxonPhotos,
   openPhotoLibrary,
+  photoLibraryAvailabilityLabel,
   searchPhotos,
   selectPhotoDirectory,
   suggestPhotoTaxa,
@@ -142,6 +143,9 @@ export function App() {
     activeLibrary?.root_available && activeLibrary.database_available,
   );
   const runningOperations = Object.values(operations).filter((operation) => operation.running);
+  const taxonomyMutationLocked = runningOperations.some(
+    (operation) => operation.operation === "apply_base_import",
+  );
 
   usePhotoMutation((mutation) => {
     if (mutation.kind !== "photo") return;
@@ -380,7 +384,8 @@ export function App() {
                     onClick={() => void selectLibrary(library)}
                   >
                     <i className={library.root_available && library.database_available ? "available" : "unavailable"} />
-                    <span><b>{library.display_name}</b><small>{library.root_path}</small></span>
+                      <span><b>{library.display_name}</b><small>{library.root_path}</small></span>
+                      <em>{photoLibraryAvailabilityLabel(library)}</em>
                   </button>
                 ))}
                 <button className="popover-action" type="button" onClick={() => void createLibrary()}><Plus size={13} />Create or open library</button>
@@ -514,6 +519,7 @@ export function App() {
                     updateTaxonTab={updateTaxonTab}
                     workspaceAvailable={workspaceAvailable}
                     activeLibrary={activeLibrary}
+                    taxonomyMutationLocked={taxonomyMutationLocked}
                     onCreateLibrary={() => void createLibrary()}
                     onWorkspaceChanged={(resetPhotoTabs) => {
                       void reloadLibraries();
@@ -541,6 +547,7 @@ function TabBody({
   updateTaxonTab,
   workspaceAvailable,
   activeLibrary,
+  taxonomyMutationLocked,
   onCreateLibrary,
   onWorkspaceChanged,
   onBaseReplaced,
@@ -553,6 +560,7 @@ function TabBody({
   updateTaxonTab: (id: string, taxonId: number, title: string) => void;
   workspaceAvailable: boolean;
   activeLibrary: PhotoLibraryWorkspace | null;
+  taxonomyMutationLocked: boolean;
   onCreateLibrary: () => void;
   onWorkspaceChanged: (resetPhotoTabs: boolean) => void;
   onBaseReplaced: () => void;
@@ -581,8 +589,8 @@ function TabBody({
   if (tab.kind === "mapping") return <MappingView active={active} onStatus={onStatus} handlers={handlers} />;
   if (tab.kind === "taxonomy-search") return <TaxonomySearchView onOpenPhotos={(taxonId, label) => openTab({ id: `taxon-photos:${taxonId}`, kind: "taxon-photos", title: label, taxonId })} />;
   if (tab.kind === "taxon-detail") return <TaxonomySearchView taxonId={tab.taxonId} onTaxonChange={(taxonId, label) => updateTaxonTab(tab.id, taxonId, label)} onOpenPhotos={(taxonId, label) => openTab({ id: `taxon-photos:${taxonId}`, kind: "taxon-photos", title: label, taxonId })} />;
-  if (tab.kind === "formatted-update") return <FormattedUpdateView />;
-  if (tab.kind === "custom-sql") return <CustomSqlView onStatus={onStatus} />;
+  if (tab.kind === "formatted-update") return <FormattedUpdateView mutationDisabled={taxonomyMutationLocked} />;
+  if (tab.kind === "custom-sql") return <CustomSqlView onStatus={onStatus} mutationDisabled={taxonomyMutationLocked} />;
   if (tab.kind === "taxonomy-history") return <OperationHistoryView domain="taxonomy" onStatus={onStatus} />;
   if (tab.kind === "settings") return <SettingsView onBaseReplaced={onBaseReplaced} onWorkspaceChanged={onWorkspaceChanged} />;
   if (tab.kind === "photo-detail" && tab.photo) return <PhotoDetailView photo={tab.photo} />;
