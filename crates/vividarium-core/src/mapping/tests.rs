@@ -238,7 +238,6 @@ fn matches_the_filename_stem_and_builds_sparse_usage() {
         &database,
         &CustomTaxonomySqlRequest {
             sql: "UPDATE taxon_names SET name = 'Canis lycaon' WHERE name = 'Canis lupus'".into(),
-            sources: Vec::new(),
             maximum_result_rows: None,
         },
     )

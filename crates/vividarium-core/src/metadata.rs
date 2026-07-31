@@ -6,7 +6,8 @@ use crate::{CoreError, CoreResult};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MetadataKey {
-    DefaultBaseImportSql,
+    BaseImportSql,
+    CustomTaxonomySql,
     MapSettings,
     PhotoFilenameFormatSettings,
     PhotoFilenameHook,
@@ -20,7 +21,8 @@ pub(crate) enum MetadataKey {
 impl MetadataKey {
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
-            Self::DefaultBaseImportSql => "default_base_import_sql",
+            Self::BaseImportSql => "base_import_sql",
+            Self::CustomTaxonomySql => "custom_taxonomy_sql",
             Self::MapSettings => "map_settings",
             Self::PhotoFilenameFormatSettings => "photo_filename_format_settings",
             Self::PhotoFilenameHook => "photo_filename_hook",
@@ -73,6 +75,7 @@ pub(crate) fn insert_raw_if_missing(
     Ok(())
 }
 
+#[cfg(test)]
 pub(crate) fn remove(connection: &Connection, key: MetadataKey) -> CoreResult<()> {
     connection.execute(
         "DELETE FROM app_metadata WHERE metadata_key = ?",

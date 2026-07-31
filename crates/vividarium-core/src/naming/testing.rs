@@ -62,7 +62,8 @@ pub fn get_naming_hook_test_cases(database: &Database) -> CoreResult<NamingHookT
     })
 }
 
-pub fn set_naming_hook_test_cases(
+#[cfg(test)]
+pub(crate) fn set_naming_hook_test_cases(
     database: &Database,
     kind: NamingHookKind,
     cases: &[NamingHookTestCase],
@@ -94,6 +95,47 @@ pub fn run_naming_hook_tests(
         Some(script) => HookRunner::from_script(kind, script)?,
         None => HookRunner::load(&connection, kind)?,
     };
+    run_cases(kind, runner, cases)
+}
+
+fn test_naming_hook_cases(
+    kind: NamingHookKind,
+    script: &str,
+    cases: &[NamingHookTestCase],
+) -> CoreResult<NamingHookTestReport> {
+    validate_cases(kind, cases)?;
+    run_cases(kind, HookRunner::from_script(kind, script)?, cases.to_vec())
+}
+
+pub fn test_and_save_naming_hook(
+    database: &Database,
+    kind: NamingHookKind,
+    script: &str,
+    cases: &[NamingHookTestCase],
+) -> CoreResult<NamingHookTestReport> {
+    if script.trim().is_empty() {
+        return Err(CoreError::InvalidArgument(
+            "naming hook script is required".into(),
+        ));
+    }
+    let report = test_naming_hook_cases(kind, script, cases)?;
+    if report.failed > 0 {
+        return Ok(report);
+    }
+    let mut connection = database.connect_metadata()?;
+    let transaction = connection.transaction()?;
+    metadata::set_raw(&transaction, kind.metadata_key(), script)?;
+    metadata::set_json(&transaction, tests_metadata_key(kind), &cases)?;
+    transaction.commit()?;
+    let _ = super::queue_photo_hook_remap(database, kind);
+    Ok(report)
+}
+
+fn run_cases(
+    kind: NamingHookKind,
+    runner: HookRunner,
+    cases: Vec<NamingHookTestCase>,
+) -> CoreResult<NamingHookTestReport> {
     let mut passed = 0;
     let results = cases
         .into_iter()
@@ -512,5 +554,46 @@ mod tests {
         assert_eq!(report.failed, 1);
         assert!(report.cases[0].actual.is_some());
         assert!(!report.cases[0].passed);
+    }
+
+    #[test]
+    fn test_and_save_keeps_the_last_successful_hook_on_failure() {
+        let directory = TempDir::new().unwrap();
+        let database = Database::open(directory.path().join("test.db")).unwrap();
+        let script = get_naming_hook_template(NamingHookKind::SynonymAuthority);
+        let mut cases = default_test_cases(NamingHookKind::SynonymAuthority);
+        cases[0].expected = NamingHookTestResult::SynonymAuthority(ScientificNameParts {
+            name: "wrong".into(),
+            authority_year: None,
+        });
+
+        let failed =
+            test_and_save_naming_hook(&database, NamingHookKind::SynonymAuthority, script, &cases)
+                .unwrap();
+        assert_eq!(failed.failed, 1);
+        assert_eq!(
+            crate::naming::get_naming_hook_settings(&database)
+                .unwrap()
+                .synonym_authority,
+            None
+        );
+
+        let cases = default_test_cases(NamingHookKind::SynonymAuthority);
+        let passed =
+            test_and_save_naming_hook(&database, NamingHookKind::SynonymAuthority, script, &cases)
+                .unwrap();
+        assert_eq!(passed.failed, 0);
+        assert_eq!(
+            crate::naming::get_naming_hook_settings(&database)
+                .unwrap()
+                .synonym_authority,
+            Some(script.to_string())
+        );
+        assert_eq!(
+            get_naming_hook_test_cases(&database)
+                .unwrap()
+                .synonym_authority,
+            cases
+        );
     }
 }

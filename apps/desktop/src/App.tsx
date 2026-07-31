@@ -20,7 +20,6 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import {
-  discardBaseImportSession,
   getPhoto,
   listPhotoLibraries,
   listTaxonPhotos,
@@ -258,20 +257,6 @@ export function App() {
   }
 
   function closeTab(id: string) {
-    const closingTab = tabs.find((tab) => tab.id === id);
-    const viewState = viewStateStores.current.get(id);
-    const baseImportSession = closingTab?.kind === "settings"
-      ? viewState?.get("base-import.session-id")
-      : null;
-    if (
-      typeof baseImportSession === "string"
-      && !window.confirm("Discard the unfinished Base Import session and close Settings?")
-    ) {
-      return;
-    }
-    if (typeof baseImportSession === "string") {
-      void discardBaseImportSession(baseImportSession).catch((nextError) => setStatus(String(nextError)));
-    }
     if (tabs.length === 1) return;
     viewStateStores.current.delete(id);
     const index = tabs.findIndex((tab) => tab.id === id);

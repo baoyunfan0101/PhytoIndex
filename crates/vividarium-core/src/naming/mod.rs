@@ -12,7 +12,9 @@ mod testing;
 
 use serde::{Deserialize, Serialize};
 
-use crate::metadata::{self, MetadataKey};
+#[cfg(test)]
+use crate::metadata;
+use crate::metadata::MetadataKey;
 use crate::{CoreResult, Database};
 
 pub use normalize::normalize_taxonomy_name;
@@ -27,7 +29,7 @@ pub use templates::{NamingHookTemplates, get_naming_hook_template, get_naming_ho
 pub use testing::{
     NamingHookCaseResult, NamingHookTestCase, NamingHookTestCases, NamingHookTestReport,
     NamingHookTestResult, get_naming_hook_test_cases, run_naming_hook_tests,
-    set_naming_hook_test_cases, test_naming_hook,
+    test_and_save_naming_hook, test_naming_hook,
 };
 
 #[cfg(test)]
@@ -66,7 +68,8 @@ pub fn get_naming_hook_settings(database: &Database) -> CoreResult<NamingHookSet
     })
 }
 
-pub fn set_naming_hook(
+#[cfg(test)]
+pub(crate) fn set_naming_hook(
     database: &Database,
     kind: NamingHookKind,
     script: Option<&str>,
@@ -83,25 +86,32 @@ pub fn set_naming_hook(
         metadata::remove(&transaction, kind.metadata_key())?;
     }
     transaction.commit()?;
-    if kind == NamingHookKind::PhotoFilename {
-        for library in database.list_photo_libraries()? {
-            let Ok(connection) = database.connect_photo_library_registration(&library) else {
-                continue;
-            };
-            connection.execute(
-                r#"
+    queue_photo_hook_remap(database, kind)?;
+    Ok(())
+}
+
+pub(crate) fn queue_photo_hook_remap(database: &Database, kind: NamingHookKind) -> CoreResult<()> {
+    if kind != NamingHookKind::PhotoFilename {
+        return Ok(());
+    }
+    for library in database.list_photo_libraries()? {
+        let Ok(connection) = database.connect_photo_library_registration(&library) else {
+            continue;
+        };
+        connection.execute(
+            r#"
             INSERT INTO photo_mapping_queue (photo_id, reason)
             SELECT photo_id, 'hook' FROM photos
             WHERE true
             ON CONFLICT(photo_id) DO UPDATE SET reason = excluded.reason
             "#,
-                [],
-            )?;
-        }
+            [],
+        )?;
     }
     Ok(())
 }
 
+#[cfg(test)]
 fn hook_sample(kind: NamingHookKind) -> &'static str {
     match kind {
         NamingHookKind::PhotoFilename => "Canis lupus001.jpg",

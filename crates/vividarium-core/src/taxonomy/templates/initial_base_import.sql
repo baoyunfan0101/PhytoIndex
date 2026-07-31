@@ -88,7 +88,7 @@ kept AS (
             WHEN 601 THEN 5
         END AS target_rank
         ,NULLIF(trim(geological_range), '') AS geological_range
-    FROM main.taxa
+    FROM biolib.taxa
     WHERE rank IN (
         60 -- kingdom
         ,301 -- order
@@ -120,7 +120,7 @@ parent_walk (
     FROM parent_walk AS walk
 
     -- Previous results' parents.
-    JOIN main.taxa AS parent
+    JOIN biolib.taxa AS parent
         ON walk.candidate_id = parent.id
 
     -- If this candidate is a discarded taxon, continue.
@@ -143,7 +143,7 @@ nearest_parent AS (
             walk.taxon_id
             ,walk.candidate_id
         FROM parent_walk AS walk
-        JOIN main.taxa AS candidate
+        JOIN biolib.taxa AS candidate
             ON walk.candidate_id = candidate.id
         WHERE candidate.rank IN (
             60
@@ -192,7 +192,7 @@ SELECT
     ,source.scientific_name
     ,NULLIF(trim(source.authority_year), '')
     ,'biolib'
-FROM main.taxa AS source
+FROM biolib.taxa AS source
 JOIN base.taxa AS retained
     ON source.id = retained.taxon_id
 ORDER BY
@@ -219,7 +219,7 @@ FROM (
         parent
         ,synonym
         ,MAX(NULLIF(trim(authority_year), '')) AS authority_year
-    FROM main.synonyms
+    FROM biolib.synonyms
     GROUP BY
         parent
         ,synonym
@@ -250,7 +250,7 @@ SELECT
     ,chinese.chinese_name
     ,NULL
     ,NULLIF(trim(chinese.source), '')
-FROM main.chinese AS chinese
+FROM biolib.chinese AS chinese
 JOIN base.taxa AS retained
     ON chinese.id = retained.taxon_id
 ORDER BY
@@ -274,7 +274,7 @@ SELECT
     ,source.english_name
     ,NULL
     ,'biolib'
-FROM main.taxa AS source
+FROM biolib.taxa AS source
 JOIN base.taxa AS retained
     ON source.id = retained.taxon_id
 WHERE source.english_name IS NOT NULL

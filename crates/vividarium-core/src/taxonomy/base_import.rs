@@ -1,24 +1,23 @@
+use std::collections::HashMap;
 use std::fs;
 use std::fs::File;
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock, TryLockError, Weak};
-use std::time::Duration;
+use std::sync::{Arc, Mutex, OnceLock, TryLockError};
 
 use base64::Engine;
-use rusqlite::backup::Backup;
 use rusqlite::ffi;
 use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
-use rusqlite::{Connection, OpenFlags, OptionalExtension, params, params_from_iter};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use uuid::Uuid;
 
 use super::base::{TaxonomyBaseMetadata, TaxonomyBaseReplaceResult};
 use super::formatted::{TaxonomyNameType, validate_taxonomy};
-use super::sql::{
-    SqlObjectType, SqlSourceSchema, inspect_sqlite_source, is_safe_identifier, quote_identifier,
-    validated_columns,
+use super::sql::{SqlStatementMessage, detach_sources, prepare_sources, quote_identifier};
+use super::sql_inputs::{
+    self, AddSqlInputRequest, PersistentSqlInput, RemoveSqlInputRequest, RemoveSqlInputResult,
+    SqlInputScope,
 };
 use super::sql_support::execute_statement_to_completion_raw;
 use crate::db::{
@@ -28,81 +27,24 @@ use crate::metadata::{self, MetadataKey};
 use crate::naming::normalize_taxonomy_name;
 use crate::{CoreError, CoreResult, Database};
 
-const SESSION_MARKER: &str = ".vividarium-base-import";
-const SESSION_STATE: &str = "session-state.json";
-const SOURCE_DATABASE: &str = "source.db";
 const STAGING_DATABASE: &str = "vividarium_base.db";
 const CANDIDATE_DATABASE: &str = "candidate-taxonomy.db";
 const CANDIDATE_BUILD_DATABASE: &str = ".candidate-building.db";
+const VALIDATION_STATE: &str = "validation.json";
 const IMPORT_BATCH_SIZE: i64 = 10_000;
 const MAX_ISSUE_SAMPLES: usize = 100;
-const BUILTIN_DEFAULT_BASE_IMPORT_SQL: &str = include_str!("templates/default_base_import.sql");
-static SESSION_LOCKS: OnceLock<Mutex<std::collections::HashMap<String, Weak<Mutex<()>>>>> =
-    OnceLock::new();
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct BaseImportSession {
-    pub session_id: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct AddBaseImportCsvSourceRequest {
-    pub session_id: String,
-    pub table_name: String,
-    pub path: PathBuf,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct AddBaseImportSqliteSourceRequest {
-    pub session_id: String,
-    pub path: PathBuf,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum BaseImportSourceType {
-    Sqlite,
-    Csv,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum BaseImportSchemaStatus {
-    Inspected,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct BaseImportSource {
-    pub source_type: BaseImportSourceType,
-    pub source_alias: String,
-    pub original_path: PathBuf,
-    pub available: bool,
-    pub schema_status: BaseImportSchemaStatus,
-    pub schema: SqlSourceSchema,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RemoveBaseImportSourceRequest {
-    pub session_id: String,
-    pub source_alias: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RemoveBaseImportSourceResult {
-    pub sources: Vec<BaseImportSource>,
-    pub session_revision: u64,
-}
+const INITIAL_BASE_IMPORT_SQL: &str = include_str!("templates/initial_base_import.sql");
+static WORKSPACE_LOCKS: OnceLock<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> = OnceLock::new();
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExecuteBaseImportSqlRequest {
-    pub session_id: String,
     pub sql: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BaseImportExecutionResult {
     pub statements_executed: usize,
-    pub session_revision: u64,
+    pub messages: Vec<SqlStatementMessage>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -132,279 +74,53 @@ pub struct BaseImportValidationResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct BaseImportSessionState {
-    revision: u64,
-    candidate: Option<ValidatedBaseImportCandidate>,
-    #[serde(default)]
-    sources: Vec<RegisteredBaseImportSource>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct RegisteredBaseImportSource {
-    source_type: BaseImportSourceType,
-    source_alias: String,
-    original_path: PathBuf,
-    schema: SqlSourceSchema,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 struct ValidatedBaseImportCandidate {
-    candidate_path: PathBuf,
-    session_revision: u64,
     staging_fingerprint: String,
     validation_result: BaseImportValidationResult,
 }
 
-pub fn create_base_import_session(database: &Database) -> CoreResult<BaseImportSession> {
-    let session_id = Uuid::new_v4().to_string();
-    let workspace = workspace_root(database).join(&session_id);
-    fs::create_dir_all(&workspace)?;
-    fs::write(workspace.join(SESSION_MARKER), &session_id)?;
-    drop(Connection::open(workspace.join(SOURCE_DATABASE))?);
-    write_session_state(
-        &workspace,
-        &BaseImportSessionState {
-            revision: 0,
-            candidate: None,
-            sources: Vec::new(),
-        },
-    )?;
-    Ok(BaseImportSession { session_id })
+pub fn list_base_import_inputs(database: &Database) -> CoreResult<Vec<PersistentSqlInput>> {
+    sql_inputs::list_inputs(database, SqlInputScope::BaseImport)
 }
 
-pub fn add_base_import_csv_source(
+pub fn add_base_import_input(
     database: &Database,
-    request: &AddBaseImportCsvSourceRequest,
-) -> CoreResult<SqlSourceSchema> {
-    if !is_safe_identifier(&request.table_name)
-        || request
-            .table_name
-            .to_ascii_lowercase()
-            .starts_with("sqlite_")
-    {
-        return Err(CoreError::InvalidArgument(format!(
-            "invalid base import source table: {}",
-            request.table_name
-        )));
-    }
-    if !request.path.is_file() {
-        return Err(CoreError::NotFound(format!(
-            "base import CSV source {}",
-            request.path.display()
-        )));
-    }
-    let session_lock = session_lock(&request.session_id)?;
-    let _session_guard = session_lock
-        .lock()
-        .map_err(|_| CoreError::Consistency("base import session lock is poisoned".into()))?;
-    let workspace = session_workspace(database, &request.session_id)?;
-    let state = read_session_state(&workspace)?;
-    if state.sources.iter().any(|source| {
-        source
-            .source_alias
-            .eq_ignore_ascii_case(&request.table_name)
-    }) {
-        return Err(CoreError::InvalidArgument(format!(
-            "base import source alias already exists: {}",
-            request.table_name
-        )));
-    }
-    let mut connection = Connection::open(workspace.join(SOURCE_DATABASE))?;
-    let exists = connection.query_row(
-        "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name = ?)",
-        [&request.table_name],
-        |row| row.get::<_, bool>(0),
-    )?;
-    if exists {
-        return Err(CoreError::InvalidArgument(format!(
-            "base import source object already exists: {}",
-            request.table_name
-        )));
-    }
-    load_csv_source_table(&mut connection, &request.table_name, &request.path)?;
-    drop(connection);
-    let schema = source_schema(
-        &workspace,
-        &request.table_name,
-        &[request.table_name.as_str()],
-    )?;
-    register_source_and_invalidate(
-        &workspace,
-        RegisteredBaseImportSource {
-            source_type: BaseImportSourceType::Csv,
-            source_alias: request.table_name.clone(),
-            original_path: request.path.clone(),
-            schema: schema.clone(),
-        },
-    )?;
-    Ok(schema)
-}
-
-pub fn add_base_import_sqlite_source(
-    database: &Database,
-    request: &AddBaseImportSqliteSourceRequest,
-) -> CoreResult<SqlSourceSchema> {
-    if !request.path.is_file() {
-        return Err(CoreError::NotFound(format!(
-            "base import SQLite source {}",
-            request.path.display()
-        )));
-    }
-    let session_lock = session_lock(&request.session_id)?;
-    let _session_guard = session_lock
-        .lock()
-        .map_err(|_| CoreError::Consistency("base import session lock is poisoned".into()))?;
-    let workspace = session_workspace(database, &request.session_id)?;
-    let state = read_session_state(&workspace)?;
-    if state
-        .sources
-        .iter()
-        .any(|source| source.source_alias.eq_ignore_ascii_case("main"))
-    {
-        return Err(CoreError::InvalidArgument(
-            "base import SQLite source already exists".into(),
-        ));
-    }
-    let source_path = workspace.join(SOURCE_DATABASE);
-    let existing = Connection::open(&source_path)?.query_row(
-        "SELECT COUNT(*) FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'",
-        [],
-        |row| row.get::<_, i64>(0),
-    )?;
-    if existing != 0 {
-        return Err(CoreError::InvalidArgument(
-            "SQLite source must be added before CSV source tables".into(),
-        ));
-    }
-    let temporary = workspace.join(".source-import.db");
-    remove_file_if_exists(&temporary)?;
-    let source = Connection::open_with_flags(
-        &request.path,
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )?;
-    let mut destination = Connection::open(&temporary)?;
-    let backup = Backup::new(&source, &mut destination)?;
-    backup.run_to_completion(256, Duration::from_millis(10), None)?;
-    drop(backup);
-    drop(destination);
-    drop(source);
-    fs::remove_file(&source_path)?;
-    fs::rename(&temporary, &source_path)?;
-    let schema = inspect_sqlite_source("main", &source_path)?;
-    register_source_and_invalidate(
-        &workspace,
-        RegisteredBaseImportSource {
-            source_type: BaseImportSourceType::Sqlite,
-            source_alias: "main".into(),
-            original_path: request.path.clone(),
-            schema: schema.clone(),
-        },
-    )?;
-    Ok(schema)
-}
-
-pub fn inspect_base_import_sources(
-    database: &Database,
-    session_id: &str,
-) -> CoreResult<Vec<BaseImportSource>> {
-    let session_lock = session_lock(session_id)?;
-    let _session_guard = session_lock
-        .lock()
-        .map_err(|_| CoreError::Consistency("base import session lock is poisoned".into()))?;
-    inspect_base_import_sources_unlocked(database, session_id)
-}
-
-fn inspect_base_import_sources_unlocked(
-    database: &Database,
-    session_id: &str,
-) -> CoreResult<Vec<BaseImportSource>> {
-    let workspace = session_workspace(database, session_id)?;
-    let state = read_session_state(&workspace)?;
-    let current_schema = inspect_sqlite_source("main", &workspace.join(SOURCE_DATABASE))?;
-    Ok(state
-        .sources
-        .into_iter()
-        .map(|source| {
-            let object_names = source
-                .schema
-                .objects
-                .iter()
-                .map(|object| object.name.as_str())
-                .collect::<Vec<_>>();
-            BaseImportSource {
-                source_type: source.source_type,
-                source_alias: source.source_alias.clone(),
-                original_path: source.original_path.clone(),
-                available: source.original_path.is_file(),
-                schema_status: BaseImportSchemaStatus::Inspected,
-                schema: filtered_schema(&current_schema, &source.source_alias, &object_names),
-            }
-        })
-        .collect())
-}
-
-pub fn remove_base_import_source(
-    database: &Database,
-    request: &RemoveBaseImportSourceRequest,
-) -> CoreResult<RemoveBaseImportSourceResult> {
-    let session_lock = session_lock(&request.session_id)?;
-    let _session_guard = match session_lock.try_lock() {
-        Ok(guard) => guard,
-        Err(TryLockError::WouldBlock) => {
-            return Err(CoreError::InvalidArgument(
-                "base import session is busy".into(),
-            ));
+    request: &AddSqlInputRequest,
+) -> CoreResult<PersistentSqlInput> {
+    let workspace_mutex = workspace_mutex(database)?;
+    let _guard = lock_workspace(&workspace_mutex)?;
+    let workspace = workspace(database)?;
+    let invalidation = ArtifactInvalidation::stage(&workspace)?;
+    match sql_inputs::add_input(database, SqlInputScope::BaseImport, request) {
+        Ok(input) => {
+            let _ = invalidation.commit();
+            Ok(input)
         }
-        Err(TryLockError::Poisoned(_)) => {
-            return Err(CoreError::Consistency(
-                "base import session lock is poisoned".into(),
-            ));
+        Err(error) => {
+            invalidation.rollback()?;
+            Err(error)
         }
-    };
-    let workspace = session_workspace(database, &request.session_id)?;
-    let mut state = read_session_state(&workspace)?;
-    let source_index = state
-        .sources
-        .iter()
-        .position(|source| source.source_alias == request.source_alias)
-        .ok_or_else(|| {
-            CoreError::NotFound(format!("base import source {}", request.source_alias))
-        })?;
-    let source = state.sources[source_index].clone();
-    let source_path = workspace.join(SOURCE_DATABASE);
-    let temporary = workspace.join(".source-remove.db");
-    let previous = workspace.join(".source-before-remove.db");
-    remove_file_if_exists(&temporary)?;
-    remove_file_if_exists(&previous)?;
-    backup_database(&source_path, &temporary)?;
-    if let Err(error) = remove_registered_source_objects(&temporary, &source) {
-        let _ = remove_file_if_exists(&temporary);
-        return Err(error);
     }
-    fs::rename(&source_path, &previous)?;
-    if let Err(error) = fs::rename(&temporary, &source_path) {
-        let _ = fs::rename(&previous, &source_path);
-        return Err(error.into());
+}
+
+pub fn remove_base_import_input(
+    database: &Database,
+    request: &RemoveSqlInputRequest,
+) -> CoreResult<RemoveSqlInputResult> {
+    let workspace_mutex = workspace_mutex(database)?;
+    let _guard = try_lock_workspace(&workspace_mutex)?;
+    let workspace = workspace(database)?;
+    let invalidation = ArtifactInvalidation::stage(&workspace)?;
+    match sql_inputs::remove_input(database, SqlInputScope::BaseImport, request) {
+        Ok(mut result) => {
+            result.warnings.extend(invalidation.commit());
+            Ok(result)
+        }
+        Err(error) => {
+            invalidation.rollback()?;
+            Err(error)
+        }
     }
-    state.sources.remove(source_index);
-    state.revision = state
-        .revision
-        .checked_add(1)
-        .ok_or_else(|| CoreError::Consistency("base import session revision overflow".into()))?;
-    state.candidate = None;
-    if let Err(error) = write_session_state(&workspace, &state) {
-        let _ = remove_file_if_exists(&source_path);
-        let _ = fs::rename(&previous, &source_path);
-        return Err(error);
-    }
-    remove_file_if_exists(&previous)?;
-    remove_file_if_exists(&workspace.join(CANDIDATE_DATABASE))?;
-    remove_file_if_exists(&workspace.join(CANDIDATE_BUILD_DATABASE))?;
-    remove_file_if_exists(&workspace.join(STAGING_DATABASE))?;
-    Ok(RemoveBaseImportSourceResult {
-        sources: inspect_base_import_sources_unlocked(database, &request.session_id)?,
-        session_revision: state.revision,
-    })
 }
 
 pub fn execute_base_import_sql(
@@ -417,56 +133,62 @@ pub fn execute_base_import_sql(
             "base import sql is required".into(),
         ));
     }
-    let session_lock = session_lock(&request.session_id)?;
-    let _session_guard = session_lock
-        .lock()
-        .map_err(|_| CoreError::Consistency("base import session lock is poisoned".into()))?;
-    let workspace = session_workspace(database, &request.session_id)?;
-    let revision = invalidate_session(&workspace, true)?;
+    let workspace_mutex = workspace_mutex(database)?;
+    let _guard = lock_workspace(&workspace_mutex)?;
+    let workspace = workspace(database)?;
+    clear_build_artifacts(&workspace)?;
     let staging = workspace.join(STAGING_DATABASE);
     let staging_path = staging.to_string_lossy().into_owned();
     let sql = replace_staging_literal(sql, &staging_path);
-    let connection = Connection::open(workspace.join(SOURCE_DATABASE))?;
+    let mut connection = Connection::open_in_memory()?;
     connection.execute_batch("PRAGMA foreign_keys = ON")?;
+    let sources = sql_inputs::stored_sources(database, SqlInputScope::BaseImport)?;
+    let attached = prepare_sources(&mut connection, &sources)?;
     let execution = execute_base_import_script(&connection, &sql, &staging_path);
-    let attachments = validate_base_import_attachments(&connection);
+    let attachments = validate_base_import_attachments(&connection, &attached);
     let autocommit = unsafe { ffi::sqlite3_get_autocommit(connection.handle()) != 0 };
     if !autocommit {
         let _ = connection.execute_batch("ROLLBACK");
     }
-    match (execution, attachments) {
-        (Ok(statements_executed), Ok(())) if autocommit => Ok(BaseImportExecutionResult {
-            statements_executed,
-            session_revision: revision,
-        }),
-        (Ok(_), Err(error)) => {
+    let detach = detach_sources(&connection, &attached);
+    match (execution, attachments, detach) {
+        (Ok(messages), Ok(()), Ok(())) if autocommit => {
+            metadata::set_raw(
+                &database.connect_metadata()?,
+                MetadataKey::BaseImportSql,
+                &request.sql,
+            )?;
+            Ok(BaseImportExecutionResult {
+                statements_executed: messages.len(),
+                messages,
+            })
+        }
+        (Ok(_), Err(error), _) => {
             remove_file_if_exists(&staging)?;
             Err(error)
         }
-        (Ok(_), Ok(())) => {
+        (Ok(_), Ok(()), Err(error)) => {
+            remove_file_if_exists(&staging)?;
+            Err(error)
+        }
+        (Ok(_), Ok(()), Ok(())) => {
             remove_file_if_exists(&staging)?;
             Err(CoreError::InvalidArgument(
                 "base import sql left an unfinished transaction".into(),
             ))
         }
-        (Err(error), _) => {
+        (Err(error), _, _) => {
             remove_file_if_exists(&staging)?;
             Err(error)
         }
     }
 }
 
-pub fn validate_base_import(
-    database: &Database,
-    session_id: &str,
-) -> CoreResult<BaseImportValidationResult> {
-    let session_lock = session_lock(session_id)?;
-    let _session_guard = session_lock
-        .lock()
-        .map_err(|_| CoreError::Consistency("base import session lock is poisoned".into()))?;
-    let workspace = session_workspace(database, session_id)?;
+pub fn validate_base_import(database: &Database) -> CoreResult<BaseImportValidationResult> {
+    let workspace_mutex = workspace_mutex(database)?;
+    let _guard = lock_workspace(&workspace_mutex)?;
+    let workspace = workspace(database)?;
     let staging = workspace.join(STAGING_DATABASE);
-    let mut session_state = read_session_state(&workspace)?;
     let mut validation = BaseImportValidationResult {
         can_apply: false,
         taxa_count: 0,
@@ -478,7 +200,7 @@ pub fn validate_base_import(
         errors: Vec::new(),
     };
     if !staging.is_file() {
-        clear_candidate(&workspace, &mut session_state)?;
+        clear_validation_artifacts(&workspace)?;
         record_error(
             &mut validation,
             "staging_missing",
@@ -489,15 +211,14 @@ pub fn validate_base_import(
         return Ok(validation);
     }
     let staging_fingerprint = workspace_fingerprint(&workspace)?;
-    if let Some(candidate) = session_state.candidate.as_ref()
-        && candidate.session_revision == session_state.revision
+    if let Some(candidate) = read_validation_state(&workspace)?
         && candidate.staging_fingerprint == staging_fingerprint
-        && candidate.candidate_path.is_file()
-        && validate_candidate_database(&candidate.candidate_path).is_ok()
+        && workspace.join(CANDIDATE_DATABASE).is_file()
+        && validate_candidate_database(&workspace.join(CANDIDATE_DATABASE)).is_ok()
     {
-        return Ok(candidate.validation_result.clone());
+        return Ok(candidate.validation_result);
     }
-    clear_candidate(&workspace, &mut session_state)?;
+    clear_validation_artifacts(&workspace)?;
     let connection = match Connection::open_with_flags(
         &staging,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
@@ -557,12 +278,8 @@ pub fn validate_base_import(
     if validation.total_error_count == 0 {
         let candidate_build = workspace.join(CANDIDATE_BUILD_DATABASE);
         remove_file_if_exists(&candidate_build)?;
-        if let Err(error) = build_official_taxonomy(
-            &staging,
-            &candidate_build,
-            &format!("base-import:{session_id}"),
-        )
-        .and_then(|_| validate_candidate_database(&candidate_build))
+        if let Err(error) = build_official_taxonomy(&staging, &candidate_build, "base-import")
+            .and_then(|_| validate_candidate_database(&candidate_build))
         {
             remove_file_if_exists(&candidate_build)?;
             record_error(
@@ -576,12 +293,6 @@ pub fn validate_base_import(
             let candidate_path = workspace.join(CANDIDATE_DATABASE);
             remove_file_if_exists(&candidate_path)?;
             fs::rename(candidate_build, &candidate_path)?;
-            session_state.candidate = Some(ValidatedBaseImportCandidate {
-                candidate_path,
-                session_revision: session_state.revision,
-                staging_fingerprint,
-                validation_result: validation.clone(),
-            });
         }
     }
     if validation.normalization_changes > 0 {
@@ -597,33 +308,31 @@ pub fn validate_base_import(
         });
     }
     validation.can_apply = validation.total_error_count == 0;
-    if let Some(candidate) = session_state.candidate.as_mut() {
-        candidate.validation_result = validation.clone();
+    if validation.can_apply && workspace.join(CANDIDATE_DATABASE).is_file() {
+        write_validation_state(
+            &workspace,
+            &ValidatedBaseImportCandidate {
+                staging_fingerprint,
+                validation_result: validation.clone(),
+            },
+        )?;
     }
-    write_session_state(&workspace, &session_state)?;
     Ok(validation)
 }
 
-pub fn apply_base_import(
-    database: &Database,
-    session_id: &str,
-) -> CoreResult<TaxonomyBaseReplaceResult> {
-    let session_lock = session_lock(session_id)?;
-    let _session_guard = session_lock
-        .lock()
-        .map_err(|_| CoreError::Consistency("base import session lock is poisoned".into()))?;
+pub fn apply_base_import(database: &Database) -> CoreResult<TaxonomyBaseReplaceResult> {
+    let workspace_mutex = workspace_mutex(database)?;
+    let _guard = lock_workspace(&workspace_mutex)?;
     let replacement_guard = database.try_taxonomy_replacement()?;
-    apply_base_import_with_guard(database, session_id, &replacement_guard)
+    apply_base_import_with_guard(database, &replacement_guard)
 }
 
 fn apply_base_import_with_guard(
     database: &Database,
-    session_id: &str,
     replacement_guard: &TaxonomyReplacementGuard<'_>,
 ) -> CoreResult<TaxonomyBaseReplaceResult> {
-    let workspace = session_workspace(database, session_id)?;
-    let mut session_state = read_session_state(&workspace)?;
-    let candidate = session_state.candidate.clone().ok_or_else(|| {
+    let workspace = workspace(database)?;
+    let candidate = read_validation_state(&workspace)?.ok_or_else(|| {
         CoreError::InvalidArgument("base import must be validated before apply".into())
     })?;
     if !candidate.validation_result.can_apply {
@@ -632,122 +341,95 @@ fn apply_base_import_with_guard(
             candidate.validation_result.total_error_count
         )));
     }
-    if candidate.session_revision != session_state.revision {
-        return Err(CoreError::InvalidArgument(
-            "base import candidate revision is stale".into(),
-        ));
-    }
     let fingerprint = workspace_fingerprint(&workspace)?;
     if fingerprint != candidate.staging_fingerprint {
-        clear_candidate(&workspace, &mut session_state)?;
+        clear_validation_artifacts(&workspace)?;
         return Err(CoreError::InvalidArgument(
             "base import candidate fingerprint is stale".into(),
         ));
     }
-    if let Err(error) = validate_candidate_database(&candidate.candidate_path) {
-        clear_candidate(&workspace, &mut session_state)?;
+    let candidate_path = workspace.join(CANDIDATE_DATABASE);
+    if let Err(error) = validate_candidate_database(&candidate_path) {
+        clear_validation_artifacts(&workspace)?;
         return Err(error);
     }
-    let metadata = match candidate_metadata(&candidate.candidate_path) {
+    let metadata = match candidate_metadata(&candidate_path) {
         Ok(metadata) => metadata,
         Err(error) => {
-            clear_candidate(&workspace, &mut session_state)?;
+            clear_validation_artifacts(&workspace)?;
             return Err(error);
         }
     };
-    database.replace_taxonomy_database_file(replacement_guard, &candidate.candidate_path)?;
-    session_state.candidate = None;
-    let _ = remove_file_if_exists(&candidate.candidate_path);
-    let _ = write_session_state(&workspace, &session_state);
+    database.replace_taxonomy_database_file(replacement_guard, &candidate_path)?;
+    let _ = clear_build_artifacts(&workspace);
     Ok(TaxonomyBaseReplaceResult { metadata })
 }
 
-pub fn discard_base_import_session(database: &Database, session_id: &str) -> CoreResult<()> {
-    let session_lock = session_lock(session_id)?;
-    let _session_guard = session_lock
-        .lock()
-        .map_err(|_| CoreError::Consistency("base import session lock is poisoned".into()))?;
-    let workspace = session_workspace(database, session_id)?;
-    fs::remove_dir_all(workspace)?;
-    Ok(())
-}
-
-pub fn get_default_base_import_sql(database: &Database) -> CoreResult<String> {
-    Ok(metadata::get_raw(
-        &database.connect_metadata()?,
-        MetadataKey::DefaultBaseImportSql,
-    )?
-    .unwrap_or_else(|| BUILTIN_DEFAULT_BASE_IMPORT_SQL.to_string()))
-}
-
-pub fn save_default_base_import_sql(database: &Database, sql: &str) -> CoreResult<()> {
-    metadata::set_raw(
-        &database.connect_metadata()?,
-        MetadataKey::DefaultBaseImportSql,
-        sql,
+pub fn get_base_import_sql(database: &Database) -> CoreResult<String> {
+    Ok(
+        metadata::get_raw(&database.connect_metadata()?, MetadataKey::BaseImportSql)?
+            .unwrap_or_else(|| INITIAL_BASE_IMPORT_SQL.to_string()),
     )
 }
 
-pub fn reset_default_base_import_sql(database: &Database) -> CoreResult<String> {
-    metadata::remove(
-        &database.connect_metadata()?,
-        MetadataKey::DefaultBaseImportSql,
-    )?;
-    Ok(BUILTIN_DEFAULT_BASE_IMPORT_SQL.to_string())
+fn workspace_mutex(database: &Database) -> CoreResult<Arc<Mutex<()>>> {
+    let path = workspace(database)?;
+    let mut locks = WORKSPACE_LOCKS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .map_err(|_| CoreError::Consistency("base import lock registry is poisoned".into()))?;
+    Ok(locks
+        .entry(path)
+        .or_insert_with(|| Arc::new(Mutex::new(())))
+        .clone())
 }
 
-fn workspace_root(database: &Database) -> PathBuf {
-    database
+fn lock_workspace(mutex: &Mutex<()>) -> CoreResult<std::sync::MutexGuard<'_, ()>> {
+    mutex
+        .lock()
+        .map_err(|_| CoreError::Consistency("base import workspace lock is poisoned".into()))
+}
+
+fn try_lock_workspace(mutex: &Mutex<()>) -> CoreResult<std::sync::MutexGuard<'_, ()>> {
+    match mutex.try_lock() {
+        Ok(guard) => Ok(guard),
+        Err(TryLockError::WouldBlock) => Err(CoreError::InvalidArgument(
+            "base import workspace is busy".into(),
+        )),
+        Err(TryLockError::Poisoned(_)) => Err(CoreError::Consistency(
+            "base import workspace lock is poisoned".into(),
+        )),
+    }
+}
+
+fn workspace(database: &Database) -> CoreResult<PathBuf> {
+    let workspace = database
         .metadata_path()
         .parent()
         .unwrap_or_else(|| Path::new("."))
-        .join("base-import-workspaces")
-}
-
-fn session_lock(session_id: &str) -> CoreResult<Arc<Mutex<()>>> {
-    let session_id = Uuid::parse_str(session_id)
-        .map_err(|_| CoreError::InvalidArgument("invalid base import session id".into()))?
-        .to_string();
-    let mut locks = SESSION_LOCKS
-        .get_or_init(|| Mutex::new(std::collections::HashMap::new()))
-        .lock()
-        .map_err(|_| CoreError::Consistency("base import lock registry is poisoned".into()))?;
-    locks.retain(|_, lock| lock.strong_count() > 0);
-    if let Some(lock) = locks.get(&session_id).and_then(Weak::upgrade) {
-        return Ok(lock);
-    }
-    let lock = Arc::new(Mutex::new(()));
-    locks.insert(session_id, Arc::downgrade(&lock));
-    Ok(lock)
-}
-
-fn session_workspace(database: &Database, session_id: &str) -> CoreResult<PathBuf> {
-    let parsed = Uuid::parse_str(session_id)
-        .map_err(|_| CoreError::InvalidArgument("invalid base import session id".into()))?;
-    let workspace = workspace_root(database).join(parsed.to_string());
-    let marker = workspace.join(SESSION_MARKER);
-    if !workspace.is_dir() || fs::read_to_string(marker).ok().as_deref() != Some(session_id) {
-        return Err(CoreError::NotFound(format!(
-            "base import session {session_id}"
-        )));
-    }
+        .join("base-import-workspace");
+    fs::create_dir_all(&workspace)?;
     Ok(workspace)
 }
 
-fn read_session_state(workspace: &Path) -> CoreResult<BaseImportSessionState> {
-    let bytes = fs::read(workspace.join(SESSION_STATE))?;
-    serde_json::from_slice(&bytes).map_err(|error| {
-        CoreError::Consistency(format!("invalid base import session state: {error}"))
-    })
+fn read_validation_state(workspace: &Path) -> CoreResult<Option<ValidatedBaseImportCandidate>> {
+    let path = workspace.join(VALIDATION_STATE);
+    if !path.is_file() {
+        return Ok(None);
+    }
+    serde_json::from_slice(&fs::read(path)?)
+        .map(Some)
+        .map_err(|error| CoreError::Consistency(format!("invalid validation state: {error}")))
 }
 
-fn write_session_state(workspace: &Path, state: &BaseImportSessionState) -> CoreResult<()> {
-    let path = workspace.join(SESSION_STATE);
-    let temporary = workspace.join(".session-state.json.tmp");
+fn write_validation_state(
+    workspace: &Path,
+    state: &ValidatedBaseImportCandidate,
+) -> CoreResult<()> {
+    let path = workspace.join(VALIDATION_STATE);
+    let temporary = workspace.join(".validation.json.tmp");
     let bytes = serde_json::to_vec(state).map_err(|error| {
-        CoreError::Consistency(format!(
-            "could not serialize base import session state: {error}"
-        ))
+        CoreError::Consistency(format!("could not serialize validation state: {error}"))
     })?;
     fs::write(&temporary, bytes)?;
     if path.exists() {
@@ -757,138 +439,90 @@ fn write_session_state(workspace: &Path, state: &BaseImportSessionState) -> Core
     Ok(())
 }
 
-fn register_source_and_invalidate(
-    workspace: &Path,
-    source: RegisteredBaseImportSource,
-) -> CoreResult<u64> {
-    let mut state = read_session_state(workspace)?;
-    state.sources.push(source);
-    state.revision = state
-        .revision
-        .checked_add(1)
-        .ok_or_else(|| CoreError::Consistency("base import session revision overflow".into()))?;
-    if let Some(candidate) = state.candidate.take() {
-        remove_file_if_exists(&candidate.candidate_path)?;
-    }
-    remove_file_if_exists(&workspace.join(CANDIDATE_BUILD_DATABASE))?;
-    remove_file_if_exists(&workspace.join(STAGING_DATABASE))?;
-    write_session_state(workspace, &state)?;
-    Ok(state.revision)
-}
-
-fn invalidate_session(workspace: &Path, remove_staging: bool) -> CoreResult<u64> {
-    let mut state = read_session_state(workspace)?;
-    state.revision = state
-        .revision
-        .checked_add(1)
-        .ok_or_else(|| CoreError::Consistency("base import session revision overflow".into()))?;
-    if let Some(candidate) = state.candidate.take() {
-        remove_file_if_exists(&candidate.candidate_path)?;
-    }
-    remove_file_if_exists(&workspace.join(CANDIDATE_BUILD_DATABASE))?;
-    if remove_staging {
-        remove_file_if_exists(&workspace.join(STAGING_DATABASE))?;
-    }
-    write_session_state(workspace, &state)?;
-    Ok(state.revision)
-}
-
-fn source_schema(
-    workspace: &Path,
-    alias: &str,
-    object_names: &[&str],
-) -> CoreResult<SqlSourceSchema> {
-    let schema = inspect_sqlite_source("main", &workspace.join(SOURCE_DATABASE))?;
-    Ok(filtered_schema(&schema, alias, object_names))
-}
-
-fn filtered_schema(
-    schema: &SqlSourceSchema,
-    alias: &str,
-    object_names: &[&str],
-) -> SqlSourceSchema {
-    SqlSourceSchema {
-        alias: alias.into(),
-        objects: schema
-            .objects
-            .iter()
-            .filter(|object| object_names.contains(&object.name.as_str()))
-            .cloned()
-            .collect(),
-    }
-}
-
-fn backup_database(source_path: &Path, destination_path: &Path) -> CoreResult<()> {
-    let source = Connection::open_with_flags(
-        source_path,
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )?;
-    let mut destination = Connection::open(destination_path)?;
-    let backup = Backup::new(&source, &mut destination)?;
-    backup.run_to_completion(256, Duration::from_millis(10), None)?;
-    drop(backup);
-    drop(destination);
-    drop(source);
-    Ok(())
-}
-
-fn remove_registered_source_objects(
-    source_path: &Path,
-    source: &RegisteredBaseImportSource,
-) -> CoreResult<()> {
-    let mut connection = Connection::open(source_path)?;
-    let transaction = connection.transaction()?;
-    for object_type in [
-        SqlObjectType::View,
-        SqlObjectType::VirtualTable,
-        SqlObjectType::Table,
+fn clear_validation_artifacts(workspace: &Path) -> CoreResult<()> {
+    for filename in [
+        CANDIDATE_DATABASE,
+        CANDIDATE_BUILD_DATABASE,
+        VALIDATION_STATE,
     ] {
-        for object in source
-            .schema
-            .objects
-            .iter()
-            .filter(|object| object.object_type == object_type)
-        {
-            let statement = match object_type {
-                SqlObjectType::View => "DROP VIEW IF EXISTS",
-                SqlObjectType::Table | SqlObjectType::VirtualTable => "DROP TABLE IF EXISTS",
-            };
-            transaction
-                .execute_batch(&format!("{statement} {}", quote_identifier(&object.name)))?;
-        }
+        remove_file_if_exists(&workspace.join(filename))?;
     }
-    transaction.commit()?;
     Ok(())
 }
 
-fn clear_candidate(workspace: &Path, state: &mut BaseImportSessionState) -> CoreResult<()> {
-    if let Some(candidate) = state.candidate.take() {
-        remove_file_if_exists(&candidate.candidate_path)?;
+fn clear_build_artifacts(workspace: &Path) -> CoreResult<()> {
+    clear_validation_artifacts(workspace)?;
+    remove_file_if_exists(&workspace.join(STAGING_DATABASE))
+}
+
+struct ArtifactInvalidation {
+    paths: Vec<(PathBuf, PathBuf)>,
+}
+
+impl ArtifactInvalidation {
+    fn stage(workspace: &Path) -> CoreResult<Self> {
+        let mut paths = Vec::new();
+        for filename in [
+            STAGING_DATABASE,
+            CANDIDATE_DATABASE,
+            CANDIDATE_BUILD_DATABASE,
+            VALIDATION_STATE,
+        ] {
+            let original = workspace.join(filename);
+            if !original.exists() {
+                continue;
+            }
+            let staged = workspace.join(format!(".invalidated-{filename}"));
+            remove_file_if_exists(&staged)?;
+            if let Err(error) = fs::rename(&original, &staged) {
+                let invalidation = Self { paths };
+                let _ = invalidation.rollback();
+                return Err(error.into());
+            }
+            paths.push((original, staged));
+        }
+        Ok(Self { paths })
     }
-    remove_file_if_exists(&workspace.join(CANDIDATE_BUILD_DATABASE))?;
-    write_session_state(workspace, state)
+
+    fn rollback(self) -> CoreResult<()> {
+        for (original, staged) in self.paths.into_iter().rev() {
+            if staged.exists() {
+                fs::rename(staged, original)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn commit(self) -> Vec<String> {
+        let mut warnings = Vec::new();
+        for (_, staged) in self.paths {
+            if let Err(error) = fs::remove_file(&staged)
+                && staged.exists()
+            {
+                warnings.push(format!("base import artifact cleanup failed: {error}"));
+            }
+        }
+        warnings
+    }
 }
 
 fn workspace_fingerprint(workspace: &Path) -> CoreResult<String> {
     let mut hasher = Sha256::new();
-    for filename in [SOURCE_DATABASE, STAGING_DATABASE] {
-        let path = workspace.join(filename);
-        if !path.is_file() {
-            return Err(CoreError::NotFound(format!(
-                "base import file {}",
-                path.display()
-            )));
+    let path = workspace.join(STAGING_DATABASE);
+    if !path.is_file() {
+        return Err(CoreError::NotFound(format!(
+            "base import file {}",
+            path.display()
+        )));
+    }
+    let mut reader = BufReader::new(File::open(path)?);
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = reader.read(&mut buffer)?;
+        if read == 0 {
+            break;
         }
-        hasher.update(filename.as_bytes());
-        let mut reader = BufReader::new(File::open(path)?);
-        let mut buffer = [0_u8; 64 * 1024];
-        loop {
-            let read = reader.read(&mut buffer)?;
-            if read == 0 {
-                break;
-            }
-            hasher.update(&buffer[..read]);
-        }
+        hasher.update(&buffer[..read]);
     }
     Ok(base64::engine::general_purpose::STANDARD_NO_PAD.encode(hasher.finalize()))
 }
@@ -953,85 +587,48 @@ fn candidate_metadata(path: &Path) -> CoreResult<TaxonomyBaseMetadata> {
     .map_err(Into::into)
 }
 
-fn load_csv_source_table(
-    connection: &mut Connection,
-    table_name: &str,
-    path: &Path,
-) -> CoreResult<()> {
-    let mut reader = csv::ReaderBuilder::new()
-        .has_headers(true)
-        .flexible(false)
-        .from_path(path)?;
-    let columns = validated_columns(reader.headers()?.iter())?;
-    let definitions = columns
-        .iter()
-        .map(|column| format!("{} TEXT", quote_identifier(column)))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let transaction = connection.transaction()?;
-    transaction.execute_batch(&format!(
-        "CREATE TABLE {} ({definitions})",
-        quote_identifier(table_name)
-    ))?;
-    let column_list = columns
-        .iter()
-        .map(|column| quote_identifier(column))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let placeholders = std::iter::repeat_n("?", columns.len())
-        .collect::<Vec<_>>()
-        .join(", ");
-    let mut insert = transaction.prepare(&format!(
-        "INSERT INTO {} ({column_list}) VALUES ({placeholders})",
-        quote_identifier(table_name)
-    ))?;
-    for (index, record) in reader.records().enumerate() {
-        let row_number = index + 2;
-        let record = record.map_err(|error| {
-            CoreError::InvalidArgument(format!("CSV row {row_number} could not be read: {error}"))
-        })?;
-        insert
-            .execute(params_from_iter(record.iter()))
-            .map_err(|error| {
-                CoreError::InvalidArgument(format!(
-                    "CSV row {row_number} could not be inserted: {error}"
-                ))
-            })?;
-    }
-    drop(insert);
-    transaction.commit()?;
-    Ok(())
-}
-
 fn execute_base_import_script(
     connection: &Connection,
     sql: &str,
     staging_path: &str,
-) -> CoreResult<usize> {
+) -> CoreResult<Vec<SqlStatementMessage>> {
     let mut offset = 0;
-    let mut statements_executed = 0;
+    let mut messages = Vec::new();
     while offset < sql.len() {
         connection.authorizer(Some(base_import_authorizer(staging_path.to_string())));
         let execution = unsafe { execute_statement_to_completion_raw(connection, &sql[offset..]) };
         connection.authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
         let execution = execution?;
         offset += execution.tail_offset;
-        if execution.statement.is_some() {
-            statements_executed += 1;
+        if let Some(statement) = execution.statement {
+            let statement_index = messages.len() + 1;
+            let affected_rows = (!statement.read_only).then_some(statement.affected_rows);
+            let message = match affected_rows {
+                Some(count) => format!("statement affected {count} rows"),
+                None => format!("statement returned {} rows", statement.returned_rows),
+            };
+            messages.push(SqlStatementMessage {
+                statement_index,
+                affected_rows,
+                message,
+            });
         }
     }
-    Ok(statements_executed)
+    Ok(messages)
 }
 
-fn validate_base_import_attachments(connection: &Connection) -> CoreResult<()> {
+fn validate_base_import_attachments(
+    connection: &Connection,
+    source_aliases: &[String],
+) -> CoreResult<()> {
     let mut statement = connection.prepare("PRAGMA database_list")?;
     let attached = statement
         .query_map([], |row| row.get::<_, String>(1))?
         .collect::<Result<Vec<_>, _>>()?;
-    if let Some(alias) = attached
-        .iter()
-        .find(|alias| !matches!(alias.as_str(), "main" | "temp" | "base"))
-    {
+    if let Some(alias) = attached.iter().find(|alias| {
+        !matches!(alias.as_str(), "main" | "temp" | "base")
+            && !source_aliases.iter().any(|source| source == *alias)
+    }) {
         return Err(CoreError::InvalidArgument(format!(
             "base import staging database must use the base alias, not {alias}"
         )));

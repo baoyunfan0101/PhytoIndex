@@ -41,19 +41,17 @@ import {
   relocateTaxonomyDatabase,
   removePhotoLibrary,
   renamePhotoLibrary,
-  runNamingHookTests,
   selectDatabaseDestination,
   selectPhotoDirectory,
   selectSqliteDatabase,
   setDefaultPhotoLibraryDatabaseDirectory,
   setDefaultTaxonomyDatabaseDirectory,
   setMapSettings,
-  setNamingHook,
-  setNamingHookTestCases,
   setPhotoFilenameFormatSettings,
   setPhotoNameMatchSettings,
   setTaxonomyNameSeparator,
   switchPhotoLibrary,
+  testAndSaveNamingHook,
   type DatabaseLocations,
   type MapSettings,
   type NamingHookKind,
@@ -434,7 +432,6 @@ function MapSettingsPanel() {
 function HooksSettings() {
   const [kind, setKind] = useState<NamingHookKind>("photo_filename");
   const [scripts, setScripts] = useState<Record<NamingHookKind, string>>({ photo_filename: "", synonym_authority: "" });
-  const [templates, setTemplates] = useState<Record<NamingHookKind, string>>({ photo_filename: "", synonym_authority: "" });
   const [cases, setCases] = useState<Record<NamingHookKind, NamingHookTestCase[]>>({ photo_filename: [], synonym_authority: [] });
   const [report, setReport] = useState<NamingHookTestReport | null>(null);
   const [message, setMessage] = useState("");
@@ -443,7 +440,6 @@ function HooksSettings() {
     let active = true;
     getNamingHookTemplates().then((nextTemplates) => {
       if (!active) return;
-      setTemplates(nextTemplates);
       setScripts(nextTemplates);
       return getNamingHookSettings().then((settings) => {
         if (!active) return;
@@ -465,18 +461,15 @@ function HooksSettings() {
     };
   }, []);
 
-  async function save() {
-    try {
-      await Promise.all([setNamingHook(kind, scripts[kind]), setNamingHookTestCases(kind, cases[kind])]);
-      setMessage("Hook and project tests saved.");
-    } catch (nextError) {
-      setMessage(errorMessage(nextError));
-    }
-  }
-
   async function run() {
     try {
-      setReport(await runNamingHookTests(kind, scripts[kind]));
+      const next = await testAndSaveNamingHook(kind, scripts[kind], cases[kind]);
+      setReport(next);
+      if (next.failed === 0) {
+        setMessage("All tests passed. Hook and project tests saved.");
+      } else {
+        setMessage("Hook was not saved because tests failed.");
+      }
     } catch (nextError) {
       setMessage(errorMessage(nextError));
     }
@@ -485,7 +478,7 @@ function HooksSettings() {
   return (
     <div className="hooks-settings">
       <SectionHeader title="Rhai hooks" detail="Default implementations and user overrides share the same execution path" actions={
-        <><button className="secondary-button" type="button" onClick={() => setScripts({ ...scripts, [kind]: templates[kind] })}>Reset template</button><button className="secondary-button" type="button" onClick={() => void run()}><Beaker size={13} />Run tests</button><button className="primary-button" type="button" onClick={() => void save()}><Save size={13} />Save</button></>
+        <button className="primary-button" type="button" onClick={() => void run()}><Beaker size={13} />Test and save</button>
       } />
       <Segmented value={kind} items={["photo_filename", "synonym_authority"] as const} onChange={(next) => {
         setKind(next);
@@ -520,7 +513,7 @@ function HooksSettings() {
           />
         </div>
       </div>
-      <div className="editor-message">{report ? `${report.passed} passed, ${report.failed} failed` : message}</div>
+      <div className="editor-message">{report ? `${report.passed} passed, ${report.failed} failed. ${message}` : message}</div>
     </div>
   );
 }

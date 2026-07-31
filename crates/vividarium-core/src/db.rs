@@ -1276,6 +1276,20 @@ CREATE TABLE app_metadata (
     metadata_value TEXT NOT NULL
 );
 
+CREATE TABLE sql_inputs (
+    scope INTEGER NOT NULL,
+    alias TEXT COLLATE NOCASE NOT NULL,
+    source_type INTEGER NOT NULL,
+    original_path TEXT NOT NULL,
+    stored_path TEXT NOT NULL UNIQUE,
+    schema_json TEXT NOT NULL,
+    PRIMARY KEY (scope, alias),
+    CHECK (scope IN (1, 2)),
+    CHECK (source_type IN (1, 2)),
+    CHECK (length(alias) > 0),
+    CHECK (length(stored_path) > 0)
+) WITHOUT ROWID;
+
 PRAGMA user_version = 2;
 "#;
 

@@ -721,7 +721,6 @@ mod tests {
             &database,
             &crate::taxonomy::CustomTaxonomySqlRequest {
                 sql: format!("DELETE FROM taxa WHERE taxon_id = {taxon_id}"),
-                sources: Vec::new(),
                 maximum_result_rows: None,
             },
         )

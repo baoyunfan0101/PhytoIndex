@@ -287,10 +287,6 @@ export type OperationAuditRow = {
   message: string;
 };
 
-export type SqlDataSource =
-  | { kind: "csv"; alias: string; path: string }
-  | { kind: "sqlite"; alias: string; path: string };
-
 export type SqlValue =
   | { type: "null" }
   | { type: "integer"; value: number }
@@ -339,27 +335,22 @@ export type SqlSourceSchema = {
   objects: SqlSourceObject[];
 };
 
-export type BaseImportSession = {
-  session_id: string;
-};
-
-export type BaseImportSource = {
-  source_type: "sqlite" | "csv";
-  source_alias: string;
+export type PersistentSqlInput = {
+  kind: "sqlite" | "csv";
+  alias: string;
   original_path: string;
   available: boolean;
-  schema_status: "inspected";
   schema: SqlSourceSchema;
 };
 
-export type RemoveBaseImportSourceResult = {
-  sources: BaseImportSource[];
-  session_revision: number;
+export type RemoveSqlInputResult = {
+  inputs: PersistentSqlInput[];
+  warnings: string[];
 };
 
 export type BaseImportExecutionResult = {
   statements_executed: number;
-  session_revision: number;
+  messages: SqlStatementMessage[];
 };
 
 export type BaseImportIssue = {
@@ -1008,12 +999,10 @@ export const applyTaxonomyRows = (rows: TaxonInputRow[]) =>
 
 export const executeCustomSql = (
   sql: string,
-  sources: SqlDataSource[],
   maximumResultRows: number | null = 1000,
 ) => call<CustomSqlExecutionResult>("execute_custom_taxonomy_sql", {
   request: {
     sql,
-    sources,
     maximum_result_rows: maximumResultRows,
   },
 }, () => ({
@@ -1028,58 +1017,59 @@ export const executeCustomSql = (
   messages: [{ statement_index: 1, affected_rows: null, message: "Query completed" }],
 }));
 
-export const inspectSqlDataSource = (source: SqlDataSource) =>
-  call<SqlSourceSchema>("inspect_sql_data_source", { source }, () => ({
-    alias: source.alias,
-    objects: [{
-      name: source.kind === "csv" ? source.alias : "taxa",
-      object_type: "table",
-      columns: [{ name: "value", declared_type: "TEXT" }],
-    }],
-  }));
-
 export const exportCustomSqlQuery = (
   sql: string,
-  sources: SqlDataSource[],
   destinationPath: string,
 ) => call<SqlExportResult>("export_custom_taxonomy_query", {
-  request: { sql, sources, destination_path: destinationPath },
+  request: { sql, destination_path: destinationPath },
 }, () => ({ path: destinationPath, row_count: 1 }));
 
-export const createBaseImportSession = () =>
-  call<BaseImportSession>("create_base_import_session", undefined, () => ({ session_id: crypto.randomUUID() }));
+export const getCustomTaxonomySql = () =>
+  call<string>("get_custom_taxonomy_sql", undefined, () => "SELECT * FROM taxa LIMIT 100;");
 
-export const addBaseImportCsvSource = (sessionId: string, tableName: string, path: string) =>
-  call<SqlSourceSchema>("add_base_import_csv_source", {
-    request: { session_id: sessionId, table_name: tableName, path },
-  }, () => ({
-    alias: "main",
-    objects: [{ name: tableName, object_type: "table", columns: [{ name: "value", declared_type: "TEXT" }] }],
-  }));
+export const listCustomSqlInputs = () =>
+  call<PersistentSqlInput[]>("list_custom_sql_inputs", undefined, () => []);
 
-export const addBaseImportSqliteSource = (sessionId: string, path: string) =>
-  call<SqlSourceSchema>("add_base_import_sqlite_source", {
-    request: { session_id: sessionId, path },
-  }, () => ({
-    alias: "main",
-    objects: [{ name: "source_taxa", object_type: "table", columns: [{ name: "taxon_id", declared_type: "INTEGER" }] }],
-  }));
+export const addCustomSqlInput = (kind: "csv" | "sqlite", alias: string, path: string) =>
+  call<PersistentSqlInput>("add_custom_sql_input", {
+    request: { kind, alias, path },
+  }, () => demoSqlInput(kind, alias, path));
 
-export const inspectBaseImportSources = (sessionId: string) =>
-  call<BaseImportSource[]>("inspect_base_import_sources", { sessionId }, () => []);
+export const removeCustomSqlInput = (alias: string) =>
+  call<RemoveSqlInputResult>("remove_custom_sql_input", {
+    request: { alias },
+  }, () => ({ inputs: [], warnings: [] }));
 
-export const removeBaseImportSource = (sessionId: string, sourceAlias: string) =>
-  call<RemoveBaseImportSourceResult>("remove_base_import_source", {
-    request: { session_id: sessionId, source_alias: sourceAlias },
-  }, () => ({ sources: [], session_revision: 1 }));
+export const getBaseImportSql = () =>
+  call<string>("get_base_import_sql", undefined, () => [
+    "ATTACH DATABASE 'vividarium_base.db' AS base;",
+    "CREATE TABLE base.taxa AS SELECT * FROM biolib.taxa;",
+    "CREATE TABLE base.taxon_names AS SELECT * FROM biolib.taxon_names;",
+  ].join("\n"));
 
-export const executeBaseImportSql = (sessionId: string, sql: string) =>
+export const listBaseImportInputs = () =>
+  call<PersistentSqlInput[]>("list_base_import_inputs", undefined, () => []);
+
+export const addBaseImportInput = (kind: "csv" | "sqlite", alias: string, path: string) =>
+  call<PersistentSqlInput>("add_base_import_input", {
+    request: { kind, alias, path },
+  }, () => demoSqlInput(kind, alias, path));
+
+export const removeBaseImportInput = (alias: string) =>
+  call<RemoveSqlInputResult>("remove_base_import_input", {
+    request: { alias },
+  }, () => ({ inputs: [], warnings: [] }));
+
+export const executeBaseImportSql = (sql: string) =>
   call<BaseImportExecutionResult>("execute_base_import_sql", {
-    request: { session_id: sessionId, sql },
-  }, () => ({ statements_executed: sql.split(";").filter(Boolean).length, session_revision: 1 }));
+    request: { sql },
+  }, () => ({
+    statements_executed: sql.split(";").filter(Boolean).length,
+    messages: [{ statement_index: 1, affected_rows: null, message: "Script completed" }],
+  }));
 
-export const validateBaseImport = (sessionId: string) =>
-  call<BaseImportValidationResult>("validate_base_import", { sessionId }, () => ({
+export const validateBaseImport = () =>
+  call<BaseImportValidationResult>("validate_base_import", undefined, () => ({
     can_apply: true,
     taxa_count: 125000,
     name_counts: [
@@ -1093,24 +1083,29 @@ export const validateBaseImport = (sessionId: string) =>
     errors: [],
   }));
 
-export const applyBaseImport = (sessionId: string) =>
-  call<OperationState>("apply_base_import", { sessionId }, () => demoOperation("mapping", "Base import applied"));
+export const applyBaseImport = () =>
+  call<OperationState>("apply_base_import", undefined, () => demoOperation("mapping", "Base import applied"));
 
-export const discardBaseImportSession = (sessionId: string) =>
-  call<void>("discard_base_import_session", { sessionId }, () => undefined);
-
-export const getDefaultBaseImportSql = () =>
-  call<string>("get_default_base_import_sql", undefined, () => [
-    "ATTACH DATABASE '' AS base;",
-    "CREATE TABLE base.taxa AS SELECT * FROM main.source_taxa;",
-    "CREATE TABLE base.taxon_names AS SELECT * FROM main.source_names;",
-  ].join("\n"));
-
-export const saveDefaultBaseImportSql = (sql: string) =>
-  call<void>("save_default_base_import_sql", { sql }, () => undefined);
-
-export const resetDefaultBaseImportSql = () =>
-  call<string>("reset_default_base_import_sql", undefined, getDefaultBaseImportSql);
+function demoSqlInput(
+  kind: "csv" | "sqlite",
+  alias: string,
+  path: string,
+): PersistentSqlInput {
+  return {
+    kind,
+    alias,
+    original_path: path,
+    available: true,
+    schema: {
+      alias,
+      objects: [{
+        name: kind === "csv" ? alias : "taxa",
+        object_type: "table",
+        columns: [{ name: "value", declared_type: "TEXT" }],
+      }],
+    },
+  };
+}
 export const getTaxonomyBaseMetadata = () =>
   call<TaxonomyBaseMetadata | null>("get_taxonomy_base_metadata", undefined, () => null);
 
@@ -1146,17 +1141,23 @@ export const getNamingHookTemplates = () =>
     photo_filename: defaultPhotoFilenameHook,
     synonym_authority: defaultSynonymAuthorityHook,
   }));
-export const setNamingHook = (kind: NamingHookKind, script: string | null) =>
-  call<void>("set_naming_hook", { kind, script }, () => undefined);
 export const getNamingHookTestCases = () =>
   call<NamingHookTestCases>("get_naming_hook_test_cases", undefined, defaultNamingHookTestCases);
-export const setNamingHookTestCases = (kind: NamingHookKind, cases: NamingHookTestCase[]) =>
-  call<void>("set_naming_hook_test_cases", { kind, cases }, () => undefined);
 export const runNamingHookTests = (kind: NamingHookKind, script: string | null) =>
   call<NamingHookTestReport>("run_naming_hook_tests", { kind, script }, async () => {
     const cases = (await getNamingHookTestCases())[kind];
     return { kind, passed: cases.length, failed: 0, cases: cases.map((item) => ({ ...item, actual: item.expected, passed: true, error: null })) };
   });
+export const testAndSaveNamingHook = (
+  kind: NamingHookKind,
+  script: string,
+  cases: NamingHookTestCase[],
+) => call<NamingHookTestReport>("test_and_save_naming_hook", { kind, script, cases }, () => ({
+  kind,
+  passed: cases.length,
+  failed: 0,
+  cases: cases.map((item) => ({ ...item, actual: item.expected, passed: true, error: null })),
+}));
 
 export const getPhotoNameMatchSettings = () =>
   call<PhotoNameMatchSettings>("get_photo_name_match_settings", undefined, () => ({

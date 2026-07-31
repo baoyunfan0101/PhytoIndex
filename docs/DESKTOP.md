@@ -12,7 +12,7 @@ migration or compatibility path for another schema.
 | `v3/api` | Typed command wrappers, IPC DTOs, file and directory pickers, media URLs, and CSV download helpers. |
 | `App` | Application shell, Photo Library workspace selection, tabs, global search, and background-operation display. |
 | `SettingsView` | Singleton keep-alive settings page with General, Storage, Photo Libraries, Naming, Map, Hooks, Base Import, and About sections. |
-| `BaseImportSettings` | `onApplied?: () => void`; maintains one isolated Base Import session until apply or discard. |
+| `BaseImportSettings` | `onApplied?: () => void`; edits the fixed persistent Base Import workspace. |
 | `CustomSqlView` | `onStatus: (message: string) => void`; executes Custom SQL and displays typed result sets. |
 | `OperationHistoryView` | `domain: "photo" | "taxonomy"`, `onStatus: (message: string) => void`; lists operation summaries and paged audit rows. |
 | `PhotoBrowser` | Shared virtual photo list/grid and photo interaction surface. |
@@ -59,58 +59,62 @@ never silently recreated.
 
 ## Custom SQL commands
 
-`SqlDataSource` is tagged by `kind` and is either a CSV path with an alias or
-an SQLite path with an alias. `CustomTaxonomySqlRequest` contains `sql`,
-`sources`, and `maximum_result_rows`.
+`PersistentSqlInput` describes a managed CSV or SQLite source by `kind`, SQL
+`alias`, `original_path`, managed-copy `available`, and inspected `schema`. Custom SQL and
+Base Import use separate persistent registries with the same DTOs.
 
 | Command | Parameters | Return |
 | --- | --- | --- |
-| `inspect_sql_data_source` | `source: SqlDataSource` | `SqlSourceSchema` |
+| `get_custom_taxonomy_sql` | none | `String` |
+| `list_custom_sql_inputs` | none | `Vec<PersistentSqlInput>` |
+| `add_custom_sql_input` | `request: AddSqlInputRequest` | `PersistentSqlInput` |
+| `remove_custom_sql_input` | `request: RemoveSqlInputRequest` | `RemoveSqlInputResult` |
 | `execute_custom_taxonomy_sql` | `request: CustomTaxonomySqlRequest` | `CustomSqlExecutionResult` |
 | `export_custom_taxonomy_query` | `request: CustomTaxonomySqlExportRequest` | `SqlExportResult` |
 
 `CustomSqlExecutionResult` contains `operation_id`, `changeset_size`,
 `result_sets`, and statement `messages`. Each result set contains typed
 `SqlValue` cells and a `truncated` flag. A pure query returns a null
-`operation_id`. A mutation creates a rollbackable taxonomy operation.
+`operation_id`. A mutation creates a rollbackable taxonomy operation. A
+successful query or mutation replaces the saved script; a failure does not.
 Full-query export streams to `destination_path` instead of returning the CSV
 through IPC.
 
 ## Base Import commands
 
-Every Base Import call after session creation uses the returned `session_id`.
-The session and SQL draft remain in the keep-alive Settings page until the
-user applies or discards the workspace.
+Base Import uses one backend-located workspace. Its source registry and last
+successful SQL are persistent; staging, candidate, and validation are build
+artifacts.
 
 | Command | Parameters | Return |
 | --- | --- | --- |
-| `create_base_import_session` | none | `BaseImportSession` |
-| `add_base_import_csv_source` | `request: AddBaseImportCsvSourceRequest` | `SqlSourceSchema` |
-| `add_base_import_sqlite_source` | `request: AddBaseImportSqliteSourceRequest` | `SqlSourceSchema` |
-| `inspect_base_import_sources` | `session_id: String` | `Vec<BaseImportSource>` |
-| `remove_base_import_source` | `request: RemoveBaseImportSourceRequest` | `RemoveBaseImportSourceResult` |
+| `get_base_import_sql` | none | `String` |
+| `list_base_import_inputs` | none | `Vec<PersistentSqlInput>` |
+| `add_base_import_input` | `request: AddSqlInputRequest` | `PersistentSqlInput` |
+| `remove_base_import_input` | `request: RemoveSqlInputRequest` | `RemoveSqlInputResult` |
 | `execute_base_import_sql` | `request: ExecuteBaseImportSqlRequest` | `BaseImportExecutionResult` |
-| `validate_base_import` | `session_id: String` | `BaseImportValidationResult` |
-| `apply_base_import` | `session_id: String` | `OperationState` |
-| `discard_base_import_session` | `session_id: String` | `()` |
-| `get_default_base_import_sql` | none | `String` |
-| `save_default_base_import_sql` | `sql: String` | `()` |
-| `reset_default_base_import_sql` | none | `String` |
+| `validate_base_import` | none | `BaseImportValidationResult` |
+| `apply_base_import` | none | `OperationState` |
 
 Validation returns authoritative total warning and error counts plus bounded
 issue samples. Apply is allowed only after successful validation. The returned
 operation reports replacement progress; photo-library remapping continues
 through the background synchronization mechanism.
 
-`BaseImportSource` identifies a SQLite or CSV input by `source_alias` and
-returns its original path, availability, inspection status, and schema.
-Removal updates the complete source list and revision. Add, remove, and SQL
-execution invalidate the current validation result.
+Execution returns statement messages but no query result tables or query CSV
+export. Runtime success saves the script and enables separate validation;
+validation issues do not undo that save. Add, remove, and successful SQL
+execution invalidate the current candidate and validation result. The frontend
+updates its source list only from a successful backend response.
 
 After a successful apply, the shell closes tabs that store taxonomy identity,
 taxon IDs, or taxonomy paths. Photo and mapping views remain open but reload
 their mapping data. Formatted Update retains its draft and clears its previous
 preview.
+
+Apply removes staging, candidate, and validation artifacts while preserving
+the source registry and saved SQL. It is disabled unless validation reports
+`can_apply = true`.
 
 ## Operation and audit commands
 

@@ -21,14 +21,12 @@ use vividarium_core::naming::{
 use vividarium_core::operations::{OperationAuditRow, OperationPage, OperationSummary};
 use vividarium_core::photos::{PhotoFilenameFormatSettings, PhotoRenameOperationResult};
 use vividarium_core::taxonomy::{
-    AddBaseImportCsvSourceRequest, AddBaseImportSqliteSourceRequest, BaseImportExecutionResult,
-    BaseImportSession, BaseImportSource, BaseImportValidationResult, CustomSqlExecutionResult,
-    CustomTaxonomySqlExportRequest, CustomTaxonomySqlRequest, DeleteTaxonNameInput,
-    ExecuteBaseImportSqlRequest, PromoteTaxonNameInput, RemoveBaseImportSourceRequest,
-    RemoveBaseImportSourceResult, SqlDataSource, SqlExportResult, SqlSourceSchema, TaxonChild,
-    TaxonDetailNode, TaxonInputRow, TaxonRowOutcome, TaxonSearchResult, TaxonSuggestion,
-    TaxonUpdateInput, TaxonomyBaseMetadata, TaxonomyOperationResult, TaxonomyPage,
-    TaxonomyPreviewResult,
+    AddSqlInputRequest, BaseImportExecutionResult, BaseImportValidationResult,
+    CustomSqlExecutionResult, CustomTaxonomySqlExportRequest, CustomTaxonomySqlRequest,
+    DeleteTaxonNameInput, ExecuteBaseImportSqlRequest, PersistentSqlInput, PromoteTaxonNameInput,
+    RemoveSqlInputRequest, RemoveSqlInputResult, SqlExportResult, TaxonChild, TaxonDetailNode,
+    TaxonInputRow, TaxonRowOutcome, TaxonSearchResult, TaxonSuggestion, TaxonUpdateInput,
+    TaxonomyBaseMetadata, TaxonomyOperationResult, TaxonomyPage, TaxonomyPreviewResult,
 };
 use vividarium_core::{
     map::{self, MapBounds, MapPhoto, MapSettings},
@@ -343,15 +341,6 @@ pub fn get_naming_hook_templates() -> NamingHookTemplates {
 }
 
 #[tauri::command]
-pub fn set_naming_hook(
-    state: State<'_, AppState>,
-    kind: NamingHookKind,
-    script: Option<String>,
-) -> CommandResult<()> {
-    naming::set_naming_hook(&state.database, kind, script.as_deref()).map_err(error)
-}
-
-#[tauri::command]
 pub fn test_naming_hook(
     kind: NamingHookKind,
     script: String,
@@ -368,21 +357,22 @@ pub fn get_naming_hook_test_cases(
 }
 
 #[tauri::command]
-pub fn set_naming_hook_test_cases(
-    state: State<'_, AppState>,
-    kind: NamingHookKind,
-    cases: Vec<NamingHookTestCase>,
-) -> CommandResult<()> {
-    naming::set_naming_hook_test_cases(&state.database, kind, &cases).map_err(error)
-}
-
-#[tauri::command]
 pub fn run_naming_hook_tests(
     state: State<'_, AppState>,
     kind: NamingHookKind,
     script: Option<String>,
 ) -> CommandResult<NamingHookTestReport> {
     naming::run_naming_hook_tests(&state.database, kind, script.as_deref()).map_err(error)
+}
+
+#[tauri::command]
+pub fn test_and_save_naming_hook(
+    state: State<'_, AppState>,
+    kind: NamingHookKind,
+    script: String,
+    cases: Vec<NamingHookTestCase>,
+) -> CommandResult<NamingHookTestReport> {
+    naming::test_and_save_naming_hook(&state.database, kind, &script, &cases).map_err(error)
 }
 
 #[tauri::command]
@@ -698,16 +688,39 @@ pub fn execute_custom_taxonomy_sql(
 }
 
 #[tauri::command]
+pub fn get_custom_taxonomy_sql(state: State<'_, AppState>) -> CommandResult<String> {
+    taxonomy::get_custom_taxonomy_sql(&state.database).map_err(error)
+}
+
+#[tauri::command]
+pub fn list_custom_sql_inputs(
+    state: State<'_, AppState>,
+) -> CommandResult<Vec<PersistentSqlInput>> {
+    taxonomy::list_custom_sql_inputs(&state.database).map_err(error)
+}
+
+#[tauri::command]
+pub fn add_custom_sql_input(
+    state: State<'_, AppState>,
+    request: AddSqlInputRequest,
+) -> CommandResult<PersistentSqlInput> {
+    taxonomy::add_custom_sql_input(&state.database, &request).map_err(error)
+}
+
+#[tauri::command]
+pub fn remove_custom_sql_input(
+    state: State<'_, AppState>,
+    request: RemoveSqlInputRequest,
+) -> CommandResult<RemoveSqlInputResult> {
+    taxonomy::remove_custom_sql_input(&state.database, &request).map_err(error)
+}
+
+#[tauri::command]
 pub fn export_custom_taxonomy_query(
     state: State<'_, AppState>,
     request: CustomTaxonomySqlExportRequest,
 ) -> CommandResult<SqlExportResult> {
     taxonomy::export_custom_taxonomy_query(&state.database, &request).map_err(error)
-}
-
-#[tauri::command]
-pub fn inspect_sql_data_source(source: SqlDataSource) -> CommandResult<SqlSourceSchema> {
-    taxonomy::inspect_sql_data_source(&source).map_err(error)
 }
 
 #[tauri::command]
@@ -859,40 +872,31 @@ pub fn get_taxonomy_base_metadata(
 }
 
 #[tauri::command]
-pub fn create_base_import_session(state: State<'_, AppState>) -> CommandResult<BaseImportSession> {
-    taxonomy::create_base_import_session(&state.database).map_err(error)
+pub fn get_base_import_sql(state: State<'_, AppState>) -> CommandResult<String> {
+    taxonomy::get_base_import_sql(&state.database).map_err(error)
 }
 
 #[tauri::command]
-pub fn add_base_import_csv_source(
+pub fn list_base_import_inputs(
     state: State<'_, AppState>,
-    request: AddBaseImportCsvSourceRequest,
-) -> CommandResult<SqlSourceSchema> {
-    taxonomy::add_base_import_csv_source(&state.database, &request).map_err(error)
+) -> CommandResult<Vec<PersistentSqlInput>> {
+    taxonomy::list_base_import_inputs(&state.database).map_err(error)
 }
 
 #[tauri::command]
-pub fn add_base_import_sqlite_source(
+pub fn add_base_import_input(
     state: State<'_, AppState>,
-    request: AddBaseImportSqliteSourceRequest,
-) -> CommandResult<SqlSourceSchema> {
-    taxonomy::add_base_import_sqlite_source(&state.database, &request).map_err(error)
+    request: AddSqlInputRequest,
+) -> CommandResult<PersistentSqlInput> {
+    taxonomy::add_base_import_input(&state.database, &request).map_err(error)
 }
 
 #[tauri::command]
-pub fn inspect_base_import_sources(
+pub fn remove_base_import_input(
     state: State<'_, AppState>,
-    session_id: String,
-) -> CommandResult<Vec<BaseImportSource>> {
-    taxonomy::inspect_base_import_sources(&state.database, &session_id).map_err(error)
-}
-
-#[tauri::command]
-pub fn remove_base_import_source(
-    state: State<'_, AppState>,
-    request: RemoveBaseImportSourceRequest,
-) -> CommandResult<RemoveBaseImportSourceResult> {
-    taxonomy::remove_base_import_source(&state.database, &request).map_err(error)
+    request: RemoveSqlInputRequest,
+) -> CommandResult<RemoveSqlInputResult> {
+    taxonomy::remove_base_import_input(&state.database, &request).map_err(error)
 }
 
 #[tauri::command]
@@ -906,16 +910,14 @@ pub fn execute_base_import_sql(
 #[tauri::command]
 pub fn validate_base_import(
     state: State<'_, AppState>,
-    session_id: String,
 ) -> CommandResult<BaseImportValidationResult> {
-    taxonomy::validate_base_import(&state.database, &session_id).map_err(error)
+    taxonomy::validate_base_import(&state.database).map_err(error)
 }
 
 #[tauri::command]
 pub fn apply_base_import(
     app: AppHandle,
     state: State<'_, AppState>,
-    session_id: String,
 ) -> CommandResult<OperationState> {
     let database = state.database.clone();
     let background_state = state.inner().clone();
@@ -924,34 +926,11 @@ pub fn apply_base_import(
         .operations
         .start(app, "mapping", "apply_base_import", move |progress| {
             progress(0, None, "Validating base import candidate");
-            let result = taxonomy::apply_base_import(&database, &session_id).map_err(error)?;
+            let result = taxonomy::apply_base_import(&database).map_err(error)?;
             progress(1, Some(1), "Taxonomy base import applied");
             schedule_taxonomy_sync(sync_app, &background_state);
             serde_json::to_value(result).map_err(error)
         })
-}
-
-#[tauri::command]
-pub fn discard_base_import_session(
-    state: State<'_, AppState>,
-    session_id: String,
-) -> CommandResult<()> {
-    taxonomy::discard_base_import_session(&state.database, &session_id).map_err(error)
-}
-
-#[tauri::command]
-pub fn get_default_base_import_sql(state: State<'_, AppState>) -> CommandResult<String> {
-    taxonomy::get_default_base_import_sql(&state.database).map_err(error)
-}
-
-#[tauri::command]
-pub fn save_default_base_import_sql(state: State<'_, AppState>, sql: String) -> CommandResult<()> {
-    taxonomy::save_default_base_import_sql(&state.database, &sql).map_err(error)
-}
-
-#[tauri::command]
-pub fn reset_default_base_import_sql(state: State<'_, AppState>) -> CommandResult<String> {
-    taxonomy::reset_default_base_import_sql(&state.database).map_err(error)
 }
 
 fn schedule_taxonomy_sync(app: AppHandle, state: &AppState) {

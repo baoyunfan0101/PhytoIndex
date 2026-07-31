@@ -1,22 +1,22 @@
-import { Database, Download, FilePlus2, Play, Table2, Trash2 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { Download, Play } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import {
+  addCustomSqlInput,
   errorMessage,
   executeCustomSql,
   exportCustomSqlQuery,
-  inspectSqlDataSource,
+  getCustomTaxonomySql,
+  listCustomSqlInputs,
+  removeCustomSqlInput,
   selectCsvDestination,
-  selectCsvFile,
-  selectSqliteDatabase,
   type CustomSqlExecutionResult,
-  type SqlDataSource,
+  type PersistentSqlInput,
   type SqlResultSet,
-  type SqlSourceSchema,
   type SqlValue,
 } from "./api";
 import { CodeEditor } from "./CodeEditor";
 import { EmptyState, SectionHeader, VirtualList } from "./components";
-import { useViewState } from "./viewState";
+import { SqlInputList } from "./SqlInputList";
 import { emitTaxonomyMutation } from "./taxonomyMutations";
 
 export function CustomSqlView({
@@ -26,29 +26,27 @@ export function CustomSqlView({
   onStatus: (message: string) => void;
   mutationDisabled?: boolean;
 }) {
-  const [sql, setSql] = useViewState(
-    "custom-sql.draft",
-    "SELECT taxon_id, rank, geological_range\nFROM taxa\nORDER BY taxon_id\nLIMIT 100;",
-  );
-  const [sources, setSources] = useViewState<SqlDataSource[]>("custom-sql.sources", []);
-  const [schemas, setSchemas] = useViewState<SqlSourceSchema[]>("custom-sql.schemas", []);
-  const [result, setResult] = useViewState<CustomSqlExecutionResult | null>("custom-sql.result", null);
+  const [sql, setSql] = useState("");
+  const [inputs, setInputs] = useState<PersistentSqlInput[]>([]);
+  const [result, setResult] = useState<CustomSqlExecutionResult | null>(null);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
 
-  async function addSource(kind: "csv" | "sqlite") {
-    const path = kind === "csv" ? await selectCsvFile() : await selectSqliteDatabase();
-    if (!path) return;
-    const suggestedAlias = sourceAlias(path, sources);
-    const alias = window.prompt("SQL source alias", suggestedAlias)?.trim();
-    if (!alias) return;
-    const source: SqlDataSource = { kind, alias, path };
-    setBusy("Inspecting source");
+  useEffect(() => {
+    Promise.all([getCustomTaxonomySql(), listCustomSqlInputs()])
+      .then(([savedSql, savedInputs]) => {
+        setSql(savedSql);
+        setInputs(savedInputs);
+      })
+      .catch((nextError) => setError(errorMessage(nextError)));
+  }, []);
+
+  async function addInput(kind: "csv" | "sqlite", alias: string, path: string) {
+    setBusy("Adding data source");
     setError("");
     try {
-      const schema = await inspectSqlDataSource(source);
-      setSources((current) => [...current, source]);
-      setSchemas((current) => [...current, schema]);
+      const input = await addCustomSqlInput(kind, alias, path);
+      setInputs((current) => [...current, input].sort((left, right) => left.alias.localeCompare(right.alias)));
     } catch (nextError) {
       setError(errorMessage(nextError));
     } finally {
@@ -56,16 +54,25 @@ export function CustomSqlView({
     }
   }
 
-  function removeSource(alias: string) {
-    setSources((current) => current.filter((source) => source.alias !== alias));
-    setSchemas((current) => current.filter((schema) => schema.alias !== alias));
+  async function removeInput(input: PersistentSqlInput) {
+    setBusy(`Removing ${input.alias}`);
+    setError("");
+    try {
+      const result = await removeCustomSqlInput(input.alias);
+      setInputs(result.inputs);
+      if (result.warnings.length > 0) onStatus(result.warnings.join(" "));
+    } catch (nextError) {
+      setError(errorMessage(nextError));
+    } finally {
+      setBusy("");
+    }
   }
 
   async function execute() {
     setBusy("Executing SQL");
     setError("");
     try {
-      const next = await executeCustomSql(sql, sources);
+      const next = await executeCustomSql(sql);
       setResult(next);
       const outcome = next.operation_id === null
         ? "Query completed without creating an operation"
@@ -85,7 +92,7 @@ export function CustomSqlView({
     setBusy("Exporting full query");
     setError("");
     try {
-      const exported = await exportCustomSqlQuery(sql, sources, destination);
+      const exported = await exportCustomSqlQuery(sql, destination);
       onStatus(`Exported ${exported.row_count} rows to ${exported.path}`);
     } catch (nextError) {
       setError(errorMessage(nextError));
@@ -100,42 +107,13 @@ export function CustomSqlView({
         title="Custom SQL"
         detail="Execute typed SQL against taxonomy and file-path data sources"
         actions={(
-          <>
-            <button className="secondary-button" type="button" disabled={Boolean(busy)} onClick={() => void addSource("csv")}>
-              <FilePlus2 size={13} />CSV source
-            </button>
-            <button className="secondary-button" type="button" disabled={Boolean(busy)} onClick={() => void addSource("sqlite")}>
-              <Database size={13} />SQLite source
-            </button>
-            <button className="primary-button" type="button" disabled={Boolean(busy) || !sql.trim() || mutationDisabled} onClick={() => void execute()}>
-              <Play size={13} />Run
-            </button>
-          </>
+          <button className="primary-button" type="button" disabled={Boolean(busy) || !sql.trim() || mutationDisabled} onClick={() => void execute()}>
+            <Play size={13} />Run
+          </button>
         )}
       />
       <div className="custom-sql-workbench">
-        <aside className="sql-sources">
-          <strong>Sources</strong>
-          {schemas.length === 0 && <span>No external sources</span>}
-          {schemas.map((schema) => (
-            <section key={schema.alias}>
-              <header>
-                <b>{schema.alias}</b>
-                <button type="button" title="Remove source" onClick={() => removeSource(schema.alias)}>
-                  <Trash2 size={12} />
-                </button>
-              </header>
-              {schema.objects.map((object) => (
-                <details key={`${schema.alias}:${object.name}`}>
-                  <summary><Table2 size={12} />{object.name}</summary>
-                  {object.columns.map((column) => (
-                    <span key={column.name}>{column.name}<i>{column.declared_type ?? "untyped"}</i></span>
-                  ))}
-                </details>
-              ))}
-            </section>
-          ))}
-        </aside>
+        <SqlInputList inputs={inputs} busy={Boolean(busy)} onAdd={addInput} onRemove={removeInput} />
         <div className="custom-sql-editor">
           <CodeEditor language="sql" ariaLabel="Custom taxonomy SQL" value={sql} onChange={setSql} />
         </div>
@@ -202,16 +180,4 @@ function displaySqlValue(value: SqlValue): string {
   if (value.type === "null") return "NULL";
   if (value.type === "blob") return `[blob/base64] ${value.value}`;
   return String(value.value);
-}
-
-function sourceAlias(path: string, existing: SqlDataSource[]): string {
-  const stem = path.split(/[\\/]/).pop()?.replace(/\.[^.]+$/, "") ?? "source";
-  const normalized = stem.replace(/[^A-Za-z0-9_]/g, "_").replace(/^[^A-Za-z_]/, "_$&") || "source";
-  let candidate = normalized;
-  let suffix = 2;
-  while (existing.some((source) => source.alias === candidate)) {
-    candidate = `${normalized}_${suffix}`;
-    suffix += 1;
-  }
-  return candidate;
 }

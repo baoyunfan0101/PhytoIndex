@@ -12,6 +12,7 @@ mod operation_export;
 mod page;
 mod query;
 mod sql;
+mod sql_inputs;
 mod sql_support;
 pub(crate) mod sync;
 mod view;
@@ -26,14 +27,10 @@ pub use base::{
     replace_taxonomy_base_database,
 };
 pub use base_import::{
-    AddBaseImportCsvSourceRequest, AddBaseImportSqliteSourceRequest, BaseImportExecutionResult,
-    BaseImportIssue, BaseImportSchemaStatus, BaseImportSession, BaseImportSource,
-    BaseImportSourceType, BaseImportValidationResult, ExecuteBaseImportSqlRequest, NameTypeCount,
-    RemoveBaseImportSourceRequest, RemoveBaseImportSourceResult, add_base_import_csv_source,
-    add_base_import_sqlite_source, apply_base_import, create_base_import_session,
-    discard_base_import_session, execute_base_import_sql, get_default_base_import_sql,
-    inspect_base_import_sources, remove_base_import_source, reset_default_base_import_sql,
-    save_default_base_import_sql, validate_base_import,
+    BaseImportExecutionResult, BaseImportIssue, BaseImportValidationResult,
+    ExecuteBaseImportSqlRequest, NameTypeCount, add_base_import_input, apply_base_import,
+    execute_base_import_sql, get_base_import_sql, list_base_import_inputs,
+    remove_base_import_input, validate_base_import,
 };
 pub use formatted::{
     TaxonChange, TaxonChangeKind, TaxonInputRow, TaxonRank, TaxonRowOutcome, TaxonRowStatus,
@@ -54,9 +51,14 @@ pub(crate) use query::{
 };
 pub use sql::{
     CustomSqlExecutionResult, CustomTaxonomySqlExportRequest, CustomTaxonomySqlRequest, SqlColumn,
-    SqlDataSource, SqlExportResult, SqlObjectType, SqlResultSet, SqlSourceObject, SqlSourceSchema,
-    SqlStatementMessage, SqlValue, execute_custom_taxonomy_sql, export_custom_taxonomy_query,
-    inspect_sql_data_source,
+    SqlExportResult, SqlObjectType, SqlResultSet, SqlSourceObject, SqlSourceSchema,
+    SqlStatementMessage, SqlValue, add_custom_sql_input, execute_custom_taxonomy_sql,
+    export_custom_taxonomy_query, get_custom_taxonomy_sql, list_custom_sql_inputs,
+    remove_custom_sql_input,
+};
+pub use sql_inputs::{
+    AddSqlInputRequest, PersistentSqlInput, RemoveSqlInputRequest, RemoveSqlInputResult,
+    SqlInputKind,
 };
 pub use sync::{TaxonomySyncResult, TaxonomySyncRun, synchronize_pending_photo_libraries};
 pub(crate) use view::load_taxon_summaries;
