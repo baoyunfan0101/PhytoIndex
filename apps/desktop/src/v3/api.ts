@@ -343,6 +343,20 @@ export type BaseImportSession = {
   session_id: string;
 };
 
+export type BaseImportSource = {
+  source_type: "sqlite" | "csv";
+  source_alias: string;
+  original_path: string;
+  available: boolean;
+  schema_status: "inspected";
+  schema: SqlSourceSchema;
+};
+
+export type RemoveBaseImportSourceResult = {
+  sources: BaseImportSource[];
+  session_revision: number;
+};
+
 export type BaseImportExecutionResult = {
   statements_executed: number;
   session_revision: number;
@@ -1052,7 +1066,12 @@ export const addBaseImportSqliteSource = (sessionId: string, path: string) =>
   }));
 
 export const inspectBaseImportSources = (sessionId: string) =>
-  call<SqlSourceSchema[]>("inspect_base_import_sources", { sessionId }, () => []);
+  call<BaseImportSource[]>("inspect_base_import_sources", { sessionId }, () => []);
+
+export const removeBaseImportSource = (sessionId: string, sourceAlias: string) =>
+  call<RemoveBaseImportSourceResult>("remove_base_import_source", {
+    request: { session_id: sessionId, source_alias: sourceAlias },
+  }, () => ({ sources: [], session_revision: 1 }));
 
 export const executeBaseImportSql = (sessionId: string, sql: string) =>
   call<BaseImportExecutionResult>("execute_base_import_sql", {

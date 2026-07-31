@@ -11,14 +11,15 @@ import {
   getDefaultBaseImportSql,
   getTaxonomyBaseMetadata,
   inspectBaseImportSources,
+  removeBaseImportSource,
   resetDefaultBaseImportSql,
   saveDefaultBaseImportSql,
   selectCsvFile,
   selectSqliteDatabase,
   validateBaseImport,
   waitForOperation,
+  type BaseImportSource,
   type BaseImportValidationResult,
-  type SqlSourceSchema,
   type TaxonomyBaseMetadata,
 } from "./api";
 import { CodeEditor } from "./CodeEditor";
@@ -29,7 +30,7 @@ import { emitTaxonomyMutation } from "./taxonomyMutations";
 export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
   const [metadata, setMetadata] = useState<TaxonomyBaseMetadata | null>(null);
   const [sessionId, setSessionId] = useViewState<string | null>("base-import.session-id", null);
-  const [schemas, setSchemas] = useViewState<SqlSourceSchema[]>("base-import.schemas", []);
+  const [sources, setSources] = useViewState<BaseImportSource[]>("base-import.sources", []);
   const [sql, setSql] = useViewState("base-import.sql", "");
   const [validation, setValidation] = useViewState<BaseImportValidationResult | null>(
     "base-import.validation",
@@ -44,6 +45,9 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
     if (!sql) {
       void getDefaultBaseImportSql().then(setSql).catch((nextError) => setMessage(errorMessage(nextError)));
     }
+    if (sessionId) {
+      void refreshSources(sessionId).catch((nextError) => setMessage(errorMessage(nextError)));
+    }
   }, []);
 
   async function ensureSession(): Promise<string> {
@@ -55,7 +59,7 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
 
   async function refreshSources(id = sessionId) {
     if (!id) return;
-    setSchemas(await inspectBaseImportSources(id));
+    setSources(await inspectBaseImportSources(id));
   }
 
   async function addSqlite() {
@@ -63,6 +67,7 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
     if (!path) return;
     setBusy("Adding SQLite source");
     setMessage("");
+    setValidation(null);
     try {
       const id = await ensureSession();
       await addBaseImportSqliteSource(id, path);
@@ -84,6 +89,7 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
     if (!tableName) return;
     setBusy("Importing CSV source");
     setMessage("");
+    setValidation(null);
     try {
       const id = await ensureSession();
       await addBaseImportCsvSource(id, tableName, path);
@@ -99,10 +105,10 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
   async function execute() {
     setBusy("Executing import SQL");
     setMessage("");
+    setValidation(null);
     try {
       const id = await ensureSession();
       const result = await executeBaseImportSql(id, sql);
-      setValidation(null);
       setMessage(`${result.statements_executed} statements executed; session revision ${result.session_revision}.`);
     } catch (nextError) {
       setMessage(errorMessage(nextError));
@@ -138,12 +144,12 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
       if (completed.error) throw new Error(completed.error);
       setMetadata(await getTaxonomyBaseMetadata());
       setSessionId(null);
-      setSchemas([]);
+      setSources([]);
       setValidation(null);
       setConfirming(false);
-      setMessage("Base import applied. Photo libraries will remap in the background.");
-      emitTaxonomyMutation();
       onApplied?.();
+      emitTaxonomyMutation({ kind: "replacement" });
+      setMessage("Taxonomy database replaced successfully. Photo mappings are being rebuilt in the background.");
     } catch (nextError) {
       setMessage(errorMessage(nextError));
     } finally {
@@ -152,11 +158,41 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
   }
 
   async function discard() {
-    if (sessionId) await discardBaseImportSession(sessionId);
-    setSessionId(null);
-    setSchemas([]);
-    setValidation(null);
-    setMessage("Import workspace discarded.");
+    setBusy("Discarding import session");
+    setMessage("");
+    try {
+      if (sessionId) await discardBaseImportSession(sessionId);
+      setSessionId(null);
+      setSources([]);
+      setValidation(null);
+      setMessage("Import workspace discarded.");
+    } catch (nextError) {
+      setMessage(errorMessage(nextError));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function removeSource(source: BaseImportSource) {
+    if (!sessionId) return;
+    if (
+      validation
+      && !window.confirm("Removing this source will invalidate the current validation result.")
+    ) {
+      return;
+    }
+    setBusy(`Removing ${source.source_alias}`);
+    setMessage("");
+    try {
+      const result = await removeBaseImportSource(sessionId, source.source_alias);
+      setSources(result.sources);
+      setValidation(null);
+      setMessage(`Source removed; session revision ${result.session_revision}.`);
+    } catch (nextError) {
+      setMessage(errorMessage(nextError));
+    } finally {
+      setBusy("");
+    }
   }
 
   async function saveDefault() {
@@ -209,16 +245,40 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
       </div>
       <div className="base-import-workbench">
         <aside className="sql-sources">
-          <strong>Session schema</strong>
-          {schemas.length === 0 && <span>No sources attached</span>}
-          {schemas.flatMap((schema) => schema.objects.map((object) => (
-            <details key={`${schema.alias}:${object.name}`}>
-              <summary>{schema.alias}.{object.name}</summary>
-              {object.columns.map((column) => (
-                <span key={column.name}>{column.name}<i>{column.declared_type ?? "untyped"}</i></span>
+          <strong>Session sources</strong>
+          {sources.length === 0 && <span>No sources attached</span>}
+          {sources.map((source) => (
+            <section className="base-source" key={source.source_alias}>
+              <header>
+                <span>
+                  <b>{source.source_alias}</b>
+                  <i>{source.source_type.toUpperCase()}</i>
+                </span>
+                <button
+                  type="button"
+                  title={`Remove ${source.source_alias}`}
+                  disabled={Boolean(busy)}
+                  onClick={() => void removeSource(source)}
+                >
+                  <Trash2 size={13} />
+                </button>
+              </header>
+              <code title={source.original_path}>{source.original_path}</code>
+              <small className={source.available ? "available" : "unavailable"}>
+                {source.available ? "Available" : "Original file unavailable"}
+                {" / "}
+                Schema {source.schema_status}
+              </small>
+              {source.schema.objects.map((object) => (
+                <details key={`${source.source_alias}:${object.name}`}>
+                  <summary>{object.object_type} {object.name}</summary>
+                  {object.columns.map((column) => (
+                    <span key={column.name}>{column.name}<i>{column.declared_type ?? "untyped"}</i></span>
+                  ))}
+                </details>
               ))}
-            </details>
-          )))}
+            </section>
+          ))}
         </aside>
         <div className="base-import-editor">
           <CodeEditor language="sql" ariaLabel="Base import SQL" value={sql} onChange={setSql} />
