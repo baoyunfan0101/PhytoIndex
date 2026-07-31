@@ -1,11 +1,15 @@
 import { useEffect, useRef } from "react";
 
-type TaxonomyMutationListener = () => void;
+export type TaxonomyMutation = {
+  kind: "update" | "replacement";
+};
+
+type TaxonomyMutationListener = (mutation: TaxonomyMutation) => void;
 
 const listeners = new Set<TaxonomyMutationListener>();
 
-export function emitTaxonomyMutation() {
-  listeners.forEach((listener) => listener());
+export function emitTaxonomyMutation(mutation: TaxonomyMutation = { kind: "update" }) {
+  listeners.forEach((listener) => listener(mutation));
 }
 
 export function useTaxonomyMutation(listener: TaxonomyMutationListener) {
@@ -13,7 +17,7 @@ export function useTaxonomyMutation(listener: TaxonomyMutationListener) {
   listenerRef.current = listener;
 
   useEffect(() => {
-    const current = () => listenerRef.current();
+    const current = (mutation: TaxonomyMutation) => listenerRef.current(mutation);
     listeners.add(current);
     return () => {
       listeners.delete(current);

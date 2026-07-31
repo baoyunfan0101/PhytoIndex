@@ -36,10 +36,16 @@ import {
 } from "./v3/api";
 import type { IconComponent } from "./v3/components";
 import { MappingEditor } from "./v3/MappingEditor";
+import {
+  createNavigationHistory,
+  findNavigationTarget,
+  pruneNavigationHistory,
+  recordNavigation,
+} from "./v3/navigationHistory";
 import { PhotoBrowser } from "./v3/PhotoBrowser";
 import { PhotoDetailView } from "./v3/PhotoDetailView";
 import type { PhotoOpenHandlers } from "./v3/PhotoInteraction";
-import { usePhotoMutation } from "./v3/photoMutations";
+import { emitPhotoMutation, usePhotoMutation } from "./v3/photoMutations";
 import {
   FolderPhotosView,
   PhotoMapView,
@@ -57,6 +63,10 @@ import { EmptyState } from "./v3/components";
 import { useOperationObserver } from "./v3/useOperationObserver";
 import { useCursorPage } from "./v3/useCursorPage";
 import { ViewStateProvider, type ViewStateStore } from "./v3/viewState";
+import {
+  dependsOnReplacedTaxonomy,
+  retainTabsAfterTaxonomyReplacement,
+} from "./v3/taxonomyReplacement";
 
 type TabKind =
   | "folders"
@@ -134,8 +144,9 @@ export function App() {
   const searchRef = useRef<HTMLDivElement>(null);
   const searchToggleRef = useRef<HTMLButtonElement>(null);
   const viewStateStores = useRef(new globalThis.Map<string, ViewStateStore>());
-  const navigation = useRef<string[]>([initialTab.id]);
-  const [navigationIndex, setNavigationIndex] = useState(0);
+  const [navigationHistory, setNavigationHistory] = useState(
+    createNavigationHistory(initialTab.id),
+  );
   const operations = useOperationObserver();
   const active = tabs.find((tab) => tab.id === activeId) ?? tabs[0];
   const activeLibrary = libraries.find((library) => library.active) ?? null;
@@ -146,6 +157,12 @@ export function App() {
   const taxonomyMutationLocked = runningOperations.some(
     (operation) => operation.operation === "apply_base_import",
   );
+  const existingTabIds = useMemo(
+    () => new Set(tabs.map((tab) => tab.id)),
+    [tabs],
+  );
+  const backTarget = findNavigationTarget(navigationHistory, existingTabIds, -1);
+  const forwardTarget = findNavigationTarget(navigationHistory, existingTabIds, 1);
 
   usePhotoMutation((mutation) => {
     if (mutation.kind !== "photo") return;
@@ -169,6 +186,14 @@ export function App() {
   });
 
   useEffect(() => { void reloadLibraries(); }, []);
+
+  useEffect(() => {
+    setNavigationHistory((current) => pruneNavigationHistory(
+      current,
+      existingTabIds,
+      active?.id ?? null,
+    ));
+  }, [active?.id, existingTabIds]);
 
   useEffect(() => {
     const value = searchQuery.trim();
@@ -210,19 +235,16 @@ export function App() {
 
   function focusTab(id: string, record = true) {
     setActiveId(id);
-    if (!record) return;
-    const next = navigation.current.slice(0, navigationIndex + 1);
-    if (next[next.length - 1] !== id) next.push(id);
-    navigation.current = next;
-    setNavigationIndex(next.length - 1);
+    if (record) {
+      setNavigationHistory((current) => recordNavigation(current, id));
+    }
   }
 
   function navigate(offset: -1 | 1) {
-    const nextIndex = navigationIndex + offset;
-    const id = navigation.current[nextIndex];
-    if (!id || !tabs.some((tab) => tab.id === id)) return;
-    setNavigationIndex(nextIndex);
-    focusTab(id, false);
+    const target = findNavigationTarget(navigationHistory, existingTabIds, offset);
+    if (!target) return;
+    setNavigationHistory((current) => ({ ...current, index: target.index }));
+    focusTab(target.tabId, false);
   }
 
   function openModule(kind: TabKind, title: string) {
@@ -250,14 +272,12 @@ export function App() {
     if (typeof baseImportSession === "string") {
       void discardBaseImportSession(baseImportSession).catch((nextError) => setStatus(String(nextError)));
     }
-    setTabs((current) => {
-      if (current.length === 1) return current;
-      viewStateStores.current.delete(id);
-      const index = current.findIndex((tab) => tab.id === id);
-      const next = current.filter((tab) => tab.id !== id);
-      if (activeId === id) focusTab(next[Math.max(0, index - 1)]?.id ?? next[0].id);
-      return next;
-    });
+    if (tabs.length === 1) return;
+    viewStateStores.current.delete(id);
+    const index = tabs.findIndex((tab) => tab.id === id);
+    const next = tabs.filter((tab) => tab.id !== id);
+    setTabs(next);
+    if (activeId === id) focusTab(next[Math.max(0, index - 1)]?.id ?? next[0].id);
   }
 
   const handlers: PhotoOpenHandlers = useMemo(() => ({
@@ -334,12 +354,16 @@ export function App() {
   }
 
   function resetTaxonomyResources() {
-    const invalidKinds = new Set<TabKind>(["taxonomy-search", "taxon-detail", "taxonomy-history"]);
     setTabs((current) => {
-      current.filter((tab) => invalidKinds.has(tab.kind)).forEach((tab) => viewStateStores.current.delete(tab.id));
-      return current.filter((tab) => !invalidKinds.has(tab.kind));
+      current.filter((tab) => dependsOnReplacedTaxonomy(tab.kind)).forEach((tab) => viewStateStores.current.delete(tab.id));
+      const remaining = retainTabsAfterTaxonomyReplacement(current);
+      if (remaining.every((tab) => tab.id !== activeId)) {
+        setActiveId(remaining[0]?.id ?? initialTab.id);
+      }
+      return remaining.length > 0 ? remaining : [{ ...initialTab }];
     });
-    setStatus("Base database replaced; taxonomy resources were refreshed");
+    emitPhotoMutation({ photoId: null, kind: "mapping" });
+    setStatus("Taxonomy database replaced successfully. Photo mappings are being rebuilt in the background.");
   }
 
   return (
@@ -358,8 +382,8 @@ export function App() {
       <div className="desktop-main">
         <header className="app-topbar">
           <div className="toolbar-navigation">
-            <button type="button" title="Back" disabled={navigationIndex <= 0} onClick={() => navigate(-1)}><ArrowLeft size={14} /></button>
-            <button type="button" title="Forward" disabled={navigationIndex >= navigation.current.length - 1} onClick={() => navigate(1)}><ArrowRight size={14} /></button>
+            <button type="button" title="Go Back" disabled={!backTarget} onClick={() => navigate(-1)}><ArrowLeft size={14} /></button>
+            <button type="button" title="Go Forward" disabled={!forwardTarget} onClick={() => navigate(1)}><ArrowRight size={14} /></button>
           </div>
           <div className="library-selector">
             <button

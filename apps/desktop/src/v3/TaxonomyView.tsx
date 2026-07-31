@@ -267,6 +267,11 @@ export function FormattedUpdateView({ mutationDisabled = false }: { mutationDisa
   useMetadataChange((change) => {
     if (change.key === "taxonomy_name_separator") setSeparator(change.value);
   });
+  useTaxonomyMutation((mutation) => {
+    if (mutation.kind !== "replacement") return;
+    setOutcomes([]);
+    setMessage("Previous preview cleared because the taxonomy database was replaced.");
+  });
 
   async function importFile(file: File) {
     setRows(await parseTaxonomyCsv(await file.text()));
