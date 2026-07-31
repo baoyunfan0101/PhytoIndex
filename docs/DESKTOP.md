@@ -27,6 +27,10 @@ Map, Mapping, Formatted Update, Custom SQL, and Settings tabs remain mounted.
 Other tabs unmount while inactive and retain their view state in the tab view
 state store.
 
+The application shell records tab navigation separately from tab order.
+Back and Forward skip closed tabs. Closing tabs, switching Photo Libraries,
+and replacing the taxonomy database prune invalid navigation entries.
+
 ## Storage and Photo Library commands
 
 `PhotoLibraryWorkspace` contains the fields from
@@ -83,7 +87,8 @@ user applies or discards the workspace.
 | `create_base_import_session` | none | `BaseImportSession` |
 | `add_base_import_csv_source` | `request: AddBaseImportCsvSourceRequest` | `SqlSourceSchema` |
 | `add_base_import_sqlite_source` | `request: AddBaseImportSqliteSourceRequest` | `SqlSourceSchema` |
-| `inspect_base_import_sources` | `session_id: String` | `Vec<SqlSourceSchema>` |
+| `inspect_base_import_sources` | `session_id: String` | `Vec<BaseImportSource>` |
+| `remove_base_import_source` | `request: RemoveBaseImportSourceRequest` | `RemoveBaseImportSourceResult` |
 | `execute_base_import_sql` | `request: ExecuteBaseImportSqlRequest` | `BaseImportExecutionResult` |
 | `validate_base_import` | `session_id: String` | `BaseImportValidationResult` |
 | `apply_base_import` | `session_id: String` | `OperationState` |
@@ -96,6 +101,16 @@ Validation returns authoritative total warning and error counts plus bounded
 issue samples. Apply is allowed only after successful validation. The returned
 operation reports replacement progress; photo-library remapping continues
 through the background synchronization mechanism.
+
+`BaseImportSource` identifies a SQLite or CSV input by `source_alias` and
+returns its original path, availability, inspection status, and schema.
+Removal updates the complete source list and revision. Add, remove, and SQL
+execution invalidate the current validation result.
+
+After a successful apply, the shell closes tabs that store taxonomy identity,
+taxon IDs, or taxonomy paths. Photo and mapping views remain open but reload
+their mapping data. Formatted Update retains its draft and clears its previous
+preview.
 
 ## Operation and audit commands
 

@@ -218,6 +218,9 @@ isolated import workspace.
 | --- | --- |
 | `AddBaseImportCsvSourceRequest` | `session_id`, `table_name`, `path` |
 | `AddBaseImportSqliteSourceRequest` | `session_id`, `path` |
+| `BaseImportSource` | `source_type`, `source_alias`, `original_path`, `available`, `schema_status`, `schema` |
+| `RemoveBaseImportSourceRequest` | `session_id`, `source_alias` |
+| `RemoveBaseImportSourceResult` | `sources`, `session_revision` |
 | `ExecuteBaseImportSqlRequest` | `session_id`, `sql` |
 | `BaseImportExecutionResult` | `statements_executed`, `session_revision` |
 | `NameTypeCount` | `name_type`, `count` |
@@ -234,7 +237,8 @@ fields remain authoritative.
 | `create_base_import_session` | none | `BaseImportSession` |
 | `add_base_import_csv_source` | `request: &AddBaseImportCsvSourceRequest` | `SqlSourceSchema` |
 | `add_base_import_sqlite_source` | `request: &AddBaseImportSqliteSourceRequest` | `SqlSourceSchema` |
-| `inspect_base_import_sources` | `session_id: &str` | `Vec<SqlSourceSchema>` |
+| `inspect_base_import_sources` | `session_id: &str` | `Vec<BaseImportSource>` |
+| `remove_base_import_source` | `request: &RemoveBaseImportSourceRequest` | `RemoveBaseImportSourceResult` |
 | `execute_base_import_sql` | `request: &ExecuteBaseImportSqlRequest` | `BaseImportExecutionResult` |
 | `validate_base_import` | `session_id: &str` | `BaseImportValidationResult` |
 | `apply_base_import` | `session_id: &str` | `TaxonomyBaseReplaceResult` |
@@ -248,6 +252,13 @@ before any CSV table. CSV sources become persistent `main.<table_name>` tables
 inside the isolated source database. They use their UTF-8 header order, store
 every value as `TEXT`, and preserve empty fields as empty text. A bad row
 rejects the complete source and reports its row number.
+
+`inspect_base_import_sources` returns sources in registration order. The
+`available` field reports whether the original path is currently available;
+`schema` describes the registered objects that remain in the session source
+database. Removing one source preserves the other registered sources,
+increments the revision, and invalidates staging and validation candidates.
+Removal is rejected while another operation holds the session execution lock.
 
 Base Import SQL can read the isolated source and can attach only the
 backend-selected `vividarium_base.db` path with the `base` alias. It may create
