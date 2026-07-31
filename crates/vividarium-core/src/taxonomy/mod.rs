@@ -27,10 +27,12 @@ pub use base::{
 };
 pub use base_import::{
     AddBaseImportCsvSourceRequest, AddBaseImportSqliteSourceRequest, BaseImportExecutionResult,
-    BaseImportIssue, BaseImportSession, BaseImportValidationResult, ExecuteBaseImportSqlRequest,
-    NameTypeCount, add_base_import_csv_source, add_base_import_sqlite_source, apply_base_import,
-    create_base_import_session, discard_base_import_session, execute_base_import_sql,
-    get_default_base_import_sql, inspect_base_import_sources, reset_default_base_import_sql,
+    BaseImportIssue, BaseImportSchemaStatus, BaseImportSession, BaseImportSource,
+    BaseImportSourceType, BaseImportValidationResult, ExecuteBaseImportSqlRequest, NameTypeCount,
+    RemoveBaseImportSourceRequest, RemoveBaseImportSourceResult, add_base_import_csv_source,
+    add_base_import_sqlite_source, apply_base_import, create_base_import_session,
+    discard_base_import_session, execute_base_import_sql, get_default_base_import_sql,
+    inspect_base_import_sources, remove_base_import_source, reset_default_base_import_sql,
     save_default_base_import_sql, validate_base_import,
 };
 pub use formatted::{

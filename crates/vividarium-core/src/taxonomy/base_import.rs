@@ -2,7 +2,7 @@ use std::fs;
 use std::fs::File;
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock, Weak};
+use std::sync::{Arc, Mutex, OnceLock, TryLockError, Weak};
 use std::time::Duration;
 
 use base64::Engine;
@@ -17,7 +17,8 @@ use uuid::Uuid;
 use super::base::{TaxonomyBaseMetadata, TaxonomyBaseReplaceResult};
 use super::formatted::{TaxonomyNameType, validate_taxonomy};
 use super::sql::{
-    SqlSourceSchema, inspect_sqlite_source, is_safe_identifier, quote_identifier, validated_columns,
+    SqlObjectType, SqlSourceSchema, inspect_sqlite_source, is_safe_identifier, quote_identifier,
+    validated_columns,
 };
 use super::sql_support::execute_statement_to_completion_raw;
 use crate::db::{
@@ -55,6 +56,41 @@ pub struct AddBaseImportCsvSourceRequest {
 pub struct AddBaseImportSqliteSourceRequest {
     pub session_id: String,
     pub path: PathBuf,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BaseImportSourceType {
+    Sqlite,
+    Csv,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BaseImportSchemaStatus {
+    Inspected,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BaseImportSource {
+    pub source_type: BaseImportSourceType,
+    pub source_alias: String,
+    pub original_path: PathBuf,
+    pub available: bool,
+    pub schema_status: BaseImportSchemaStatus,
+    pub schema: SqlSourceSchema,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RemoveBaseImportSourceRequest {
+    pub session_id: String,
+    pub source_alias: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RemoveBaseImportSourceResult {
+    pub sources: Vec<BaseImportSource>,
+    pub session_revision: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -99,6 +135,16 @@ pub struct BaseImportValidationResult {
 struct BaseImportSessionState {
     revision: u64,
     candidate: Option<ValidatedBaseImportCandidate>,
+    #[serde(default)]
+    sources: Vec<RegisteredBaseImportSource>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RegisteredBaseImportSource {
+    source_type: BaseImportSourceType,
+    source_alias: String,
+    original_path: PathBuf,
+    schema: SqlSourceSchema,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -120,6 +166,7 @@ pub fn create_base_import_session(database: &Database) -> CoreResult<BaseImportS
         &BaseImportSessionState {
             revision: 0,
             candidate: None,
+            sources: Vec::new(),
         },
     )?;
     Ok(BaseImportSession { session_id })
@@ -151,6 +198,17 @@ pub fn add_base_import_csv_source(
         .lock()
         .map_err(|_| CoreError::Consistency("base import session lock is poisoned".into()))?;
     let workspace = session_workspace(database, &request.session_id)?;
+    let state = read_session_state(&workspace)?;
+    if state.sources.iter().any(|source| {
+        source
+            .source_alias
+            .eq_ignore_ascii_case(&request.table_name)
+    }) {
+        return Err(CoreError::InvalidArgument(format!(
+            "base import source alias already exists: {}",
+            request.table_name
+        )));
+    }
     let mut connection = Connection::open(workspace.join(SOURCE_DATABASE))?;
     let exists = connection.query_row(
         "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name = ?)",
@@ -165,11 +223,21 @@ pub fn add_base_import_csv_source(
     }
     load_csv_source_table(&mut connection, &request.table_name, &request.path)?;
     drop(connection);
-    invalidate_session(&workspace, true)?;
-    inspect_base_import_sources_unlocked(database, &request.session_id)?
-        .into_iter()
-        .next()
-        .ok_or_else(|| CoreError::Consistency("base import source schema was not created".into()))
+    let schema = source_schema(
+        &workspace,
+        &request.table_name,
+        &[request.table_name.as_str()],
+    )?;
+    register_source_and_invalidate(
+        &workspace,
+        RegisteredBaseImportSource {
+            source_type: BaseImportSourceType::Csv,
+            source_alias: request.table_name.clone(),
+            original_path: request.path.clone(),
+            schema: schema.clone(),
+        },
+    )?;
+    Ok(schema)
 }
 
 pub fn add_base_import_sqlite_source(
@@ -187,6 +255,16 @@ pub fn add_base_import_sqlite_source(
         .lock()
         .map_err(|_| CoreError::Consistency("base import session lock is poisoned".into()))?;
     let workspace = session_workspace(database, &request.session_id)?;
+    let state = read_session_state(&workspace)?;
+    if state
+        .sources
+        .iter()
+        .any(|source| source.source_alias.eq_ignore_ascii_case("main"))
+    {
+        return Err(CoreError::InvalidArgument(
+            "base import SQLite source already exists".into(),
+        ));
+    }
     let source_path = workspace.join(SOURCE_DATABASE);
     let existing = Connection::open(&source_path)?.query_row(
         "SELECT COUNT(*) FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'",
@@ -212,17 +290,23 @@ pub fn add_base_import_sqlite_source(
     drop(source);
     fs::remove_file(&source_path)?;
     fs::rename(&temporary, &source_path)?;
-    invalidate_session(&workspace, true)?;
-    inspect_base_import_sources_unlocked(database, &request.session_id)?
-        .into_iter()
-        .next()
-        .ok_or_else(|| CoreError::Consistency("base import source schema was not copied".into()))
+    let schema = inspect_sqlite_source("main", &source_path)?;
+    register_source_and_invalidate(
+        &workspace,
+        RegisteredBaseImportSource {
+            source_type: BaseImportSourceType::Sqlite,
+            source_alias: "main".into(),
+            original_path: request.path.clone(),
+            schema: schema.clone(),
+        },
+    )?;
+    Ok(schema)
 }
 
 pub fn inspect_base_import_sources(
     database: &Database,
     session_id: &str,
-) -> CoreResult<Vec<SqlSourceSchema>> {
+) -> CoreResult<Vec<BaseImportSource>> {
     let session_lock = session_lock(session_id)?;
     let _session_guard = session_lock
         .lock()
@@ -233,12 +317,94 @@ pub fn inspect_base_import_sources(
 fn inspect_base_import_sources_unlocked(
     database: &Database,
     session_id: &str,
-) -> CoreResult<Vec<SqlSourceSchema>> {
+) -> CoreResult<Vec<BaseImportSource>> {
     let workspace = session_workspace(database, session_id)?;
-    Ok(vec![inspect_sqlite_source(
-        "main",
-        &workspace.join(SOURCE_DATABASE),
-    )?])
+    let state = read_session_state(&workspace)?;
+    let current_schema = inspect_sqlite_source("main", &workspace.join(SOURCE_DATABASE))?;
+    Ok(state
+        .sources
+        .into_iter()
+        .map(|source| {
+            let object_names = source
+                .schema
+                .objects
+                .iter()
+                .map(|object| object.name.as_str())
+                .collect::<Vec<_>>();
+            BaseImportSource {
+                source_type: source.source_type,
+                source_alias: source.source_alias.clone(),
+                original_path: source.original_path.clone(),
+                available: source.original_path.is_file(),
+                schema_status: BaseImportSchemaStatus::Inspected,
+                schema: filtered_schema(&current_schema, &source.source_alias, &object_names),
+            }
+        })
+        .collect())
+}
+
+pub fn remove_base_import_source(
+    database: &Database,
+    request: &RemoveBaseImportSourceRequest,
+) -> CoreResult<RemoveBaseImportSourceResult> {
+    let session_lock = session_lock(&request.session_id)?;
+    let _session_guard = match session_lock.try_lock() {
+        Ok(guard) => guard,
+        Err(TryLockError::WouldBlock) => {
+            return Err(CoreError::InvalidArgument(
+                "base import session is busy".into(),
+            ));
+        }
+        Err(TryLockError::Poisoned(_)) => {
+            return Err(CoreError::Consistency(
+                "base import session lock is poisoned".into(),
+            ));
+        }
+    };
+    let workspace = session_workspace(database, &request.session_id)?;
+    let mut state = read_session_state(&workspace)?;
+    let source_index = state
+        .sources
+        .iter()
+        .position(|source| source.source_alias == request.source_alias)
+        .ok_or_else(|| {
+            CoreError::NotFound(format!("base import source {}", request.source_alias))
+        })?;
+    let source = state.sources[source_index].clone();
+    let source_path = workspace.join(SOURCE_DATABASE);
+    let temporary = workspace.join(".source-remove.db");
+    let previous = workspace.join(".source-before-remove.db");
+    remove_file_if_exists(&temporary)?;
+    remove_file_if_exists(&previous)?;
+    backup_database(&source_path, &temporary)?;
+    if let Err(error) = remove_registered_source_objects(&temporary, &source) {
+        let _ = remove_file_if_exists(&temporary);
+        return Err(error);
+    }
+    fs::rename(&source_path, &previous)?;
+    if let Err(error) = fs::rename(&temporary, &source_path) {
+        let _ = fs::rename(&previous, &source_path);
+        return Err(error.into());
+    }
+    state.sources.remove(source_index);
+    state.revision = state
+        .revision
+        .checked_add(1)
+        .ok_or_else(|| CoreError::Consistency("base import session revision overflow".into()))?;
+    state.candidate = None;
+    if let Err(error) = write_session_state(&workspace, &state) {
+        let _ = remove_file_if_exists(&source_path);
+        let _ = fs::rename(&previous, &source_path);
+        return Err(error);
+    }
+    remove_file_if_exists(&previous)?;
+    remove_file_if_exists(&workspace.join(CANDIDATE_DATABASE))?;
+    remove_file_if_exists(&workspace.join(CANDIDATE_BUILD_DATABASE))?;
+    remove_file_if_exists(&workspace.join(STAGING_DATABASE))?;
+    Ok(RemoveBaseImportSourceResult {
+        sources: inspect_base_import_sources_unlocked(database, &request.session_id)?,
+        session_revision: state.revision,
+    })
 }
 
 pub fn execute_base_import_sql(
@@ -591,6 +757,25 @@ fn write_session_state(workspace: &Path, state: &BaseImportSessionState) -> Core
     Ok(())
 }
 
+fn register_source_and_invalidate(
+    workspace: &Path,
+    source: RegisteredBaseImportSource,
+) -> CoreResult<u64> {
+    let mut state = read_session_state(workspace)?;
+    state.sources.push(source);
+    state.revision = state
+        .revision
+        .checked_add(1)
+        .ok_or_else(|| CoreError::Consistency("base import session revision overflow".into()))?;
+    if let Some(candidate) = state.candidate.take() {
+        remove_file_if_exists(&candidate.candidate_path)?;
+    }
+    remove_file_if_exists(&workspace.join(CANDIDATE_BUILD_DATABASE))?;
+    remove_file_if_exists(&workspace.join(STAGING_DATABASE))?;
+    write_session_state(workspace, &state)?;
+    Ok(state.revision)
+}
+
 fn invalidate_session(workspace: &Path, remove_staging: bool) -> CoreResult<u64> {
     let mut state = read_session_state(workspace)?;
     state.revision = state
@@ -606,6 +791,74 @@ fn invalidate_session(workspace: &Path, remove_staging: bool) -> CoreResult<u64>
     }
     write_session_state(workspace, &state)?;
     Ok(state.revision)
+}
+
+fn source_schema(
+    workspace: &Path,
+    alias: &str,
+    object_names: &[&str],
+) -> CoreResult<SqlSourceSchema> {
+    let schema = inspect_sqlite_source("main", &workspace.join(SOURCE_DATABASE))?;
+    Ok(filtered_schema(&schema, alias, object_names))
+}
+
+fn filtered_schema(
+    schema: &SqlSourceSchema,
+    alias: &str,
+    object_names: &[&str],
+) -> SqlSourceSchema {
+    SqlSourceSchema {
+        alias: alias.into(),
+        objects: schema
+            .objects
+            .iter()
+            .filter(|object| object_names.contains(&object.name.as_str()))
+            .cloned()
+            .collect(),
+    }
+}
+
+fn backup_database(source_path: &Path, destination_path: &Path) -> CoreResult<()> {
+    let source = Connection::open_with_flags(
+        source_path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    let mut destination = Connection::open(destination_path)?;
+    let backup = Backup::new(&source, &mut destination)?;
+    backup.run_to_completion(256, Duration::from_millis(10), None)?;
+    drop(backup);
+    drop(destination);
+    drop(source);
+    Ok(())
+}
+
+fn remove_registered_source_objects(
+    source_path: &Path,
+    source: &RegisteredBaseImportSource,
+) -> CoreResult<()> {
+    let mut connection = Connection::open(source_path)?;
+    let transaction = connection.transaction()?;
+    for object_type in [
+        SqlObjectType::View,
+        SqlObjectType::VirtualTable,
+        SqlObjectType::Table,
+    ] {
+        for object in source
+            .schema
+            .objects
+            .iter()
+            .filter(|object| object.object_type == object_type)
+        {
+            let statement = match object_type {
+                SqlObjectType::View => "DROP VIEW IF EXISTS",
+                SqlObjectType::Table | SqlObjectType::VirtualTable => "DROP TABLE IF EXISTS",
+            };
+            transaction
+                .execute_batch(&format!("{statement} {}", quote_identifier(&object.name)))?;
+        }
+    }
+    transaction.commit()?;
+    Ok(())
 }
 
 fn clear_candidate(workspace: &Path, state: &mut BaseImportSessionState) -> CoreResult<()> {

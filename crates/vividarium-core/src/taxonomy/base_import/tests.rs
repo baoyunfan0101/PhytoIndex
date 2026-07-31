@@ -395,6 +395,189 @@ fn source_and_sql_changes_invalidate_the_candidate() {
 }
 
 #[test]
+fn removes_csv_source_without_changing_other_sources() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = Database::open(directory.path().join("metadata.db")).unwrap();
+    let sqlite_path = directory.path().join("source.db");
+    Connection::open(&sqlite_path)
+        .unwrap()
+        .execute_batch("CREATE TABLE taxa (taxon_id INTEGER PRIMARY KEY)")
+        .unwrap();
+    let csv_path = directory.path().join("names.csv");
+    fs::write(&csv_path, "name\nAnimalia\n").unwrap();
+    let session = create_base_import_session(&database).unwrap();
+    add_base_import_sqlite_source(
+        &database,
+        &AddBaseImportSqliteSourceRequest {
+            session_id: session.session_id.clone(),
+            path: sqlite_path,
+        },
+    )
+    .unwrap();
+    add_base_import_csv_source(
+        &database,
+        &AddBaseImportCsvSourceRequest {
+            session_id: session.session_id.clone(),
+            table_name: "names".into(),
+            path: csv_path,
+        },
+    )
+    .unwrap();
+
+    let result = remove_base_import_source(
+        &database,
+        &RemoveBaseImportSourceRequest {
+            session_id: session.session_id.clone(),
+            source_alias: "names".into(),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(result.sources.len(), 1);
+    assert_eq!(result.sources[0].source_alias, "main");
+    assert_eq!(result.session_revision, 3);
+    let workspace = session_workspace(&database, &session.session_id).unwrap();
+    let connection = Connection::open(workspace.join(SOURCE_DATABASE)).unwrap();
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_schema WHERE name = 'taxa'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_schema WHERE name = 'names'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn removes_sqlite_source_without_changing_csv_source() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = Database::open(directory.path().join("metadata.db")).unwrap();
+    let sqlite_path = directory.path().join("source.db");
+    Connection::open(&sqlite_path)
+        .unwrap()
+        .execute_batch("CREATE TABLE taxa (taxon_id INTEGER PRIMARY KEY)")
+        .unwrap();
+    let csv_path = directory.path().join("names.csv");
+    fs::write(&csv_path, "name\nAnimalia\n").unwrap();
+    let session = create_base_import_session(&database).unwrap();
+    add_base_import_sqlite_source(
+        &database,
+        &AddBaseImportSqliteSourceRequest {
+            session_id: session.session_id.clone(),
+            path: sqlite_path,
+        },
+    )
+    .unwrap();
+    add_base_import_csv_source(
+        &database,
+        &AddBaseImportCsvSourceRequest {
+            session_id: session.session_id.clone(),
+            table_name: "names".into(),
+            path: csv_path,
+        },
+    )
+    .unwrap();
+
+    let result = remove_base_import_source(
+        &database,
+        &RemoveBaseImportSourceRequest {
+            session_id: session.session_id.clone(),
+            source_alias: "main".into(),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(result.sources.len(), 1);
+    assert_eq!(result.sources[0].source_alias, "names");
+    let workspace = session_workspace(&database, &session.session_id).unwrap();
+    let connection = Connection::open(workspace.join(SOURCE_DATABASE)).unwrap();
+    assert_eq!(
+        connection
+            .query_row("SELECT name FROM names", [], |row| row.get::<_, String>(0))
+            .unwrap(),
+        "Animalia"
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_schema WHERE name = 'taxa'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn source_removal_invalidates_candidate_and_rejects_busy_or_missing_source() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = Database::open(directory.path().join("metadata.db")).unwrap();
+    let session = simple_session(&directory, &database);
+    validate_base_import(&database, &session.session_id).unwrap();
+    let workspace = session_workspace(&database, &session.session_id).unwrap();
+    let candidate_path = read_session_state(&workspace)
+        .unwrap()
+        .candidate
+        .as_ref()
+        .unwrap()
+        .candidate_path
+        .clone();
+    let session_mutex = session_lock(&session.session_id).unwrap();
+    let guard = session_mutex.lock().unwrap();
+    let busy_error = remove_base_import_source(
+        &database,
+        &RemoveBaseImportSourceRequest {
+            session_id: session.session_id.clone(),
+            source_alias: "source_taxa".into(),
+        },
+    )
+    .unwrap_err();
+    assert!(busy_error.to_string().contains("session is busy"));
+    drop(guard);
+
+    let missing_error = remove_base_import_source(
+        &database,
+        &RemoveBaseImportSourceRequest {
+            session_id: session.session_id.clone(),
+            source_alias: "missing".into(),
+        },
+    )
+    .unwrap_err();
+    assert!(
+        missing_error
+            .to_string()
+            .contains("base import source missing")
+    );
+
+    let result = remove_base_import_source(
+        &database,
+        &RemoveBaseImportSourceRequest {
+            session_id: session.session_id.clone(),
+            source_alias: "source_taxa".into(),
+        },
+    )
+    .unwrap();
+    assert_eq!(result.session_revision, 3);
+    assert!(result.sources.is_empty());
+    assert!(!candidate_path.exists());
+    assert!(read_session_state(&workspace).unwrap().candidate.is_none());
+    assert!(!workspace.join(STAGING_DATABASE).exists());
+}
+
+#[test]
 fn external_staging_change_blocks_apply_and_preserves_taxonomy() {
     let directory = tempfile::tempdir().unwrap();
     let database = Database::open(directory.path().join("metadata.db")).unwrap();
@@ -497,12 +680,7 @@ fn csv_failure_rolls_back_the_entire_source_table() {
     let schema = inspect_base_import_sources(&database, &session.session_id).unwrap();
 
     assert!(error.to_string().contains("CSV row 3"));
-    assert!(
-        !schema[0]
-            .objects
-            .iter()
-            .any(|object| object.name == "broken_source")
-    );
+    assert!(schema.is_empty());
 
     let mut large_csv = String::from("value\n");
     for value in 0..5_000 {

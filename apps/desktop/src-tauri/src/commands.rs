@@ -22,12 +22,13 @@ use vividarium_core::operations::{OperationAuditRow, OperationPage, OperationSum
 use vividarium_core::photos::{PhotoFilenameFormatSettings, PhotoRenameOperationResult};
 use vividarium_core::taxonomy::{
     AddBaseImportCsvSourceRequest, AddBaseImportSqliteSourceRequest, BaseImportExecutionResult,
-    BaseImportSession, BaseImportValidationResult, CustomSqlExecutionResult,
+    BaseImportSession, BaseImportSource, BaseImportValidationResult, CustomSqlExecutionResult,
     CustomTaxonomySqlExportRequest, CustomTaxonomySqlRequest, DeleteTaxonNameInput,
-    ExecuteBaseImportSqlRequest, PromoteTaxonNameInput, SqlDataSource, SqlExportResult,
-    SqlSourceSchema, TaxonChild, TaxonDetailNode, TaxonInputRow, TaxonRowOutcome,
-    TaxonSearchResult, TaxonSuggestion, TaxonUpdateInput, TaxonomyBaseMetadata,
-    TaxonomyOperationResult, TaxonomyPage, TaxonomyPreviewResult,
+    ExecuteBaseImportSqlRequest, PromoteTaxonNameInput, RemoveBaseImportSourceRequest,
+    RemoveBaseImportSourceResult, SqlDataSource, SqlExportResult, SqlSourceSchema, TaxonChild,
+    TaxonDetailNode, TaxonInputRow, TaxonRowOutcome, TaxonSearchResult, TaxonSuggestion,
+    TaxonUpdateInput, TaxonomyBaseMetadata, TaxonomyOperationResult, TaxonomyPage,
+    TaxonomyPreviewResult,
 };
 use vividarium_core::{
     map::{self, MapBounds, MapPhoto, MapSettings},
@@ -882,8 +883,16 @@ pub fn add_base_import_sqlite_source(
 pub fn inspect_base_import_sources(
     state: State<'_, AppState>,
     session_id: String,
-) -> CommandResult<Vec<SqlSourceSchema>> {
+) -> CommandResult<Vec<BaseImportSource>> {
     taxonomy::inspect_base_import_sources(&state.database, &session_id).map_err(error)
+}
+
+#[tauri::command]
+pub fn remove_base_import_source(
+    state: State<'_, AppState>,
+    request: RemoveBaseImportSourceRequest,
+) -> CommandResult<RemoveBaseImportSourceResult> {
+    taxonomy::remove_base_import_source(&state.database, &request).map_err(error)
 }
 
 #[tauri::command]

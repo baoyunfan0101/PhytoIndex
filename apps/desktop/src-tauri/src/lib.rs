@@ -104,6 +104,7 @@ pub fn run() {
             commands::add_base_import_csv_source,
             commands::add_base_import_sqlite_source,
             commands::inspect_base_import_sources,
+            commands::remove_base_import_source,
             commands::execute_base_import_sql,
             commands::validate_base_import,
             commands::apply_base_import,
