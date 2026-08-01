@@ -13,3 +13,7 @@ export function closeTabState<T extends { id: string }>(
     activeId: remaining[nextIndex]?.id ?? null,
   };
 }
+
+export function closeAllTabsState<T>(): { tabs: T[]; activeId: null } {
+  return { tabs: [], activeId: null };
+}

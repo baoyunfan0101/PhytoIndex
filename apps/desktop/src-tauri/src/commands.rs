@@ -238,6 +238,21 @@ pub fn relocate_taxonomy_database(
 }
 
 #[tauri::command]
+pub fn open_taxonomy_database(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    database_path: String,
+) -> CommandResult<DatabaseLocations> {
+    ensure_database_relocation_allowed(&state)?;
+    let locations = state
+        .database
+        .open_taxonomy_database(Path::new(&database_path))
+        .map_err(error)?;
+    schedule_taxonomy_sync(app, &state);
+    Ok(locations)
+}
+
+#[tauri::command]
 pub fn set_default_taxonomy_database_directory(
     state: State<'_, AppState>,
     directory: String,

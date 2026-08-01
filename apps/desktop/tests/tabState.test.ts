@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { closeTabState } from "../src/app/tabState.ts";
+import { closeAllTabsState, closeTabState } from "../src/app/tabState.ts";
 
 const tab = (id: string) => ({ id });
 
@@ -27,4 +27,8 @@ test("closing an inactive tab preserves the active tab", () => {
     tabs: [tab("B")],
     activeId: "B",
   });
+});
+
+test("closing all tabs clears the active tab", () => {
+  assert.deepEqual(closeAllTabsState(), { tabs: [], activeId: null });
 });

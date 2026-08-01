@@ -4,14 +4,12 @@ import {
   ArrowRightLeft,
   ArrowRight,
   Braces,
-  ChevronDown,
   Database,
   FileClock,
   FolderOpen,
   History,
   ListTree,
   Map,
-  Plus,
   Search,
   Settings,
   TableProperties,
@@ -24,12 +22,11 @@ import {
 } from "../api/photos";
 import {
   listPhotoLibraries,
+  openTaxonomyDatabase,
   openPhotoLibrary,
-  photoLibraryAvailabilityLabel,
-  switchPhotoLibrary,
   type PhotoLibraryWorkspace,
 } from "../api/storage";
-import { selectPhotoDirectory } from "../api/dialogs";
+import { selectPhotoDirectory, selectSqliteDatabase } from "../api/dialogs";
 import type { IconComponent } from "../shared/ui";
 import { MappingEditor } from "../features/mapping/MappingEditor";
 import {
@@ -71,7 +68,9 @@ import {
   dependsOnReplacedTaxonomy,
   retainTabsAfterTaxonomyReplacement,
 } from "./taxonomyReplacement";
-import { closeTabState } from "./tabState";
+import { closeAllTabsState, closeTabState } from "./tabState";
+import { nativeMenuActions, useNativeMenu } from "./nativeMenu";
+import { NativeAboutOverlay } from "./NativeAboutOverlay";
 
 type TabKind =
   | "folders"
@@ -138,14 +137,12 @@ export function DesktopShell() {
   const [tabs, setTabs] = useState<AppTab[]>([initialTab]);
   const [activeId, setActiveId] = useState<string | null>(initialTab.id);
   const [libraries, setLibraries] = useState<PhotoLibraryWorkspace[]>([]);
-  const [workspaceLoading, setWorkspaceLoading] = useState(true);
-  const [libraryMenuOpen, setLibraryMenuOpen] = useState(false);
   const [operationsOpen, setOperationsOpen] = useState(false);
+  const [aboutOpen, setAboutOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [recentSearches, setRecentSearches] = useState(loadRecentSearches);
   const [status, setStatus] = useState("Ready");
   const emptySearchInputRef = useRef<HTMLInputElement>(null);
-  const libraryMenuRef = useRef<HTMLDivElement>(null);
   const operationsMenuRef = useRef<HTMLDivElement>(null);
   const viewStateStores = useRef(new globalThis.Map<string, ViewStateStore>());
   const [navigationHistory, setNavigationHistory] = useState(
@@ -200,19 +197,16 @@ export function DesktopShell() {
   }, [active?.id, existingTabIds]);
 
   useEffect(() => {
-    if (!libraryMenuOpen && !operationsOpen) return;
-    const closeMenusOnOutsidePointer = (event: PointerEvent) => {
+    if (!operationsOpen) return;
+    const closeMenuOnOutsidePointer = (event: PointerEvent) => {
       const target = event.target as Node;
-      if (libraryMenuOpen && !libraryMenuRef.current?.contains(target)) {
-        setLibraryMenuOpen(false);
-      }
       if (operationsOpen && !operationsMenuRef.current?.contains(target)) {
         setOperationsOpen(false);
       }
     };
-    window.addEventListener("pointerdown", closeMenusOnOutsidePointer);
-    return () => window.removeEventListener("pointerdown", closeMenusOnOutsidePointer);
-  }, [libraryMenuOpen, operationsOpen]);
+    window.addEventListener("pointerdown", closeMenuOnOutsidePointer);
+    return () => window.removeEventListener("pointerdown", closeMenuOnOutsidePointer);
+  }, [operationsOpen]);
 
   function openTab(tab: AppTab, singleton = false) {
     const existing = tabs.find((item) => item.id === tab.id || (singleton && item.kind === tab.kind));
@@ -325,48 +319,47 @@ export function DesktopShell() {
   }
 
   async function reloadLibraries() {
-    setWorkspaceLoading(true);
     try {
       setLibraries(await listPhotoLibraries());
     } catch (nextError) {
       setStatus(String(nextError));
-    } finally {
-      setWorkspaceLoading(false);
     }
   }
 
   async function createLibrary() {
     const selected = await selectPhotoDirectory();
     if (!selected) return;
-    await openPhotoLibrary(selected);
-    await reloadLibraries();
-    setLibraryMenuOpen(false);
-    resetPhotoWorkspace("Photo Library opened");
-  }
-
-  async function selectLibrary(library: PhotoLibraryWorkspace) {
-    if (library.active) {
-      setLibraryMenuOpen(false);
-      return;
-    }
-    if (!library.root_available || !library.database_available) {
-      setLibraryMenuOpen(false);
-      setStatus(`${library.display_name} is unavailable; rebind it in Settings`);
-      openModule("settings", "Settings");
-      return;
-    }
     try {
-      await switchPhotoLibrary(library.library_uuid);
+      await openPhotoLibrary(selected);
       await reloadLibraries();
-      setLibraryMenuOpen(false);
-      resetPhotoWorkspace(`Opened ${library.display_name}`);
+      resetPhotoWorkspace("Photo Library opened");
     } catch (nextError) {
       setStatus(String(nextError));
-      await reloadLibraries();
     }
   }
 
-  function resetTaxonomyResources() {
+  async function openExistingTaxonomyDatabase() {
+    const selected = await selectSqliteDatabase();
+    if (!selected) return;
+    try {
+      await openTaxonomyDatabase(selected);
+      resetTaxonomyResources("Taxonomy Database opened. Photo mappings are being rebuilt in the background.");
+    } catch (nextError) {
+      setStatus(String(nextError));
+    }
+  }
+
+  function closeAllTabs() {
+    const next = closeAllTabsState<AppTab>();
+    viewStateStores.current.clear();
+    setTabs(next.tabs);
+    focusTab(next.activeId);
+    setOperationsOpen(false);
+    setAboutOpen(false);
+    setSearchOpen(false);
+  }
+
+  function resetTaxonomyResources(message = "Taxonomy database replaced successfully. Photo mappings are being rebuilt in the background.") {
     setTabs((current) => {
       current.filter((tab) => dependsOnReplacedTaxonomy(tab.kind)).forEach((tab) => viewStateStores.current.delete(tab.id));
       const remaining = retainTabsAfterTaxonomyReplacement(current);
@@ -376,8 +369,24 @@ export function DesktopShell() {
       return remaining.length > 0 ? remaining : [{ ...initialTab }];
     });
     emitPhotoMutation({ photoId: null, kind: "mapping" });
-    setStatus("Taxonomy database replaced successfully. Photo mappings are being rebuilt in the background.");
+    setStatus(message);
   }
+
+  useNativeMenu((action) => {
+    if (action === nativeMenuActions.aboutVividarium) {
+      setSearchOpen(false);
+      setAboutOpen(true);
+    }
+    if (action === nativeMenuActions.openPhotoLibrary) void createLibrary();
+    if (action === nativeMenuActions.managePhotoLibraries) {
+      openTab({ id: "settings", kind: "settings", title: "Settings", settingsSection: "Photo Libraries" }, true);
+    }
+    if (action === nativeMenuActions.openTaxonomyDatabase) void openExistingTaxonomyDatabase();
+    if (action === nativeMenuActions.manageTaxonomyDatabases) {
+      openTab({ id: "settings", kind: "settings", title: "Settings", settingsSection: "Taxonomy Databases" }, true);
+    }
+    if (action === nativeMenuActions.closeAllTabs) closeAllTabs();
+  });
 
   return (
     <div className="desktop-shell">
@@ -398,44 +407,6 @@ export function DesktopShell() {
             <button type="button" title="Go Back" disabled={!backTarget} onClick={() => navigate(-1)}><ArrowLeft size={14} /></button>
             <button type="button" title="Go Forward" disabled={!forwardTarget} onClick={() => navigate(1)}><ArrowRight size={14} /></button>
           </div>
-          <div className="library-selector" ref={libraryMenuRef}>
-            <button
-              className={`library-selector-button${workspaceAvailable ? "" : " unavailable"}`}
-              type="button"
-              onClick={() => {
-                setOperationsOpen(false);
-                setLibraryMenuOpen((current) => !current);
-              }}
-              title={activeLibrary?.root_path ?? "Select a Photo Library"}
-            >
-              <Database size={14} />
-              <span>{workspaceLoading ? "Loading libraries" : activeLibrary?.display_name ?? "No Photo Library"}</span>
-              <ChevronDown size={13} />
-            </button>
-            {libraryMenuOpen && (
-              <div className="toolbar-popover library-popover">
-                <strong>Photo Libraries</strong>
-                {libraries.length === 0 && <span>No registered libraries</span>}
-                {libraries.map((library) => (
-                  <button
-                    className={library.active ? "active" : ""}
-                    type="button"
-                    key={library.library_uuid}
-                    onClick={() => void selectLibrary(library)}
-                  >
-                    <i className={library.root_available && library.database_available ? "available" : "unavailable"} />
-                      <span><b>{library.display_name}</b><small>{library.root_path}</small></span>
-                      <em>{photoLibraryAvailabilityLabel(library)}</em>
-                  </button>
-                ))}
-                <button className="popover-action" type="button" onClick={() => void createLibrary()}><Plus size={13} />Create or open library</button>
-                <button className="popover-action" type="button" onClick={() => {
-                  setLibraryMenuOpen(false);
-                  openTab({ id: "settings", kind: "settings", title: "Settings", settingsSection: "Photo Libraries" }, true);
-                }}><Settings size={13} />Manage libraries</button>
-              </div>
-            )}
-          </div>
           <div className="tab-strip">
             {tabs.map((tab) => (
               <button className={`app-tab${tab.id === activeId ? " active" : ""}`} type="button" key={tab.id} onClick={() => focusTab(tab.id)}>
@@ -449,7 +420,6 @@ export function DesktopShell() {
           </div>
           <div className="toolbar-actions" ref={operationsMenuRef}>
             <button className={runningOperations.length > 0 ? "running" : ""} type="button" title="Background operations" onClick={() => {
-              setLibraryMenuOpen(false);
               setOperationsOpen((current) => !current);
             }}>
               <Activity size={15} /><span>{runningOperations.length}</span>
@@ -513,6 +483,7 @@ export function DesktopShell() {
                       if (resetPhotoTabs) resetPhotoWorkspace("Photo Library workspace changed");
                     }}
                     onBaseReplaced={resetTaxonomyResources}
+                    onTaxonomyDatabaseChanged={() => resetTaxonomyResources("Taxonomy Database opened. Photo mappings are being rebuilt in the background.")}
                   />
                 </ViewStateProvider>
               </section>
@@ -528,6 +499,7 @@ export function DesktopShell() {
           onSubmit={submitSearch}
         />
       )}
+      {aboutOpen && <NativeAboutOverlay onClose={() => setAboutOpen(false)} />}
     </div>
   );
 }
@@ -546,6 +518,7 @@ function TabBody({
   onCreateLibrary,
   onWorkspaceChanged,
   onBaseReplaced,
+  onTaxonomyDatabaseChanged,
 }: {
   active: boolean;
   tab: AppTab;
@@ -560,6 +533,7 @@ function TabBody({
   onCreateLibrary: () => void;
   onWorkspaceChanged: (resetPhotoTabs: boolean) => void;
   onBaseReplaced: () => void;
+  onTaxonomyDatabaseChanged: () => void;
 }) {
   if (photoTabKinds.has(tab.kind) && !workspaceAvailable) {
     return (
@@ -588,7 +562,7 @@ function TabBody({
   if (tab.kind === "formatted-update") return <FormattedUpdateView mutationDisabled={taxonomyMutationLocked} />;
   if (tab.kind === "custom-sql") return <CustomSqlView onStatus={onStatus} mutationDisabled={taxonomyMutationLocked} />;
   if (tab.kind === "taxonomy-history") return <OperationHistoryView domain="taxonomy" onStatus={onStatus} />;
-  if (tab.kind === "settings") return <SettingsView section={tab.settingsSection ?? "General"} onSectionChange={(section) => updateSettingsTab(tab.id, section)} onBaseReplaced={onBaseReplaced} onWorkspaceChanged={onWorkspaceChanged} />;
+  if (tab.kind === "settings") return <SettingsView section={tab.settingsSection ?? "General"} onSectionChange={(section) => updateSettingsTab(tab.id, section)} onBaseReplaced={onBaseReplaced} onTaxonomyDatabaseChanged={onTaxonomyDatabaseChanged} onWorkspaceChanged={onWorkspaceChanged} />;
   if (tab.kind === "photo-detail" && tab.photo) return <PhotoDetailView photo={tab.photo} />;
   if (tab.kind === "mapping-editor" && tab.photo) return <MappingEditor photo={tab.photo} />;
   if (tab.kind === "search-photos" && tab.query) return <PhotoSet query={tab.query} handlers={handlers} />;

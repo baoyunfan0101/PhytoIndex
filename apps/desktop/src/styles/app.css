@@ -34,21 +34,6 @@
 .activity-spacer { flex: 1; }
 .desktop-main { display: grid; min-width: 0; flex: 1; grid-template-rows: 34px minmax(0, 1fr) 22px; }
 .app-topbar { position: relative; z-index: 12; display: flex; min-width: 0; border-bottom: 1px solid var(--line); background: var(--top); }
-.root-button {
-  display: flex;
-  width: 260px;
-  min-width: 160px;
-  align-items: center;
-  gap: 8px;
-  padding: 0 12px;
-  overflow: hidden;
-  border: 0;
-  border-right: 1px solid var(--line);
-  color: var(--muted);
-  background: #1c1c1c;
-}
-.root-button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.root-button:hover { color: var(--text); background: var(--hover); }
 .tab-strip { display: flex; min-width: 0; flex: 1; overflow-x: auto; overflow-y: hidden; }
 .tab-strip::-webkit-scrollbar { height: 2px; }
 .app-tab {
@@ -99,20 +84,6 @@
 .toolbar-actions > button { position: relative; }
 .toolbar-actions > button > span { position: absolute; top: 2px; right: 3px; font-size: 9px; color: var(--muted); }
 .toolbar-actions > button.running { color: var(--accent-bright); }
-.library-selector { position: relative; flex: 0 0 220px; border-right: 1px solid var(--line); }
-.library-selector-button {
-  display: flex;
-  width: 100%;
-  height: 33px;
-  align-items: center;
-  gap: 7px;
-  padding: 0 9px;
-  overflow: hidden;
-  border: 0;
-  background: #1c1c1c;
-}
-.library-selector-button > span { min-width: 0; flex: 1; overflow: hidden; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
-.library-selector-button.unavailable { color: var(--amber); }
 .toolbar-popover {
   position: absolute;
   z-index: 70;
@@ -123,36 +94,29 @@
   background: #252525;
   box-shadow: 0 10px 30px #000a;
 }
-.library-popover { left: 0; width: 330px; }
 .toolbar-popover > strong { display: block; padding: 6px 7px; color: #eee; }
-.library-popover > button {
-  display: flex;
-  width: 100%;
-  min-height: 36px;
-  align-items: center;
-  gap: 8px;
-  padding: 5px 7px;
-  overflow: hidden;
-  border: 0;
-  border-radius: 3px;
-  text-align: left;
-  background: transparent;
-}
-.library-popover > button:hover { background: var(--active); }
-.library-popover > button.active { background: #343a36; }
-.library-popover button > i { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; }
-.library-popover button > i.available { background: var(--accent-bright); }
-.library-popover button > i.unavailable { background: var(--amber); }
-.library-popover button > span { display: flex; min-width: 0; flex: 1; flex-direction: column; }
-.library-popover small { overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
-.library-popover em { max-width: 90px; color: var(--muted); font-size: 10px; font-style: normal; text-align: right; }
-.library-popover .popover-action { min-height: 30px; border-top: 1px solid var(--line); }
 .operations-popover { right: 3px; width: 310px; }
 .operations-popover > div { display: grid; gap: 3px; padding: 7px; border-top: 1px solid var(--line); }
 .operations-popover span, .operations-popover small { color: var(--muted); }
 .operations-popover progress { width: 100%; accent-color: var(--accent); }
 
-@media (max-width: 1050px) {
-  .root-button { width: 190px; }
-  .library-selector { flex-basis: 180px; }
+.native-about-overlay {
+  position: fixed;
+  z-index: 220;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: #0008;
 }
+.native-about-dialog {
+  width: min(440px, calc(100vw - 48px));
+  padding: 28px;
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  background: #252525;
+  box-shadow: 0 16px 50px #000c;
+}
+.native-about-dialog h1 { margin: 0 0 22px; font-size: 24px; font-weight: 600; }
+.native-about-dialog > div { display: flex; gap: 6px; margin: 10px 0; }
+.native-about-dialog span { color: var(--muted); }
+.native-about-dialog a { color: var(--accent-bright); }

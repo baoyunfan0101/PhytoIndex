@@ -2,6 +2,7 @@ import {
   ArrowDown,
   ArrowUp,
   Beaker,
+  BookOpen,
   CaseSensitive,
   Database,
   FolderCog,
@@ -26,6 +27,7 @@ import { errorMessage } from "../../api/common";
 import {
   getDatabaseLocations,
   listPhotoLibraries,
+  openTaxonomyDatabase,
   photoLibraryAvailabilityLabel,
   rebindPhotoLibraryDatabase,
   rebindPhotoLibraryRoot,
@@ -70,6 +72,7 @@ export type SettingsSection =
   | "General"
   | "Storage"
   | "Photo Libraries"
+  | "Taxonomy Databases"
   | "Naming"
   | "Map"
   | "Hooks"
@@ -83,6 +86,7 @@ const settingsSections: Array<{
   { id: "General", icon: SlidersHorizontal },
   { id: "Storage", icon: Database },
   { id: "Photo Libraries", icon: Library },
+  { id: "Taxonomy Databases", icon: BookOpen },
   { id: "Naming", icon: CaseSensitive },
   { id: "Map", icon: MapPinned },
   { id: "Hooks", icon: Beaker },
@@ -93,11 +97,13 @@ const settingsSections: Array<{
 export function SettingsView({
   onBaseReplaced,
   onSectionChange,
+  onTaxonomyDatabaseChanged,
   onWorkspaceChanged,
   section,
 }: {
   onBaseReplaced?: () => void;
   onSectionChange: (section: SettingsSection) => void;
+  onTaxonomyDatabaseChanged?: () => void;
   onWorkspaceChanged?: (resetPhotoTabs: boolean) => void;
   section: SettingsSection;
 }) {
@@ -114,6 +120,7 @@ export function SettingsView({
         {section === "General" && <GeneralSettings />}
         {section === "Storage" && <StorageSettings />}
         {section === "Photo Libraries" && <PhotoLibrariesSettings onChanged={onWorkspaceChanged} />}
+        {section === "Taxonomy Databases" && <TaxonomyDatabasesSettings onOpened={onTaxonomyDatabaseChanged} />}
         {section === "Naming" && <NamingSettings />}
         {section === "Map" && <MapSettingsPanel />}
         {section === "Hooks" && <HooksSettings />}
@@ -182,24 +189,11 @@ function StorageSettings() {
     void getDatabaseLocations().then(setLocations).catch((nextError) => setMessage(errorMessage(nextError)));
   }, []);
 
-  async function changeTaxonomyDatabase() {
-    const destination = await selectDatabaseDestination(locations?.taxonomy_database);
-    if (!destination) return;
-    try {
-      setLocations(await relocateTaxonomyDatabase(destination));
-      setMessage("Taxonomy database relocated.");
-    } catch (nextError) {
-      setMessage(errorMessage(nextError));
-    }
-  }
-
-  async function changeDefault(kind: "taxonomy" | "photo") {
+  async function changeDefaultPhotoLibraryDirectory() {
     const directory = await selectPhotoDirectory();
     if (!directory) return;
     try {
-      setLocations(kind === "taxonomy"
-        ? await setDefaultTaxonomyDatabaseDirectory(directory)
-        : await setDefaultPhotoLibraryDatabaseDirectory(directory));
+      setLocations(await setDefaultPhotoLibraryDatabaseDirectory(directory));
       setMessage("Default storage directory updated.");
     } catch (nextError) {
       setMessage(errorMessage(nextError));
@@ -208,22 +202,76 @@ function StorageSettings() {
 
   return (
     <div className="settings-section">
-      <SectionHeader title="Storage" detail="Independent metadata, taxonomy, and photo library database locations" />
+      <SectionHeader title="Storage" detail="Application metadata and Photo Library storage" />
       <StoragePath label="Metadata database" value={locations?.metadata_database ?? "Loading"} />
-      <StoragePath
-        label="Taxonomy database"
-        value={locations?.taxonomy_database ?? "Loading"}
-        action={<button type="button" onClick={() => void changeTaxonomyDatabase()}><Move size={13} />Relocate</button>}
-      />
-      <StoragePath
-        label="Default taxonomy directory"
-        value={locations?.default_taxonomy_directory ?? "Loading"}
-        action={<button type="button" onClick={() => void changeDefault("taxonomy")}><FolderCog size={13} />Change</button>}
-      />
       <StoragePath
         label="Default photo library DB directory"
         value={locations?.default_photo_library_directory ?? "Loading"}
-        action={<button type="button" onClick={() => void changeDefault("photo")}><FolderCog size={13} />Change</button>}
+        action={<button type="button" onClick={() => void changeDefaultPhotoLibraryDirectory()}><FolderCog size={13} />Change</button>}
+      />
+      <div className="editor-message">{message}</div>
+    </div>
+  );
+}
+
+function TaxonomyDatabasesSettings({ onOpened }: { onOpened?: () => void }) {
+  const [locations, setLocations] = useState<DatabaseLocations | null>(null);
+  const [message, setMessage] = useState("");
+  useEffect(() => {
+    void getDatabaseLocations().then(setLocations).catch((nextError) => setMessage(errorMessage(nextError)));
+  }, []);
+
+  async function openExisting() {
+    const selected = await selectSqliteDatabase();
+    if (!selected) return;
+    try {
+      setLocations(await openTaxonomyDatabase(selected));
+      setMessage("Taxonomy Database opened.");
+      onOpened?.();
+    } catch (nextError) {
+      setMessage(errorMessage(nextError));
+    }
+  }
+
+  async function relocate() {
+    const destination = await selectDatabaseDestination(locations?.taxonomy_database);
+    if (!destination) return;
+    try {
+      setLocations(await relocateTaxonomyDatabase(destination));
+      setMessage("Taxonomy Database relocated.");
+    } catch (nextError) {
+      setMessage(errorMessage(nextError));
+    }
+  }
+
+  async function changeDefaultDirectory() {
+    const directory = await selectPhotoDirectory();
+    if (!directory) return;
+    try {
+      setLocations(await setDefaultTaxonomyDatabaseDirectory(directory));
+      setMessage("Default Taxonomy Database directory updated.");
+    } catch (nextError) {
+      setMessage(errorMessage(nextError));
+    }
+  }
+
+  return (
+    <div className="settings-section">
+      <SectionHeader title="Taxonomy Databases" detail="Active taxonomy storage" />
+      <StoragePath
+        label="Taxonomy Database"
+        value={locations?.taxonomy_database ?? "Loading"}
+        action={(
+          <div className="storage-actions">
+            <button type="button" onClick={() => void openExisting()}><BookOpen size={13} />Open</button>
+            <button type="button" onClick={() => void relocate()}><Move size={13} />Relocate</button>
+          </div>
+        )}
+      />
+      <StoragePath
+        label="Default directory"
+        value={locations?.default_taxonomy_directory ?? "Loading"}
+        action={<button type="button" onClick={() => void changeDefaultDirectory()}><FolderCog size={13} />Change</button>}
       />
       <div className="editor-message">{message}</div>
     </div>

@@ -1,6 +1,7 @@
 mod commands;
 mod file_manager;
 mod media;
+mod native_menu;
 mod paths;
 mod state;
 mod updater;
@@ -11,6 +12,8 @@ use tauri::Manager;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .menu(native_menu::build)
+        .on_menu_event(native_menu::handle)
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
@@ -35,6 +38,7 @@ pub fn run() {
             commands::relocate_photo_library_database,
             commands::remove_photo_library,
             commands::rename_photo_library,
+            commands::open_taxonomy_database,
             commands::relocate_taxonomy_database,
             commands::set_default_taxonomy_database_directory,
             commands::set_default_photo_library_database_directory,

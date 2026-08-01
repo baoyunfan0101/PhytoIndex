@@ -71,6 +71,7 @@
   border: 1px solid var(--line);
   background: #292929;
 }
+.storage-actions { display: flex; gap: 5px; }
 .library-settings-list { display: grid; gap: 8px; padding: 10px; overflow: auto; }
 .library-settings-row { display: grid; gap: 6px; padding: 9px; border: 1px solid var(--line); background: var(--panel); }
 .library-settings-row.active { border-color: #4c7158; }
