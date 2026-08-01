@@ -16,6 +16,8 @@ grouped by domain:
 | `error` | `CoreError` and the `CoreResult<T>` return type used by core interfaces. |
 
 Desktop updater commands are documented in [UPDATING.md](UPDATING.md).
+Desktop frontend domains and their public component contracts are documented
+in [DESKTOP.md](DESKTOP.md).
 Build and release procedures are documented separately in
 [BUILDING.md](BUILDING.md).
 

@@ -1,9 +1,10 @@
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::ffi::{CStr, CString};
 use std::fs::File;
 use std::io::BufWriter;
 use std::path::{Path, PathBuf};
 use std::ptr;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use rusqlite::ffi;
 use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
@@ -13,17 +14,25 @@ use serde::{Deserialize, Serialize};
 use super::formatted::{
     affected_taxon_ids_from_changeset, start_taxonomy_session, validate_taxonomy,
 };
+#[cfg(test)]
+use super::sql_inputs::SqlInputKind;
+use super::sql_inputs::{
+    self, AddSqlInputRequest, AddSqlInputResult, PersistentSqlInput, RemoveSqlInputRequest,
+    RemoveSqlInputResult, SqlInputScope,
+};
 use super::sql_support::{
     RawStatement, execute_preview_statement_raw, sqlite_error, statement_columns, statement_row,
 };
+use crate::metadata::{self, MetadataKey};
 use crate::operations::{self, NewAuditRow, NewOperation};
 use crate::{CoreError, CoreResult, Database};
 
 pub const DEFAULT_SQL_RESULT_ROW_LIMIT: usize = 1000;
+static CUSTOM_SQL_LOCKS: OnceLock<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> = OnceLock::new();
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub enum SqlDataSource {
+pub(super) enum SqlDataSource {
     Csv { alias: String, path: PathBuf },
     Sqlite { alias: String, path: PathBuf },
 }
@@ -31,16 +40,12 @@ pub enum SqlDataSource {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CustomTaxonomySqlRequest {
     pub sql: String,
-    #[serde(default)]
-    pub sources: Vec<SqlDataSource>,
     pub maximum_result_rows: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CustomTaxonomySqlExportRequest {
     pub sql: String,
-    #[serde(default)]
-    pub sources: Vec<SqlDataSource>,
     pub destination_path: PathBuf,
 }
 
@@ -50,6 +55,8 @@ pub struct CustomSqlExecutionResult {
     pub changeset_size: usize,
     pub result_sets: Vec<SqlResultSet>,
     pub messages: Vec<SqlStatementMessage>,
+    pub script_saved: bool,
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -125,6 +132,8 @@ pub fn execute_custom_taxonomy_sql(
     database: &Database,
     request: &CustomTaxonomySqlRequest,
 ) -> CoreResult<CustomSqlExecutionResult> {
+    let sql_mutex = custom_sql_mutex(database)?;
+    let _sql_guard = lock_custom_sql(&sql_mutex)?;
     let _guard = database.try_taxonomy_mutation()?;
     let sql = require_sql(&request.sql)?;
     let maximum_result_rows = request
@@ -132,8 +141,9 @@ pub fn execute_custom_taxonomy_sql(
         .unwrap_or(DEFAULT_SQL_RESULT_ROW_LIMIT)
         .min(DEFAULT_SQL_RESULT_ROW_LIMIT);
     let mut connection = database.connect_taxonomy()?;
-    let attached = prepare_sources(&mut connection, &request.sources)?;
-    let execution = (|| {
+    let sources = sql_inputs::stored_sources(database, SqlInputScope::CustomSql)?;
+    let attached = prepare_sources(&mut connection, &sources)?;
+    let execution: CoreResult<CustomSqlExecutionResult> = (|| {
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let mut session = start_taxonomy_session(&transaction)?;
         let mut result = execute_custom_script(
@@ -166,17 +176,33 @@ pub fn execute_custom_taxonomy_sql(
         Ok(result)
     })();
     let detach = detach_sources(&connection, &attached);
-    match (execution, detach) {
+    let mut result = match (execution, detach) {
         (Ok(result), Ok(())) => Ok(result),
         (Err(error), _) => Err(error),
-        (Ok(_), Err(error)) => Err(error),
+        (Ok(mut result), Err(error)) => {
+            result.warnings.push(format!(
+                "custom taxonomy SQL committed, but source cleanup failed: {error}"
+            ));
+            Ok(result)
+        }
+    }?;
+    match database.connect_metadata().and_then(|connection| {
+        metadata::set_raw(&connection, MetadataKey::CustomTaxonomySql, &request.sql)
+    }) {
+        Ok(()) => result.script_saved = true,
+        Err(error) => result.warnings.push(format!(
+            "custom taxonomy SQL committed, but the script could not be saved: {error}"
+        )),
     }
+    Ok(result)
 }
 
 pub fn export_custom_taxonomy_query(
     database: &Database,
     request: &CustomTaxonomySqlExportRequest,
 ) -> CoreResult<SqlExportResult> {
+    let sql_mutex = custom_sql_mutex(database)?;
+    let _sql_guard = lock_custom_sql(&sql_mutex)?;
     let sql = require_sql(&request.sql)?;
     if !request.destination_path.is_absolute() {
         return Err(CoreError::InvalidArgument(
@@ -184,7 +210,8 @@ pub fn export_custom_taxonomy_query(
         ));
     }
     let mut connection = database.connect_taxonomy()?;
-    let attached = prepare_sources(&mut connection, &request.sources)?;
+    let sources = sql_inputs::stored_sources(database, SqlInputScope::CustomSql)?;
+    let attached = prepare_sources(&mut connection, &sources)?;
     let export = export_single_query(&connection, sql, &request.destination_path);
     let detach = detach_sources(&connection, &attached);
     match (export, detach) {
@@ -194,12 +221,61 @@ pub fn export_custom_taxonomy_query(
     }
 }
 
-pub fn inspect_sql_data_source(source: &SqlDataSource) -> CoreResult<SqlSourceSchema> {
+pub(super) fn inspect_sql_data_source(source: &SqlDataSource) -> CoreResult<SqlSourceSchema> {
     validate_sources(std::slice::from_ref(source))?;
     match source {
         SqlDataSource::Csv { alias, path } => inspect_csv_source(alias, path),
         SqlDataSource::Sqlite { alias, path } => inspect_sqlite_source(alias, path),
     }
+}
+
+pub fn get_custom_taxonomy_sql(database: &Database) -> CoreResult<String> {
+    Ok(metadata::get_raw(
+        &database.connect_metadata()?,
+        MetadataKey::CustomTaxonomySql,
+    )?
+    .unwrap_or_else(|| {
+        "SELECT taxon_id, rank, geological_range\nFROM taxa\nORDER BY taxon_id\nLIMIT 100;".into()
+    }))
+}
+
+pub fn list_custom_sql_inputs(database: &Database) -> CoreResult<Vec<PersistentSqlInput>> {
+    sql_inputs::list_inputs(database, SqlInputScope::CustomSql)
+}
+
+pub fn add_custom_sql_input(
+    database: &Database,
+    request: &AddSqlInputRequest,
+) -> CoreResult<AddSqlInputResult> {
+    let sql_mutex = custom_sql_mutex(database)?;
+    let _sql_guard = lock_custom_sql(&sql_mutex)?;
+    sql_inputs::add_input(database, SqlInputScope::CustomSql, request)
+}
+
+pub fn remove_custom_sql_input(
+    database: &Database,
+    request: &RemoveSqlInputRequest,
+) -> CoreResult<RemoveSqlInputResult> {
+    let sql_mutex = custom_sql_mutex(database)?;
+    let _sql_guard = lock_custom_sql(&sql_mutex)?;
+    sql_inputs::remove_input(database, SqlInputScope::CustomSql, request)
+}
+
+fn custom_sql_mutex(database: &Database) -> CoreResult<Arc<Mutex<()>>> {
+    let mut locks = CUSTOM_SQL_LOCKS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .map_err(|_| CoreError::Consistency("Custom SQL lock registry is poisoned".into()))?;
+    Ok(locks
+        .entry(database.metadata_path())
+        .or_insert_with(|| Arc::new(Mutex::new(())))
+        .clone())
+}
+
+fn lock_custom_sql(mutex: &Mutex<()>) -> CoreResult<std::sync::MutexGuard<'_, ()>> {
+    mutex
+        .lock()
+        .map_err(|_| CoreError::Consistency("Custom SQL workspace lock is poisoned".into()))
 }
 
 fn execute_custom_script<F, A>(
@@ -254,11 +330,18 @@ where
             message,
         });
     }
+    if statement_index != 1 {
+        return Err(CoreError::InvalidArgument(
+            "custom taxonomy SQL requires exactly one statement".into(),
+        ));
+    }
     Ok(CustomSqlExecutionResult {
         operation_id: None,
         changeset_size: 0,
         result_sets,
         messages,
+        script_saved: false,
+        warnings: Vec::new(),
     })
 }
 
@@ -341,7 +424,7 @@ unsafe fn export_single_query_raw(
     })
 }
 
-fn prepare_sources(
+pub(super) fn prepare_sources(
     connection: &mut Connection,
     sources: &[SqlDataSource],
 ) -> CoreResult<Vec<String>> {
@@ -366,7 +449,7 @@ fn prepare_sources(
     Ok(attached)
 }
 
-fn detach_sources(connection: &Connection, aliases: &[String]) -> CoreResult<()> {
+pub(super) fn detach_sources(connection: &Connection, aliases: &[String]) -> CoreResult<()> {
     for alias in aliases.iter().rev() {
         connection.execute_batch(&format!("DETACH DATABASE {}", quote_identifier(alias)))?;
     }

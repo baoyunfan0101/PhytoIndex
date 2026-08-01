@@ -24,7 +24,6 @@ fn database() -> (tempfile::TempDir, Database) {
 fn request(sql: &str) -> CustomTaxonomySqlRequest {
     CustomTaxonomySqlRequest {
         sql: sql.into(),
-        sources: Vec::new(),
         maximum_result_rows: None,
     }
 }
@@ -42,6 +41,8 @@ fn returns_typed_results_and_only_logs_actual_mutations() {
     .unwrap();
     assert_eq!(query.operation_id, None);
     assert_eq!(query.changeset_size, 0);
+    assert!(query.script_saved);
+    assert!(query.warnings.is_empty());
     assert_eq!(query.result_sets.len(), 1);
     assert_eq!(query.result_sets[0].rows[0][1], SqlValue::Integer(1));
     assert_eq!(query.result_sets[0].rows[0][2], SqlValue::Null);
@@ -52,25 +53,75 @@ fn returns_typed_results_and_only_logs_actual_mutations() {
 
     let mutation = execute_custom_taxonomy_sql(
         &database,
-        &request(
-            r#"
-                UPDATE taxa SET geological_range = 'Recent';
-                SELECT geological_range FROM taxa;
-                "#,
-        ),
+        &request("UPDATE taxa SET geological_range = 'Recent' RETURNING geological_range"),
     )
     .unwrap();
     assert!(mutation.operation_id.is_some());
     assert!(mutation.changeset_size > 0);
+    assert!(mutation.script_saved);
+    assert!(mutation.warnings.is_empty());
     assert_eq!(
         mutation.result_sets[0].rows,
         vec![vec![SqlValue::Text("Recent".into())]]
     );
     assert_eq!(mutation.messages[0].affected_rows, Some(1));
-    assert_eq!(mutation.messages[1].affected_rows, None);
     assert_eq!(
         list_operations(&database, None, 20).unwrap().items.len(),
         before + 1
+    );
+}
+
+#[test]
+fn saves_only_successful_single_statements() {
+    let (_directory, database) = database();
+    let initial = get_custom_taxonomy_sql(&database).unwrap();
+
+    let multiple =
+        execute_custom_taxonomy_sql(&database, &request("SELECT 1; SELECT 2")).unwrap_err();
+    assert!(multiple.to_string().contains("exactly one statement"));
+    assert_eq!(get_custom_taxonomy_sql(&database).unwrap(), initial);
+
+    execute_custom_taxonomy_sql(&database, &request("SELECT taxon_id FROM taxa")).unwrap();
+    assert_eq!(
+        get_custom_taxonomy_sql(&database).unwrap(),
+        "SELECT taxon_id FROM taxa"
+    );
+
+    execute_custom_taxonomy_sql(&database, &request("SELECT missing FROM taxa")).unwrap_err();
+    assert_eq!(
+        get_custom_taxonomy_sql(&database).unwrap(),
+        "SELECT taxon_id FROM taxa"
+    );
+}
+
+#[test]
+fn committed_sql_reports_script_save_failure_as_warning() {
+    let (_directory, database) = database();
+    database
+        .connect_metadata()
+        .unwrap()
+        .execute("DROP TABLE app_metadata", [])
+        .unwrap();
+
+    let result = execute_custom_taxonomy_sql(
+        &database,
+        &request("UPDATE taxa SET geological_range = 'Recent'"),
+    )
+    .unwrap();
+
+    assert!(result.operation_id.is_some());
+    assert!(!result.script_saved);
+    assert_eq!(result.warnings.len(), 1);
+    assert!(result.warnings[0].contains("script could not be saved"));
+    assert_eq!(
+        database
+            .connect_taxonomy()
+            .unwrap()
+            .query_row("SELECT geological_range FROM taxa LIMIT 1", [], |row| {
+                row.get::<_, String>(0)
+            },)
+            .unwrap(),
+        "Recent"
     );
 }
 
@@ -166,21 +217,28 @@ fn csv_and_sqlite_sources_are_read_only() {
         )
         .unwrap();
     drop(source);
-    let sources = vec![
-        SqlDataSource::Csv {
+    add_custom_sql_input(
+        &database,
+        &AddSqlInputRequest {
+            kind: super::SqlInputKind::Csv,
             alias: "csv_input".into(),
             path: csv_path.clone(),
         },
-        SqlDataSource::Sqlite {
+    )
+    .unwrap();
+    add_custom_sql_input(
+        &database,
+        &AddSqlInputRequest {
+            kind: super::SqlInputKind::Sqlite,
             alias: "external".into(),
             path: sqlite_path.clone(),
         },
-    ];
+    )
+    .unwrap();
     let result = execute_custom_taxonomy_sql(
             &database,
             &CustomTaxonomySqlRequest {
                 sql: "SELECT csv_input.name, csv_input.value, external.source_names.name FROM csv_input CROSS JOIN external.source_names".into(),
-                sources: sources.clone(),
                 maximum_result_rows: None,
             },
         )
@@ -197,7 +255,6 @@ fn csv_and_sqlite_sources_are_read_only() {
         &database,
         &CustomTaxonomySqlRequest {
             sql: "DELETE FROM external.source_names".into(),
-            sources,
             maximum_result_rows: None,
         },
     )
@@ -285,7 +342,6 @@ fn streams_one_query_to_csv() {
         &database,
         &CustomTaxonomySqlExportRequest {
             sql: "SELECT rank, name FROM taxa JOIN taxon_names USING (taxon_id)".into(),
-            sources: Vec::new(),
             destination_path: destination.clone(),
         },
     )

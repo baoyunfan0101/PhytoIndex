@@ -341,6 +341,27 @@ impl Database {
         Ok(())
     }
 
+    pub fn rename_photo_library(
+        &self,
+        library_uuid: &str,
+        display_name: &str,
+    ) -> CoreResult<PhotoLibraryRegistration> {
+        let display_name = display_name.trim();
+        if display_name.is_empty() {
+            return Err(CoreError::InvalidArgument(
+                "photo library display name cannot be empty".into(),
+            ));
+        }
+        let updated = self.connect_metadata()?.execute(
+            "UPDATE photo_libraries SET display_name = ? WHERE library_uuid = ?",
+            params![display_name, library_uuid],
+        )?;
+        if updated == 0 {
+            return Err(CoreError::NotFound(format!("photo library {library_uuid}")));
+        }
+        self.photo_library(library_uuid)
+    }
+
     pub fn rebind_photo_library_root(
         &self,
         library_uuid: &str,
@@ -1254,6 +1275,20 @@ CREATE TABLE app_metadata (
     metadata_key TEXT PRIMARY KEY,
     metadata_value TEXT NOT NULL
 );
+
+CREATE TABLE sql_inputs (
+    scope INTEGER NOT NULL,
+    alias TEXT COLLATE NOCASE NOT NULL,
+    source_type INTEGER NOT NULL,
+    original_path TEXT NOT NULL,
+    stored_path TEXT NOT NULL UNIQUE,
+    schema_json TEXT NOT NULL,
+    PRIMARY KEY (scope, alias),
+    CHECK (scope IN (1, 2)),
+    CHECK (source_type IN (1, 2)),
+    CHECK (length(alias) > 0),
+    CHECK (length(stored_path) > 0)
+) WITHOUT ROWID;
 
 PRAGMA user_version = 2;
 "#;

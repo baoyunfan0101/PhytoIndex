@@ -21,6 +21,7 @@ pub struct TaxonomyBaseMetadata {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TaxonomyBaseReplaceResult {
     pub metadata: TaxonomyBaseMetadata,
+    pub warnings: Vec<String>,
 }
 
 pub fn get_taxonomy_base_metadata(database: &Database) -> CoreResult<Option<TaxonomyBaseMetadata>> {
@@ -121,7 +122,10 @@ fn replace_from_attached_database(
         taxonomy_base_metadata_row,
     )?;
     transaction.commit()?;
-    Ok(TaxonomyBaseReplaceResult { metadata })
+    Ok(TaxonomyBaseReplaceResult {
+        metadata,
+        warnings: Vec::new(),
+    })
 }
 
 fn import_normalized_names(transaction: &Transaction<'_>) -> CoreResult<()> {

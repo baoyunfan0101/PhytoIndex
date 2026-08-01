@@ -186,12 +186,6 @@ pub fn get_naming_hook_settings(
     database: &Database,
 ) -> CoreResult<NamingHookSettings>
 
-pub fn set_naming_hook(
-    database: &Database,
-    kind: NamingHookKind,
-    script: Option<&str>,
-) -> CoreResult<()>
-
 pub fn test_naming_hook(
     kind: NamingHookKind,
     script: &str,
@@ -200,15 +194,14 @@ pub fn test_naming_hook(
 ```
 
 `NamingHookTemplates` contains the bundled `photo_filename` and
-`synonym_authority` Rhai scripts. These scripts are both the defaults executed
-by the backend and editable starting points for users.
+`synonym_authority` Rhai scripts. These bundled implementations run when no
+successful user script exists and provide the initial editable source.
 
-`NamingHookSettings` contains optional `photo_filename` and
-`synonym_authority` scripts. Passing `None` or an empty script restores the
-built-in template. `set_naming_hook` validates the script before saving it.
-Changing the photo hook marks every photo as `processing` for remapping. Hook
-scripts must keep executable logic inside their hook functions instead of
-relying on top-level statements to initialize scope values.
+`NamingHookSettings` contains optional saved `photo_filename` and
+`synonym_authority` scripts. The bundled template is the initial editor value
+when no successful script exists. Hook scripts must keep executable logic
+inside their hook functions instead of relying on top-level statements to
+initialize scope values.
 
 `test_naming_hook` does not save the script. Its tagged return value contains
 either `ParsedPhotoFilename` or `ScientificNameParts`.
@@ -218,7 +211,6 @@ either `ParsedPhotoFilename` or `ScientificNameParts`.
 | `get_naming_hook_template` | `kind`: requested hook kind | Bundled Rhai source for that kind. |
 | `get_naming_hook_templates` | none | Bundled source for both hook kinds. |
 | `get_naming_hook_settings` | `database`: project database | Optional saved scripts for both hook kinds. |
-| `set_naming_hook` | `database`; `kind`; optional `script` | `()` after validation and save; `None` or empty restores the default. |
 | `test_naming_hook` | `kind`; unsaved `script`; raw `input` | Tagged parsed result without saving the script. |
 
 ## Project test cases
@@ -238,16 +230,17 @@ pub fn get_naming_hook_test_cases(
     database: &Database,
 ) -> CoreResult<NamingHookTestCases>
 
-pub fn set_naming_hook_test_cases(
-    database: &Database,
-    kind: NamingHookKind,
-    cases: &[NamingHookTestCase],
-) -> CoreResult<()>
-
 pub fn run_naming_hook_tests(
     database: &Database,
     kind: NamingHookKind,
     script: Option<&str>,
+) -> CoreResult<NamingHookTestReport>
+
+pub fn test_and_save_naming_hook(
+    database: &Database,
+    kind: NamingHookKind,
+    script: &str,
+    cases: &[NamingHookTestCase],
 ) -> CoreResult<NamingHookTestReport>
 ```
 
@@ -257,7 +250,7 @@ output. New projects include the bundled photo filename golden cases and
 synonym-authority golden cases.
 
 `run_naming_hook_tests` uses the supplied unsaved script when `script` is
-`Some`; `None` uses the project's effective saved or default script. It
+`Some`; `None` uses the project's effective saved or bundled script. It
 executes every project case in order and returns passed and failed counts.
 Every `NamingHookCaseResult` includes `expected`, optional `actual`, `passed`,
 and an optional execution `error`.
@@ -265,8 +258,12 @@ and an optional execution `error`.
 | Function | Parameters | Return |
 | --- | --- | --- |
 | `get_naming_hook_test_cases` | `database`: project database | Test cases grouped by hook kind. |
-| `set_naming_hook_test_cases` | `database`; `kind`; ordered `cases` | `()` after replacing that kind's project cases. |
 | `run_naming_hook_tests` | `database`; `kind`; optional unsaved `script` | Per-case results plus passed and failed counts. |
+| `test_and_save_naming_hook` | `database`; `kind`; current `script`; ordered `cases` | Test report; saves script and cases atomically only when every case passes. |
+
+Saving a photo filename hook queues photos in available libraries for
+remapping. A failed test run leaves both the last successful script and saved
+project cases unchanged.
 
 ## Desktop commands
 
@@ -276,8 +273,7 @@ and an optional execution `error`.
 | `parse_photo_filename` | `filename: string` | `ParsedPhotoFilename` |
 | `get_naming_hook_settings` | none | `NamingHookSettings` |
 | `get_naming_hook_templates` | none | `NamingHookTemplates` |
-| `set_naming_hook` | `kind: NamingHookKind`, optional `script: string` | `null` |
 | `test_naming_hook` | `kind: NamingHookKind`, `script: string`, `input: string` | `NamingHookTestResult` |
 | `get_naming_hook_test_cases` | none | `NamingHookTestCases` |
-| `set_naming_hook_test_cases` | `kind: NamingHookKind`, `cases: NamingHookTestCase[]` | `null` |
 | `run_naming_hook_tests` | `kind: NamingHookKind`, optional `script: string` | `NamingHookTestReport` |
+| `test_and_save_naming_hook` | `kind: NamingHookKind`, `script: string`, `cases: NamingHookTestCase[]` | `NamingHookTestReport` |

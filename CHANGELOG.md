@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to PhytoIndex are documented in this file.
+All notable changes to Vividarium are documented in this file.
 
 ## [3.0.0] - Unreleased
 
@@ -48,8 +48,8 @@ All notable changes to PhytoIndex are documented in this file.
 - Replaced the Python application service with a Rust workspace.
 - Replaced the separately served frontend with a Tauri 2 desktop shell.
 - Kept the React and TypeScript interface while moving IPC and file access behind typed Tauri commands.
-- Split reusable domain, SQLite, scanning, import, mapping, and export logic into `phytoindex-core`.
-- Adopted the permanent application identifier `io.github.baoyunfan0101.phytoindex`.
+- Split reusable domain, SQLite, scanning, import, mapping, and export logic into `vividarium-core`.
+- Adopted the permanent application identifier `io.github.baoyunfan0101.vividarium`.
 - Added native Apple Silicon DMG and Windows x64 NSIS release pipelines.
 - Added automatic WebView2 bootstrapping for Windows computers without the runtime.
 

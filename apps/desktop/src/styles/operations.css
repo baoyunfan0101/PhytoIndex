@@ -1,0 +1,27 @@
+.history-view { display: grid; height: 100%; min-height: 0; grid-template-rows: auto minmax(0, 1fr); }
+.history-list { max-width: 1050px; margin: 0 auto; }
+.operation-row { display: flex; height: calc(100% - 4px); align-items: center; gap: 10px; margin: 2px 7px; padding: 8px 10px; border: 1px solid var(--line); background: #202020; }
+.operation-row > div:first-of-type { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 4px; }
+.operation-row span { color: var(--muted); }
+.operation-actions { display: flex; gap: 4px; opacity: 0; }
+.operation-row:hover .operation-actions { opacity: 1; }
+.operation-actions button { display: grid; width: 28px; height: 26px; place-items: center; border: 1px solid var(--line); background: #292929; }
+.operation-row .rename-audit-fields {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  grid-template-columns: minmax(150px, 1.2fr) minmax(140px, 1fr) minmax(140px, 1fr);
+  gap: 4px 14px;
+}
+.rename-audit-fields span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rename-audit-fields b { display: block; margin-bottom: 2px; color: var(--quiet); font-size: 10px; font-weight: 500; text-transform: uppercase; }
+.rename-audit-fields small { grid-column: 1 / -1; color: var(--quiet); }
+
+.operation-summary-row { width: 100%; border: 0; text-align: left; }
+.operation-counts { display: flex; align-items: center; gap: 9px; color: var(--muted); }
+.operation-counts span { white-space: nowrap; }
+.operation-counts b { color: var(--text); }
+.audit-row > b { min-width: 25px; color: var(--muted); }
+.audit-row > div { display: grid; min-width: 0; flex: 1; gap: 3px; }
+.audit-row code { overflow: hidden; color: var(--blue); text-overflow: ellipsis; white-space: nowrap; }
+.audit-row.failed { border-left: 2px solid var(--red); }

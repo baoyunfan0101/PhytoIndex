@@ -6,12 +6,14 @@ use crate::{CoreError, CoreResult};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MetadataKey {
-    DefaultBaseImportSql,
+    BaseImportSql,
+    CustomTaxonomySql,
     MapSettings,
     PhotoFilenameFormatSettings,
     PhotoFilenameHook,
     PhotoFilenameHookTests,
     PhotoNameMatchSettings,
+    PendingFileCleanup,
     SynonymAuthorityHook,
     SynonymAuthorityHookTests,
     TaxonomyNameSeparator,
@@ -20,12 +22,14 @@ pub(crate) enum MetadataKey {
 impl MetadataKey {
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
-            Self::DefaultBaseImportSql => "default_base_import_sql",
+            Self::BaseImportSql => "base_import_sql",
+            Self::CustomTaxonomySql => "custom_taxonomy_sql",
             Self::MapSettings => "map_settings",
             Self::PhotoFilenameFormatSettings => "photo_filename_format_settings",
             Self::PhotoFilenameHook => "photo_filename_hook",
             Self::PhotoFilenameHookTests => "photo_filename_hook_tests",
             Self::PhotoNameMatchSettings => "photo_name_match_settings",
+            Self::PendingFileCleanup => "pending_file_cleanup",
             Self::SynonymAuthorityHook => "synonym_authority_hook",
             Self::SynonymAuthorityHookTests => "synonym_authority_hook_tests",
             Self::TaxonomyNameSeparator => "taxonomy_name_separator",
@@ -73,6 +77,7 @@ pub(crate) fn insert_raw_if_missing(
     Ok(())
 }
 
+#[cfg(test)]
 pub(crate) fn remove(connection: &Connection, key: MetadataKey) -> CoreResult<()> {
     connection.execute(
         "DELETE FROM app_metadata WHERE metadata_key = ?",

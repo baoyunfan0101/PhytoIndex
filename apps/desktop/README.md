@@ -1,6 +1,6 @@
-# PhytoIndex Desktop
+# Vividarium Desktop
 
-This package contains the React interface and Tauri desktop adapter for PhytoIndex.
+This package contains the React interface and Tauri desktop adapter for Vividarium.
 
 ## Source Layout
 
@@ -21,7 +21,7 @@ src-tauri/
   tauri.windows.conf.json  Windows NSIS and WebView2 settings
 ```
 
-The interface never receives arbitrary file-system privileges. Photos are requested by database ID through the private `phytoindex://` protocol, and Rust validates the configured photo root before reading a file.
+The interface never receives arbitrary file-system privileges. Photos are requested by database ID through the private `vividarium://` protocol, and Rust validates the configured photo root before reading a file.
 
 ## Develop
 

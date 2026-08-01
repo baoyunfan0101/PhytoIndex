@@ -1,0 +1,36 @@
+import { searchPhotos } from "../../api/photos";
+import { listTaxonPhotos } from "../../api/taxonomy";
+import { useCursorPage } from "../../shared/useCursorPage";
+import { PhotoBrowser } from "./PhotoBrowser";
+import type { PhotoOpenHandlers } from "./PhotoInteraction";
+
+export function PhotoSet({
+  query,
+  taxonId,
+  handlers,
+}: {
+  query?: string;
+  taxonId?: number;
+  handlers: PhotoOpenHandlers;
+}) {
+  const params = query !== undefined
+    ? { kind: "search" as const, query }
+    : { kind: "taxon" as const, taxonId: taxonId! };
+  const page = useCursorPage({
+    params,
+    resetKey: query !== undefined ? `search:${query}` : `taxon:${taxonId}`,
+    stateKey: "photo-set.page",
+    loadPage: (next, cursor) => next.kind === "search"
+      ? searchPhotos(next.query, cursor)
+      : listTaxonPhotos(next.taxonId, cursor),
+  });
+
+  return (
+    <PhotoBrowser
+      title={query !== undefined ? `Search: ${query}` : `Taxon ${taxonId}`}
+      detail={page.loading ? "Loading" : page.error || undefined}
+      page={page}
+      handlers={handlers}
+    />
+  );
+}
