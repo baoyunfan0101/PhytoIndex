@@ -51,6 +51,42 @@ Returns: a photo stage and copyable photo, metadata, and taxon fields.
 Parameters: a `Photo`, with display options appropriate to the full image or
 thumbnail. Returns media UI using the desktop photo URI.
 
+### `EmptyWorkspace(props)`
+
+Parameters: the recent-search list, recent-search mutation callbacks, a search
+submitter, suggestion availability, and an input ref.
+
+Returns: the no-tab workspace containing only photo search, current-query
+suggestions, and recent searches when the query is empty.
+
+### `GlobalSearchOverlay(props)`
+
+Parameters: a search submitter, suggestion availability, and a close callback.
+
+Returns: a modal photo-search input with current-query suggestions. Escape or
+a pointer action on the backdrop closes it.
+
+### `PhotoSearch(props)`
+
+Parameters: a `PhotoSearchController`, suggestion availability, an ID prefix,
+and optional focus configuration.
+
+Returns: the shared keyboard-accessible search input and suggestion list used
+by `EmptyWorkspace` and `GlobalSearchOverlay`. Arrow keys select suggestions;
+Enter submits the selected suggestion or normalized input.
+
+### Search state helpers
+
+`useSearchSuggestions(query, enabled)` returns debounced suggestions and a
+loading flag. Only the latest request may update its result.
+
+`usePhotoSearch(onSubmit)` returns the controlled query, submission error,
+query setter, and asynchronous submit function.
+
+`loadRecentSearches()`, `saveRecentSearches(searches)`,
+`addRecentSearch(searches, query)`, and `removeRecentSearch(searches, query)`
+manage the bounded, most-recent-first search list in browser-local storage.
+
 ## Interaction contract
 
 `PhotoOpenHandlers` contains callbacks for opening details, taxonomy, and the

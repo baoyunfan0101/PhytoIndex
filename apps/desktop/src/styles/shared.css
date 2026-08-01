@@ -23,6 +23,18 @@
   border-radius: 3px;
   background: #2b2b2b;
 }
+.search-field {
+  display: flex;
+  height: 32px;
+  align-items: center;
+  gap: 7px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  color: var(--muted);
+  background: var(--input);
+}
+.search-field input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; }
 .primary-button { border-color: #4e8661; color: #fff; background: #396449; }
 .primary-button:hover { background: #467959; }
 .secondary-button:hover, .small-button:hover, .icon-button:hover, .record-actions button:hover { background: #3a3a3a; }
