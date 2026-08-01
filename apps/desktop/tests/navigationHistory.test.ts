@@ -6,7 +6,7 @@ import {
   pruneNavigationHistory,
   recordNavigation,
   type NavigationHistory,
-} from "../src/v3/navigationHistory.ts";
+} from "../src/app/navigationHistory.ts";
 
 function ids(history: NavigationHistory) {
   return history.entries.map((entry) => entry.tabId);

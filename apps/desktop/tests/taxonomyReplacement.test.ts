@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { retainTabsAfterTaxonomyReplacement } from "../src/v3/taxonomyReplacement.ts";
+import { retainTabsAfterTaxonomyReplacement } from "../src/app/taxonomyReplacement.ts";
 
 test("taxonomy replacement closes identity-bound tabs and preserves global work", () => {
   const tabs = [

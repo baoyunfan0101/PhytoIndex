@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { canExportFullQuery } from "../src/v3/sqlResults.ts";
+import { canExportFullQuery } from "../src/features/taxonomy/sqlResults.ts";
 
 function preview(truncated: boolean, affectedRows: number | null) {
   return {
