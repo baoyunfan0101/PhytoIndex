@@ -67,6 +67,12 @@ import { SectionHeader, Segmented, VirtualList } from "../../shared/ui";
 import { CodeEditor } from "../../shared/CodeEditor";
 import { BaseImportSettings } from "../taxonomy/BaseImportSettings";
 import { emitMetadataChange } from "../../shared/metadataChanges";
+import {
+  defaultPhotoFilenameFormatSettings,
+  normalizePhotoFilenameFormatSettings,
+  photoFilenameFormatFields,
+  photoNamePriorityFields,
+} from "./namingSettings";
 
 export type SettingsSection =
   | "General"
@@ -401,18 +407,32 @@ function StoragePath({
 }
 
 function NamingSettings() {
-  const allFields: PhotoNameField[] = ["species_sci", "species_zh", "genus_sci", "genus_zh", "family_sci", "family_zh"];
-  const [priority, setPriority] = useState<PhotoNameField[]>(allFields);
-  const [format, setFormat] = useState<PhotoFilenameFormatSettings | null>(null);
+  const [priority, setPriority] = useState<PhotoNameField[]>([...photoNamePriorityFields]);
+  const [format, setFormat] = useState<PhotoFilenameFormatSettings>(defaultPhotoFilenameFormatSettings);
   const [separator, setSeparator] = useState(";");
+  const [loadError, setLoadError] = useState("");
   const [message, setMessage] = useState("");
   useEffect(() => {
-    Promise.all([getPhotoNameMatchSettings(), getPhotoFilenameFormatSettings(), getTaxonomyNameSeparator()])
-      .then(([match, nextFormat, nextSeparator]) => {
-        setPriority(match.priority);
-        setFormat(nextFormat);
-        setSeparator(nextSeparator);
-      });
+    let active = true;
+    void Promise.allSettled([
+      getPhotoNameMatchSettings(),
+      getPhotoFilenameFormatSettings(),
+      getTaxonomyNameSeparator(),
+    ]).then(([matchResult, formatResult, separatorResult]) => {
+      if (!active) return;
+      const errors: string[] = [];
+      if (matchResult.status === "fulfilled") setPriority(matchResult.value.priority);
+      else errors.push(`Mapping priority: ${errorMessage(matchResult.reason)}`);
+      if (formatResult.status === "fulfilled") {
+        setFormat(normalizePhotoFilenameFormatSettings(formatResult.value));
+      } else {
+        errors.push(`Photo filename format: ${errorMessage(formatResult.reason)}. Showing defaults.`);
+      }
+      if (separatorResult.status === "fulfilled") setSeparator(separatorResult.value);
+      else errors.push(`Multiple-name separator: ${errorMessage(separatorResult.reason)}`);
+      setLoadError(errors.join(" "));
+    });
+    return () => { active = false; };
   }, []);
 
   function move(index: number, direction: -1 | 1) {
@@ -424,7 +444,6 @@ function NamingSettings() {
   }
 
   async function save() {
-    if (!format) return;
     try {
       await Promise.all([
         setPhotoNameMatchSettings({ priority }),
@@ -447,11 +466,12 @@ function NamingSettings() {
           <div key={field}><b>{index + 1}</b><span>{field}</span><button type="button" onClick={() => move(index, -1)}><ArrowUp size={13} /></button><button type="button" onClick={() => move(index, 1)}><ArrowDown size={13} /></button></div>
         ))}
       </div>
-      <h3>Photo filename fields</h3>
-      {format && <div className="checkbox-grid">{allFields.map((field) => (
-        <label key={field}><input type="checkbox" checked={format[field]} onChange={(event) => setFormat({ ...format, [field]: event.target.checked })} />{field}</label>
-      ))}</div>}
+      <h3>Photo filename format</h3>
+      <div className="checkbox-grid">{photoFilenameFormatFields.map(({ field, label }) => (
+        <label key={field}><input type="checkbox" checked={format[field]} onChange={(event) => setFormat({ ...format, [field]: event.target.checked })} />{label}</label>
+      ))}</div>
       <label className="field-stack"><span>Multiple-name separator</span><input value={separator} maxLength={1} onChange={(event) => setSeparator(event.target.value)} /></label>
+      {loadError && <div className="editor-message error-message" role="alert">{loadError}</div>}
       <div className="editor-message">{message}</div>
     </div>
   );

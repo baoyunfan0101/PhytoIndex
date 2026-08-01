@@ -17,6 +17,11 @@ library, select a Taxonomy Database, and handle taxonomy replacement.
 Returns: the complete settings workbench. Unsaved hook source, test cases, and
 expected values remain in the view state while the tab is inactive.
 
+The Naming section exposes the six-field mapping priority, the six Photo
+filename format toggles, and the formatted-input name separator. Each metadata
+value loads independently. If a read fails, the affected control remains
+visible with its default value and the section displays the backend error.
+
 ## Metadata notification
 
 The shared `emitMetadataChange(change)` publishes a committed metadata update.
