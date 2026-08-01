@@ -406,18 +406,33 @@ export function DesktopShell() {
             <IconButton aria-label="Go Back" title="Go Back" disabled={!backTarget} onClick={() => navigate(-1)}><ArrowLeft size={14} /></IconButton>
             <IconButton aria-label="Go Forward" title="Go Forward" disabled={!forwardTarget} onClick={() => navigate(1)}><ArrowRight size={14} /></IconButton>
           </div>
-          <div className="tab-strip">
+          <div className="tab-strip" role="tablist" aria-label="Open tabs">
             {tabs.map((tab) => (
-              <div className={`app-tab${tab.id === activeId ? " active" : ""}`} key={tab.id}>
-                <Button className="app-tab-main" variant="ghost" onClick={() => focusTab(tab.id)}>
-                  <span>{tab.title}</span>
-                </Button>
+              <div
+                aria-selected={tab.id === activeId}
+                className={`app-tab${tab.id === activeId ? " active" : ""}`}
+                key={tab.id}
+                role="tab"
+                tabIndex={0}
+                onClick={() => focusTab(tab.id)}
+                onKeyDown={(event) => {
+                  if (event.target !== event.currentTarget) return;
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    focusTab(tab.id);
+                  }
+                }}
+              >
+                <span className="app-tab-title">{tab.title}</span>
                 <IconButton
                   aria-label={`Close ${tab.title}`}
                   className="app-tab-close"
                   size="small"
                   title={`Close ${tab.title}`}
-                  onClick={() => closeTab(tab.id)}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    closeTab(tab.id);
+                  }}
                 ><X size={12} /></IconButton>
               </div>
             ))}
