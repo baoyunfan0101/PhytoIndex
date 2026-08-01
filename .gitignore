@@ -20,6 +20,7 @@ data/
 *.jpeg
 *.png
 !apps/desktop/src-tauri/icons/**/*.png
+!apps/desktop/public/**/*.png
 *.heic
 *.tif
 *.tiff
@@ -59,3 +60,6 @@ temp/
 /build/
 /dist/
 /target/
+
+# Local branding source archive
+/assets/branding/Vividarium-Logo-Pack.zip
