@@ -514,6 +514,66 @@ impl Database {
         self.locations()
     }
 
+    pub fn open_taxonomy_database(
+        &self,
+        existing_database: &Path,
+    ) -> CoreResult<DatabaseLocations> {
+        let _guard = self.try_taxonomy_replacement()?;
+        let existing_database = canonical_or_absolute(existing_database)?;
+        let current_database = canonical_or_absolute(&self.taxonomy_path()?)?;
+        if existing_database == current_database {
+            return self.locations();
+        }
+        validate_existing_file(&existing_database)?;
+        let taxonomy_identity = open_existing_connection(&existing_database)?
+            .query_row(
+                "SELECT taxonomy_identity FROM taxonomy_identity WHERE identity_id = 1",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|error| {
+                CoreError::InvalidArgument(format!(
+                    "invalid taxonomy database {}: {error}",
+                    existing_database.display()
+                ))
+            })?;
+        if taxonomy_identity.as_deref().is_none_or(str::is_empty) {
+            return Err(CoreError::InvalidArgument(format!(
+                "taxonomy database has no identity: {}",
+                existing_database.display()
+            )));
+        }
+
+        let mut metadata = self.connect_metadata()?;
+        let transaction = metadata.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        transaction.execute(
+            "UPDATE storage_settings SET taxonomy_db_path = ? WHERE settings_id = 1",
+            [path_string(&existing_database)],
+        )?;
+        transaction.execute(
+            "UPDATE taxonomy_sync_dispatch SET last_dispatched_sync_id = 0 WHERE dispatch_id = 1",
+            [],
+        )?;
+        transaction.execute(
+            r#"
+            INSERT INTO photo_library_taxonomy_pending (
+                library_uuid, target_sync_id, full_remap_required
+            )
+            SELECT library_uuid, 0, 1
+            FROM photo_libraries
+            WHERE true
+            ON CONFLICT(library_uuid) DO UPDATE SET
+                target_sync_id = 0,
+                full_remap_required = 1
+            "#,
+            [],
+        )?;
+        transaction.execute("DELETE FROM photo_library_taxonomy_pending_taxa", [])?;
+        transaction.commit()?;
+        self.locations()
+    }
+
     pub fn set_default_taxonomy_directory(
         &self,
         directory: &Path,
