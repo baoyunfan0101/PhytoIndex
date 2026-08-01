@@ -16,8 +16,8 @@ use super::base::{TaxonomyBaseMetadata, TaxonomyBaseReplaceResult};
 use super::formatted::{TaxonomyNameType, validate_taxonomy};
 use super::sql::{SqlStatementMessage, detach_sources, prepare_sources, quote_identifier};
 use super::sql_inputs::{
-    self, AddSqlInputRequest, PersistentSqlInput, RemoveSqlInputRequest, RemoveSqlInputResult,
-    SqlInputScope,
+    self, AddSqlInputRequest, AddSqlInputResult, PersistentSqlInput, RemoveSqlInputRequest,
+    RemoveSqlInputResult, SqlInputScope,
 };
 use super::sql_support::execute_statement_to_completion_raw;
 use crate::db::{
@@ -45,6 +45,8 @@ pub struct ExecuteBaseImportSqlRequest {
 pub struct BaseImportExecutionResult {
     pub statements_executed: usize,
     pub messages: Vec<SqlStatementMessage>,
+    pub script_saved: bool,
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -86,20 +88,22 @@ pub fn list_base_import_inputs(database: &Database) -> CoreResult<Vec<Persistent
 pub fn add_base_import_input(
     database: &Database,
     request: &AddSqlInputRequest,
-) -> CoreResult<PersistentSqlInput> {
+) -> CoreResult<AddSqlInputResult> {
     let workspace_mutex = workspace_mutex(database)?;
     let _guard = lock_workspace(&workspace_mutex)?;
     let workspace = workspace(database)?;
     let invalidation = ArtifactInvalidation::stage(&workspace)?;
     match sql_inputs::add_input(database, SqlInputScope::BaseImport, request) {
-        Ok(input) => {
-            let _ = invalidation.commit();
-            Ok(input)
+        Ok(mut result) => {
+            result.warnings.extend(invalidation.commit(database));
+            Ok(result)
         }
-        Err(error) => {
-            invalidation.rollback()?;
-            Err(error)
-        }
+        Err(error) => match invalidation.rollback() {
+            Ok(()) => Err(error),
+            Err(rollback_error) => Err(CoreError::Consistency(format!(
+                "{error}; failed base import artifact restore: {rollback_error}"
+            ))),
+        },
     }
 }
 
@@ -113,13 +117,15 @@ pub fn remove_base_import_input(
     let invalidation = ArtifactInvalidation::stage(&workspace)?;
     match sql_inputs::remove_input(database, SqlInputScope::BaseImport, request) {
         Ok(mut result) => {
-            result.warnings.extend(invalidation.commit());
+            result.warnings.extend(invalidation.commit(database));
             Ok(result)
         }
-        Err(error) => {
-            invalidation.rollback()?;
-            Err(error)
-        }
+        Err(error) => match invalidation.rollback() {
+            Ok(()) => Err(error),
+            Err(rollback_error) => Err(CoreError::Consistency(format!(
+                "{error}; failed base import artifact restore: {rollback_error}"
+            ))),
+        },
     }
 }
 
@@ -136,51 +142,50 @@ pub fn execute_base_import_sql(
     let workspace_mutex = workspace_mutex(database)?;
     let _guard = lock_workspace(&workspace_mutex)?;
     let workspace = workspace(database)?;
-    clear_build_artifacts(&workspace)?;
+    let invalidation = ArtifactInvalidation::stage(&workspace)?;
     let staging = workspace.join(STAGING_DATABASE);
     let staging_path = staging.to_string_lossy().into_owned();
     let sql = replace_staging_literal(sql, &staging_path);
-    let mut connection = Connection::open_in_memory()?;
-    connection.execute_batch("PRAGMA foreign_keys = ON")?;
-    let sources = sql_inputs::stored_sources(database, SqlInputScope::BaseImport)?;
-    let attached = prepare_sources(&mut connection, &sources)?;
-    let execution = execute_base_import_script(&connection, &sql, &staging_path);
-    let attachments = validate_base_import_attachments(&connection, &attached);
-    let autocommit = unsafe { ffi::sqlite3_get_autocommit(connection.handle()) != 0 };
-    if !autocommit {
-        let _ = connection.execute_batch("ROLLBACK");
-    }
-    let detach = detach_sources(&connection, &attached);
-    match (execution, attachments, detach) {
-        (Ok(messages), Ok(()), Ok(())) if autocommit => {
-            metadata::set_raw(
-                &database.connect_metadata()?,
-                MetadataKey::BaseImportSql,
-                &request.sql,
-            )?;
-            Ok(BaseImportExecutionResult {
+    let execution: CoreResult<Vec<SqlStatementMessage>> = (|| {
+        let mut connection = Connection::open_in_memory()?;
+        connection.execute_batch("PRAGMA foreign_keys = ON")?;
+        let sources = sql_inputs::stored_sources(database, SqlInputScope::BaseImport)?;
+        let attached = prepare_sources(&mut connection, &sources)?;
+        let execution = execute_base_import_script(&connection, &sql, &staging_path);
+        let attachments = validate_base_import_attachments(&connection, &attached);
+        let autocommit = unsafe { ffi::sqlite3_get_autocommit(connection.handle()) != 0 };
+        if !autocommit {
+            let _ = connection.execute_batch("ROLLBACK");
+        }
+        let detach = detach_sources(&connection, &attached);
+        match (execution, attachments, detach) {
+            (Ok(messages), Ok(()), Ok(())) if autocommit => Ok(messages),
+            (Ok(_), Err(error), _) | (Ok(_), Ok(()), Err(error)) => Err(error),
+            (Ok(_), Ok(()), Ok(())) => Err(CoreError::InvalidArgument(
+                "base import sql left an unfinished transaction".into(),
+            )),
+            (Err(error), _, _) => Err(error),
+        }
+    })();
+    match execution {
+        Ok(messages) => {
+            let mut result = BaseImportExecutionResult {
                 statements_executed: messages.len(),
                 messages,
-            })
+                script_saved: false,
+                warnings: invalidation.commit(database),
+            };
+            match database.connect_metadata().and_then(|connection| {
+                metadata::set_raw(&connection, MetadataKey::BaseImportSql, &request.sql)
+            }) {
+                Ok(()) => result.script_saved = true,
+                Err(error) => result.warnings.push(format!(
+                    "base import SQL committed, but the script could not be saved: {error}"
+                )),
+            }
+            Ok(result)
         }
-        (Ok(_), Err(error), _) => {
-            remove_file_if_exists(&staging)?;
-            Err(error)
-        }
-        (Ok(_), Ok(()), Err(error)) => {
-            remove_file_if_exists(&staging)?;
-            Err(error)
-        }
-        (Ok(_), Ok(()), Ok(())) => {
-            remove_file_if_exists(&staging)?;
-            Err(CoreError::InvalidArgument(
-                "base import sql left an unfinished transaction".into(),
-            ))
-        }
-        (Err(error), _, _) => {
-            remove_file_if_exists(&staging)?;
-            Err(error)
-        }
+        Err(error) => restore_invalidated_artifacts(invalidation, &staging, error),
     }
 }
 
@@ -361,8 +366,8 @@ fn apply_base_import_with_guard(
         }
     };
     database.replace_taxonomy_database_file(replacement_guard, &candidate_path)?;
-    let _ = clear_build_artifacts(&workspace);
-    Ok(TaxonomyBaseReplaceResult { metadata })
+    let warnings = cleanup_build_artifacts(database, &workspace);
+    Ok(TaxonomyBaseReplaceResult { metadata, warnings })
 }
 
 pub fn get_base_import_sql(database: &Database) -> CoreResult<String> {
@@ -450,11 +455,6 @@ fn clear_validation_artifacts(workspace: &Path) -> CoreResult<()> {
     Ok(())
 }
 
-fn clear_build_artifacts(workspace: &Path) -> CoreResult<()> {
-    clear_validation_artifacts(workspace)?;
-    remove_file_if_exists(&workspace.join(STAGING_DATABASE))
-}
-
 struct ArtifactInvalidation {
     paths: Vec<(PathBuf, PathBuf)>,
 }
@@ -476,8 +476,12 @@ impl ArtifactInvalidation {
             remove_file_if_exists(&staged)?;
             if let Err(error) = fs::rename(&original, &staged) {
                 let invalidation = Self { paths };
-                let _ = invalidation.rollback();
-                return Err(error.into());
+                return match invalidation.rollback() {
+                    Ok(()) => Err(error.into()),
+                    Err(rollback_error) => Err(CoreError::Consistency(format!(
+                        "{error}; failed base import artifact restore: {rollback_error}"
+                    ))),
+                };
             }
             paths.push((original, staged));
         }
@@ -493,17 +497,54 @@ impl ArtifactInvalidation {
         Ok(())
     }
 
-    fn commit(self) -> Vec<String> {
+    fn commit(self, database: &Database) -> Vec<String> {
         let mut warnings = Vec::new();
         for (_, staged) in self.paths {
-            if let Err(error) = fs::remove_file(&staged)
-                && staged.exists()
+            if let Some(warning) =
+                super::cleanup::remove_or_defer(database, &staged, "base import artifact")
             {
-                warnings.push(format!("base import artifact cleanup failed: {error}"));
+                warnings.push(warning);
             }
         }
         warnings
     }
+}
+
+fn restore_invalidated_artifacts<T>(
+    invalidation: ArtifactInvalidation,
+    staging: &Path,
+    error: CoreError,
+) -> CoreResult<T> {
+    if let Err(cleanup_error) = remove_file_if_exists(staging) {
+        return Err(CoreError::Consistency(format!(
+            "{error}; failed base import staging cleanup: {cleanup_error}"
+        )));
+    }
+    if let Err(rollback_error) = invalidation.rollback() {
+        return Err(CoreError::Consistency(format!(
+            "{error}; failed base import artifact restore: {rollback_error}"
+        )));
+    }
+    Err(error)
+}
+
+fn cleanup_build_artifacts(database: &Database, workspace: &Path) -> Vec<String> {
+    let mut warnings = super::cleanup::retry_pending(database);
+    for filename in [
+        CANDIDATE_DATABASE,
+        CANDIDATE_BUILD_DATABASE,
+        VALIDATION_STATE,
+        STAGING_DATABASE,
+    ] {
+        if let Some(warning) = super::cleanup::remove_or_defer(
+            database,
+            &workspace.join(filename),
+            "base import artifact",
+        ) {
+            warnings.push(warning);
+        }
+    }
+    warnings
 }
 
 fn workspace_fingerprint(workspace: &Path) -> CoreResult<String> {

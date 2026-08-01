@@ -15,6 +15,7 @@ import {
   type PersistentSqlInput,
   type SqlStatementMessage,
   type TaxonomyBaseMetadata,
+  type TaxonomyBaseReplaceResult,
 } from "./api";
 import { CodeEditor } from "./CodeEditor";
 import { Modal, SectionHeader, VirtualList } from "./components";
@@ -44,11 +45,12 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
   async function addInput(kind: "csv" | "sqlite", alias: string, path: string) {
     setBusy("Adding data source");
     setMessage("");
-    setValidation(null);
     try {
-      const input = await addBaseImportInput(kind, alias, path);
-      setInputs((current) => [...current, input].sort((left, right) => left.alias.localeCompare(right.alias)));
+      const result = await addBaseImportInput(kind, alias, path);
+      setInputs(result.inputs);
+      setValidation(null);
       setExecutionMessages([]);
+      setMessage(result.warnings.length > 0 ? result.warnings.join(" ") : "Data source added.");
     } catch (nextError) {
       setMessage(errorMessage(nextError));
     } finally {
@@ -59,12 +61,16 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
   async function execute() {
     setBusy("Executing import SQL");
     setMessage("");
-    setValidation(null);
-    setExecutionMessages([]);
     try {
       const result = await executeBaseImportSql(sql);
+      setValidation(null);
       setExecutionMessages(result.messages);
-      setMessage(`${result.statements_executed} statements executed successfully. SQL saved.`);
+      const saveStatus = result.script_saved ? "SQL saved." : "SQL was not saved.";
+      setMessage([
+        `${result.statements_executed} statements executed successfully.`,
+        saveStatus,
+        ...result.warnings,
+      ].join(" "));
     } catch (nextError) {
       setMessage(errorMessage(nextError));
     } finally {
@@ -95,12 +101,17 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
       const operation = await applyBaseImport();
       const completed = await waitForOperation("mapping", operation.task_id, (next) => setMessage(next.message));
       if (completed.error) throw new Error(completed.error);
-      setMetadata(await getTaxonomyBaseMetadata());
+      const result = completed.result as TaxonomyBaseReplaceResult | null;
+      if (!result) throw new Error("Base import completed without a replacement result");
+      setMetadata(result.metadata);
       setValidation(null);
       setConfirming(false);
       onApplied?.();
       emitTaxonomyMutation({ kind: "replacement" });
-      setMessage("Taxonomy database replaced successfully. Photo mappings are being rebuilt in the background.");
+      setMessage([
+        "Taxonomy database replaced successfully. Photo mappings are being rebuilt in the background.",
+        ...result.warnings,
+      ].join(" "));
     } catch (nextError) {
       setMessage(errorMessage(nextError));
     } finally {

@@ -45,8 +45,9 @@ export function CustomSqlView({
     setBusy("Adding data source");
     setError("");
     try {
-      const input = await addCustomSqlInput(kind, alias, path);
-      setInputs((current) => [...current, input].sort((left, right) => left.alias.localeCompare(right.alias)));
+      const result = await addCustomSqlInput(kind, alias, path);
+      setInputs(result.inputs);
+      if (result.warnings.length > 0) onStatus(result.warnings.join(" "));
     } catch (nextError) {
       setError(errorMessage(nextError));
     } finally {
@@ -78,7 +79,8 @@ export function CustomSqlView({
         ? "Query completed without creating an operation"
         : `Mutation created taxonomy operation ${next.operation_id}`;
       if (next.operation_id !== null) emitTaxonomyMutation();
-      onStatus(outcome);
+      const saveStatus = next.script_saved ? "SQL saved." : "SQL was not saved.";
+      onStatus([outcome, saveStatus, ...next.warnings].join(" "));
     } catch (nextError) {
       setError(errorMessage(nextError));
     } finally {
@@ -124,6 +126,7 @@ export function CustomSqlView({
           <div className="sql-result-summary">
             <span>{result.changeset_size} bytes changed</span>
             <span>{result.operation_id === null ? "No operation created" : `Operation ${result.operation_id}`}</span>
+            <span>{result.script_saved ? "Script saved" : "Script not saved"}</span>
             {result.result_sets.some((set) => set.truncated) && (
               <button className="secondary-button" type="button" disabled={Boolean(busy)} onClick={() => void exportQuery()}>
                 <Download size={13} />Export full query

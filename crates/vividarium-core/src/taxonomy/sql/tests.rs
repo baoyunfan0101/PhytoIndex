@@ -41,6 +41,8 @@ fn returns_typed_results_and_only_logs_actual_mutations() {
     .unwrap();
     assert_eq!(query.operation_id, None);
     assert_eq!(query.changeset_size, 0);
+    assert!(query.script_saved);
+    assert!(query.warnings.is_empty());
     assert_eq!(query.result_sets.len(), 1);
     assert_eq!(query.result_sets[0].rows[0][1], SqlValue::Integer(1));
     assert_eq!(query.result_sets[0].rows[0][2], SqlValue::Null);
@@ -56,6 +58,8 @@ fn returns_typed_results_and_only_logs_actual_mutations() {
     .unwrap();
     assert!(mutation.operation_id.is_some());
     assert!(mutation.changeset_size > 0);
+    assert!(mutation.script_saved);
+    assert!(mutation.warnings.is_empty());
     assert_eq!(
         mutation.result_sets[0].rows,
         vec![vec![SqlValue::Text("Recent".into())]]
@@ -87,6 +91,37 @@ fn saves_only_successful_single_statements() {
     assert_eq!(
         get_custom_taxonomy_sql(&database).unwrap(),
         "SELECT taxon_id FROM taxa"
+    );
+}
+
+#[test]
+fn committed_sql_reports_script_save_failure_as_warning() {
+    let (_directory, database) = database();
+    database
+        .connect_metadata()
+        .unwrap()
+        .execute("DROP TABLE app_metadata", [])
+        .unwrap();
+
+    let result = execute_custom_taxonomy_sql(
+        &database,
+        &request("UPDATE taxa SET geological_range = 'Recent'"),
+    )
+    .unwrap();
+
+    assert!(result.operation_id.is_some());
+    assert!(!result.script_saved);
+    assert_eq!(result.warnings.len(), 1);
+    assert!(result.warnings[0].contains("script could not be saved"));
+    assert_eq!(
+        database
+            .connect_taxonomy()
+            .unwrap()
+            .query_row("SELECT geological_range FROM taxa LIMIT 1", [], |row| {
+                row.get::<_, String>(0)
+            },)
+            .unwrap(),
+        "Recent"
     );
 }
 

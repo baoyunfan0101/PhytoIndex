@@ -7,6 +7,7 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, pa
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use super::cleanup;
 use super::sql::{SqlDataSource, SqlSourceSchema, inspect_sql_data_source, is_safe_identifier};
 use crate::{CoreError, CoreResult, Database};
 
@@ -36,6 +37,13 @@ pub struct PersistentSqlInput {
     pub original_path: PathBuf,
     pub available: bool,
     pub schema: SqlSourceSchema,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AddSqlInputResult {
+    pub input: PersistentSqlInput,
+    pub inputs: Vec<PersistentSqlInput>,
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -154,7 +162,8 @@ pub(crate) fn add_input(
     database: &Database,
     scope: SqlInputScope,
     request: &AddSqlInputRequest,
-) -> CoreResult<PersistentSqlInput> {
+) -> CoreResult<AddSqlInputResult> {
+    let warnings = cleanup::retry_pending(database);
     validate_alias(&request.alias)?;
     if !request.path.is_file() {
         return Err(CoreError::NotFound(format!(
@@ -171,46 +180,55 @@ pub(crate) fn add_input(
         SqlInputKind::Sqlite => "db",
     };
     let stored_path = directory.join(format!("{}.{}", Uuid::new_v4(), extension));
-    copy_input(request.kind, &request.path, &stored_path)?;
-    let stored_source = data_source(request.kind, request.alias.clone(), stored_path.clone());
-    let schema = match inspect_sql_data_source(&stored_source) {
-        Ok(schema) => schema,
-        Err(error) => {
-            let _ = fs::remove_file(&stored_path);
-            return Err(error);
+    let mut file_guard = InputFileGuard::new(stored_path.clone());
+    let added = (|| {
+        copy_input(request.kind, &request.path, &stored_path)?;
+        let stored_source = data_source(request.kind, request.alias.clone(), stored_path.clone());
+        let schema = inspect_sql_data_source(&stored_source)?;
+        let schema_json = serde_json::to_string(&schema).map_err(|error| {
+            CoreError::Consistency(format!("could not serialize SQL input schema: {error}"))
+        })?;
+        let mut connection = database.connect_metadata()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        transaction.execute(
+            r#"
+            INSERT INTO sql_inputs (
+                scope, alias, source_type, original_path, stored_path, schema_json
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            "#,
+            params![
+                scope.code(),
+                request.alias,
+                kind_code(request.kind),
+                request.path.to_string_lossy(),
+                stored_path.to_string_lossy(),
+                schema_json,
+            ],
+        )?;
+        let inputs = list_inputs_on_connection(&transaction, scope)?;
+        transaction.commit()?;
+        Ok((
+            PersistentSqlInput {
+                kind: request.kind,
+                alias: request.alias.clone(),
+                original_path: request.path.clone(),
+                available: true,
+                schema,
+            },
+            inputs,
+        ))
+    })();
+    match added {
+        Ok((input, inputs)) => {
+            file_guard.disarm();
+            Ok(AddSqlInputResult {
+                input,
+                inputs,
+                warnings,
+            })
         }
-    };
-    let schema_json = serde_json::to_string(&schema).map_err(|error| {
-        CoreError::Consistency(format!("could not serialize SQL input schema: {error}"))
-    })?;
-    let mut connection = database.connect_metadata()?;
-    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let inserted = transaction.execute(
-        r#"
-        INSERT INTO sql_inputs (
-            scope, alias, source_type, original_path, stored_path, schema_json
-        ) VALUES (?, ?, ?, ?, ?, ?)
-        "#,
-        params![
-            scope.code(),
-            request.alias,
-            kind_code(request.kind),
-            request.path.to_string_lossy(),
-            stored_path.to_string_lossy(),
-            schema_json,
-        ],
-    );
-    if let Err(error) = inserted.and_then(|_| transaction.commit()) {
-        let _ = fs::remove_file(&stored_path);
-        return Err(error.into());
+        Err(error) => Err(file_guard.cleanup_error(database, error)),
     }
-    Ok(PersistentSqlInput {
-        kind: request.kind,
-        alias: request.alias.clone(),
-        original_path: request.path.clone(),
-        available: true,
-        schema,
-    })
 }
 
 pub(crate) fn remove_input(
@@ -218,6 +236,7 @@ pub(crate) fn remove_input(
     scope: SqlInputScope,
     request: &RemoveSqlInputRequest,
 ) -> CoreResult<RemoveSqlInputResult> {
+    let mut warnings = cleanup::retry_pending(database);
     let mut connection = database.connect_metadata()?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let stored_path = transaction
@@ -234,13 +253,43 @@ pub(crate) fn remove_input(
     )?;
     let inputs = list_inputs_on_connection(&transaction, scope)?;
     transaction.commit()?;
-    let mut warnings = Vec::new();
-    if let Err(error) = fs::remove_file(&stored_path)
-        && Path::new(&stored_path).exists()
+    if let Some(warning) =
+        cleanup::remove_or_defer(database, Path::new(&stored_path), "stored SQL input")
     {
-        warnings.push(format!("stored SQL input cleanup failed: {error}"));
+        warnings.push(warning);
     }
     Ok(RemoveSqlInputResult { inputs, warnings })
+}
+
+struct InputFileGuard {
+    path: PathBuf,
+    armed: bool,
+}
+
+impl InputFileGuard {
+    fn new(path: PathBuf) -> Self {
+        Self { path, armed: true }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+
+    fn cleanup_error(mut self, database: &Database, error: CoreError) -> CoreError {
+        self.armed = false;
+        match cleanup::remove_or_defer(database, &self.path, "unregistered SQL input") {
+            Some(warning) => CoreError::Consistency(format!("{error}; {warning}")),
+            None => error,
+        }
+    }
+}
+
+impl Drop for InputFileGuard {
+    fn drop(&mut self) {
+        if self.armed && self.path.exists() {
+            let _ = fs::remove_file(&self.path);
+        }
+    }
 }
 
 fn input_directory(database: &Database, scope: SqlInputScope) -> PathBuf {
@@ -349,5 +398,77 @@ mod tests {
         .unwrap();
         assert!(result.inputs.is_empty());
         assert!(result.warnings.is_empty());
+    }
+
+    #[test]
+    fn registry_failures_remove_new_csv_and_sqlite_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = Database::open(directory.path().join("metadata.db")).unwrap();
+        let csv_path = directory.path().join("taxa.csv");
+        fs::write(&csv_path, "taxon_id,name\n1,Animalia\n").unwrap();
+        let sqlite_path = directory.path().join("taxa.db");
+        Connection::open(&sqlite_path)
+            .unwrap()
+            .execute("CREATE TABLE taxa (taxon_id INTEGER)", [])
+            .unwrap();
+
+        let first = add_input(
+            &database,
+            SqlInputScope::CustomSql,
+            &AddSqlInputRequest {
+                kind: SqlInputKind::Csv,
+                alias: "source".into(),
+                path: csv_path.clone(),
+            },
+        )
+        .unwrap();
+        assert_eq!(first.inputs.len(), 1);
+        assert!(
+            add_input(
+                &database,
+                SqlInputScope::CustomSql,
+                &AddSqlInputRequest {
+                    kind: SqlInputKind::Sqlite,
+                    alias: "source".into(),
+                    path: sqlite_path.clone(),
+                },
+            )
+            .is_err()
+        );
+        assert_eq!(
+            fs::read_dir(input_directory(&database, SqlInputScope::CustomSql))
+                .unwrap()
+                .count(),
+            1
+        );
+
+        add_input(
+            &database,
+            SqlInputScope::BaseImport,
+            &AddSqlInputRequest {
+                kind: SqlInputKind::Sqlite,
+                alias: "source".into(),
+                path: sqlite_path,
+            },
+        )
+        .unwrap();
+        assert!(
+            add_input(
+                &database,
+                SqlInputScope::BaseImport,
+                &AddSqlInputRequest {
+                    kind: SqlInputKind::Csv,
+                    alias: "source".into(),
+                    path: csv_path,
+                },
+            )
+            .is_err()
+        );
+        assert_eq!(
+            fs::read_dir(input_directory(&database, SqlInputScope::BaseImport))
+                .unwrap()
+                .count(),
+            1
+        );
     }
 }

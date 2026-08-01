@@ -317,6 +317,8 @@ export type CustomSqlExecutionResult = {
   changeset_size: number;
   result_sets: SqlResultSet[];
   messages: SqlStatementMessage[];
+  script_saved: boolean;
+  warnings: string[];
 };
 
 export type SqlExportResult = {
@@ -343,6 +345,12 @@ export type PersistentSqlInput = {
   schema: SqlSourceSchema;
 };
 
+export type AddSqlInputResult = {
+  input: PersistentSqlInput;
+  inputs: PersistentSqlInput[];
+  warnings: string[];
+};
+
 export type RemoveSqlInputResult = {
   inputs: PersistentSqlInput[];
   warnings: string[];
@@ -351,6 +359,8 @@ export type RemoveSqlInputResult = {
 export type BaseImportExecutionResult = {
   statements_executed: number;
   messages: SqlStatementMessage[];
+  script_saved: boolean;
+  warnings: string[];
 };
 
 export type BaseImportIssue = {
@@ -376,6 +386,11 @@ export type TaxonomyBaseMetadata = {
   taxa_count: number;
   taxon_names_count: number;
   imported_at: string;
+};
+
+export type TaxonomyBaseReplaceResult = {
+  metadata: TaxonomyBaseMetadata;
+  warnings: string[];
 };
 
 export type MapSettings = {
@@ -1015,6 +1030,8 @@ export const executeCustomSql = (
     truncated: false,
   }],
   messages: [{ statement_index: 1, affected_rows: null, message: "Query completed" }],
+  script_saved: true,
+  warnings: [],
 }));
 
 export const exportCustomSqlQuery = (
@@ -1031,9 +1048,12 @@ export const listCustomSqlInputs = () =>
   call<PersistentSqlInput[]>("list_custom_sql_inputs", undefined, () => []);
 
 export const addCustomSqlInput = (kind: "csv" | "sqlite", alias: string, path: string) =>
-  call<PersistentSqlInput>("add_custom_sql_input", {
+  call<AddSqlInputResult>("add_custom_sql_input", {
     request: { kind, alias, path },
-  }, () => demoSqlInput(kind, alias, path));
+  }, () => {
+    const input = demoSqlInput(kind, alias, path);
+    return { input, inputs: [input], warnings: [] };
+  });
 
 export const removeCustomSqlInput = (alias: string) =>
   call<RemoveSqlInputResult>("remove_custom_sql_input", {
@@ -1051,9 +1071,12 @@ export const listBaseImportInputs = () =>
   call<PersistentSqlInput[]>("list_base_import_inputs", undefined, () => []);
 
 export const addBaseImportInput = (kind: "csv" | "sqlite", alias: string, path: string) =>
-  call<PersistentSqlInput>("add_base_import_input", {
+  call<AddSqlInputResult>("add_base_import_input", {
     request: { kind, alias, path },
-  }, () => demoSqlInput(kind, alias, path));
+  }, () => {
+    const input = demoSqlInput(kind, alias, path);
+    return { input, inputs: [input], warnings: [] };
+  });
 
 export const removeBaseImportInput = (alias: string) =>
   call<RemoveSqlInputResult>("remove_base_import_input", {
@@ -1066,6 +1089,8 @@ export const executeBaseImportSql = (sql: string) =>
   }, () => ({
     statements_executed: sql.split(";").filter(Boolean).length,
     messages: [{ statement_index: 1, affected_rows: null, message: "Script completed" }],
+    script_saved: true,
+    warnings: [],
   }));
 
 export const validateBaseImport = () =>
@@ -1084,7 +1109,19 @@ export const validateBaseImport = () =>
   }));
 
 export const applyBaseImport = () =>
-  call<OperationState>("apply_base_import", undefined, () => demoOperation("mapping", "Base import applied"));
+  call<OperationState>("apply_base_import", undefined, () => {
+    const operation = demoOperation("mapping", "Base import applied");
+    operation.result = {
+      metadata: {
+        source_path: "demo-base.db",
+        taxa_count: 125000,
+        taxon_names_count: 185000,
+        imported_at: new Date().toISOString(),
+      },
+      warnings: [],
+    } satisfies TaxonomyBaseReplaceResult;
+    return operation;
+  });
 
 function demoSqlInput(
   kind: "csv" | "sqlite",

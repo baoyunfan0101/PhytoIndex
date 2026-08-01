@@ -86,11 +86,14 @@ fn persistent_inputs_and_successful_sql_survive_apply_and_reopen() {
     let execution = execute_simple(&database);
     assert!(execution.statements_executed > 0);
     assert_eq!(execution.messages.len(), execution.statements_executed);
+    assert!(execution.script_saved);
+    assert!(execution.warnings.is_empty());
     let validation = validate_base_import(&database).unwrap();
     assert!(validation.can_apply, "{:?}", validation.errors);
     let result = apply_base_import(&database).unwrap();
 
     assert_eq!(result.metadata.taxa_count, 1);
+    assert!(result.warnings.is_empty());
     assert_ne!(database.taxonomy_identity().unwrap(), old_identity);
     assert_eq!(
         get_taxon_detail(&database, 101)
@@ -163,6 +166,77 @@ fn failed_execution_does_not_replace_saved_sql() {
 }
 
 #[test]
+fn failed_execution_restores_existing_staging_and_validation() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = Database::open(directory.path().join("metadata.db")).unwrap();
+    add_simple_input(&directory, &database);
+    execute_simple(&database);
+    assert!(validate_base_import(&database).unwrap().can_apply);
+
+    execute_base_import_sql(
+        &database,
+        &ExecuteBaseImportSqlRequest {
+            sql: "SELECT FROM".into(),
+        },
+    )
+    .unwrap_err();
+
+    assert!(validate_base_import(&database).unwrap().can_apply);
+    assert_eq!(get_base_import_sql(&database).unwrap(), SIMPLE_IMPORT_SQL);
+}
+
+#[test]
+fn committed_base_import_sql_reports_script_save_failure_as_warning() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = Database::open(directory.path().join("metadata.db")).unwrap();
+    add_simple_input(&directory, &database);
+    database
+        .connect_metadata()
+        .unwrap()
+        .execute("DROP TABLE app_metadata", [])
+        .unwrap();
+
+    let result = execute_simple(&database);
+
+    assert!(!result.script_saved);
+    assert_eq!(result.warnings.len(), 1);
+    assert!(result.warnings[0].contains("script could not be saved"));
+    assert!(
+        workspace(&database)
+            .unwrap()
+            .join(STAGING_DATABASE)
+            .is_file()
+    );
+}
+
+#[test]
+fn adding_input_returns_cleanup_warning_after_registry_commit() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = Database::open(directory.path().join("metadata.db")).unwrap();
+    let workspace = workspace(&database).unwrap();
+    fs::create_dir(workspace.join(CANDIDATE_BUILD_DATABASE)).unwrap();
+    let csv_path = directory.path().join("source.csv");
+    fs::write(&csv_path, "taxon_id,name\n1,Animalia\n").unwrap();
+
+    let result = add_base_import_input(
+        &database,
+        &AddSqlInputRequest {
+            kind: SqlInputKind::Csv,
+            alias: "source_taxa".into(),
+            path: csv_path,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(result.inputs.len(), 1);
+    assert_eq!(result.input.alias, "source_taxa");
+    assert_eq!(result.warnings.len(), 1);
+    assert!(result.warnings[0].contains("queued for retry"));
+    let deferred = workspace.join(format!(".invalidated-{CANDIDATE_BUILD_DATABASE}"));
+    fs::remove_dir(deferred).unwrap();
+}
+
+#[test]
 fn source_removal_invalidates_staging_validation_and_candidate() {
     let directory = tempfile::tempdir().unwrap();
     let database = Database::open(directory.path().join("metadata.db")).unwrap();
@@ -185,6 +259,37 @@ fn source_removal_invalidates_staging_validation_and_candidate() {
     assert!(!workspace.join(STAGING_DATABASE).exists());
     assert!(!workspace.join(CANDIDATE_DATABASE).exists());
     assert!(!workspace.join(VALIDATION_STATE).exists());
+}
+
+#[test]
+fn removing_input_returns_cleanup_warning_after_registry_commit() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = Database::open(directory.path().join("metadata.db")).unwrap();
+    add_simple_input(&directory, &database);
+    let stored_path = database
+        .connect_metadata()
+        .unwrap()
+        .query_row(
+            "SELECT stored_path FROM sql_inputs WHERE scope = 2 AND alias = 'source_taxa'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .unwrap();
+    fs::remove_file(&stored_path).unwrap();
+    fs::create_dir(&stored_path).unwrap();
+
+    let result = remove_base_import_input(
+        &database,
+        &RemoveSqlInputRequest {
+            alias: "source_taxa".into(),
+        },
+    )
+    .unwrap();
+
+    assert!(result.inputs.is_empty());
+    assert_eq!(result.warnings.len(), 1);
+    assert!(result.warnings[0].contains("queued for retry"));
+    fs::remove_dir(stored_path).unwrap();
 }
 
 #[test]
@@ -312,4 +417,22 @@ fn external_staging_change_invalidates_apply() {
     let error = apply_base_import(&database).unwrap_err();
     assert!(error.to_string().contains("fingerprint is stale"));
     assert!(!workspace.join(CANDIDATE_DATABASE).exists());
+}
+
+#[test]
+fn apply_returns_cleanup_warning_after_taxonomy_replacement() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = Database::open(directory.path().join("metadata.db")).unwrap();
+    add_simple_input(&directory, &database);
+    execute_simple(&database);
+    assert!(validate_base_import(&database).unwrap().can_apply);
+    let workspace = workspace(&database).unwrap();
+    fs::create_dir(workspace.join(CANDIDATE_BUILD_DATABASE)).unwrap();
+
+    let result = apply_base_import(&database).unwrap();
+
+    assert_eq!(result.metadata.taxa_count, 1);
+    assert_eq!(result.warnings.len(), 1);
+    assert!(result.warnings[0].contains("queued for retry"));
+    fs::remove_dir(workspace.join(CANDIDATE_BUILD_DATABASE)).unwrap();
 }

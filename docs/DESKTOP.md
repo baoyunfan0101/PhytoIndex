@@ -67,16 +67,18 @@ Base Import use separate persistent registries with the same DTOs.
 | --- | --- | --- |
 | `get_custom_taxonomy_sql` | none | `String` |
 | `list_custom_sql_inputs` | none | `Vec<PersistentSqlInput>` |
-| `add_custom_sql_input` | `request: AddSqlInputRequest` | `PersistentSqlInput` |
+| `add_custom_sql_input` | `request: AddSqlInputRequest` | `AddSqlInputResult` |
 | `remove_custom_sql_input` | `request: RemoveSqlInputRequest` | `RemoveSqlInputResult` |
 | `execute_custom_taxonomy_sql` | `request: CustomTaxonomySqlRequest` | `CustomSqlExecutionResult` |
 | `export_custom_taxonomy_query` | `request: CustomTaxonomySqlExportRequest` | `SqlExportResult` |
 
 `CustomSqlExecutionResult` contains `operation_id`, `changeset_size`,
-`result_sets`, and statement `messages`. Each result set contains typed
+`result_sets`, statement `messages`, `script_saved`, and `warnings`. Each result set contains typed
 `SqlValue` cells and a `truncated` flag. A pure query returns a null
 `operation_id`. A mutation creates a rollbackable taxonomy operation. A
-successful query or mutation replaces the saved script; a failure does not.
+successful query or mutation attempts to replace the saved script after the
+SQL transaction commits. A save failure leaves SQL execution successful and
+is reported by `script_saved = false` plus `warnings`.
 Full-query export streams to `destination_path` instead of returning the CSV
 through IPC.
 
@@ -90,7 +92,7 @@ artifacts.
 | --- | --- | --- |
 | `get_base_import_sql` | none | `String` |
 | `list_base_import_inputs` | none | `Vec<PersistentSqlInput>` |
-| `add_base_import_input` | `request: AddSqlInputRequest` | `PersistentSqlInput` |
+| `add_base_import_input` | `request: AddSqlInputRequest` | `AddSqlInputResult` |
 | `remove_base_import_input` | `request: RemoveSqlInputRequest` | `RemoveSqlInputResult` |
 | `execute_base_import_sql` | `request: ExecuteBaseImportSqlRequest` | `BaseImportExecutionResult` |
 | `validate_base_import` | none | `BaseImportValidationResult` |
@@ -98,14 +100,17 @@ artifacts.
 
 Validation returns authoritative total warning and error counts plus bounded
 issue samples. Apply is allowed only after successful validation. The returned
-operation reports replacement progress; photo-library remapping continues
+operation reports replacement progress and stores a
+`TaxonomyBaseReplaceResult` in `result`; photo-library remapping continues
 through the background synchronization mechanism.
 
-Execution returns statement messages but no query result tables or query CSV
-export. Runtime success saves the script and enables separate validation;
+Execution returns statement messages, `script_saved`, and cleanup or save
+`warnings`, but no query result tables or query CSV export. Runtime success
+attempts to save the script and enables separate validation;
 validation issues do not undo that save. Add, remove, and successful SQL
 execution invalidate the current candidate and validation result. The frontend
-updates its source list only from a successful backend response.
+updates its source list from the authoritative `inputs` returned by
+`AddSqlInputResult` or `RemoveSqlInputResult`.
 
 After a successful apply, the shell closes tabs that store taxonomy identity,
 taxon IDs, or taxonomy paths. Photo and mapping views remain open but reload
@@ -113,8 +118,9 @@ their mapping data. Formatted Update retains its draft and clears its previous
 preview.
 
 Apply removes staging, candidate, and validation artifacts while preserving
-the source registry and saved SQL. It is disabled unless validation reports
-`can_apply = true`.
+the source registry and saved SQL. Cleanup failures are returned in
+`TaxonomyBaseReplaceResult.warnings` and do not undo replacement. Apply is
+disabled unless validation reports `can_apply = true`.
 
 ## Operation and audit commands
 

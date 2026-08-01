@@ -21,7 +21,7 @@ use vividarium_core::naming::{
 use vividarium_core::operations::{OperationAuditRow, OperationPage, OperationSummary};
 use vividarium_core::photos::{PhotoFilenameFormatSettings, PhotoRenameOperationResult};
 use vividarium_core::taxonomy::{
-    AddSqlInputRequest, BaseImportExecutionResult, BaseImportValidationResult,
+    AddSqlInputRequest, AddSqlInputResult, BaseImportExecutionResult, BaseImportValidationResult,
     CustomSqlExecutionResult, CustomTaxonomySqlExportRequest, CustomTaxonomySqlRequest,
     DeleteTaxonNameInput, ExecuteBaseImportSqlRequest, PersistentSqlInput, PromoteTaxonNameInput,
     RemoveSqlInputRequest, RemoveSqlInputResult, SqlExportResult, TaxonChild, TaxonDetailNode,
@@ -703,7 +703,7 @@ pub fn list_custom_sql_inputs(
 pub fn add_custom_sql_input(
     state: State<'_, AppState>,
     request: AddSqlInputRequest,
-) -> CommandResult<PersistentSqlInput> {
+) -> CommandResult<AddSqlInputResult> {
     taxonomy::add_custom_sql_input(&state.database, &request).map_err(error)
 }
 
@@ -887,7 +887,7 @@ pub fn list_base_import_inputs(
 pub fn add_base_import_input(
     state: State<'_, AppState>,
     request: AddSqlInputRequest,
-) -> CommandResult<PersistentSqlInput> {
+) -> CommandResult<AddSqlInputResult> {
     taxonomy::add_base_import_input(&state.database, &request).map_err(error)
 }
 

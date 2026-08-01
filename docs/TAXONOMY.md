@@ -157,6 +157,7 @@ and cannot use reserved database names.
 | Type | Fields | Description |
 | --- | --- | --- |
 | `AddSqlInputRequest` | `kind`, `alias`, `path` | Register a source and create a managed copy. |
+| `AddSqlInputResult` | `input`, `inputs`, `warnings` | Added source, authoritative source list, and noncritical cleanup warnings. |
 | `RemoveSqlInputRequest` | `alias` | Identify one source in the selected workflow. |
 | `PersistentSqlInput` | `kind`, `alias`, `original_path`, `available`, `schema` | Registered source, managed-copy availability, and inspected schema. |
 | `RemoveSqlInputResult` | `inputs`, `warnings` | Authoritative remaining sources and noncritical cleanup warnings. |
@@ -173,7 +174,7 @@ query in `sql` and an absolute `destination_path`.
 
 | Type | Fields | Description |
 | --- | --- | --- |
-| `CustomSqlExecutionResult` | `operation_id`, `changeset_size`, `result_sets`, `messages` | Combined result for the full Custom SQL script. |
+| `CustomSqlExecutionResult` | `operation_id`, `changeset_size`, `result_sets`, `messages`, `script_saved`, `warnings` | Committed SQL result and independent script-save status. |
 | `SqlResultSet` | `statement_index`, `columns`, `rows`, `truncated` | One statement result. |
 | `SqlColumn` | `name`, `declared_type` | Result or source column metadata. |
 | `SqlStatementMessage` | `statement_index`, `affected_rows`, `message` | Per-statement execution summary. |
@@ -194,7 +195,7 @@ are `table`, `view`, and `virtual_table`.
 | --- | --- | --- |
 | `get_custom_taxonomy_sql` | none | Last successful SQL, or the initial built-in script `String` |
 | `list_custom_sql_inputs` | none | `Vec<PersistentSqlInput>` |
-| `add_custom_sql_input` | `request: &AddSqlInputRequest` | `PersistentSqlInput` |
+| `add_custom_sql_input` | `request: &AddSqlInputRequest` | `AddSqlInputResult` |
 | `remove_custom_sql_input` | `request: &RemoveSqlInputRequest` | `RemoveSqlInputResult` |
 | `execute_custom_taxonomy_sql` | `request: &CustomTaxonomySqlRequest` | `CustomSqlExecutionResult` |
 | `export_custom_taxonomy_query` | `request: &CustomTaxonomySqlExportRequest` | `SqlExportResult` |
@@ -208,22 +209,25 @@ executes.
 The statement succeeds or fails as one unit and the resulting taxonomy must
 remain valid. A pure query creates no operation. A successful mutation creates
 a rollbackable operation without formatted input and records photo-library
-synchronization. SQL is saved only after prepare and execution succeed; a
-failure does not replace the last successful SQL. Export accepts exactly one
+synchronization. SQL is saved only after prepare, execution, and transaction
+commit succeed. A script-save failure returns the committed execution with
+`script_saved = false` and a warning; an execution failure does not replace
+the last successful SQL. Export accepts exactly one
 read-only query and streams its rows to the destination CSV.
 
 ## Base database
 
 `TaxonomyBaseMetadata` contains `source_path`, `taxa_count`,
 `taxon_names_count`, and `imported_at`.
-`TaxonomyBaseReplaceResult` contains the resulting `metadata`.
+`TaxonomyBaseReplaceResult` contains the resulting `metadata` and noncritical
+cleanup `warnings`.
 
 ### Base import types
 
 | Type | Fields |
 | --- | --- |
 | `ExecuteBaseImportSqlRequest` | `sql` |
-| `BaseImportExecutionResult` | `statements_executed`, `messages` |
+| `BaseImportExecutionResult` | `statements_executed`, `messages`, `script_saved`, `warnings` |
 | `NameTypeCount` | `name_type`, `count` |
 | `BaseImportIssue` | `code`, `message`, `table`, `row_identifier` |
 | `BaseImportValidationResult` | `can_apply`, `taxa_count`, `name_counts`, `normalization_changes`, `total_warning_count`, `total_error_count`, `warnings`, `errors` |
@@ -237,7 +241,7 @@ fields remain authoritative.
 | --- | --- | --- |
 | `get_base_import_sql` | none | Last successful SQL, or the initial built-in script `String` |
 | `list_base_import_inputs` | none | `Vec<PersistentSqlInput>` |
-| `add_base_import_input` | `request: &AddSqlInputRequest` | `PersistentSqlInput` |
+| `add_base_import_input` | `request: &AddSqlInputRequest` | `AddSqlInputResult` |
 | `remove_base_import_input` | `request: &RemoveSqlInputRequest` | `RemoveSqlInputResult` |
 | `execute_base_import_sql` | `request: &ExecuteBaseImportSqlRequest` | `BaseImportExecutionResult` |
 | `validate_base_import` | none | `BaseImportValidationResult` |
@@ -253,8 +257,11 @@ Base Import SQL can read the isolated source and can attach only the
 backend-selected `vividarium_base.db` path with the `base` alias. It may create
 and mutate staging objects only in `base`; the execution result never creates
 a taxonomy operation or returns Custom SQL result sets. It reports only
-per-statement messages or a syntax/runtime error. A fully successful script is
-saved even when later validation fails.
+per-statement messages or a syntax/runtime error. After a fully successful
+script commits, script persistence is attempted separately. Save failure is
+reported through `script_saved = false` and `warnings` without changing the
+execution result. A failed execution restores the prior staging and validation
+artifacts.
 
 `validate_base_import` separately checks file integrity, foreign keys, required
 schema and constraints, supported ranks and name types, canonical
@@ -265,7 +272,8 @@ samples. Any later source or SQL change requires validation again.
 `apply_base_import` accepts only the latest successfully validated candidate.
 Successful replacement assigns a new taxonomy identity, clears taxonomy
 history, and marks every registered photo library for a full remap. It removes
-staging, candidate, and validation artifacts while retaining inputs and SQL. A
+staging, candidate, and validation artifacts while retaining inputs and SQL.
+Post-commit cleanup failures are warnings and are queued for later retry. A
 failed validation or replacement leaves the current taxonomy unchanged.
 
 ### Direct base database replacement

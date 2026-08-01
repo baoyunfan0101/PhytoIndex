@@ -17,8 +17,8 @@ use super::formatted::{
 #[cfg(test)]
 use super::sql_inputs::SqlInputKind;
 use super::sql_inputs::{
-    self, AddSqlInputRequest, PersistentSqlInput, RemoveSqlInputRequest, RemoveSqlInputResult,
-    SqlInputScope,
+    self, AddSqlInputRequest, AddSqlInputResult, PersistentSqlInput, RemoveSqlInputRequest,
+    RemoveSqlInputResult, SqlInputScope,
 };
 use super::sql_support::{
     RawStatement, execute_preview_statement_raw, sqlite_error, statement_columns, statement_row,
@@ -55,6 +55,8 @@ pub struct CustomSqlExecutionResult {
     pub changeset_size: usize,
     pub result_sets: Vec<SqlResultSet>,
     pub messages: Vec<SqlStatementMessage>,
+    pub script_saved: bool,
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -141,7 +143,7 @@ pub fn execute_custom_taxonomy_sql(
     let mut connection = database.connect_taxonomy()?;
     let sources = sql_inputs::stored_sources(database, SqlInputScope::CustomSql)?;
     let attached = prepare_sources(&mut connection, &sources)?;
-    let execution = (|| {
+    let execution: CoreResult<CustomSqlExecutionResult> = (|| {
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let mut session = start_taxonomy_session(&transaction)?;
         let mut result = execute_custom_script(
@@ -174,16 +176,24 @@ pub fn execute_custom_taxonomy_sql(
         Ok(result)
     })();
     let detach = detach_sources(&connection, &attached);
-    let result = match (execution, detach) {
+    let mut result = match (execution, detach) {
         (Ok(result), Ok(())) => Ok(result),
         (Err(error), _) => Err(error),
-        (Ok(_), Err(error)) => Err(error),
+        (Ok(mut result), Err(error)) => {
+            result.warnings.push(format!(
+                "custom taxonomy SQL committed, but source cleanup failed: {error}"
+            ));
+            Ok(result)
+        }
     }?;
-    metadata::set_raw(
-        &database.connect_metadata()?,
-        MetadataKey::CustomTaxonomySql,
-        &request.sql,
-    )?;
+    match database.connect_metadata().and_then(|connection| {
+        metadata::set_raw(&connection, MetadataKey::CustomTaxonomySql, &request.sql)
+    }) {
+        Ok(()) => result.script_saved = true,
+        Err(error) => result.warnings.push(format!(
+            "custom taxonomy SQL committed, but the script could not be saved: {error}"
+        )),
+    }
     Ok(result)
 }
 
@@ -236,7 +246,7 @@ pub fn list_custom_sql_inputs(database: &Database) -> CoreResult<Vec<PersistentS
 pub fn add_custom_sql_input(
     database: &Database,
     request: &AddSqlInputRequest,
-) -> CoreResult<PersistentSqlInput> {
+) -> CoreResult<AddSqlInputResult> {
     let sql_mutex = custom_sql_mutex(database)?;
     let _sql_guard = lock_custom_sql(&sql_mutex)?;
     sql_inputs::add_input(database, SqlInputScope::CustomSql, request)
@@ -330,6 +340,8 @@ where
         changeset_size: 0,
         result_sets,
         messages,
+        script_saved: false,
+        warnings: Vec::new(),
     })
 }
 
