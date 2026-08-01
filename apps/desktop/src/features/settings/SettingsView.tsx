@@ -66,7 +66,7 @@ import { CodeEditor } from "../../shared/CodeEditor";
 import { BaseImportSettings } from "../taxonomy/BaseImportSettings";
 import { emitMetadataChange } from "../../shared/metadataChanges";
 
-type SettingsSection =
+export type SettingsSection =
   | "General"
   | "Storage"
   | "Photo Libraries"
@@ -92,17 +92,20 @@ const settingsSections: Array<{
 
 export function SettingsView({
   onBaseReplaced,
+  onSectionChange,
   onWorkspaceChanged,
+  section,
 }: {
   onBaseReplaced?: () => void;
+  onSectionChange: (section: SettingsSection) => void;
   onWorkspaceChanged?: (resetPhotoTabs: boolean) => void;
+  section: SettingsSection;
 }) {
-  const [section, setSection] = useState<SettingsSection>("General");
   return (
     <div className="settings-workbench">
       <aside className="settings-nav">
         {settingsSections.map(({ id, icon: Icon }) => (
-          <button className={section === id ? "active" : ""} type="button" key={id} onClick={() => setSection(id)}>
+          <button className={section === id ? "active" : ""} type="button" key={id} onClick={() => onSectionChange(id)}>
             <Icon size={14} />{id}
           </button>
         ))}

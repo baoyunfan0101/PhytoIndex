@@ -10,9 +10,9 @@ Hooks, Base Import, and About sections in one workspace.
 
 ### `SettingsView(props)`
 
-Parameters include application and workspace callbacks used to reload Photo
-Libraries, switch the active library, handle taxonomy replacement, and report
-status.
+Parameters include the selected settings section, a section-change callback,
+and application callbacks used to reload Photo Libraries, switch the active
+library, and handle taxonomy replacement.
 
 Returns: the complete settings workbench. Unsaved hook source, test cases, and
 expected values remain in the view state while the tab is inactive.

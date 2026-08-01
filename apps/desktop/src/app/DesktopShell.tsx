@@ -11,7 +11,6 @@ import {
   History,
   ListTree,
   Map,
-  MoreHorizontal,
   Plus,
   Search,
   Settings,
@@ -58,7 +57,7 @@ import {
   TaxonPhotosView,
 } from "../features/photos/PhotosView";
 import { MappingView } from "../features/mapping/MappingView";
-import { SettingsView } from "../features/settings/SettingsView";
+import { SettingsView, type SettingsSection } from "../features/settings/SettingsView";
 import {
   FormattedUpdateView,
   TaxonomySearchView,
@@ -98,6 +97,7 @@ type AppTab = {
   query?: string;
   taxonId?: number;
   photo?: Photo;
+  settingsSection?: SettingsSection;
 };
 
 const initialTab: AppTab = { id: "folders", kind: "folders", title: "Folders" };
@@ -141,11 +141,12 @@ export function DesktopShell() {
   const [workspaceLoading, setWorkspaceLoading] = useState(true);
   const [libraryMenuOpen, setLibraryMenuOpen] = useState(false);
   const [operationsOpen, setOperationsOpen] = useState(false);
-  const [moreOpen, setMoreOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [recentSearches, setRecentSearches] = useState(loadRecentSearches);
   const [status, setStatus] = useState("Ready");
   const emptySearchInputRef = useRef<HTMLInputElement>(null);
+  const libraryMenuRef = useRef<HTMLDivElement>(null);
+  const operationsMenuRef = useRef<HTMLDivElement>(null);
   const viewStateStores = useRef(new globalThis.Map<string, ViewStateStore>());
   const [navigationHistory, setNavigationHistory] = useState(
     createNavigationHistory(initialTab.id),
@@ -198,9 +199,29 @@ export function DesktopShell() {
     ));
   }, [active?.id, existingTabIds]);
 
+  useEffect(() => {
+    if (!libraryMenuOpen && !operationsOpen) return;
+    const closeMenusOnOutsidePointer = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (libraryMenuOpen && !libraryMenuRef.current?.contains(target)) {
+        setLibraryMenuOpen(false);
+      }
+      if (operationsOpen && !operationsMenuRef.current?.contains(target)) {
+        setOperationsOpen(false);
+      }
+    };
+    window.addEventListener("pointerdown", closeMenusOnOutsidePointer);
+    return () => window.removeEventListener("pointerdown", closeMenusOnOutsidePointer);
+  }, [libraryMenuOpen, operationsOpen]);
+
   function openTab(tab: AppTab, singleton = false) {
     const existing = tabs.find((item) => item.id === tab.id || (singleton && item.kind === tab.kind));
     if (existing) {
+      if (tab.kind === "settings" && tab.settingsSection !== undefined) {
+        setTabs((current) => current.map((item) => item.id === existing.id
+          ? { ...item, settingsSection: tab.settingsSection }
+          : item));
+      }
       focusTab(existing.id);
       return;
     }
@@ -229,6 +250,12 @@ export function DesktopShell() {
   function updateTaxonTab(id: string, taxonId: number, title: string) {
     setTabs((current) => current.map((tab) => tab.id === id && tab.kind === "taxon-detail"
       ? { ...tab, taxonId, title }
+      : tab));
+  }
+
+  function updateSettingsTab(id: string, settingsSection: SettingsSection) {
+    setTabs((current) => current.map((tab) => tab.id === id && tab.kind === "settings"
+      ? { ...tab, settingsSection }
       : tab));
   }
 
@@ -371,11 +398,14 @@ export function DesktopShell() {
             <button type="button" title="Go Back" disabled={!backTarget} onClick={() => navigate(-1)}><ArrowLeft size={14} /></button>
             <button type="button" title="Go Forward" disabled={!forwardTarget} onClick={() => navigate(1)}><ArrowRight size={14} /></button>
           </div>
-          <div className="library-selector">
+          <div className="library-selector" ref={libraryMenuRef}>
             <button
               className={`library-selector-button${workspaceAvailable ? "" : " unavailable"}`}
               type="button"
-              onClick={() => setLibraryMenuOpen((current) => !current)}
+              onClick={() => {
+                setOperationsOpen(false);
+                setLibraryMenuOpen((current) => !current);
+              }}
               title={activeLibrary?.root_path ?? "Select a Photo Library"}
             >
               <Database size={14} />
@@ -401,7 +431,7 @@ export function DesktopShell() {
                 <button className="popover-action" type="button" onClick={() => void createLibrary()}><Plus size={13} />Create or open library</button>
                 <button className="popover-action" type="button" onClick={() => {
                   setLibraryMenuOpen(false);
-                  openModule("settings", "Settings");
+                  openTab({ id: "settings", kind: "settings", title: "Settings", settingsSection: "Photo Libraries" }, true);
                 }}><Settings size={13} />Manage libraries</button>
               </div>
             )}
@@ -417,11 +447,13 @@ export function DesktopShell() {
               </button>
             ))}
           </div>
-          <div className="toolbar-actions">
-            <button className={runningOperations.length > 0 ? "running" : ""} type="button" title="Background operations" onClick={() => setOperationsOpen((current) => !current)}>
+          <div className="toolbar-actions" ref={operationsMenuRef}>
+            <button className={runningOperations.length > 0 ? "running" : ""} type="button" title="Background operations" onClick={() => {
+              setLibraryMenuOpen(false);
+              setOperationsOpen((current) => !current);
+            }}>
               <Activity size={15} /><span>{runningOperations.length}</span>
             </button>
-            <button type="button" title="More actions" onClick={() => setMoreOpen((current) => !current)}><MoreHorizontal size={16} /></button>
             {operationsOpen && (
               <div className="toolbar-popover operations-popover">
                 <strong>Background operations</strong>
@@ -434,18 +466,6 @@ export function DesktopShell() {
                     {operation.error && <small>{operation.error}</small>}
                   </div>
                 ))}
-              </div>
-            )}
-            {moreOpen && (
-              <div className="toolbar-popover more-popover">
-                <button type="button" onClick={() => {
-                  setMoreOpen(false);
-                  openModule("settings", "Settings");
-                }}><Settings size={13} />Settings</button>
-                <button type="button" onClick={() => {
-                  setMoreOpen(false);
-                  void reloadLibraries();
-                }}><Database size={13} />Refresh libraries</button>
               </div>
             )}
           </div>
@@ -483,6 +503,7 @@ export function DesktopShell() {
                     onStatus={setStatus}
                     openTab={openTab}
                     updateTaxonTab={updateTaxonTab}
+                    updateSettingsTab={updateSettingsTab}
                     workspaceAvailable={workspaceAvailable}
                     activeLibrary={activeLibrary}
                     taxonomyMutationLocked={taxonomyMutationLocked}
@@ -518,6 +539,7 @@ function TabBody({
   onStatus,
   openTab,
   updateTaxonTab,
+  updateSettingsTab,
   workspaceAvailable,
   activeLibrary,
   taxonomyMutationLocked,
@@ -531,6 +553,7 @@ function TabBody({
   onStatus: (message: string, busy?: boolean) => void;
   openTab: (tab: AppTab, singleton?: boolean) => void;
   updateTaxonTab: (id: string, taxonId: number, title: string) => void;
+  updateSettingsTab: (id: string, section: SettingsSection) => void;
   workspaceAvailable: boolean;
   activeLibrary: PhotoLibraryWorkspace | null;
   taxonomyMutationLocked: boolean;
@@ -549,7 +572,7 @@ function TabBody({
         action={(
           <div className="empty-state-actions">
             {!activeLibrary && <button className="primary-button" type="button" onClick={onCreateLibrary}>Create or open</button>}
-            <button className="secondary-button" type="button" onClick={() => openTab({ id: "settings", kind: "settings", title: "Settings" }, true)}>Manage libraries</button>
+            <button className="secondary-button" type="button" onClick={() => openTab({ id: "settings", kind: "settings", title: "Settings", settingsSection: "Photo Libraries" }, true)}>Manage libraries</button>
           </div>
         )}
       />
@@ -565,7 +588,7 @@ function TabBody({
   if (tab.kind === "formatted-update") return <FormattedUpdateView mutationDisabled={taxonomyMutationLocked} />;
   if (tab.kind === "custom-sql") return <CustomSqlView onStatus={onStatus} mutationDisabled={taxonomyMutationLocked} />;
   if (tab.kind === "taxonomy-history") return <OperationHistoryView domain="taxonomy" onStatus={onStatus} />;
-  if (tab.kind === "settings") return <SettingsView onBaseReplaced={onBaseReplaced} onWorkspaceChanged={onWorkspaceChanged} />;
+  if (tab.kind === "settings") return <SettingsView section={tab.settingsSection ?? "General"} onSectionChange={(section) => updateSettingsTab(tab.id, section)} onBaseReplaced={onBaseReplaced} onWorkspaceChanged={onWorkspaceChanged} />;
   if (tab.kind === "photo-detail" && tab.photo) return <PhotoDetailView photo={tab.photo} />;
   if (tab.kind === "mapping-editor" && tab.photo) return <MappingEditor photo={tab.photo} />;
   if (tab.kind === "search-photos" && tab.query) return <PhotoSet query={tab.query} handlers={handlers} />;

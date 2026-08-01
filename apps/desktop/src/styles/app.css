@@ -32,7 +32,7 @@
 }
 .activity-divider { width: 22px; height: 1px; margin: 4px 0; background: var(--line); }
 .activity-spacer { flex: 1; }
-.desktop-main { display: grid; min-width: 0; flex: 1; grid-template-rows: 40px minmax(0, 1fr) 22px; }
+.desktop-main { display: grid; min-width: 0; flex: 1; grid-template-rows: 34px minmax(0, 1fr) 22px; }
 .app-topbar { position: relative; z-index: 12; display: flex; min-width: 0; border-bottom: 1px solid var(--line); background: var(--top); }
 .root-button {
   display: flex;
@@ -53,7 +53,7 @@
 .tab-strip::-webkit-scrollbar { height: 2px; }
 .app-tab {
   display: flex;
-  height: 40px;
+  height: 34px;
   min-width: 120px;
   max-width: 210px;
   align-items: center;
@@ -87,7 +87,7 @@
 .toolbar-navigation > button, .toolbar-actions > button {
   display: grid;
   width: 32px;
-  height: 39px;
+  height: 33px;
   place-items: center;
   padding: 0;
   border: 0;
@@ -97,13 +97,13 @@
 .toolbar-navigation > button:hover:not(:disabled), .toolbar-actions > button:hover { color: var(--text); background: var(--hover); }
 .toolbar-actions { border-right: 0; border-left: 1px solid var(--line); }
 .toolbar-actions > button { position: relative; }
-.toolbar-actions > button > span { position: absolute; top: 4px; right: 3px; font-size: 9px; color: var(--muted); }
+.toolbar-actions > button > span { position: absolute; top: 2px; right: 3px; font-size: 9px; color: var(--muted); }
 .toolbar-actions > button.running { color: var(--accent-bright); }
 .library-selector { position: relative; flex: 0 0 220px; border-right: 1px solid var(--line); }
 .library-selector-button {
   display: flex;
   width: 100%;
-  height: 39px;
+  height: 33px;
   align-items: center;
   gap: 7px;
   padding: 0 9px;
@@ -116,7 +116,7 @@
 .toolbar-popover {
   position: absolute;
   z-index: 70;
-  top: 42px;
+  top: 36px;
   padding: 6px;
   border: 1px solid var(--line-strong);
   border-radius: 5px;
@@ -125,7 +125,7 @@
 }
 .library-popover { left: 0; width: 330px; }
 .toolbar-popover > strong { display: block; padding: 6px 7px; color: #eee; }
-.library-popover > button, .more-popover > button {
+.library-popover > button {
   display: flex;
   width: 100%;
   min-height: 36px;
@@ -138,7 +138,7 @@
   text-align: left;
   background: transparent;
 }
-.library-popover > button:hover, .more-popover > button:hover { background: var(--active); }
+.library-popover > button:hover { background: var(--active); }
 .library-popover > button.active { background: #343a36; }
 .library-popover button > i { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; }
 .library-popover button > i.available { background: var(--accent-bright); }
@@ -147,11 +147,10 @@
 .library-popover small { overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
 .library-popover em { max-width: 90px; color: var(--muted); font-size: 10px; font-style: normal; text-align: right; }
 .library-popover .popover-action { min-height: 30px; border-top: 1px solid var(--line); }
-.operations-popover { right: 34px; width: 310px; }
+.operations-popover { right: 3px; width: 310px; }
 .operations-popover > div { display: grid; gap: 3px; padding: 7px; border-top: 1px solid var(--line); }
 .operations-popover span, .operations-popover small { color: var(--muted); }
 .operations-popover progress { width: 100%; accent-color: var(--accent); }
-.more-popover { right: 3px; width: 190px; }
 
 @media (max-width: 1050px) {
   .root-button { width: 190px; }
