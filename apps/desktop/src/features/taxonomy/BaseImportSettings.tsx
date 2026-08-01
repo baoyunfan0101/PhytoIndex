@@ -17,7 +17,7 @@ import type { PersistentSqlInput, SqlStatementMessage } from "../../api/customSq
 import { errorMessage } from "../../api/common";
 import { waitForOperation } from "../../api/tasks";
 import { CodeEditor } from "../../shared/CodeEditor";
-import { Modal, SectionHeader, VirtualList } from "../../shared/ui";
+import { Button, Modal, SectionHeader, VirtualList } from "../../shared/ui";
 import { SqlInputList } from "./SqlInputList";
 import { emitTaxonomyMutation } from "./taxonomyMutations";
 
@@ -157,15 +157,15 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
         <div className="base-import-editor">
           <CodeEditor language="sql" ariaLabel="Base import SQL" value={sql} onChange={setSql} />
           <div className="base-import-actions">
-            <button className="secondary-button" type="button" disabled={Boolean(busy) || !sql.trim()} onClick={() => void execute()}>
+            <Button disabled={Boolean(busy) || !sql.trim()} onClick={() => void execute()}>
               <Play size={13} />Execute
-            </button>
-            <button className="secondary-button" type="button" disabled={Boolean(busy)} onClick={() => void validate()}>
+            </Button>
+            <Button disabled={Boolean(busy)} onClick={() => void validate()}>
               <Beaker size={13} />Validate
-            </button>
-            <button className="primary-button" type="button" disabled={Boolean(busy) || !validation?.can_apply} onClick={() => setConfirming(true)}>
+            </Button>
+            <Button variant="primary" disabled={Boolean(busy) || !validation?.can_apply} onClick={() => setConfirming(true)}>
               Apply candidate
-            </button>
+            </Button>
           </div>
         </div>
       </div>
@@ -208,10 +208,10 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
           onClose={() => !busy && setConfirming(false)}
           actions={(
             <>
-              <button className="secondary-button" type="button" disabled={Boolean(busy)} onClick={() => setConfirming(false)}>Cancel</button>
-              <button className="primary-button" type="button" disabled={Boolean(busy)} onClick={() => void apply()}>
+              <Button disabled={Boolean(busy)} onClick={() => setConfirming(false)}>Cancel</Button>
+              <Button variant="primary" disabled={Boolean(busy)} onClick={() => void apply()}>
                 Replace taxonomy
-              </button>
+              </Button>
             </>
           )}
         >

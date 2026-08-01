@@ -19,3 +19,18 @@ theme, application shell, shared UI, and business-domain styles.
 Feature components use domain class names and place new rules in their owning
 domain file. A rule belongs in `shared.css` only after the corresponding UI is
 used by more than one feature domain.
+
+## Shared button interface
+
+`Button` and `IconButton` are exported from `apps/desktop/src/shared/ui.tsx`.
+
+`Button` accepts native button attributes plus `variant` (`primary`,
+`secondary`, or `ghost`) and `size` (`default` or `small`). It returns a native
+button with the shared visual and interaction states.
+
+`IconButton` accepts the same parameters and requires an `aria-label`. It
+returns a square button with the shared icon click target and accessible name.
+
+Button colors, radius, focus ring, transition duration, pressed transform, and
+disabled behavior are global. Domain styles may define layout and selected-row
+states, but do not redefine ordinary button interaction states.

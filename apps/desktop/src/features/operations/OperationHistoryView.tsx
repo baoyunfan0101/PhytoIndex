@@ -18,7 +18,7 @@ import {
 } from "../../api/operations";
 import { downloadCsv, errorMessage } from "../../api/common";
 import { selectCsvDestination } from "../../api/dialogs";
-import { EmptyState, SectionHeader, VirtualList } from "../../shared/ui";
+import { Button, EmptyState, SectionHeader, VirtualList } from "../../shared/ui";
 import { emitPhotoMutation } from "../photos/photoMutations";
 import { useCursorPage } from "../../shared/useCursorPage";
 import { useViewState } from "../../shared/viewState";
@@ -104,13 +104,13 @@ export function OperationHistoryView({
         actions={(
           <>
             {domain === "taxonomy" && (
-              <button className="secondary-button" type="button" onClick={() => void exportAllInput()}>
+              <Button onClick={() => void exportAllInput()}>
                 <FileInput size={13} />Export replayable input
-              </button>
+              </Button>
             )}
-            <button className="secondary-button" type="button" disabled={Boolean(busy)} onClick={() => void exportAllAudit()}>
+            <Button disabled={Boolean(busy)} onClick={() => void exportAllAudit()}>
               <Download size={13} />Export all audit
-            </button>
+            </Button>
           </>
         )}
       />
@@ -228,25 +228,23 @@ function OperationAuditDetail({
         detail={`${operation.applied_at} / ${operation.total_items} audit rows`}
         actions={(
           <>
-            <button className="secondary-button" type="button" onClick={onBack}>
+            <Button onClick={onBack}>
               <ChevronLeft size={13} />Operations
-            </button>
+            </Button>
             {domain === "taxonomy" && operation.has_formatted_input && (
-              <button className="secondary-button" type="button" onClick={() => void exportInput()}>
+              <Button onClick={() => void exportInput()}>
                 <FileInput size={13} />Formatted input
-              </button>
+              </Button>
             )}
-            <button className="secondary-button" type="button" disabled={Boolean(busy)} onClick={() => void exportAudit()}>
+            <Button disabled={Boolean(busy)} onClick={() => void exportAudit()}>
               <Download size={13} />Export audit
-            </button>
-            <button
-              className="secondary-button"
-              type="button"
+            </Button>
+            <Button
               disabled={Boolean(busy) || !operation.rollbackable}
               onClick={() => void rollback()}
             >
               <RotateCcw size={13} />Rollback
-            </button>
+            </Button>
           </>
         )}
       />

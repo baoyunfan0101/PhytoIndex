@@ -12,7 +12,7 @@
 .section-header strong, .pane-header strong { font-size: 12px; color: #e1e1e1; }
 .section-header span, .pane-header span { overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
 .section-actions { display: flex; align-items: center; gap: 6px; }
-.primary-button, .secondary-button, .small-button, .icon-button, .record-actions button {
+.button, .record-actions button {
   display: inline-flex;
   height: 28px;
   align-items: center;
@@ -20,8 +20,8 @@
   gap: 6px;
   padding: 0 9px;
   border: 1px solid var(--line-strong);
-  border-radius: 3px;
-  background: #2b2b2b;
+  border-radius: var(--button-radius);
+  background: var(--button-bg);
 }
 .search-field {
   display: flex;
@@ -35,12 +35,21 @@
   background: var(--input);
 }
 .search-field input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; }
-.primary-button { border-color: #4e8661; color: #fff; background: #396449; }
-.primary-button:hover { background: #467959; }
-.secondary-button:hover, .small-button:hover, .icon-button:hover, .record-actions button:hover { background: #3a3a3a; }
-.icon-button { width: 28px; padding: 0; }
-.small-button { height: 24px; padding: 0 7px; }
-button:disabled { cursor: not-allowed; opacity: .42; }
+.button-primary { border-color: #4e8661; color: #fff; background: var(--button-primary); }
+.button-primary:hover:not(:disabled) { background: var(--button-primary-hover); filter: none; }
+.button-primary:active:not(:disabled) { background: var(--button-primary-active); filter: none; }
+.button-secondary:hover:not(:disabled), .button-ghost:hover:not(:disabled), .record-actions button:hover:not(:disabled) {
+  background: var(--button-bg-hover);
+  filter: none;
+}
+.button-secondary:active:not(:disabled), .button-ghost:active:not(:disabled), .record-actions button:active:not(:disabled) {
+  background: var(--button-bg-active);
+  filter: none;
+}
+.button-ghost { border-color: transparent; background: transparent; }
+.button-small { height: 24px; padding: 0 7px; }
+.icon-button { width: 28px; min-width: 28px; padding: 0; border-radius: var(--button-radius); }
+.icon-button-small { width: 24px; min-width: 24px; }
 
 .virtual-viewport, .virtual-grid-viewport { position: relative; width: 100%; height: 100%; overflow: auto; outline: 0; }
 .virtual-spacer, .virtual-grid-spacer { position: relative; width: 100%; }

@@ -17,7 +17,7 @@ import { errorMessage } from "../../api/common";
 import { getMapSettings, listMapPhotos, type MapBounds, type MapPhoto } from "../../api/map";
 import { browsePhotoTaxon, type PhotoTaxonItem, type PhotoTaxonUsage } from "../../api/mapping";
 import { waitForOperation } from "../../api/tasks";
-import { EmptyState, SectionHeader, VirtualList } from "../../shared/ui";
+import { EmptyState, IconButton, SectionHeader, VirtualList } from "../../shared/ui";
 import { PhotoStage } from "./PhotoMedia";
 import { usePhotoInteraction, type PhotoOpenHandlers } from "./PhotoInteraction";
 import { useDeferredPhotoMutation, usePhotoMutation } from "./photoMutations";
@@ -176,7 +176,7 @@ export function FolderPhotosView({
             }}>{item.name}</button></span>
           ))}
         </div>
-        <button className="icon-button" type="button" onClick={() => void refresh()} title="Refresh"><RefreshCw size={14} /></button>
+        <IconButton aria-label="Refresh" onClick={() => void refresh()} title="Refresh"><RefreshCw size={14} /></IconButton>
       </header>
       <div className="explorer-columns">
         <aside className="finder-pane">
@@ -193,14 +193,14 @@ export function FolderPhotosView({
             renderItem={(item) => (
               item.kind === "directory" ? (
                 <div className="finder-row tree" style={{ paddingLeft: 6 + item.depth * 18 }}>
-                  <button
+                  <IconButton
+                    aria-label={tree.nodes.get(item.directory.directory_id)?.expanded ? "Collapse folder" : "Expand folder"}
                     className="tree-toggle"
-                    type="button"
                     onClick={() => tree.toggle(item.directory.directory_id)}
                     title={tree.nodes.get(item.directory.directory_id)?.expanded ? "Collapse folder" : "Expand folder"}
                   >
                     {tree.nodes.get(item.directory.directory_id)?.expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-                  </button>
+                  </IconButton>
                   <Folder size={14} />
                   <button className="tree-label" type="button" onDoubleClick={() => enter(item.directory)}>
                     {item.directory.name}
@@ -298,14 +298,14 @@ export function TaxonPhotosView({ handlers }: { handlers: PhotoOpenHandlers }) {
             renderItem={(item) => (
               item.kind === "taxon" ? (
                 <div className="finder-row tree taxon" style={{ paddingLeft: 6 + item.depth * 18 }}>
-                  <button
+                  <IconButton
+                    aria-label={tree.nodes.get(item.taxon.taxon_id)?.expanded ? "Collapse taxon" : "Expand taxon"}
                     className="tree-toggle"
-                    type="button"
                     onClick={() => tree.toggle(item.taxon.taxon_id)}
                     title={tree.nodes.get(item.taxon.taxon_id)?.expanded ? "Collapse taxon" : "Expand taxon"}
                   >
                     {tree.nodes.get(item.taxon.taxon_id)?.expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-                  </button>
+                  </IconButton>
                   <button className="tree-label stacked" type="button" onClick={() => {
                     tree.clear();
                     setTrail((current) => [...current, item.taxon]);

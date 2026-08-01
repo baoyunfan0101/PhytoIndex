@@ -26,7 +26,7 @@ import {
 } from "../../api/taxonomy";
 import { downloadCsv, errorMessage } from "../../api/common";
 import { getTaxonomyNameSeparator } from "../../api/settings";
-import { EmptyState, SectionHeader, VirtualList } from "../../shared/ui";
+import { Button, EmptyState, SectionHeader, VirtualList } from "../../shared/ui";
 import { TaxonCard } from "./TaxonCard";
 import { useMetadataChange } from "../../shared/metadataChanges";
 import { useCursorPage } from "../../shared/useCursorPage";
@@ -312,13 +312,13 @@ export function FormattedUpdateView({ mutationDisabled = false }: { mutationDisa
     <div className="formatted-view">
       <SectionHeader title="Formatted update" detail={`Pipe-delimited UTF-8 input or direct table editing. Multiple names use "${separator}".`} actions={
         <>
-          <label className="secondary-button file-button"><FileUp size={13} />Upload CSV<input type="file" accept=".csv,text/csv" onChange={(event) => {
+          <label className="button button-secondary file-button"><FileUp size={13} />Upload CSV<input type="file" accept=".csv,text/csv" onChange={(event) => {
             const file = event.target.files?.[0];
             if (file) void importFile(file);
           }} /></label>
-          <button className="secondary-button" type="button" onClick={() => void getTaxonomyTemplate().then((csv) => downloadCsv("taxonomy-template.csv", csv))}><Download size={13} />Template</button>
-          <button className="secondary-button" type="button" disabled={busy} onClick={() => void run("preview")}>Preview</button>
-          <button className="primary-button" type="button" disabled={busy || mutationDisabled} onClick={() => void run("apply")}><Play size={13} />Apply</button>
+          <Button onClick={() => void getTaxonomyTemplate().then((csv) => downloadCsv("taxonomy-template.csv", csv))}><Download size={13} />Template</Button>
+          <Button disabled={busy} onClick={() => void run("preview")}>Preview</Button>
+          <Button variant="primary" disabled={busy || mutationDisabled} onClick={() => void run("apply")}><Play size={13} />Apply</Button>
         </>
       } />
       <div className="input-table">
@@ -334,7 +334,7 @@ export function FormattedUpdateView({ mutationDisabled = false }: { mutationDisa
             </div>
           )}
         />
-        <button className="table-add-row" type="button" onClick={() => setRows((current) => [...current, {}])}>+ Add row</button>
+        <Button className="table-add-row" variant="ghost" onClick={() => setRows((current) => [...current, {}])}>+ Add row</Button>
       </div>
       <div className="formatted-log">
         <SectionHeader title="Result log" detail={message || "Preview and apply return the same log format"} />

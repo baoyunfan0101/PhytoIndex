@@ -73,7 +73,6 @@
 .sql-sources > span { color: var(--quiet); }
 .sql-input-actions { display: flex; align-items: center; gap: 4px; }
 .sql-input-actions strong { margin-right: auto; }
-.sql-input-actions button { display: inline-flex; width: 24px; height: 24px; align-items: center; justify-content: center; }
 .sql-sources section { border: 1px solid var(--line); }
 .sql-sources section > header { display: flex; align-items: center; justify-content: space-between; padding: 5px 7px; background: var(--panel-2); }
 .sql-sources section > header span { display: flex; align-items: center; gap: 6px; }

@@ -8,7 +8,7 @@ import {
 import { errorMessage, formatBytes } from "../../api/common";
 import { getPhotoMapping } from "../../api/mapping";
 import { displayTaxon, getTaxonDetailNode } from "../../api/taxonomy";
-import { Busy } from "../../shared/ui";
+import { Busy, Button } from "../../shared/ui";
 import { PhotoStage } from "./PhotoMedia";
 import { useViewState } from "../../shared/viewState";
 import { usePhotoMutation } from "./photoMutations";
@@ -113,10 +113,10 @@ function DetailValue({
       <dt>{label}</dt>
       <dd className="detail-value">
         {multiline ? <pre>{value}</pre> : <span>{value}</span>}
-        <button type="button" title={`Copy ${label}`} onClick={() => onCopy(label, value)}>
+        <Button size="small" title={`Copy ${label}`} onClick={() => onCopy(label, value)}>
           <Copy size={13} />
           <span>{copied === label ? "Copied" : "Copy"}</span>
-        </button>
+        </Button>
       </dd>
     </>
   );

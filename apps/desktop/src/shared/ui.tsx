@@ -10,6 +10,7 @@ import {
   useEffect,
   useRef,
   useState,
+  type ButtonHTMLAttributes,
   type CSSProperties,
   type KeyboardEvent,
   type ReactNode,
@@ -18,6 +19,55 @@ import {
 import { useViewState } from "./viewState";
 
 export type IconComponent = LucideIcon;
+
+export type ButtonVariant = "primary" | "secondary" | "ghost";
+export type ButtonSize = "default" | "small";
+
+export function Button({
+  className = "",
+  size = "default",
+  type = "button",
+  variant = "secondary",
+  ...props
+}: ButtonHTMLAttributes<HTMLButtonElement> & {
+  size?: ButtonSize;
+  variant?: ButtonVariant;
+}) {
+  const classes = [
+    "button",
+    `button-${variant}`,
+    size === "small" ? "button-small" : "",
+    className,
+  ].filter(Boolean).join(" ");
+  return <button {...props} className={classes} type={type} />;
+}
+
+export function IconButton({
+  "aria-label": ariaLabel,
+  className = "",
+  size = "default",
+  type = "button",
+  variant = "ghost",
+  ...props
+}: ButtonHTMLAttributes<HTMLButtonElement> & {
+  "aria-label": string;
+  size?: ButtonSize;
+  variant?: ButtonVariant;
+}) {
+  const classes = ["icon-button", size === "small" ? "icon-button-small" : "", className]
+    .filter(Boolean)
+    .join(" ");
+  return (
+    <Button
+      {...props}
+      aria-label={ariaLabel}
+      className={classes}
+      size={size}
+      type={type}
+      variant={variant}
+    />
+  );
+}
 
 export function VirtualList<T>({
   items,
@@ -249,7 +299,7 @@ export function Modal({
       <section className="modal-card" style={{ "--modal-width": `${width}px` } as CSSProperties} onMouseDown={(event) => event.stopPropagation()}>
         <header>
           <strong>{title}</strong>
-          <button className="icon-button" type="button" onClick={onClose} aria-label="Close"><X size={15} /></button>
+          <IconButton onClick={onClose} aria-label="Close"><X size={15} /></IconButton>
         </header>
         <div className="modal-body">{children}</div>
         {actions && <footer>{actions}</footer>}
@@ -270,9 +320,9 @@ export function Segmented<T extends string>({
   return (
     <div className="segmented">
       {items.map((item) => (
-        <button className={item === value ? "active" : ""} type="button" key={item} onClick={() => onChange(item)}>
+        <Button className={item === value ? "active" : ""} variant="ghost" key={item} onClick={() => onChange(item)}>
           {item}
-        </button>
+        </Button>
       ))}
     </div>
   );
@@ -291,10 +341,10 @@ export function Disclosure({
 }) {
   return (
     <div className="disclosure">
-      <button type="button" onClick={onToggle}>
+      <Button variant="ghost" onClick={onToggle}>
         {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
         {label}
-      </button>
+      </Button>
       {open && <div className="disclosure-children">{children}</div>}
     </div>
   );

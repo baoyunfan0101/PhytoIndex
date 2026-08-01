@@ -23,13 +23,41 @@
   --amber: #d2ad63;
   --red: #d66f6f;
   --purple: #b49add;
+  --button-radius: 4px;
+  --button-transition: 100ms ease;
+  --button-bg: #2b2b2b;
+  --button-bg-hover: #3a3a3a;
+  --button-bg-active: #444;
+  --button-primary: #396449;
+  --button-primary-hover: #467959;
+  --button-primary-active: #31563f;
+  --button-focus-ring: #78b58dcc;
 }
 
 * { box-sizing: border-box; }
 html, body, #root { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #181818; }
 button, input, textarea, select { font: inherit; color: inherit; }
-button { cursor: default; }
+button, .button {
+  cursor: pointer;
+  transition:
+    color var(--button-transition),
+    background-color var(--button-transition),
+    border-color var(--button-transition),
+    box-shadow var(--button-transition),
+    filter var(--button-transition),
+    opacity var(--button-transition),
+    transform var(--button-transition);
+}
+button:hover:not(:disabled), .button:hover { background-color: #ffffff0d; filter: brightness(1.14); }
+button:active:not(:disabled), .button:active { background-color: #ffffff16; filter: brightness(.94); transform: translateY(1px) scale(.98); }
 button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible {
   outline: 1px solid var(--accent-bright);
   outline-offset: -1px;
+}
+button:focus-visible { outline: 0; box-shadow: 0 0 0 2px var(--button-focus-ring); }
+.button:focus-within { outline: 0; box-shadow: 0 0 0 2px var(--button-focus-ring); }
+button:disabled { cursor: default; opacity: .42; pointer-events: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  button, .button { transition-duration: 0ms; }
 }

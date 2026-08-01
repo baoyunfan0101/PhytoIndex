@@ -15,7 +15,7 @@ import {
 import { errorMessage } from "../../api/common";
 import { selectCsvDestination } from "../../api/dialogs";
 import { CodeEditor } from "../../shared/CodeEditor";
-import { EmptyState, SectionHeader, VirtualList } from "../../shared/ui";
+import { Button, EmptyState, SectionHeader, VirtualList } from "../../shared/ui";
 import { SqlInputList } from "./SqlInputList";
 import { canExportFullQuery } from "./sqlResults";
 import { emitTaxonomyMutation } from "./taxonomyMutations";
@@ -110,9 +110,9 @@ export function CustomSqlView({
         title="Custom SQL"
         detail="Execute typed SQL against taxonomy and file-path data sources"
         actions={(
-          <button className="primary-button" type="button" disabled={Boolean(busy) || !sql.trim() || mutationDisabled} onClick={() => void execute()}>
+          <Button variant="primary" disabled={Boolean(busy) || !sql.trim() || mutationDisabled} onClick={() => void execute()}>
             <Play size={13} />Run
-          </button>
+          </Button>
         )}
       />
       <div className="custom-sql-workbench">
@@ -129,9 +129,9 @@ export function CustomSqlView({
             <span>{result.operation_id === null ? "No operation created" : `Operation ${result.operation_id}`}</span>
             <span>{result.script_saved ? "Script saved" : "Script not saved"}</span>
             {canExportFullQuery(result) && (
-              <button className="secondary-button" type="button" disabled={Boolean(busy)} onClick={() => void exportQuery()}>
+              <Button disabled={Boolean(busy)} onClick={() => void exportQuery()}>
                 <Download size={13} />Export full query
-              </button>
+              </Button>
             )}
           </div>
           {result.messages.map((message) => (

@@ -27,7 +27,7 @@ import {
   type PhotoLibraryWorkspace,
 } from "../api/storage";
 import { selectPhotoDirectory, selectSqliteDatabase } from "../api/dialogs";
-import type { IconComponent } from "../shared/ui";
+import { Button, EmptyState, IconButton, type IconComponent } from "../shared/ui";
 import { MappingEditor } from "../features/mapping/MappingEditor";
 import {
   createNavigationHistory,
@@ -61,7 +61,6 @@ import {
 } from "../features/taxonomy/TaxonomyView";
 import { CustomSqlView } from "../features/taxonomy/CustomSqlView";
 import { OperationHistoryView } from "../features/operations/OperationHistoryView";
-import { EmptyState } from "../shared/ui";
 import { useOperationObserver } from "./useOperationObserver";
 import { ViewStateProvider, type ViewStateStore } from "../shared/viewState";
 import {
@@ -404,26 +403,31 @@ export function DesktopShell() {
       <div className="desktop-main">
         <header className="app-topbar">
           <div className="toolbar-navigation">
-            <button type="button" title="Go Back" disabled={!backTarget} onClick={() => navigate(-1)}><ArrowLeft size={14} /></button>
-            <button type="button" title="Go Forward" disabled={!forwardTarget} onClick={() => navigate(1)}><ArrowRight size={14} /></button>
+            <IconButton aria-label="Go Back" title="Go Back" disabled={!backTarget} onClick={() => navigate(-1)}><ArrowLeft size={14} /></IconButton>
+            <IconButton aria-label="Go Forward" title="Go Forward" disabled={!forwardTarget} onClick={() => navigate(1)}><ArrowRight size={14} /></IconButton>
           </div>
           <div className="tab-strip">
             {tabs.map((tab) => (
-              <button className={`app-tab${tab.id === activeId ? " active" : ""}`} type="button" key={tab.id} onClick={() => focusTab(tab.id)}>
-                <span>{tab.title}</span>
-                <i role="button" tabIndex={0} onClick={(event) => {
-                  event.stopPropagation();
-                  closeTab(tab.id);
-                }}><X size={12} /></i>
-              </button>
+              <div className={`app-tab${tab.id === activeId ? " active" : ""}`} key={tab.id}>
+                <Button className="app-tab-main" variant="ghost" onClick={() => focusTab(tab.id)}>
+                  <span>{tab.title}</span>
+                </Button>
+                <IconButton
+                  aria-label={`Close ${tab.title}`}
+                  className="app-tab-close"
+                  size="small"
+                  title={`Close ${tab.title}`}
+                  onClick={() => closeTab(tab.id)}
+                ><X size={12} /></IconButton>
+              </div>
             ))}
           </div>
           <div className="toolbar-actions" ref={operationsMenuRef}>
-            <button className={runningOperations.length > 0 ? "running" : ""} type="button" title="Background operations" onClick={() => {
+            <IconButton aria-label="Background operations" className={runningOperations.length > 0 ? "running" : ""} title="Background operations" onClick={() => {
               setOperationsOpen((current) => !current);
             }}>
               <Activity size={15} /><span>{runningOperations.length}</span>
-            </button>
+            </IconButton>
             {operationsOpen && (
               <div className="toolbar-popover operations-popover">
                 <strong>Background operations</strong>
@@ -545,8 +549,8 @@ function TabBody({
         icon={Database}
         action={(
           <div className="empty-state-actions">
-            {!activeLibrary && <button className="primary-button" type="button" onClick={onCreateLibrary}>Create or open</button>}
-            <button className="secondary-button" type="button" onClick={() => openTab({ id: "settings", kind: "settings", title: "Settings", settingsSection: "Photo Libraries" }, true)}>Manage libraries</button>
+            {!activeLibrary && <Button variant="primary" onClick={onCreateLibrary}>Create or open</Button>}
+            <Button onClick={() => openTab({ id: "settings", kind: "settings", title: "Settings", settingsSection: "Photo Libraries" }, true)}>Manage libraries</Button>
           </div>
         )}
       />
@@ -583,5 +587,5 @@ function ActivityButton({
   onClick: () => void;
   disabled?: boolean;
 }) {
-  return <button className={`activity-button${active ? " active" : ""}`} type="button" title={label} aria-label={label} disabled={disabled} onClick={onClick}><Icon size={19} /></button>;
+  return <IconButton className={`activity-button${active ? " active" : ""}`} title={label} aria-label={label} disabled={disabled} onClick={onClick}><Icon size={19} /></IconButton>;
 }

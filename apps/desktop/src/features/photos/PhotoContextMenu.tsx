@@ -16,7 +16,7 @@ import {
 } from "../../api/photos";
 import { errorMessage } from "../../api/common";
 import { remapPhoto, type PhotoMappingSummary } from "../../api/mapping";
-import { Modal } from "../../shared/ui";
+import { Button, Modal } from "../../shared/ui";
 import { MappingBadge } from "../mapping/MappingBadge";
 
 export function PhotoContextMenu({
@@ -138,15 +138,14 @@ export function PhotoContextMenu({
           onClose={() => setRenaming(false)}
           actions={
             <>
-              <button className="secondary-button" type="button" onClick={() => setRenaming(false)}>Cancel</button>
-              <button
-                className="primary-button"
-                type="button"
+              <Button onClick={() => setRenaming(false)}>Cancel</Button>
+              <Button
+                variant="primary"
                 disabled={!newFilename.trim() || Boolean(busy)}
                 onClick={() => void run("Renaming", async () => onChanged(await renamePhoto(photo.photo_id, newFilename.trim())))}
               >
                 Rename
-              </button>
+              </Button>
             </>
           }
         >

@@ -10,7 +10,7 @@ import {
   type PhotoTaxonStatus,
 } from "../../api/mapping";
 import { waitForOperation } from "../../api/tasks";
-import { Segmented, VirtualList } from "../../shared/ui";
+import { Button, Segmented, VirtualList } from "../../shared/ui";
 import { PhotoStage } from "../photos/PhotoMedia";
 import { MappingBadge } from "./MappingBadge";
 import { MappingEditor } from "./MappingEditor";
@@ -93,7 +93,7 @@ export function MappingView({
           <Search size={14} />
           <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={`Search ${status} photos`} />
         </label>
-        <button className="secondary-button" type="button" onClick={() => void mapAll()}><RefreshCw size={13} />Map all</button>
+        <Button onClick={() => void mapAll()}><RefreshCw size={13} />Map all</Button>
       </header>
       <div className="mapping-summary">
         {statuses.map((item) => <span key={item}><MappingBadge status={item} />{counts[item]}</span>)}

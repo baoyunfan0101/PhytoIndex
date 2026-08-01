@@ -63,7 +63,7 @@ import {
   type PhotoNameField,
 } from "../../api/settings";
 import { selectDatabaseDestination, selectPhotoDirectory, selectSqliteDatabase } from "../../api/dialogs";
-import { SectionHeader, Segmented, VirtualList } from "../../shared/ui";
+import { Button, IconButton, SectionHeader, Segmented, VirtualList } from "../../shared/ui";
 import { CodeEditor } from "../../shared/CodeEditor";
 import { BaseImportSettings } from "../taxonomy/BaseImportSettings";
 import { emitMetadataChange } from "../../shared/metadataChanges";
@@ -182,7 +182,7 @@ function GeneralSettings() {
       <Setting label="Database schema" value="2" />
       <div className="update-row">
         <div><strong>Software update</strong><span>{updateMessage || "Updates are delivered from GitHub Releases."}</span></div>
-        {updateAvailable ? <button className="primary-button" type="button" onClick={() => void installUpdate()}>Install and restart</button> : <button className="secondary-button" type="button" onClick={() => void checkUpdate()}>Check for updates</button>}
+        {updateAvailable ? <Button variant="primary" onClick={() => void installUpdate()}>Install and restart</Button> : <Button onClick={() => void checkUpdate()}>Check for updates</Button>}
       </div>
     </div>
   );
@@ -213,7 +213,7 @@ function StorageSettings() {
       <StoragePath
         label="Default photo library DB directory"
         value={locations?.default_photo_library_directory ?? "Loading"}
-        action={<button type="button" onClick={() => void changeDefaultPhotoLibraryDirectory()}><FolderCog size={13} />Change</button>}
+        action={<Button onClick={() => void changeDefaultPhotoLibraryDirectory()}><FolderCog size={13} />Change</Button>}
       />
       <div className="editor-message">{message}</div>
     </div>
@@ -269,15 +269,15 @@ function TaxonomyDatabasesSettings({ onOpened }: { onOpened?: () => void }) {
         value={locations?.taxonomy_database ?? "Loading"}
         action={(
           <div className="storage-actions">
-            <button type="button" onClick={() => void openExisting()}><BookOpen size={13} />Open</button>
-            <button type="button" onClick={() => void relocate()}><Move size={13} />Relocate</button>
+            <Button onClick={() => void openExisting()}><BookOpen size={13} />Open</Button>
+            <Button onClick={() => void relocate()}><Move size={13} />Relocate</Button>
           </div>
         )}
       />
       <StoragePath
         label="Default directory"
         value={locations?.default_taxonomy_directory ?? "Loading"}
-        action={<button type="button" onClick={() => void changeDefaultDirectory()}><FolderCog size={13} />Change</button>}
+        action={<Button onClick={() => void changeDefaultDirectory()}><FolderCog size={13} />Change</Button>}
       />
       <div className="editor-message">{message}</div>
     </div>
@@ -338,8 +338,8 @@ function PhotoLibrariesSettings({ onChanged }: { onChanged?: (resetPhotoTabs: bo
         detail="One registered library represents one real photo root and one independent database"
         actions={(
           <>
-            <button className="secondary-button" type="button" onClick={() => void load()}><RefreshCcw size={13} />Refresh</button>
-            <button className="primary-button" type="button" disabled={Boolean(busy)} onClick={() => void createLibrary()}>Create or register</button>
+            <Button onClick={() => void load()}><RefreshCcw size={13} />Refresh</Button>
+            <Button variant="primary" disabled={Boolean(busy)} onClick={() => void createLibrary()}>Create or register</Button>
           </>
         )}
       />
@@ -357,21 +357,21 @@ function PhotoLibrariesSettings({ onChanged }: { onChanged?: (resetPhotoTabs: bo
             <code>{library.db_path}</code>
             <small>Last opened: {library.last_opened_at}</small>
             <div className="library-actions">
-              <button type="button" disabled={library.active || !library.root_available || !library.database_available} onClick={() => void mutate("Switching library", () => switchPhotoLibrary(library.library_uuid), true)}>Open</button>
-              <button type="button" onClick={() => {
+              <Button size="small" disabled={library.active || !library.root_available || !library.database_available} onClick={() => void mutate("Switching library", () => switchPhotoLibrary(library.library_uuid), true)}>Open</Button>
+              <Button size="small" onClick={() => {
                 const name = window.prompt("Photo Library name", library.display_name)?.trim();
                 if (name) void mutate("Renaming library", () => renamePhotoLibrary(library.library_uuid, name));
-              }}><Pencil size={12} />Rename</button>
-              <button type="button" onClick={() => void selectPhotoDirectory().then((path) => {
+              }}><Pencil size={12} />Rename</Button>
+              <Button size="small" onClick={() => void selectPhotoDirectory().then((path) => {
                 if (path) return mutate("Rebinding root", () => rebindPhotoLibraryRoot(library.library_uuid, path), library.active);
-              })}>Rebind root</button>
-              <button type="button" onClick={() => void selectSqliteDatabase().then((path) => {
+              })}>Rebind root</Button>
+              <Button size="small" onClick={() => void selectSqliteDatabase().then((path) => {
                 if (path) return mutate("Rebinding database", () => rebindPhotoLibraryDatabase(library.library_uuid, path), library.active);
-              })}>Rebind DB</button>
-              <button type="button" disabled={!library.database_available} onClick={() => void selectDatabaseDestination(library.db_path).then((path) => {
+              })}>Rebind DB</Button>
+              <Button size="small" disabled={!library.database_available} onClick={() => void selectDatabaseDestination(library.db_path).then((path) => {
                 if (path) return mutate("Relocating database", () => relocatePhotoLibraryDatabase(library.library_uuid, path), library.active);
-              })}><Move size={12} />Relocate DB</button>
-              <button type="button" disabled={library.active} onClick={() => void mutate("Removing registration", () => removePhotoLibrary(library.library_uuid))}><Trash2 size={12} />Remove</button>
+              })}><Move size={12} />Relocate DB</Button>
+              <Button size="small" disabled={library.active} onClick={() => void mutate("Removing registration", () => removePhotoLibrary(library.library_uuid))}><Trash2 size={12} />Remove</Button>
             </div>
           </article>
         ))}
@@ -459,11 +459,23 @@ function NamingSettings() {
 
   return (
     <div className="settings-section">
-      <SectionHeader title="Naming" detail="Mapping priority, filename output, and formatted input" actions={<button className="primary-button" type="button" onClick={() => void save()}><Save size={13} />Save</button>} />
+      <SectionHeader title="Naming" detail="Mapping priority, filename output, and formatted input" actions={<Button variant="primary" onClick={() => void save()}><Save size={13} />Save</Button>} />
       <h3>Six-field mapping priority</h3>
       <div className="priority-list">
         {priority.map((field, index) => (
-          <div key={field}><b>{index + 1}</b><span>{field}</span><button type="button" onClick={() => move(index, -1)}><ArrowUp size={13} /></button><button type="button" onClick={() => move(index, 1)}><ArrowDown size={13} /></button></div>
+          <div key={field}>
+            <b>{index + 1}</b><span>{field}</span>
+            <IconButton
+              aria-label={`Move ${field} up`}
+              disabled={index === 0}
+              onClick={() => move(index, -1)}
+            ><ArrowUp size={13} /></IconButton>
+            <IconButton
+              aria-label={`Move ${field} down`}
+              disabled={index === priority.length - 1}
+              onClick={() => move(index, 1)}
+            ><ArrowDown size={13} /></IconButton>
+          </div>
         ))}
       </div>
       <h3>Photo filename format</h3>
@@ -491,7 +503,7 @@ function MapSettingsPanel() {
   }
   return (
     <div className="settings-section">
-      <SectionHeader title="Map" detail="Tile source metadata" actions={<button className="primary-button" type="button" onClick={() => void save()}><Save size={13} />Save</button>} />
+      <SectionHeader title="Map" detail="Tile source metadata" actions={<Button variant="primary" onClick={() => void save()}><Save size={13} />Save</Button>} />
       <label className="field-stack"><span>Tile provider</span><select value={settings.provider} onChange={(event) => setSettings({ ...settings, provider: event.target.value as MapSettings["provider"] })}><option value="osm">OpenStreetMap</option><option value="tianditu">Tianditu</option></select></label>
       <label className="field-stack"><span>Tianditu token</span><input value={settings.tianditu_token ?? ""} onChange={(event) => setSettings({ ...settings, tianditu_token: event.target.value || null })} /></label>
       <div className="editor-message">{message}</div>
@@ -548,7 +560,7 @@ function HooksSettings() {
   return (
     <div className="hooks-settings">
       <SectionHeader title="Rhai hooks" detail="Default implementations and user overrides share the same execution path" actions={
-        <button className="primary-button" type="button" onClick={() => void run()}><Beaker size={13} />Test and save</button>
+        <Button variant="primary" onClick={() => void run()}><Beaker size={13} />Test and save</Button>
       } />
       <Segmented value={kind} items={["photo_filename", "synonym_authority"] as const} onChange={(next) => {
         setKind(next);
@@ -562,7 +574,7 @@ function HooksSettings() {
           onChange={(value) => setScripts({ ...scripts, [kind]: value })}
         />
         <div className="hook-tests">
-          <header><strong>Project tests</strong><button type="button" onClick={() => setCases({ ...cases, [kind]: [...cases[kind], { name: "New test", input: "", expected: { kind, output: {} } }] })}>+ Add</button></header>
+          <header><strong>Project tests</strong><Button variant="ghost" size="small" onClick={() => setCases({ ...cases, [kind]: [...cases[kind], { name: "New test", input: "", expected: { kind, output: {} } }] })}>+ Add</Button></header>
           <VirtualList
             items={cases[kind]}
             rowHeight={report ? 252 : 228}
@@ -571,7 +583,7 @@ function HooksSettings() {
               <div className={`hook-test-row${report?.cases[index] && !report.cases[index].passed ? " failed" : ""}`}>
                 <input value={item.name} onChange={(event) => changeCase(cases, setCases, kind, index, { ...item, name: event.target.value })} />
                 <input value={item.input} placeholder="Raw input" onChange={(event) => changeCase(cases, setCases, kind, index, { ...item, input: event.target.value })} />
-                <button type="button" onClick={() => setCases({ ...cases, [kind]: cases[kind].filter((_, itemIndex) => itemIndex !== index) })}>Delete</button>
+                <Button size="small" onClick={() => setCases({ ...cases, [kind]: cases[kind].filter((_, itemIndex) => itemIndex !== index) })}>Delete</Button>
                 <ExpectedEditor
                   value={item.expected}
                   testName={item.name}

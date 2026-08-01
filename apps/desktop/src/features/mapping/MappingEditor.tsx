@@ -10,7 +10,7 @@ import {
 import type { Photo } from "../../api/photos";
 import { displayTaxon, getTaxonDetailNode, type TaxonSummary } from "../../api/taxonomy";
 import { errorMessage } from "../../api/common";
-import { Busy, EmptyState, VirtualList } from "../../shared/ui";
+import { Busy, Button, EmptyState, VirtualList } from "../../shared/ui";
 import { PhotoStage } from "../photos/PhotoMedia";
 import { TaxonCard } from "../taxonomy/TaxonCard";
 import { MappingBadge } from "./MappingBadge";
@@ -110,9 +110,9 @@ export function MappingEditor({
                 <span>{mappedTaxon?.rank ?? "Taxon"}</span>
                 <strong>{mappedTaxon ? displayTaxon(mappedTaxon) : match.mapping.taxon_id}</strong>
               </div>
-              <button className="secondary-button" type="button" disabled={Boolean(busy)} onClick={() => void mutate("Clearing", () => clearPhotoMapping(photo.photo_id))}>
+              <Button disabled={Boolean(busy)} onClick={() => void mutate("Clearing", () => clearPhotoMapping(photo.photo_id))}>
                 <Link2Off size={13} /> Clear mapping
-              </button>
+              </Button>
             </div>
           ) : match?.mapping.status === "ambiguous" ? (
             <VirtualList
@@ -126,9 +126,9 @@ export function MappingEditor({
                   compact
                   taxon={candidate.summary}
                   actions={
-                    <button className="small-button" type="button" onClick={() => void mutate("Selecting", () => setPhotoMapping(photo.photo_id, candidate.summary.taxon_id))}>
+                    <Button size="small" onClick={() => void mutate("Selecting", () => setPhotoMapping(photo.photo_id, candidate.summary.taxon_id))}>
                       Select
-                    </button>
+                    </Button>
                   }
                 />
               )}
@@ -153,9 +153,9 @@ export function MappingEditor({
                 compact
                 taxon={item.summary}
                 actions={
-                  <button className="small-button" type="button" disabled={Boolean(busy)} onClick={() => void mutate("Mapping", () => setPhotoMapping(photo.photo_id, item.summary.taxon_id))}>
+                  <Button size="small" disabled={Boolean(busy)} onClick={() => void mutate("Mapping", () => setPhotoMapping(photo.photo_id, item.summary.taxon_id))}>
                     Map
-                  </button>
+                  </Button>
                 }
               />
             )}

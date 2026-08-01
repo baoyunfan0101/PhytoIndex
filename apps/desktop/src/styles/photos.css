@@ -70,7 +70,6 @@
   color: var(--quiet);
   background: transparent;
 }
-.recent-searches > header button:hover { color: var(--text); }
 .recent-searches > div { overflow: hidden; border: 1px solid var(--line); border-radius: 5px; background: #202020; }
 .recent-search-row { display: grid; grid-template-columns: minmax(0, 1fr) 34px; border-bottom: 1px solid var(--line); }
 .recent-search-row:last-child { border-bottom: 0; }
@@ -160,17 +159,11 @@
 .finder-row.tree { padding-right: 8px; }
 .finder-row.tree:hover { background: var(--hover); }
 .tree-toggle {
-  display: grid;
-  width: 18px;
-  height: 24px;
-  flex: 0 0 18px;
-  place-items: center;
-  padding: 0;
+  flex: 0 0 28px;
   border: 0;
   color: var(--quiet);
   background: transparent;
 }
-.tree-toggle:hover { color: #fff; }
 .tree-label {
   min-width: 0;
   flex: 1;
