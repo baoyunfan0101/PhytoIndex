@@ -17,6 +17,7 @@ import {
 import { CodeEditor } from "./CodeEditor";
 import { EmptyState, SectionHeader, VirtualList } from "./components";
 import { SqlInputList } from "./SqlInputList";
+import { canExportFullQuery } from "./sqlResults";
 import { emitTaxonomyMutation } from "./taxonomyMutations";
 
 export function CustomSqlView({
@@ -127,7 +128,7 @@ export function CustomSqlView({
             <span>{result.changeset_size} bytes changed</span>
             <span>{result.operation_id === null ? "No operation created" : `Operation ${result.operation_id}`}</span>
             <span>{result.script_saved ? "Script saved" : "Script not saved"}</span>
-            {result.result_sets.some((set) => set.truncated) && (
+            {canExportFullQuery(result) && (
               <button className="secondary-button" type="button" disabled={Boolean(busy)} onClick={() => void exportQuery()}>
                 <Download size={13} />Export full query
               </button>
