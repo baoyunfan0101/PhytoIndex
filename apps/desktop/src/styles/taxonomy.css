@@ -101,13 +101,14 @@
 .sql-result-row { height: 32px; }
 .sql-result-row:nth-child(2n) { background: #202020; }
 
-.base-import-settings { grid-template-rows: auto minmax(250px, 48%) auto minmax(150px, 1fr); overflow: auto; }
+.base-import-settings { grid-template-rows: auto minmax(250px, 1fr) auto; overflow: auto; }
+.base-import-settings:has(.base-validation) { grid-template-rows: auto minmax(250px, 48%) auto minmax(150px, 1fr); }
 .base-metadata-grid { display: grid; grid-template-columns: repeat(4, minmax(120px, 1fr)); gap: 1px; background: var(--line); }
 .base-metadata-grid > div { display: grid; gap: 4px; padding: 9px; overflow: hidden; background: var(--panel); }
 .base-metadata-grid span { color: var(--muted); }
 .base-metadata-grid strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .base-import-editor .code-editor { width: 100%; height: 100%; }
-.base-import-feedback { max-height: 120px; overflow: auto; }
+.base-import-status { min-height: 30px; }
 .base-validation { display: grid; min-height: 150px; grid-template-rows: auto auto minmax(100px, 1fr); }
 .validation-counts { display: flex; flex-wrap: wrap; gap: 8px; padding: 7px; border-bottom: 1px solid var(--line); }
 .validation-counts span { padding: 3px 6px; border-radius: 3px; background: var(--panel-2); }

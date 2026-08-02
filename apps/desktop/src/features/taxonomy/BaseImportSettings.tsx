@@ -10,7 +10,7 @@ import {
   type BaseImportValidationResult,
   type TaxonomyBaseReplaceResult,
 } from "../../api/baseImport";
-import type { PersistentSqlInput, SqlStatementMessage } from "../../api/customSql";
+import type { PersistentSqlInput } from "../../api/customSql";
 import { errorMessage } from "../../api/common";
 import { waitForOperation } from "../../api/tasks";
 import { CodeEditor } from "../../shared/CodeEditor";
@@ -22,7 +22,6 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
   const [inputs, setInputs] = useState<PersistentSqlInput[]>([]);
   const [sql, setSql] = useState("");
   const [validation, setValidation] = useState<BaseImportValidationResult | null>(null);
-  const [executionMessages, setExecutionMessages] = useState<SqlStatementMessage[]>([]);
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState("");
   const [message, setMessage] = useState("");
@@ -43,7 +42,6 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
       const result = await addBaseImportInput(kind, alias, path);
       setInputs(result.inputs);
       setValidation(null);
-      setExecutionMessages([]);
       setMessage(result.warnings.length > 0 ? result.warnings.join(" ") : "Data source added.");
     } catch (nextError) {
       setMessage(errorMessage(nextError));
@@ -58,7 +56,6 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
     try {
       const result = await validateBaseImport(sql);
       setValidation(result.validation);
-      setExecutionMessages(result.execution.messages);
       const saveStatus = result.execution.script_saved ? "SQL saved." : "SQL was not saved.";
       setMessage([
         `${result.execution.statements_executed} statements executed successfully.`,
@@ -112,7 +109,6 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
       const result = await removeBaseImportInput(input.alias);
       setInputs(result.inputs);
       setValidation(null);
-      setExecutionMessages([]);
       setMessage(result.warnings.length > 0 ? result.warnings.join(" ") : "Data source removed.");
     } catch (nextError) {
       setMessage(errorMessage(nextError));
@@ -143,19 +139,10 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
           <CodeEditor language="sql" ariaLabel="Base import SQL" value={sql} onChange={(value) => {
             setSql(value);
             setValidation(null);
-            setExecutionMessages([]);
           }} />
         </div>
       </div>
-      <div className="base-import-feedback">
-        {(message || busy) && <div className="editor-message">{busy || message}</div>}
-        {executionMessages.map((item) => (
-          <p className="sql-message" key={`${item.statement_index}:${item.message}`}>
-            Statement {item.statement_index}: {item.message}
-            {item.affected_rows !== null ? ` (${item.affected_rows} rows)` : ""}
-          </p>
-        ))}
-      </div>
+      {(message || busy) && <div className="editor-message base-import-status">{busy || message}</div>}
       {validation && (
         <div className="base-validation">
           <div className="base-metadata-grid">

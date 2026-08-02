@@ -576,16 +576,16 @@ function HooksSettings({ kind }: { kind: NamingHookKind }) {
                 <header>
                   <strong>Test {index + 1}</strong>
                   {report?.cases[index] && <span className={report.cases[index].passed ? "passed" : "failed"}>{report.cases[index].passed ? "Passed" : "Failed"}</span>}
-                  <Button size="small" onClick={() => invalidate(scripts, { ...cases, [kind]: cases[kind].filter((_, itemIndex) => itemIndex !== index) })}>Delete</Button>
+                  <IconButton size="small" aria-label={`Delete Test ${index + 1}`} title={`Delete Test ${index + 1}`} onClick={() => invalidate(scripts, { ...cases, [kind]: cases[kind].filter((_, itemIndex) => itemIndex !== index) })}><Trash2 size={12} /></IconButton>
                 </header>
-                <label><span>Raw input</span><textarea rows={2} value={item.input} onChange={(event) => invalidate(scripts, changeCase(cases, kind, index, { ...item, input: event.target.value }))} /></label>
+                <label className="hook-raw-field"><span>Raw input</span><input className="hook-raw-input" value={item.input} onChange={(event) => invalidate(scripts, changeCase(cases, kind, index, { ...item, input: event.target.value }))} /></label>
                 <label><span>Expected output</span>
-                <ExpectedEditor
-                  value={item.expected}
-                  testNumber={index + 1}
-                  onDraftChange={() => invalidate()}
-                  onChange={(expected) => invalidate(scripts, changeCase(cases, kind, index, { ...item, expected }))}
-                />
+                  <ExpectedEditor
+                    value={item.expected}
+                    testNumber={index + 1}
+                    onDraftChange={() => invalidate()}
+                    onChange={(expected) => invalidate(scripts, changeCase(cases, kind, index, { ...item, expected }))}
+                  />
                 </label>
                 {report?.cases[index] && (
                   <div className="hook-test-actual">
@@ -638,7 +638,7 @@ function ExpectedEditor({
 
   return (
     <div className={`hook-expected${error ? " invalid" : ""}`} title={error}>
-      <CodeEditor language="json" ariaLabel={`Test ${testNumber} expected output`} value={draft} onChange={update} autoGrow={{ minRows: 5, maxRows: 14 }} />
+      <CodeEditor language="json" ariaLabel={`Test ${testNumber} expected output`} value={draft} onChange={update} />
     </div>
   );
 }

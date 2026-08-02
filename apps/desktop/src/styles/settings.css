@@ -44,9 +44,9 @@
 .hook-test-row {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  margin-bottom: 8px;
-  padding: 9px;
+  gap: 5px;
+  margin-bottom: 6px;
+  padding: 6px;
   border: 1px solid var(--line);
 }
 .hook-test-row.failed { border-color: var(--red); }
@@ -55,14 +55,15 @@
 .hook-test-row > header span { color: var(--muted); }
 .hook-test-row > header span.passed { color: var(--accent-bright); }
 .hook-test-row > header span.failed { color: var(--red); }
-.hook-test-row label, .hook-test-actual { display: flex; min-width: 0; flex-direction: column; gap: 5px; }
+.hook-test-row label, .hook-test-actual { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
 .hook-test-row label > span, .hook-test-actual > span { color: var(--muted); }
-.hook-test-row textarea { min-height: 48px; padding: 7px; border: 1px solid var(--line); background: var(--input); resize: vertical; }
-.hook-expected { width: 100%; border: 1px solid var(--line); }
+.hook-test-row label.hook-raw-field { display: grid; grid-template-columns: 72px minmax(0, 1fr); align-items: center; gap: 6px; }
+.hook-raw-input { min-width: 0; height: 26px; padding: 0 6px; border: 1px solid var(--line); background: var(--input); }
+.hook-expected { width: 100%; height: 104px; border: 1px solid var(--line); }
 .hook-expected.invalid { border-color: var(--red); }
-.hook-expected .code-editor { width: 100%; }
+.hook-expected .code-editor { width: 100%; height: 100%; }
 .hook-expected .code-editor pre, .hook-expected .code-editor textarea { padding: 6px; font-size: 10px; line-height: 1.4; }
-.hook-test-actual pre { max-height: 260px; margin: 0; padding: 7px; overflow: auto; border: 1px solid var(--line); background: var(--input); white-space: pre-wrap; }
+.hook-test-actual pre { max-height: 104px; margin: 0; padding: 6px; overflow: auto; border: 1px solid var(--line); background: var(--input); white-space: pre; }
 .hook-test-actual p { margin: 0; color: var(--red); }
 
 .storage-path { display: grid; grid-template-columns: 210px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 10px; border-bottom: 1px solid var(--line); }

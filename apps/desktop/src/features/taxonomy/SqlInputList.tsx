@@ -1,7 +1,7 @@
-import { DatabaseZap, FileUp, Table2, Trash2 } from "lucide-react";
+import { DatabasePlus, FilePlusCorner, Table2, Trash2 } from "lucide-react";
 import { selectCsvFile, selectSqliteDatabase } from "../../api/dialogs";
 import type { PersistentSqlInput } from "../../api/customSql";
-import { Button, IconButton } from "../../shared/ui";
+import { IconButton } from "../../shared/ui";
 
 export function SqlInputList({
   inputs,
@@ -26,12 +26,12 @@ export function SqlInputList({
     <aside className="sql-sources">
       <header className="sql-input-actions">
         <strong>Input sources</strong>
-        <Button size="small" disabled={busy} title="Add CSV input source" onClick={() => void add("csv")}>
-          <FileUp size={13} />Add CSV
-        </Button>
-        <Button size="small" disabled={busy} title="Add SQLite input source" onClick={() => void add("sqlite")}>
-          <DatabaseZap size={13} />Add SQLite
-        </Button>
+        <IconButton aria-label="Add CSV" size="small" disabled={busy} title="Add CSV" onClick={() => void add("csv")}>
+          <FilePlusCorner size={13} />
+        </IconButton>
+        <IconButton aria-label="Add SQLite" size="small" disabled={busy} title="Add SQLite" onClick={() => void add("sqlite")}>
+          <DatabasePlus size={13} />
+        </IconButton>
       </header>
       {inputs.length === 0 && <span>No data sources</span>}
       {inputs.map((input) => (
