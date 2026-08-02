@@ -5,6 +5,7 @@ use std::path::Path;
 use serde::Serialize;
 use serde_json::{Value, json};
 use tauri::{AppHandle, State, ipc::Channel};
+use vividarium_core::general::{GeneralSettings, WorkspaceState};
 use vividarium_core::mapping::{
     PhotoMappingListItem, PhotoMappingListStatus, PhotoMappingSummary, PhotoNameMatchSettings,
     PhotoTaxonCandidate, PhotoTaxonItem, PhotoTaxonNode,
@@ -54,6 +55,32 @@ pub struct PhotoLibraryWorkspace {
 #[tauri::command]
 pub fn get_app_version(app: AppHandle) -> String {
     app.package_info().version.to_string()
+}
+
+#[tauri::command]
+pub fn get_general_settings(state: State<'_, AppState>) -> CommandResult<GeneralSettings> {
+    vividarium_core::general::get_general_settings(&state.database).map_err(error)
+}
+
+#[tauri::command]
+pub fn update_general_settings(
+    state: State<'_, AppState>,
+    settings: GeneralSettings,
+) -> CommandResult<GeneralSettings> {
+    vividarium_core::general::update_general_settings(&state.database, &settings).map_err(error)
+}
+
+#[tauri::command]
+pub fn get_workspace_state(state: State<'_, AppState>) -> CommandResult<WorkspaceState> {
+    vividarium_core::general::get_workspace_state(&state.database).map_err(error)
+}
+
+#[tauri::command]
+pub fn save_workspace_state(
+    state: State<'_, AppState>,
+    workspace_state: WorkspaceState,
+) -> CommandResult<()> {
+    vividarium_core::general::save_workspace_state(&state.database, &workspace_state).map_err(error)
 }
 
 #[tauri::command]

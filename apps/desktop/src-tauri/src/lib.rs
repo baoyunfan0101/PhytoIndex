@@ -26,6 +26,10 @@ pub fn run() {
         })
         .register_uri_scheme_protocol("vividarium", |_context, request| media::handle(request))
         .invoke_handler(tauri::generate_handler![
+            commands::get_general_settings,
+            commands::update_general_settings,
+            commands::get_workspace_state,
+            commands::save_workspace_state,
             commands::get_photo_library,
             commands::get_photo_library_count,
             commands::open_photo_library,
