@@ -38,6 +38,10 @@ Parameters: optional callback invoked after a base database is applied.
 Returns: the base-import source registry, SQL workspace, validation issues,
 metadata, and apply controls.
 
+Search results and taxon details, formatted input and result logs, SQL input
+sources and editors, and execution or validation outputs use adjustable panes
+with minimum sizes appropriate to their controls.
+
 ## Reusable interfaces
 
 `TaxonCard` renders a `TaxonSummary` with optional selection and actions.

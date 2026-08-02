@@ -17,6 +17,7 @@ import { MappingEditor } from "./MappingEditor";
 import { usePhotoInteraction, type PhotoOpenHandlers } from "../photos/PhotoInteraction";
 import { emitPhotoMutation, useDeferredPhotoMutation } from "../photos/photoMutations";
 import { useCursorPage } from "../../shared/useCursorPage";
+import { ResizablePanels } from "../../shared/ResizablePanels";
 
 const statuses = ["matched", "ambiguous", "unmatched", "processing"] as const;
 const emptyMetadata: MappingMetadata = {
@@ -98,8 +99,14 @@ export function MappingView({
       <div className="mapping-summary">
         {statuses.map((item) => <span key={item}><MappingBadge status={item} />{counts[item]}</span>)}
       </div>
-      <div className="mapping-three-columns">
-        <aside className="mapping-photo-list">
+      <ResizablePanels
+        className="mapping-three-columns"
+        initialSize={240}
+        minFirst={180}
+        minSecond={600}
+        separatorLabel="Resize mapping photo list"
+        stateKey="mapping.photo-list"
+        first={(<aside className="mapping-photo-list">
           <VirtualList
             items={page.items}
             rowHeight={54}
@@ -118,14 +125,22 @@ export function MappingView({
           />
           {page.loading && <div className="pane-overlay">Loading</div>}
           {page.error && <div className="inline-error">{page.error}</div>}
-        </aside>
-        <main className="mapping-photo-stage">
-          <PhotoStage photo={interaction.selected} onContextMenu={interaction.openContextMenu} />
-        </main>
-        <aside className="mapping-editor-pane">
-          {selected ? <MappingEditor photo={selected.photo} embedded refreshKey={editorRevision} /> : <div className="empty-copy">Select a photo</div>}
-        </aside>
-      </div>
+        </aside>)}
+        second={(<ResizablePanels
+          className="mapping-content-columns"
+          initialRatio={0.55}
+          minFirst={260}
+          minSecond={320}
+          separatorLabel="Resize mapping photo and editor"
+          stateKey="mapping.editor"
+          first={(<main className="mapping-photo-stage">
+            <PhotoStage photo={interaction.selected} onContextMenu={interaction.openContextMenu} />
+          </main>)}
+          second={(<aside className="mapping-editor-pane">
+            {selected ? <MappingEditor photo={selected.photo} embedded refreshKey={editorRevision} /> : <div className="empty-copy">Select a photo</div>}
+          </aside>)}
+        />)}
+      />
       {interaction.contextMenu}
     </div>
   );

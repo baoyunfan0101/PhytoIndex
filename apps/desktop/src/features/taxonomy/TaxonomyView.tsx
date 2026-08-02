@@ -33,6 +33,7 @@ import { useCursorPage } from "../../shared/useCursorPage";
 import { useTaxonSearch } from "./useTaxonSearch";
 import { useViewState } from "../../shared/viewState";
 import { emitTaxonomyMutation, useTaxonomyMutation } from "./taxonomyMutations";
+import { ResizablePanels } from "../../shared/ResizablePanels";
 
 type TaxonomyRecordItem =
   | { kind: "selected"; result: TaxonSearchResult }
@@ -141,6 +142,47 @@ export function TaxonomySearchView({
     { kind: "selected", result: selected },
     ...(expanded ? children.items.map((child) => ({ kind: "child" as const, child })) : []),
   ] : [];
+  const resultsPane = (
+    <aside className="taxonomy-results">
+      <VirtualList
+        stateKey="taxonomy-search.results-list"
+        items={taxonomySearch.results}
+        rowHeight={62}
+        itemKey={(item) => item.summary.taxon_id}
+        renderItem={(item) => (
+          <TaxonCard taxon={item.summary} active={selected?.summary.taxon_id === item.summary.taxon_id} onClick={() => setSelected(item)} />
+        )}
+      />
+    </aside>
+  );
+  const recordsPane = (
+    <main className="taxonomy-records">
+      {(error || taxonomySearch.error || children.error) ? <EmptyState title="Taxonomy unavailable" detail={error || taxonomySearch.error || children.error} /> : visible.length === 0 ? (
+        <EmptyState icon={Search} title={taxonId === undefined ? "Search taxonomy" : "Loading taxon"} detail="Results include accepted names and aliases." />
+      ) : (
+        <VirtualList
+          stateKey="taxonomy-search.records-list"
+          items={visible}
+          rowHeight={expanded ? 194 : 250}
+          itemKey={(item) => item.kind === "selected" ? item.result.summary.taxon_id : item.child.taxon_id}
+          onNearEnd={() => void children.loadMore()}
+          renderItem={(item, index) => (
+            <TaxonRecord
+              summary={item.kind === "selected" ? item.result.summary : item.child}
+              detail={item.kind === "selected" ? item.result.detail : null}
+              breadcrumb={item.kind === "selected" ? item.result.summary.breadcrumb : []}
+              loadedChildCount={index === 0 ? node?.children.items.length ?? null : null}
+              child={item.kind === "child"}
+              expanded={expanded}
+              onToggleChildren={() => void toggleChildren()}
+              onOpenTaxon={(nextTaxonId) => void navigateTo(nextTaxonId)}
+              onOpenPhotos={onOpenPhotos}
+            />
+          )}
+        />
+      )}
+    </main>
+  );
 
   return (
     <div className="taxonomy-search-view">
@@ -152,47 +194,18 @@ export function TaxonomySearchView({
           </label>
         </header>
       )}
-      <div className="taxonomy-columns">
-        {taxonId === undefined && (
-          <aside className="taxonomy-results">
-            <VirtualList
-              stateKey="taxonomy-search.results-list"
-              items={taxonomySearch.results}
-              rowHeight={62}
-              itemKey={(item) => item.summary.taxon_id}
-              renderItem={(item) => (
-                <TaxonCard taxon={item.summary} active={selected?.summary.taxon_id === item.summary.taxon_id} onClick={() => setSelected(item)} />
-              )}
-            />
-          </aside>
-        )}
-        <main className="taxonomy-records">
-          {(error || taxonomySearch.error || children.error) ? <EmptyState title="Taxonomy unavailable" detail={error || taxonomySearch.error || children.error} /> : visible.length === 0 ? (
-            <EmptyState icon={Search} title={taxonId === undefined ? "Search taxonomy" : "Loading taxon"} detail="Results include accepted names and aliases." />
-          ) : (
-            <VirtualList
-              stateKey="taxonomy-search.records-list"
-              items={visible}
-              rowHeight={expanded ? 194 : 250}
-              itemKey={(item) => item.kind === "selected" ? item.result.summary.taxon_id : item.child.taxon_id}
-              onNearEnd={() => void children.loadMore()}
-              renderItem={(item, index) => (
-                <TaxonRecord
-                  summary={item.kind === "selected" ? item.result.summary : item.child}
-                  detail={item.kind === "selected" ? item.result.detail : null}
-                  breadcrumb={item.kind === "selected" ? item.result.summary.breadcrumb : []}
-                  loadedChildCount={index === 0 ? node?.children.items.length ?? null : null}
-                  child={item.kind === "child"}
-                  expanded={expanded}
-                  onToggleChildren={() => void toggleChildren()}
-                  onOpenTaxon={(nextTaxonId) => void navigateTo(nextTaxonId)}
-                  onOpenPhotos={onOpenPhotos}
-                />
-              )}
-            />
-          )}
-        </main>
-      </div>
+      {taxonId === undefined ? (
+        <ResizablePanels
+          className="taxonomy-columns"
+          initialRatio={0.28}
+          minFirst={220}
+          minSecond={360}
+          separatorLabel="Resize taxonomy results and details"
+          stateKey="taxonomy-search.columns"
+          first={resultsPane}
+          second={recordsPane}
+        />
+      ) : <div className="taxonomy-columns taxonomy-columns-single">{recordsPane}</div>}
     </div>
   );
 }
@@ -321,7 +334,15 @@ export function FormattedUpdateView({ mutationDisabled = false }: { mutationDisa
           <Button variant="primary" disabled={busy || mutationDisabled} onClick={() => void run("apply")}><Play size={13} />Apply</Button>
         </>
       } />
-      <div className="input-table">
+      <ResizablePanels
+        className="formatted-split"
+        direction="vertical"
+        initialRatio={0.52}
+        minFirst={190}
+        minSecond={150}
+        separatorLabel="Resize formatted input and result log"
+        stateKey="formatted-update.rows"
+        first={(<div className="input-table">
         <div className="input-table-head"><span>#</span>{inputFields.map((field) => <span key={field}>{field}</span>)}</div>
         <VirtualList
           items={rows}
@@ -335,8 +356,8 @@ export function FormattedUpdateView({ mutationDisabled = false }: { mutationDisa
           )}
         />
         <Button className="table-add-row" variant="ghost" onClick={() => setRows((current) => [...current, {}])}>+ Add row</Button>
-      </div>
-      <div className="formatted-log">
+        </div>)}
+        second={(<div className="formatted-log">
         <SectionHeader title="Result log" detail={message || "Preview and apply return the same log format"} />
         <VirtualList
           items={outcomes}
@@ -350,7 +371,8 @@ export function FormattedUpdateView({ mutationDisabled = false }: { mutationDisa
             </div>
           )}
         />
-      </div>
+        </div>)}
+      />
     </div>
   );
 }

@@ -12,6 +12,7 @@ import { Busy, Button } from "../../shared/ui";
 import { PhotoStage } from "./PhotoMedia";
 import { useViewState } from "../../shared/viewState";
 import { usePhotoMutation } from "./photoMutations";
+import { ResizablePanels } from "../../shared/ResizablePanels";
 
 export function PhotoDetailView({ photo }: { photo: Photo }) {
   const [metadata, setMetadata] = useViewState<PhotoMetadata | null>("photo-detail.metadata", null);
@@ -72,9 +73,16 @@ export function PhotoDetailView({ photo }: { photo: Photo }) {
         <strong>{photo.filename}</strong>
         <span>{taxon || "No matched taxon"}</span>
       </header>
-      <div className="photo-detail-content">
-        <PhotoStage photo={photo} compact />
-        {!metadata && !error ? <Busy label="Loading details" /> : (
+      <ResizablePanels
+        className="photo-detail-content"
+        initialRatio={0.52}
+        minFirst={320}
+        minSecond={300}
+        separatorLabel="Resize photo and details"
+        stateKey="photo-detail.columns"
+        first={<PhotoStage photo={photo} compact />}
+        second={(<div className="photo-detail-sidebar">
+          {!metadata && !error ? <Busy label="Loading details" /> : (
           <dl
             className="detail-grid"
             ref={detailRef}
@@ -90,7 +98,8 @@ export function PhotoDetailView({ photo }: { photo: Photo }) {
           </dl>
         )}
         {error && <div className="inline-error">{error}</div>}
-      </div>
+        </div>)}
+      />
     </div>
   );
 }

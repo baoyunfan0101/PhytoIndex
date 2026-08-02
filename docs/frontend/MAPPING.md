@@ -26,6 +26,11 @@ Parameters:
 Returns: current mapping details, persisted Ambiguous candidates, taxonomy
 search, and controls to clear, assign, replace, or automatically remap.
 
+The Mapping workspace exposes independent dividers between the photo list,
+preview, and editor. The standalone editor also separates its photo from the
+controls, while both standalone and embedded editors allow the current match
+and taxonomy-search sections to be resized vertically.
+
 ### `MappingBadge({ status })`
 
 Parameters: `PhotoTaxonStatus`.

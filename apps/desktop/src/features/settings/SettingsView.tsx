@@ -129,6 +129,7 @@ export function SettingsView({
       minFirst={150}
       minSecond={420}
       separatorLabel="Resize Settings navigation"
+      stateKey="settings.navigation"
       first={(<aside className="settings-nav">
         {settingsSections.map(({ id, icon: Icon }) => (
           <button className={section === id ? "active" : ""} type="button" key={id} onClick={() => onSectionChange(id)}>
@@ -730,6 +731,7 @@ function HooksSettings({ kind }: { kind: NamingHookKind }) {
         minSecond={{ horizontal: 300, vertical: 180 }}
         responsiveBreakpoint={800}
         separatorLabel="Resize Hook editor and Project tests"
+        stateKey={`settings.hooks.${kind}`}
         first={(<CodeEditor
             language="rhai"
             ariaLabel={`${kind} Rhai source`}

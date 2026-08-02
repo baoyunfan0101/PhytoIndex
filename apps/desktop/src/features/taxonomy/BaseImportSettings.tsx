@@ -134,6 +134,7 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
         minFirst={180}
         minSecond={320}
         separatorLabel="Resize Input sources"
+        stateKey="base-import.inputs"
         first={<SqlInputList inputs={inputs} busy={Boolean(busy)} onAdd={addInput} onRemove={removeInput} />}
         second={(<div className="base-import-editor">
           <CodeEditor language="sql" ariaLabel="Base import SQL" value={sql} onChange={(value) => {
@@ -199,6 +200,7 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
           minFirst={250}
           minSecond={150}
           separatorLabel="Resize validation output"
+          stateKey="base-import.output"
           first={primary}
           second={output}
         />

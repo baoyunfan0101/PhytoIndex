@@ -15,6 +15,13 @@ optional end-of-list callback.
 provide domain-neutral presentation. `CodeEditor` provides the common SQL and
 Rhai editing surface with syntax highlighting.
 
+`ResizablePanels(props)` returns two panes separated by a pointer- and
+keyboard-adjustable divider. Parameters select horizontal or vertical layout,
+initial size or ratio, minimum pane sizes, an accessible separator label, and
+an optional `stateKey`. A keyed divider stores both horizontal and vertical
+sizes in the owning tab's view-state store, so a non-keep-alive page restores
+its layout after remounting.
+
 ## Cursor interfaces
 
 `useCursorPage<T, P>(options)` accepts initial parameters and a loader returning

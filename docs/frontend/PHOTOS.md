@@ -21,6 +21,11 @@ Parameters: either a search `query` or a `taxonId`, plus
 
 Returns: a cursor-backed `PhotoBrowser` for global search or one taxon.
 
+Photo Browser list and media panes, Folder and photographed-taxonomy tree and
+preview panes, and Photo Detail media and metadata panes are adjustable within
+page-specific minimum widths. Their divider positions belong to the tab view
+state.
+
 ### `FolderPhotosView(props)`
 
 Parameters: `handlers: PhotoOpenHandlers`.

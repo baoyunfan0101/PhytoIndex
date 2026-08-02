@@ -17,6 +17,7 @@ import { MappingBadge } from "./MappingBadge";
 import { emitPhotoMutation, usePhotoMutation } from "../photos/photoMutations";
 import { useTaxonSearch } from "../taxonomy/useTaxonSearch";
 import { useViewState } from "../../shared/viewState";
+import { ResizablePanels } from "../../shared/ResizablePanels";
 
 export function MappingEditor({
   photo,
@@ -87,83 +88,113 @@ export function MappingEditor({
     }
   }
 
-  return (
-    <div className={`mapping-editor${embedded ? " embedded" : ""}`}>
-      <div className="editor-photo-column">
-        <div className="two-line-heading">
-          <strong>{photo.filename}</strong>
-          <span>{mappedTaxon ? displayTaxon(mappedTaxon) : match?.mapping.taxon_id ? `Taxon ${match.mapping.taxon_id}` : "No mapped taxon"}</span>
-        </div>
-        <PhotoStage photo={photo} />
+  const photoPane = (
+    <div className="editor-photo-column">
+      <div className="two-line-heading">
+        <strong>{photo.filename}</strong>
+        <span>{mappedTaxon ? displayTaxon(mappedTaxon) : match?.mapping.taxon_id ? `Taxon ${match.mapping.taxon_id}` : "No mapped taxon"}</span>
       </div>
-      <div className="editor-mapping-column">
-        <section className="mapping-current">
-          <header>
-            <strong>Current mapping</strong>
-            {match && <MappingBadge status={match.mapping.status} />}
-          </header>
-          {loading ? (
-            <Busy label="Loading mapping" />
-          ) : match?.mapping.status === "matched" ? (
-            <div className="current-mapping-card">
-              <div>
-                <span>{mappedTaxon?.rank ?? "Taxon"}</span>
-                <strong>{mappedTaxon ? displayTaxon(mappedTaxon) : match.mapping.taxon_id}</strong>
-              </div>
-              <Button disabled={Boolean(busy)} onClick={() => void mutate("Clearing", () => clearPhotoMapping(photo.photo_id))}>
-                <Link2Off size={13} /> Clear mapping
-              </Button>
-            </div>
-          ) : match?.mapping.status === "ambiguous" ? (
-            <VirtualList
-              stateKey="mapping-editor.candidates"
-              className="candidate-stack"
-              items={match.candidates}
-              rowHeight={60}
-              itemKey={(candidate) => candidate.summary.taxon_id}
-              renderItem={(candidate) => (
-                <TaxonCard
-                  compact
-                  taxon={candidate.summary}
-                  actions={
-                    <Button size="small" onClick={() => void mutate("Selecting", () => setPhotoMapping(photo.photo_id, candidate.summary.taxon_id))}>
-                      Select
-                    </Button>
-                  }
-                />
-              )}
-            />
-          ) : (
-            <EmptyState title="No automatic match" detail="Search below to assign any taxon." icon={Sparkles} />
-          )}
-        </section>
-        <section className="mapping-search">
-          <label className="search-field">
-            <Search size={14} />
-            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search taxonomy" />
-          </label>
-          <VirtualList
-            stateKey="mapping-editor.results"
-            className="mapping-search-results"
-            items={taxonomySearch.results}
-            rowHeight={58}
-            itemKey={(item) => item.summary.taxon_id}
-            renderItem={(item) => (
-              <TaxonCard
-                compact
-                taxon={item.summary}
-                actions={
-                  <Button size="small" disabled={Boolean(busy)} onClick={() => void mutate("Mapping", () => setPhotoMapping(photo.photo_id, item.summary.taxon_id))}>
-                    Map
-                  </Button>
-                }
-              />
-            )}
-          />
-        </section>
-        {busy && <div className="floating-progress"><Busy label={busy} /></div>}
-        {(error || taxonomySearch.error) && <div className="inline-error">{error || taxonomySearch.error}</div>}
-      </div>
+      <PhotoStage photo={photo} />
     </div>
+  );
+  const currentPane = (
+    <section className="mapping-current">
+      <header>
+        <strong>Current mapping</strong>
+        {match && <MappingBadge status={match.mapping.status} />}
+      </header>
+      {loading ? (
+        <Busy label="Loading mapping" />
+      ) : match?.mapping.status === "matched" ? (
+        <div className="current-mapping-card">
+          <div>
+            <span>{mappedTaxon?.rank ?? "Taxon"}</span>
+            <strong>{mappedTaxon ? displayTaxon(mappedTaxon) : match.mapping.taxon_id}</strong>
+          </div>
+          <Button disabled={Boolean(busy)} onClick={() => void mutate("Clearing", () => clearPhotoMapping(photo.photo_id))}>
+            <Link2Off size={13} /> Clear mapping
+          </Button>
+        </div>
+      ) : match?.mapping.status === "ambiguous" ? (
+        <VirtualList
+          stateKey="mapping-editor.candidates"
+          className="candidate-stack"
+          items={match.candidates}
+          rowHeight={60}
+          itemKey={(candidate) => candidate.summary.taxon_id}
+          renderItem={(candidate) => (
+            <TaxonCard
+              compact
+              taxon={candidate.summary}
+              actions={
+                <Button size="small" onClick={() => void mutate("Selecting", () => setPhotoMapping(photo.photo_id, candidate.summary.taxon_id))}>
+                  Select
+                </Button>
+              }
+            />
+          )}
+        />
+      ) : (
+        <EmptyState title="No automatic match" detail="Search below to assign any taxon." icon={Sparkles} />
+      )}
+    </section>
+  );
+  const searchPane = (
+    <section className="mapping-search">
+      <label className="search-field">
+        <Search size={14} />
+        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search taxonomy" />
+      </label>
+      <VirtualList
+        stateKey="mapping-editor.results"
+        className="mapping-search-results"
+        items={taxonomySearch.results}
+        rowHeight={58}
+        itemKey={(item) => item.summary.taxon_id}
+        renderItem={(item) => (
+          <TaxonCard
+            compact
+            taxon={item.summary}
+            actions={
+              <Button size="small" disabled={Boolean(busy)} onClick={() => void mutate("Mapping", () => setPhotoMapping(photo.photo_id, item.summary.taxon_id))}>
+                Map
+              </Button>
+            }
+          />
+        )}
+      />
+    </section>
+  );
+  const mappingPane = (
+    <div className="editor-mapping-column">
+      <ResizablePanels
+        className="editor-mapping-split"
+        direction="vertical"
+        initialRatio={0.42}
+        minFirst={180}
+        minSecond={180}
+        separatorLabel="Resize current mapping and taxonomy search"
+        stateKey={embedded ? "mapping-editor.embedded-sections" : "mapping-editor.sections"}
+        first={currentPane}
+        second={searchPane}
+      />
+      {busy && <div className="floating-progress"><Busy label={busy} /></div>}
+      {(error || taxonomySearch.error) && <div className="inline-error">{error || taxonomySearch.error}</div>}
+    </div>
+  );
+
+  if (embedded) return <div className="mapping-editor embedded">{mappingPane}</div>;
+
+  return (
+    <ResizablePanels
+      className="mapping-editor"
+      initialRatio={0.58}
+      minFirst={300}
+      minSecond={330}
+      separatorLabel="Resize mapping photo and controls"
+      stateKey="mapping-editor.columns"
+      first={photoPane}
+      second={mappingPane}
+    />
   );
 }

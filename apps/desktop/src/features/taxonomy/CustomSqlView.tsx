@@ -114,6 +114,7 @@ export function CustomSqlView({
       minFirst={180}
       minSecond={320}
       separatorLabel="Resize Input sources"
+      stateKey="custom-sql.inputs"
       first={<SqlInputList inputs={inputs} busy={Boolean(busy)} onAdd={addInput} onRemove={removeInput} />}
       second={(<div className="custom-sql-editor">
         <CodeEditor language="sql" ariaLabel="Custom taxonomy SQL" value={sql} onChange={setSql} />
@@ -171,6 +172,7 @@ export function CustomSqlView({
           minFirst={230}
           minSecond={130}
           separatorLabel="Resize SQL output"
+          stateKey="custom-sql.output"
           first={primary}
           second={output}
         />

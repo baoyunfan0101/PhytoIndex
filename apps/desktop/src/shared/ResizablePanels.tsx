@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import { clampPanelSize } from "./panelSizing";
+import { useViewState } from "./viewState";
 
 export type PanelDirection = "horizontal" | "vertical";
 
@@ -24,6 +25,7 @@ export function ResizablePanels({
   responsiveBreakpoint,
   second,
   separatorLabel,
+  stateKey = null,
 }: {
   className?: string;
   direction?: PanelDirection;
@@ -35,12 +37,16 @@ export function ResizablePanels({
   responsiveBreakpoint?: number;
   second: ReactNode;
   separatorLabel: string;
+  stateKey?: string | null;
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ pointerId: number; start: number; size: number } | null>(null);
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
   const [dragging, setDragging] = useState(false);
-  const [sizes, setSizes] = useState<Partial<Record<PanelDirection, number>>>({});
+  const [sizes, setSizes] = useViewState<Partial<Record<PanelDirection, number>>>(
+    stateKey === null ? null : `resizable-panels.${stateKey}`,
+    {},
+  );
   const resolvedDirection = responsiveBreakpoint !== undefined && containerSize.width > 0
     ? containerSize.width < responsiveBreakpoint ? "vertical" : "horizontal"
     : direction;

@@ -24,6 +24,7 @@ import { useDeferredPhotoMutation, usePhotoMutation } from "./photoMutations";
 import { useCursorPage } from "../../shared/useCursorPage";
 import { useCursorTree, type CursorTreeNode } from "../../shared/useCursorTree";
 import { useViewState } from "../../shared/viewState";
+import { ResizablePanels } from "../../shared/ResizablePanels";
 
 type DirectoryTreeRow =
   | { kind: "directory"; directory: PhotoDirectory; depth: number }
@@ -178,8 +179,14 @@ export function FolderPhotosView({
         </div>
         <IconButton aria-label="Refresh" onClick={() => void refresh()} title="Refresh"><RefreshCw size={14} /></IconButton>
       </header>
-      <div className="explorer-columns">
-        <aside className="finder-pane">
+      <ResizablePanels
+        className="explorer-columns"
+        initialRatio={0.34}
+        minFirst={220}
+        minSecond={320}
+        separatorLabel="Resize folder browser and photo preview"
+        stateKey="folders.columns"
+        first={(<aside className="finder-pane">
           <VirtualList
             stateKey="folders.list"
             items={rows}
@@ -231,9 +238,9 @@ export function FolderPhotosView({
           />
           {(libraryLoading || page.loading) && <div className="pane-overlay">Loading</div>}
           {(libraryError || page.error) && <div className="inline-error">{libraryError || page.error}</div>}
-        </aside>
-        <PhotoStage photo={interaction.selected} onContextMenu={interaction.openContextMenu} />
-      </div>
+        </aside>)}
+        second={<PhotoStage photo={interaction.selected} onContextMenu={interaction.openContextMenu} />}
+      />
       {interaction.contextMenu}
     </div>
   );
@@ -283,8 +290,14 @@ export function TaxonPhotosView({ handlers }: { handlers: PhotoOpenHandlers }) {
           }}>{item.names.sci_name ?? `Taxon ${item.taxon_id}`}</button></span>
         ))}
       </header>
-      <div className="explorer-columns">
-        <aside className="finder-pane">
+      <ResizablePanels
+        className="explorer-columns"
+        initialRatio={0.34}
+        minFirst={220}
+        minSecond={320}
+        separatorLabel="Resize taxon browser and photo preview"
+        stateKey="photo-taxonomy.columns"
+        first={(<aside className="finder-pane">
           <VirtualList
             stateKey="photo-taxonomy.list"
             items={rows}
@@ -333,9 +346,9 @@ export function TaxonPhotosView({ handlers }: { handlers: PhotoOpenHandlers }) {
           />
           {page.loading && <div className="pane-overlay">Loading</div>}
           {page.error && <div className="inline-error">{page.error}</div>}
-        </aside>
-        <PhotoStage photo={interaction.selected} onContextMenu={interaction.openContextMenu} />
-      </div>
+        </aside>)}
+        second={<PhotoStage photo={interaction.selected} onContextMenu={interaction.openContextMenu} />}
+      />
       {interaction.contextMenu}
     </div>
   );
