@@ -1,7 +1,15 @@
 import { DatabasePlus, FilePlusCorner, Table2, Trash2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { selectCsvFile, selectSqliteDatabase } from "../../api/dialogs";
 import type { PersistentSqlInput } from "../../api/customSql";
-import { IconButton } from "../../shared/ui";
+import { Button, IconButton, Modal } from "../../shared/ui";
+import { sqlInputAliasError, suggestedSqlInputAlias } from "./sqlInputAlias";
+
+type PendingSqlInput = {
+  kind: "csv" | "sqlite";
+  path: string;
+  alias: string;
+};
 
 export function SqlInputList({
   inputs,
@@ -14,22 +22,42 @@ export function SqlInputList({
   onAdd: (kind: "csv" | "sqlite", alias: string, path: string) => Promise<void>;
   onRemove: (input: PersistentSqlInput) => Promise<void>;
 }) {
-  async function add(kind: "csv" | "sqlite") {
+  const [pending, setPending] = useState<PendingSqlInput | null>(null);
+  const [adding, setAdding] = useState(false);
+  const aliasInputRef = useRef<HTMLInputElement>(null);
+  const aliasError = pending ? sqlInputAliasError(pending.alias, inputs) : "";
+
+  useEffect(() => {
+    if (!pending) return;
+    aliasInputRef.current?.focus();
+    aliasInputRef.current?.select();
+  }, [pending?.path]);
+
+  async function choose(kind: "csv" | "sqlite") {
     const path = kind === "csv" ? await selectCsvFile() : await selectSqliteDatabase();
     if (!path) return;
-    const alias = window.prompt("SQL access name", suggestedAlias(path, inputs))?.trim();
-    if (!alias) return;
-    await onAdd(kind, alias, path);
+    setPending({ kind, path, alias: suggestedSqlInputAlias(path, inputs) });
+  }
+
+  async function confirmAdd() {
+    if (!pending || aliasError || adding || busy) return;
+    setAdding(true);
+    try {
+      await onAdd(pending.kind, pending.alias.trim(), pending.path);
+      setPending(null);
+    } finally {
+      setAdding(false);
+    }
   }
 
   return (
     <aside className="sql-sources">
       <header className="sql-input-actions">
         <strong>Input sources</strong>
-        <IconButton aria-label="Add CSV" size="small" disabled={busy} title="Add CSV" onClick={() => void add("csv")}>
+        <IconButton aria-label="Add CSV" size="small" disabled={busy} title="Add CSV" onClick={() => void choose("csv")}>
           <FilePlusCorner size={13} />
         </IconButton>
-        <IconButton aria-label="Add SQLite" size="small" disabled={busy} title="Add SQLite" onClick={() => void add("sqlite")}>
+        <IconButton aria-label="Add SQLite" size="small" disabled={busy} title="Add SQLite" onClick={() => void choose("sqlite")}>
           <DatabasePlus size={13} />
         </IconButton>
       </header>
@@ -62,18 +90,41 @@ export function SqlInputList({
           ))}
         </section>
       ))}
+      {pending && (
+        <Modal
+          title={`Add ${pending.kind === "sqlite" ? "SQLite" : "CSV"} input`}
+          onClose={() => {
+            if (!adding) setPending(null);
+          }}
+          actions={(
+            <>
+              <Button disabled={adding} onClick={() => setPending(null)}>Cancel</Button>
+              <Button variant="primary" disabled={adding || Boolean(aliasError)} onClick={() => void confirmAdd()}>
+                {adding ? "Adding..." : "Add input"}
+              </Button>
+            </>
+          )}
+        >
+          <label className="sql-input-alias-field">
+            <span>SQL access name</span>
+            <input
+              ref={aliasInputRef}
+              value={pending.alias}
+              disabled={adding}
+              aria-invalid={Boolean(aliasError)}
+              onChange={(event) => setPending({ ...pending, alias: event.target.value })}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  void confirmAdd();
+                }
+              }}
+            />
+          </label>
+          <div className="sql-input-selected-path"><span>Selected file</span><code title={pending.path}>{pending.path}</code></div>
+          {aliasError && <div className="inline-error" role="alert">{aliasError}</div>}
+        </Modal>
+      )}
     </aside>
   );
-}
-
-function suggestedAlias(path: string, existing: PersistentSqlInput[]): string {
-  const stem = path.split(/[\\/]/).pop()?.replace(/\.[^.]+$/, "") ?? "source";
-  const normalized = stem.replace(/[^A-Za-z0-9_]/g, "_").replace(/^[^A-Za-z_]/, "_$&") || "source";
-  let candidate = normalized;
-  let suffix = 2;
-  while (existing.some((input) => input.alias.toLowerCase() === candidate.toLowerCase())) {
-    candidate = `${normalized}_${suffix}`;
-    suffix += 1;
-  }
-  return candidate;
 }

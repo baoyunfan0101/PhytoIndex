@@ -79,6 +79,12 @@
 .sql-sources details { padding: 4px 6px; border-top: 1px solid var(--line); }
 .sql-sources summary { display: flex; align-items: center; gap: 5px; }
 .sql-sources details > span { display: flex; justify-content: space-between; padding: 3px 4px 3px 18px; color: var(--muted); }
+.sql-input-alias-field { display: flex; flex-direction: column; gap: 6px; padding: 8px; }
+.sql-input-alias-field > span, .sql-input-selected-path > span { color: var(--muted); }
+.sql-input-alias-field input { height: 30px; padding: 0 8px; border: 1px solid var(--line-strong); border-radius: 3px; background: var(--input); }
+.sql-input-alias-field input[aria-invalid="true"] { border-color: var(--red); }
+.sql-input-selected-path { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 8px; padding: 8px; }
+.sql-input-selected-path code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sql-sources i { color: var(--quiet); font-style: normal; }
 .base-source > code, .base-source > small { display: block; padding: 4px 7px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .base-source > code { color: var(--muted); }
