@@ -2,32 +2,79 @@
 
 Location: `apps/desktop/src/features/settings`
 
-The Settings domain owns user-editable application metadata and storage
-configuration. It presents General, Storage, Photo Libraries, Taxonomy
-Databases, Naming, Map, Hooks, Base Import, and About sections in one workspace.
+The Settings domain presents application metadata and resource configuration
+through one settings workbench.
 
 ## Public interface
 
 ### `SettingsView(props)`
 
-Parameters include the selected settings section, a section-change callback,
-and application callbacks used to reload Photo Libraries, switch the active
-library, select a Taxonomy Database, and handle taxonomy replacement.
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `section` | `SettingsSection` | Currently displayed settings page. |
+| `onSectionChange` | `(section) => void` | Updates the settings page stored by the owning tab. |
+| `onWorkspaceChanged` | optional callback | Refreshes application state after Photo Library changes. |
+| `onBaseReplaced` | optional callback | Refreshes taxonomy and mapping state after replacement. |
 
-Returns: the complete settings workbench. Unsaved hook source, test cases, and
-expected values remain in the view state while the tab is inactive.
+Returns the complete Settings workbench.
 
-The Naming section exposes the six-field mapping priority, the six Photo
-filename format toggles, and the formatted-input name separator. Each metadata
-value loads independently. If a read fails, the affected control remains
-visible with its default value and the section displays the backend error.
+`SettingsSection` includes General, Storage, Photo Libraries, Taxonomy
+Databases, Naming, Map, Filename Parser, Synonym Splitter, and About.
+
+## Pages
+
+### General
+
+Reserved for application-wide settings. It has no controls until a global
+setting is available.
+
+### Storage
+
+Shows the metadata database, current taxonomy database, default Photo Library
+database directory, default taxonomy database directory, and current taxonomy
+source metadata. Long paths remain on one line and expose the complete value
+through a tooltip.
+
+### Photo Libraries
+
+Registers, opens, renames, rebinds, relocates, and removes Photo Library
+resources. It does not own photo browsing or mapping behavior.
+
+### Taxonomy Databases
+
+Accepts persistent CSV and SQLite input sources plus SQL. `Validate` executes
+the SQL, builds a candidate database, and returns SQL messages and the
+validation report. `Apply` is enabled only for the latest successful
+validation and replaces the taxonomy database through the background
+operation API.
+
+### Naming
+
+Edits the six-field mapping priority, mapped-photo filename fields, and the
+formatted-input multiple-name separator. Each value remains visible with a
+usable default if loading fails.
+
+### Map
+
+Edits the tile provider and provider token. The token is editable only for
+Tianditu; selecting another provider preserves the stored Tianditu value.
+
+### Filename Parser and Synonym Splitter
+
+Each Hook page edits one Rhai source and its ordered project tests. Tests are
+numbered by array position and contain raw input, expected output, actual
+output, and pass or failure state.
+
+`Test` runs the current unsaved source and tests without persistence. `Save`
+is enabled only after every test passes and the source and tests remain
+unchanged. Saving persists the source and tests atomically.
+
+### About
+
+Shows the product name, application version, author, and project GitHub link.
 
 ## Metadata notification
 
-The shared `emitMetadataChange(change)` publishes a committed metadata update.
-`useMetadataChange(listener)` subscribes to those changes. The event contains
-the changed metadata kind so dependent pages refresh only the values they use.
-
-Rhai hook settings always display either the saved source or the backend
-template. Test execution returns actual results for every configured case;
-saving uses the backend test-and-save operation.
+`emitMetadataChange(change)` publishes a committed metadata update.
+`useMetadataChange(listener)` subscribes to changes so dependent views refresh
+only the values they consume.

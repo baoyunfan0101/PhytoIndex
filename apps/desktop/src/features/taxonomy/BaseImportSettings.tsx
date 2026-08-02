@@ -1,15 +1,13 @@
-import { ShieldCheck } from "lucide-react";
+import { Send, ShieldCheck } from "lucide-react";
 import { useEffect, useState } from "react";
 import {
   addBaseImportInput,
   applyBaseImport,
   getBaseImportSql,
-  getTaxonomyBaseMetadata,
   listBaseImportInputs,
   removeBaseImportInput,
   validateBaseImport,
   type BaseImportValidationResult,
-  type TaxonomyBaseMetadata,
   type TaxonomyBaseReplaceResult,
 } from "../../api/baseImport";
 import type { PersistentSqlInput, SqlStatementMessage } from "../../api/customSql";
@@ -21,7 +19,6 @@ import { SqlInputList } from "./SqlInputList";
 import { emitTaxonomyMutation } from "./taxonomyMutations";
 
 export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
-  const [metadata, setMetadata] = useState<TaxonomyBaseMetadata | null>(null);
   const [inputs, setInputs] = useState<PersistentSqlInput[]>([]);
   const [sql, setSql] = useState("");
   const [validation, setValidation] = useState<BaseImportValidationResult | null>(null);
@@ -31,9 +28,8 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
   const [message, setMessage] = useState("");
 
   useEffect(() => {
-    Promise.all([getTaxonomyBaseMetadata(), getBaseImportSql(), listBaseImportInputs()])
-      .then(([nextMetadata, savedSql, savedInputs]) => {
-        setMetadata(nextMetadata);
+    Promise.all([getBaseImportSql(), listBaseImportInputs()])
+      .then(([savedSql, savedInputs]) => {
         setSql(savedSql);
         setInputs(savedInputs);
       })
@@ -88,7 +84,6 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
       if (completed.error) throw new Error(completed.error);
       const result = completed.result as TaxonomyBaseReplaceResult | null;
       if (!result) throw new Error("Base import completed without a replacement result");
-      setMetadata(result.metadata);
       setValidation(null);
       setConfirming(false);
       onApplied?.();
@@ -129,15 +124,19 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
   return (
     <div className="base-import-settings">
       <SectionHeader
-        title="Base Import"
-        detail="Build and validate a taxonomy candidate from persistent data sources"
+        title="Taxonomy Databases"
+        detail="Build, validate, and apply a replacement taxonomy database."
+        actions={(
+          <>
+            <Button disabled={Boolean(busy) || !sql.trim()} onClick={() => void validate()}>
+              <ShieldCheck size={13} />Validate
+            </Button>
+            <Button variant="primary" disabled={Boolean(busy) || !validation?.can_apply} onClick={() => setConfirming(true)}>
+              <Send size={13} />Apply
+            </Button>
+          </>
+        )}
       />
-      <div className="base-metadata-grid">
-        <Metric label="Current source" value={metadata?.source_path ?? "Not imported"} />
-        <Metric label="Taxa" value={metadata ? String(metadata.taxa_count) : "-"} />
-        <Metric label="Names" value={metadata ? String(metadata.taxon_names_count) : "-"} />
-        <Metric label="Imported" value={metadata?.imported_at ?? "-"} />
-      </div>
       <div className="base-import-workbench">
         <SqlInputList inputs={inputs} busy={Boolean(busy)} onAdd={addInput} onRemove={removeInput} />
         <div className="base-import-editor">
@@ -146,23 +145,17 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
             setValidation(null);
             setExecutionMessages([]);
           }} />
-          <div className="base-import-actions">
-            <Button disabled={Boolean(busy) || !sql.trim()} onClick={() => void validate()}>
-              <ShieldCheck size={13} />Validate
-            </Button>
-            <Button variant="primary" disabled={Boolean(busy) || !validation?.can_apply} onClick={() => setConfirming(true)}>
-              Apply candidate
-            </Button>
-          </div>
         </div>
       </div>
-      {(message || busy) && <div className="editor-message">{busy || message}</div>}
-      {executionMessages.map((item) => (
-        <p className="sql-message" key={`${item.statement_index}:${item.message}`}>
-          Statement {item.statement_index}: {item.message}
-          {item.affected_rows !== null ? ` (${item.affected_rows} rows)` : ""}
-        </p>
-      ))}
+      <div className="base-import-feedback">
+        {(message || busy) && <div className="editor-message">{busy || message}</div>}
+        {executionMessages.map((item) => (
+          <p className="sql-message" key={`${item.statement_index}:${item.message}`}>
+            Statement {item.statement_index}: {item.message}
+            {item.affected_rows !== null ? ` (${item.affected_rows} rows)` : ""}
+          </p>
+        ))}
+      </div>
       {validation && (
         <div className="base-validation">
           <div className="base-metadata-grid">

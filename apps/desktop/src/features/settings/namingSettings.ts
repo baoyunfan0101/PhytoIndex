@@ -7,6 +7,15 @@ export const photoNamePriorityFields = [
   "family_zh",
 ] as const;
 
+export const photoNamePriorityLabels: Record<typeof photoNamePriorityFields[number], string> = {
+  species_sci: "Species scientific",
+  species_zh: "Species Chinese",
+  genus_sci: "Genus scientific",
+  genus_zh: "Genus Chinese",
+  family_sci: "Family scientific",
+  family_zh: "Family Chinese",
+};
+
 export const photoFilenameFormatFields = [
   { field: "family_zh", label: "Family Chinese" },
   { field: "family_sci", label: "Family scientific" },

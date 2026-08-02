@@ -30,13 +30,19 @@ export function CodeEditor({
   value,
   onChange,
   ariaLabel,
+  autoGrow,
 }: {
   language: CodeLanguage;
   value: string;
   onChange: (value: string) => void;
   ariaLabel: string;
+  autoGrow?: { minRows: number; maxRows: number };
 }) {
   const highlightRef = useRef<HTMLPreElement>(null);
+  const rowCount = value.split("\n").length;
+  const autoHeight = autoGrow
+    ? Math.min(autoGrow.maxRows, Math.max(autoGrow.minRows, rowCount)) * 19.8 + 24
+    : undefined;
 
   function syncScroll(event: UIEvent<HTMLTextAreaElement>) {
     if (!highlightRef.current) return;
@@ -45,7 +51,7 @@ export function CodeEditor({
   }
 
   return (
-    <div className={`code-editor language-${language}`}>
+    <div className={`code-editor language-${language}`} style={autoHeight ? { height: `${autoHeight}px` } : undefined}>
       <pre ref={highlightRef} aria-hidden="true">
         <code>{highlight(value, language)}{"\n"}</code>
       </pre>

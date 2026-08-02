@@ -1,17 +1,18 @@
 import {
   ArrowDown,
   ArrowUp,
-  Beaker,
-  BookOpen,
   BugPlay,
   CaseSensitive,
+  ChevronDown,
+  ChevronRight,
   Database,
   FolderCog,
   Info,
   Library,
-  MapPinned,
+  Map,
   Move,
   Pencil,
+  Plug,
   RefreshCcw,
   Save,
   SlidersHorizontal,
@@ -19,16 +20,11 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
-import {
-  checkAppUpdate,
-  getAppVersion,
-  installAppUpdate,
-} from "../../api/updater";
+import { getAppVersion } from "../../api/updater";
 import { errorMessage } from "../../api/common";
 import {
   getDatabaseLocations,
   listPhotoLibraries,
-  openTaxonomyDatabase,
   photoLibraryAvailabilityLabel,
   rebindPhotoLibraryDatabase,
   rebindPhotoLibraryRoot,
@@ -43,8 +39,8 @@ import {
   type DatabaseLocations,
   type PhotoLibraryWorkspace,
 } from "../../api/storage";
-import { getPhotoLibrary, getPhotoLibraryCount } from "../../api/photos";
 import { getMapSettings, setMapSettings, type MapSettings } from "../../api/map";
+import { getTaxonomyBaseMetadata, type TaxonomyBaseMetadata } from "../../api/baseImport";
 import {
   getNamingHookSettings,
   getNamingHookTemplates,
@@ -65,7 +61,7 @@ import {
   type PhotoNameField,
 } from "../../api/settings";
 import { selectDatabaseDestination, selectPhotoDirectory, selectSqliteDatabase } from "../../api/dialogs";
-import { Button, IconButton, SectionHeader, Segmented, VirtualList } from "../../shared/ui";
+import { Button, IconButton, SectionHeader } from "../../shared/ui";
 import { CodeEditor } from "../../shared/CodeEditor";
 import { BaseImportSettings } from "../taxonomy/BaseImportSettings";
 import { emitMetadataChange } from "../../shared/metadataChanges";
@@ -74,6 +70,7 @@ import {
   normalizePhotoFilenameFormatSettings,
   photoFilenameFormatFields,
   photoNamePriorityFields,
+  photoNamePriorityLabels,
 } from "./namingSettings";
 
 export type SettingsSection =
@@ -83,8 +80,8 @@ export type SettingsSection =
   | "Taxonomy Databases"
   | "Naming"
   | "Map"
-  | "Hooks"
-  | "Base Import"
+  | "Filename Parser"
+  | "Synonym Splitter"
   | "About";
 
 const settingsSections: Array<{
@@ -92,29 +89,31 @@ const settingsSections: Array<{
   icon: LucideIcon;
 }> = [
   { id: "General", icon: SlidersHorizontal },
-  { id: "Storage", icon: Database },
+  { id: "Storage", icon: FolderCog },
   { id: "Photo Libraries", icon: Library },
-  { id: "Taxonomy Databases", icon: BookOpen },
+  { id: "Taxonomy Databases", icon: Database },
   { id: "Naming", icon: CaseSensitive },
-  { id: "Map", icon: MapPinned },
-  { id: "Hooks", icon: Beaker },
-  { id: "Base Import", icon: FolderCog },
-  { id: "About", icon: Info },
+  { id: "Map", icon: Map },
 ];
 
 export function SettingsView({
   onBaseReplaced,
   onSectionChange,
-  onTaxonomyDatabaseChanged,
   onWorkspaceChanged,
   section,
 }: {
   onBaseReplaced?: () => void;
   onSectionChange: (section: SettingsSection) => void;
-  onTaxonomyDatabaseChanged?: () => void;
   onWorkspaceChanged?: (resetPhotoTabs: boolean) => void;
   section: SettingsSection;
 }) {
+  const hookSection = section === "Filename Parser" || section === "Synonym Splitter";
+  const [hooksExpanded, setHooksExpanded] = useState(hookSection);
+
+  useEffect(() => {
+    if (hookSection) setHooksExpanded(true);
+  }, [hookSection]);
+
   return (
     <div className="settings-workbench">
       <aside className="settings-nav">
@@ -123,16 +122,30 @@ export function SettingsView({
             <Icon size={14} />{id}
           </button>
         ))}
+        <button className={hookSection ? "active" : ""} type="button" onClick={() => setHooksExpanded((current) => !current)}>
+          <Plug size={14} />Hooks
+          {hooksExpanded ? <ChevronDown className="settings-nav-chevron" size={13} /> : <ChevronRight className="settings-nav-chevron" size={13} />}
+        </button>
+        {hooksExpanded && (
+          <div className="settings-subnav">
+            {(["Filename Parser", "Synonym Splitter"] as const).map((id) => (
+              <button className={section === id ? "active" : ""} type="button" key={id} onClick={() => onSectionChange(id)}>{id}</button>
+            ))}
+          </div>
+        )}
+        <div className="settings-nav-spacer" />
+        <button className={section === "About" ? "active" : ""} type="button" onClick={() => onSectionChange("About")}>
+          <Info size={14} />About
+        </button>
       </aside>
       <main className="settings-content">
         {section === "General" && <GeneralSettings />}
         {section === "Storage" && <StorageSettings />}
         {section === "Photo Libraries" && <PhotoLibrariesSettings onChanged={onWorkspaceChanged} />}
-        {section === "Taxonomy Databases" && <TaxonomyDatabasesSettings onOpened={onTaxonomyDatabaseChanged} />}
+        {section === "Taxonomy Databases" && <BaseImportSettings onApplied={onBaseReplaced} />}
         {section === "Naming" && <NamingSettings />}
         {section === "Map" && <MapSettingsPanel />}
-        {section === "Hooks" && <HooksSettings />}
-        {section === "Base Import" && <BaseImportSettings onApplied={onBaseReplaced} />}
+        {hookSection && <HooksSettings kind={section === "Filename Parser" ? "photo_filename" : "synonym_authority"} />}
         {section === "About" && <AboutSettings />}
       </main>
     </div>
@@ -140,61 +153,24 @@ export function SettingsView({
 }
 
 function GeneralSettings() {
-  const [root, setRoot] = useState("Loading");
-  const [count, setCount] = useState(0);
-  const [version, setVersion] = useState("3.0.0");
-  const [updateMessage, setUpdateMessage] = useState("");
-  const [updateAvailable, setUpdateAvailable] = useState(false);
-  useEffect(() => {
-    void getAppVersion().then(setVersion);
-    void getPhotoLibrary()
-      .then((library) => setRoot(library?.root_path ?? "Not configured"))
-      .catch(() => setRoot("Active library unavailable"));
-    void getPhotoLibraryCount().then(setCount).catch(() => setCount(0));
-  }, []);
-
-  async function checkUpdate() {
-    try {
-      setUpdateMessage("Checking GitHub Releases");
-      const update = await checkAppUpdate();
-      setUpdateAvailable(Boolean(update));
-      setUpdateMessage(update ? `Version ${update.version} is available` : "Vividarium is up to date");
-    } catch (nextError) {
-      setUpdateMessage(errorMessage(nextError));
-    }
-  }
-
-  async function installUpdate() {
-    try {
-      await installAppUpdate((event) => {
-        if (event.event === "progress") setUpdateMessage(`Downloaded ${event.data.downloaded} bytes`);
-        if (event.event === "finished") setUpdateMessage("Installing and restarting");
-      });
-    } catch (nextError) {
-      setUpdateMessage(errorMessage(nextError));
-    }
-  }
   return (
     <div className="settings-section">
-      <SectionHeader title="General" detail="Workspace metadata" />
-      <Setting label="Product" value="Vividarium" />
-      <Setting label="Software version" value={version} />
-      <Setting label="Photo root" value={root} />
-      <Setting label="Indexed photos" value={String(count)} />
-      <Setting label="Database schema" value="2" />
-      <div className="update-row">
-        <div><strong>Software update</strong><span>{updateMessage || "Updates are delivered from GitHub Releases."}</span></div>
-        {updateAvailable ? <Button variant="primary" onClick={() => void installUpdate()}>Install and restart</Button> : <Button onClick={() => void checkUpdate()}>Check for updates</Button>}
-      </div>
+      <SectionHeader title="General" detail="Configure application-wide settings." />
     </div>
   );
 }
 
 function StorageSettings() {
   const [locations, setLocations] = useState<DatabaseLocations | null>(null);
+  const [baseMetadata, setBaseMetadata] = useState<TaxonomyBaseMetadata | null>(null);
   const [message, setMessage] = useState("");
   useEffect(() => {
-    void getDatabaseLocations().then(setLocations).catch((nextError) => setMessage(errorMessage(nextError)));
+    void Promise.all([getDatabaseLocations(), getTaxonomyBaseMetadata()])
+      .then(([nextLocations, nextMetadata]) => {
+        setLocations(nextLocations);
+        setBaseMetadata(nextMetadata);
+      })
+      .catch((nextError) => setMessage(errorMessage(nextError)));
   }, []);
 
   async function changeDefaultPhotoLibraryDirectory() {
@@ -203,39 +179,6 @@ function StorageSettings() {
     try {
       setLocations(await setDefaultPhotoLibraryDatabaseDirectory(directory));
       setMessage("Default storage directory updated.");
-    } catch (nextError) {
-      setMessage(errorMessage(nextError));
-    }
-  }
-
-  return (
-    <div className="settings-section">
-      <SectionHeader title="Storage" detail="Application metadata and Photo Library storage" />
-      <StoragePath label="Metadata database" value={locations?.metadata_database ?? "Loading"} />
-      <StoragePath
-        label="Default photo library DB directory"
-        value={locations?.default_photo_library_directory ?? "Loading"}
-        action={<Button onClick={() => void changeDefaultPhotoLibraryDirectory()}><FolderCog size={13} />Change</Button>}
-      />
-      <div className="editor-message">{message}</div>
-    </div>
-  );
-}
-
-function TaxonomyDatabasesSettings({ onOpened }: { onOpened?: () => void }) {
-  const [locations, setLocations] = useState<DatabaseLocations | null>(null);
-  const [message, setMessage] = useState("");
-  useEffect(() => {
-    void getDatabaseLocations().then(setLocations).catch((nextError) => setMessage(errorMessage(nextError)));
-  }, []);
-
-  async function openExisting() {
-    const selected = await selectSqliteDatabase();
-    if (!selected) return;
-    try {
-      setLocations(await openTaxonomyDatabase(selected));
-      setMessage("Taxonomy Database opened.");
-      onOpened?.();
     } catch (nextError) {
       setMessage(errorMessage(nextError));
     }
@@ -265,22 +208,28 @@ function TaxonomyDatabasesSettings({ onOpened }: { onOpened?: () => void }) {
 
   return (
     <div className="settings-section">
-      <SectionHeader title="Taxonomy Databases" detail="Active taxonomy storage" />
+      <SectionHeader title="Storage" detail="View database locations, default directories, and taxonomy metadata." />
+      <StoragePath label="Metadata database" value={locations?.metadata_database ?? "Loading"} />
       <StoragePath
-        label="Taxonomy Database"
+        label="Taxonomy database"
         value={locations?.taxonomy_database ?? "Loading"}
-        action={(
-          <div className="storage-actions">
-            <Button onClick={() => void openExisting()}><BookOpen size={13} />Open</Button>
-            <Button onClick={() => void relocate()}><Move size={13} />Relocate</Button>
-          </div>
-        )}
+        action={<Button onClick={() => void relocate()}><Move size={13} />Relocate</Button>}
       />
       <StoragePath
-        label="Default directory"
+        label="Photo Library database default directory"
+        value={locations?.default_photo_library_directory ?? "Loading"}
+        action={<Button onClick={() => void changeDefaultPhotoLibraryDirectory()}><FolderCog size={13} />Change</Button>}
+      />
+      <StoragePath
+        label="Taxonomy database default directory"
         value={locations?.default_taxonomy_directory ?? "Loading"}
         action={<Button onClick={() => void changeDefaultDirectory()}><FolderCog size={13} />Change</Button>}
       />
+      <h3>Taxonomy metadata</h3>
+      <StoragePath label="Current source" value={baseMetadata?.source_path ?? "Not imported"} />
+      <Setting label="Taxa" value={baseMetadata ? String(baseMetadata.taxa_count) : "-"} />
+      <Setting label="Names" value={baseMetadata ? String(baseMetadata.taxon_names_count) : "-"} />
+      <Setting label="Imported" value={baseMetadata?.imported_at ?? "-"} />
       <div className="editor-message">{message}</div>
     </div>
   );
@@ -337,7 +286,7 @@ function PhotoLibrariesSettings({ onChanged }: { onChanged?: (resetPhotoTabs: bo
     <div className="settings-section">
       <SectionHeader
         title="Photo Libraries"
-        detail="One registered library represents one real photo root and one independent database"
+        detail="Open, register, and manage photo libraries."
         actions={(
           <>
             <Button onClick={() => void load()}><RefreshCcw size={13} />Refresh</Button>
@@ -388,10 +337,16 @@ function AboutSettings() {
   useEffect(() => { void getAppVersion().then(setVersion); }, []);
   return (
     <div className="settings-section">
-      <SectionHeader title="About" detail="Vividarium desktop application" />
-      <Setting label="Product" value="Vividarium" />
-      <Setting label="Software version" value={version} />
-      <Setting label="Database schema" value="2" />
+      <SectionHeader title="About" detail="View application, version, author, and project information." />
+      <div className="about-settings">
+        <strong>Vividarium</strong>
+        <Setting label="Version" value={version} />
+        <Setting label="Author" value="Yunfan Bao" />
+        <div className="setting-row">
+          <span>GitHub</span>
+          <a href="https://github.com/baoyunfan0101/Vividarium" target="_blank" rel="noreferrer">github.com/baoyunfan0101/Vividarium</a>
+        </div>
+      </div>
     </div>
   );
 }
@@ -461,19 +416,19 @@ function NamingSettings() {
 
   return (
     <div className="settings-section">
-      <SectionHeader title="Naming" detail="Mapping priority, filename output, and formatted input" actions={<Button variant="primary" onClick={() => void save()}><Save size={13} />Save</Button>} />
-      <h3>Six-field mapping priority</h3>
+      <SectionHeader title="Naming" detail="Configure taxonomy matching and mapped-photo filename generation." actions={<Button variant="primary" onClick={() => void save()}><Save size={13} />Save</Button>} />
+      <h3>Mapping name priority</h3>
       <div className="priority-list">
         {priority.map((field, index) => (
           <div key={field}>
-            <b>{index + 1}</b><span>{field}</span>
+            <b>{index + 1}</b><span>{photoNamePriorityLabels[field]}</span>
             <IconButton
-              aria-label={`Move ${field} up`}
+              aria-label={`Move ${photoNamePriorityLabels[field]} up`}
               disabled={index === 0}
               onClick={() => move(index, -1)}
             ><ArrowUp size={13} /></IconButton>
             <IconButton
-              aria-label={`Move ${field} down`}
+              aria-label={`Move ${photoNamePriorityLabels[field]} down`}
               disabled={index === priority.length - 1}
               onClick={() => move(index, 1)}
             ><ArrowDown size={13} /></IconButton>
@@ -505,20 +460,20 @@ function MapSettingsPanel() {
   }
   return (
     <div className="settings-section">
-      <SectionHeader title="Map" detail="Tile source metadata" actions={<Button variant="primary" onClick={() => void save()}><Save size={13} />Save</Button>} />
+      <SectionHeader title="Map" detail="Configure the map tile provider and provider credentials." actions={<Button variant="primary" onClick={() => void save()}><Save size={13} />Save</Button>} />
       <label className="field-stack"><span>Tile provider</span><select value={settings.provider} onChange={(event) => setSettings({ ...settings, provider: event.target.value as MapSettings["provider"] })}><option value="osm">OpenStreetMap</option><option value="tianditu">Tianditu</option></select></label>
-      <label className="field-stack"><span>Tianditu token</span><input value={settings.tianditu_token ?? ""} onChange={(event) => setSettings({ ...settings, tianditu_token: event.target.value || null })} /></label>
+      <label className="field-stack"><span>Token</span><input disabled={settings.provider !== "tianditu"} value={settings.tianditu_token ?? ""} onChange={(event) => setSettings({ ...settings, tianditu_token: event.target.value || null })} /></label>
       <div className="editor-message">{message}</div>
     </div>
   );
 }
 
-function HooksSettings() {
-  const [kind, setKind] = useState<NamingHookKind>("photo_filename");
+function HooksSettings({ kind }: { kind: NamingHookKind }) {
   const [scripts, setScripts] = useState<Record<NamingHookKind, string>>({ photo_filename: "", synonym_authority: "" });
   const [cases, setCases] = useState<Record<NamingHookKind, NamingHookTestCase[]>>({ photo_filename: [], synonym_authority: [] });
   const [report, setReport] = useState<NamingHookTestReport | null>(null);
   const [testedSnapshot, setTestedSnapshot] = useState<Record<NamingHookKind, string | null>>({ photo_filename: null, synonym_authority: null });
+  const [busy, setBusy] = useState("");
   const [message, setMessage] = useState("");
 
   useEffect(() => {
@@ -546,54 +501,66 @@ function HooksSettings() {
     };
   }, []);
 
+  useEffect(() => {
+    setReport(null);
+    setMessage("");
+  }, [kind]);
+
   const currentSnapshot = JSON.stringify({ script: scripts[kind], cases: cases[kind] });
 
   function invalidate(nextScripts = scripts, nextCases = cases) {
     setScripts(nextScripts);
     setCases(nextCases);
     setReport(null);
-    setTestedSnapshot({ ...testedSnapshot, [kind]: null });
+    setTestedSnapshot((current) => ({ ...current, [kind]: null }));
   }
 
   async function run() {
+    setBusy("Testing Hook");
     try {
       const snapshot = currentSnapshot;
       const next = await runNamingHookTests(kind, scripts[kind], cases[kind]);
       setReport(next);
       if (next.failed === 0) {
-        setTestedSnapshot({ ...testedSnapshot, [kind]: snapshot });
+        setTestedSnapshot((current) => ({ ...current, [kind]: snapshot }));
         setMessage("All tests passed. The current Hook can be saved.");
       } else {
-        setTestedSnapshot({ ...testedSnapshot, [kind]: null });
+        setTestedSnapshot((current) => ({ ...current, [kind]: null }));
         setMessage("Tests failed. Review the actual output before saving.");
       }
     } catch (nextError) {
-      setTestedSnapshot({ ...testedSnapshot, [kind]: null });
+      setTestedSnapshot((current) => ({ ...current, [kind]: null }));
       setMessage(errorMessage(nextError));
+    } finally {
+      setBusy("");
     }
   }
 
   async function save() {
+    setBusy("Saving Hook");
     try {
       await saveNamingHook(kind, scripts[kind], cases[kind]);
       setMessage("Hook and project tests saved.");
     } catch (nextError) {
       setMessage(errorMessage(nextError));
+    } finally {
+      setBusy("");
     }
   }
 
+  const title = kind === "photo_filename" ? "Filename Parser" : "Synonym Splitter";
+  const detail = kind === "photo_filename"
+    ? "Edit and test the hook that extracts taxonomy information from filenames."
+    : "Edit and test the hook that separates names from authority information.";
+
   return (
     <div className="hooks-settings">
-      <SectionHeader title="Rhai hooks" detail="Default implementations and user overrides share the same execution path" actions={(
+      <SectionHeader title={title} detail={detail} actions={(
         <>
-          <Button onClick={() => void run()}><BugPlay size={13} />Test</Button>
-          <Button variant="primary" disabled={testedSnapshot[kind] !== currentSnapshot} onClick={() => void save()}><Save size={13} />Save</Button>
+          <Button disabled={Boolean(busy) || !scripts[kind].trim()} onClick={() => void run()}><BugPlay size={13} />Test</Button>
+          <Button variant="primary" disabled={Boolean(busy) || testedSnapshot[kind] !== currentSnapshot} onClick={() => void save()}><Save size={13} />Save</Button>
         </>
       )} />
-      <Segmented value={kind} items={["photo_filename", "synonym_authority"] as const} onChange={(next) => {
-        setKind(next);
-        setReport(null);
-      }} />
       <div className="hook-columns">
         <CodeEditor
           language="rhai"
@@ -603,27 +570,36 @@ function HooksSettings() {
         />
         <div className="hook-tests">
           <header><strong>Project tests</strong><Button variant="ghost" size="small" onClick={() => invalidate(scripts, { ...cases, [kind]: [...cases[kind], { input: "", expected: { kind, output: {} } }] })}>+ Add</Button></header>
-          <VirtualList
-            items={cases[kind]}
-            rowHeight={report ? 252 : 228}
-            itemKey={(_, index) => index}
-            renderItem={(item, index) => (
-              <div className={`hook-test-row${report?.cases[index] && !report.cases[index].passed ? " failed" : ""}`}>
-                <strong>Test {index + 1}</strong>
-                <input value={item.input} placeholder="Raw input" onChange={(event) => invalidate(scripts, changeCase(cases, kind, index, { ...item, input: event.target.value }))} />
-                <Button size="small" onClick={() => invalidate(scripts, { ...cases, [kind]: cases[kind].filter((_, itemIndex) => itemIndex !== index) })}>Delete</Button>
+          <div className="hook-test-list">
+            {cases[kind].map((item, index) => (
+              <div className={`hook-test-row${report?.cases[index] && !report.cases[index].passed ? " failed" : ""}`} key={index}>
+                <header>
+                  <strong>Test {index + 1}</strong>
+                  {report?.cases[index] && <span className={report.cases[index].passed ? "passed" : "failed"}>{report.cases[index].passed ? "Passed" : "Failed"}</span>}
+                  <Button size="small" onClick={() => invalidate(scripts, { ...cases, [kind]: cases[kind].filter((_, itemIndex) => itemIndex !== index) })}>Delete</Button>
+                </header>
+                <label><span>Raw input</span><textarea rows={2} value={item.input} onChange={(event) => invalidate(scripts, changeCase(cases, kind, index, { ...item, input: event.target.value }))} /></label>
+                <label><span>Expected output</span>
                 <ExpectedEditor
                   value={item.expected}
                   testNumber={index + 1}
+                  onDraftChange={() => invalidate()}
                   onChange={(expected) => invalidate(scripts, changeCase(cases, kind, index, { ...item, expected }))}
                 />
-                {report?.cases[index] && <span className="hook-test-actual">Actual: {JSON.stringify(report.cases[index].actual)}</span>}
+                </label>
+                {report?.cases[index] && (
+                  <div className="hook-test-actual">
+                    <span>Actual output</span>
+                    <pre>{JSON.stringify(report.cases[index].actual, null, 2)}</pre>
+                    {report.cases[index].error && <p>{report.cases[index].error}</p>}
+                  </div>
+                )}
               </div>
-            )}
-          />
+            ))}
+          </div>
         </div>
       </div>
-      <div className="editor-message">{report ? `${report.passed} passed, ${report.failed} failed. ${message}` : message}</div>
+      <div className="editor-message">{busy || (report ? `${report.passed} passed, ${report.failed} failed. ${message}` : message)}</div>
     </div>
   );
 }
@@ -631,10 +607,12 @@ function HooksSettings() {
 function ExpectedEditor({
   value,
   testNumber,
+  onDraftChange,
   onChange,
 }: {
   value: NamingHookTestResult;
   testNumber: number;
+  onDraftChange: () => void;
   onChange: (value: NamingHookTestResult) => void;
 }) {
   const serialized = JSON.stringify(value, null, 2);
@@ -645,6 +623,7 @@ function ExpectedEditor({
 
   function update(next: string) {
     setDraft(next);
+    onDraftChange();
     try {
       const parsed = JSON.parse(next) as NamingHookTestResult;
       if (!parsed || typeof parsed !== "object" || !("kind" in parsed) || !("output" in parsed)) {
@@ -659,7 +638,7 @@ function ExpectedEditor({
 
   return (
     <div className={`hook-expected${error ? " invalid" : ""}`} title={error}>
-      <CodeEditor language="json" ariaLabel={`Test ${testNumber} expected output`} value={draft} onChange={update} />
+      <CodeEditor language="json" ariaLabel={`Test ${testNumber} expected output`} value={draft} onChange={update} autoGrow={{ minRows: 5, maxRows: 14 }} />
     </div>
   );
 }

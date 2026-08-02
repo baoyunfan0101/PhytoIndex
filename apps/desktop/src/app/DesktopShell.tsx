@@ -503,7 +503,6 @@ export function DesktopShell() {
                       if (resetPhotoTabs) resetPhotoWorkspace("Photo Library workspace changed");
                     }}
                     onBaseReplaced={resetTaxonomyResources}
-                    onTaxonomyDatabaseChanged={() => resetTaxonomyResources("Taxonomy Database opened. Photo mappings are being rebuilt in the background.")}
                   />
                 </ViewStateProvider>
               </section>
@@ -538,7 +537,6 @@ function TabBody({
   onCreateLibrary,
   onWorkspaceChanged,
   onBaseReplaced,
-  onTaxonomyDatabaseChanged,
 }: {
   active: boolean;
   tab: AppTab;
@@ -553,7 +551,6 @@ function TabBody({
   onCreateLibrary: () => void;
   onWorkspaceChanged: (resetPhotoTabs: boolean) => void;
   onBaseReplaced: () => void;
-  onTaxonomyDatabaseChanged: () => void;
 }) {
   if (photoTabKinds.has(tab.kind) && !workspaceAvailable) {
     return (
@@ -582,7 +579,7 @@ function TabBody({
   if (tab.kind === "formatted-update") return <FormattedUpdateView mutationDisabled={taxonomyMutationLocked} />;
   if (tab.kind === "custom-sql") return <CustomSqlView onStatus={onStatus} mutationDisabled={taxonomyMutationLocked} />;
   if (tab.kind === "taxonomy-history") return <OperationHistoryView domain="taxonomy" onStatus={onStatus} />;
-  if (tab.kind === "settings") return <SettingsView section={tab.settingsSection ?? "General"} onSectionChange={(section) => updateSettingsTab(tab.id, section)} onBaseReplaced={onBaseReplaced} onTaxonomyDatabaseChanged={onTaxonomyDatabaseChanged} onWorkspaceChanged={onWorkspaceChanged} />;
+  if (tab.kind === "settings") return <SettingsView section={tab.settingsSection ?? "General"} onSectionChange={(section) => updateSettingsTab(tab.id, section)} onBaseReplaced={onBaseReplaced} onWorkspaceChanged={onWorkspaceChanged} />;
   if (tab.kind === "photo-detail" && tab.photo) return <PhotoDetailView photo={tab.photo} />;
   if (tab.kind === "mapping-editor" && tab.photo) return <MappingEditor photo={tab.photo} />;
   if (tab.kind === "search-photos" && tab.query) return <PhotoSet query={tab.query} handlers={handlers} />;
