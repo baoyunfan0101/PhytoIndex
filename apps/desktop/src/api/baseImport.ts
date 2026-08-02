@@ -19,6 +19,12 @@ export type BaseImportValidationResult = {
   warnings: BaseImportIssue[];
   errors: BaseImportIssue[];
 };
+export type ValidateBaseImportResult = {
+  execution: BaseImportExecutionResult;
+  validation: BaseImportValidationResult;
+  warnings: string[];
+  can_apply: boolean;
+};
 export type TaxonomyBaseMetadata = {
   source_path: string;
   taxa_count: number;
@@ -41,24 +47,26 @@ export const addBaseImportInput = (kind: "csv" | "sqlite", alias: string, path: 
   });
 export const removeBaseImportInput = (alias: string) =>
   call<RemoveSqlInputResult>("remove_base_import_input", { request: { alias } }, () => ({ inputs: [], warnings: [] }));
-export const executeBaseImportSql = (sql: string) =>
-  call<BaseImportExecutionResult>("execute_base_import_sql", { request: { sql } }, () => ({
-    statements_executed: sql.split(";").filter(Boolean).length,
-    messages: [{ statement_index: 1, affected_rows: null, message: "Script completed" }],
-    script_saved: true,
-    warnings: [],
-  }));
-export const validateBaseImport = () =>
-  call<BaseImportValidationResult>("validate_base_import", undefined, () => ({
-    can_apply: true,
-    taxa_count: 125000,
-    name_counts: [{ name_type: "sci_name", count: 125000 }, { name_type: "synonym", count: 60000 }],
-    normalization_changes: 0,
-    total_warning_count: 0,
-    total_error_count: 0,
-    warnings: [],
-    errors: [],
-  }));
+export const validateBaseImport = (sql: string) =>
+  call<ValidateBaseImportResult>("validate_base_import", { request: { sql } }, () => {
+    const execution = {
+      statements_executed: sql.split(";").filter(Boolean).length,
+      messages: [{ statement_index: 1, affected_rows: null, message: "Script completed" }],
+      script_saved: true,
+      warnings: [],
+    } satisfies BaseImportExecutionResult;
+    const validation = {
+      can_apply: true,
+      taxa_count: 125000,
+      name_counts: [{ name_type: "sci_name", count: 125000 }, { name_type: "synonym", count: 60000 }],
+      normalization_changes: 0,
+      total_warning_count: 0,
+      total_error_count: 0,
+      warnings: [],
+      errors: [],
+    } satisfies BaseImportValidationResult;
+    return { execution, validation, warnings: [], can_apply: true };
+  });
 export const applyBaseImport = () => call<OperationState>("apply_base_import", undefined, () => {
   const operation = demoOperation("mapping", "Base import applied");
   operation.result = {

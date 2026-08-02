@@ -1,9 +1,8 @@
-import { Beaker, Play } from "lucide-react";
+import { ShieldCheck } from "lucide-react";
 import { useEffect, useState } from "react";
 import {
   addBaseImportInput,
   applyBaseImport,
-  executeBaseImportSql,
   getBaseImportSql,
   getTaxonomyBaseMetadata,
   listBaseImportInputs,
@@ -57,35 +56,22 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
     }
   }
 
-  async function execute() {
-    setBusy("Executing import SQL");
+  async function validate() {
+    setBusy("Executing SQL and validating candidate");
     setMessage("");
     try {
-      const result = await executeBaseImportSql(sql);
-      setValidation(null);
-      setExecutionMessages(result.messages);
-      const saveStatus = result.script_saved ? "SQL saved." : "SQL was not saved.";
+      const result = await validateBaseImport(sql);
+      setValidation(result.validation);
+      setExecutionMessages(result.execution.messages);
+      const saveStatus = result.execution.script_saved ? "SQL saved." : "SQL was not saved.";
       setMessage([
-        `${result.statements_executed} statements executed successfully.`,
+        `${result.execution.statements_executed} statements executed successfully.`,
         saveStatus,
+        result.can_apply
+          ? "Candidate is valid and ready to apply."
+          : `Validation found ${result.validation.total_error_count} errors.`,
         ...result.warnings,
       ].join(" "));
-    } catch (nextError) {
-      setMessage(errorMessage(nextError));
-    } finally {
-      setBusy("");
-    }
-  }
-
-  async function validate() {
-    setBusy("Validating candidate");
-    setMessage("");
-    try {
-      const next = await validateBaseImport();
-      setValidation(next);
-      setMessage(next.can_apply
-        ? "Candidate is valid and ready to apply."
-        : `Validation found ${next.total_error_count} errors.`);
     } catch (nextError) {
       setMessage(errorMessage(nextError));
     } finally {
@@ -155,13 +141,14 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
       <div className="base-import-workbench">
         <SqlInputList inputs={inputs} busy={Boolean(busy)} onAdd={addInput} onRemove={removeInput} />
         <div className="base-import-editor">
-          <CodeEditor language="sql" ariaLabel="Base import SQL" value={sql} onChange={setSql} />
+          <CodeEditor language="sql" ariaLabel="Base import SQL" value={sql} onChange={(value) => {
+            setSql(value);
+            setValidation(null);
+            setExecutionMessages([]);
+          }} />
           <div className="base-import-actions">
-            <Button disabled={Boolean(busy) || !sql.trim()} onClick={() => void execute()}>
-              <Play size={13} />Execute
-            </Button>
-            <Button disabled={Boolean(busy)} onClick={() => void validate()}>
-              <Beaker size={13} />Validate
+            <Button disabled={Boolean(busy) || !sql.trim()} onClick={() => void validate()}>
+              <ShieldCheck size={13} />Validate
             </Button>
             <Button variant="primary" disabled={Boolean(busy) || !validation?.can_apply} onClick={() => setConfirming(true)}>
               Apply candidate

@@ -60,11 +60,54 @@ fn add_simple_input(directory: &tempfile::TempDir, database: &Database) {
 fn execute_simple(database: &Database) -> BaseImportExecutionResult {
     execute_base_import_sql(
         database,
-        &ExecuteBaseImportSqlRequest {
+        &ValidateBaseImportRequest {
             sql: SIMPLE_IMPORT_SQL.into(),
         },
     )
     .unwrap()
+}
+
+#[test]
+fn validate_executes_sql_and_builds_the_candidate_in_one_request() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = Database::open(directory.path().join("metadata.db")).unwrap();
+    add_simple_input(&directory, &database);
+
+    let result = validate_base_import(
+        &database,
+        &ValidateBaseImportRequest {
+            sql: SIMPLE_IMPORT_SQL.into(),
+        },
+    )
+    .unwrap();
+
+    assert!(result.execution.statements_executed > 0);
+    assert!(result.execution.script_saved);
+    assert!(result.can_apply);
+    assert!(result.validation.can_apply);
+    assert!(result.warnings.is_empty());
+    let workspace = workspace(&database).unwrap();
+    assert!(workspace.join(CANDIDATE_DATABASE).is_file());
+    assert!(workspace.join(VALIDATION_STATE).is_file());
+}
+
+#[test]
+fn validate_stops_after_sql_execution_failure() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = Database::open(directory.path().join("metadata.db")).unwrap();
+
+    let error = validate_base_import(
+        &database,
+        &ValidateBaseImportRequest {
+            sql: "SELECT * FROM missing_source;".into(),
+        },
+    )
+    .unwrap_err();
+
+    assert!(error.to_string().contains("missing_source"));
+    let workspace = workspace(&database).unwrap();
+    assert!(!workspace.join(CANDIDATE_DATABASE).exists());
+    assert!(!workspace.join(VALIDATION_STATE).exists());
 }
 
 #[test]
@@ -88,7 +131,7 @@ fn persistent_inputs_and_successful_sql_survive_apply_and_reopen() {
     assert_eq!(execution.messages.len(), execution.statements_executed);
     assert!(execution.script_saved);
     assert!(execution.warnings.is_empty());
-    let validation = validate_base_import(&database).unwrap();
+    let validation = validate_base_import_candidate(&database).unwrap();
     assert!(validation.can_apply, "{:?}", validation.errors);
     let result = apply_base_import(&database).unwrap();
 
@@ -134,12 +177,12 @@ fn execution_success_is_saved_even_when_validation_fails() {
 
     execute_base_import_sql(
         &database,
-        &ExecuteBaseImportSqlRequest {
+        &ValidateBaseImportRequest {
             sql: invalid_sql.clone(),
         },
     )
     .unwrap();
-    let validation = validate_base_import(&database).unwrap();
+    let validation = validate_base_import_candidate(&database).unwrap();
 
     assert!(!validation.can_apply);
     assert!(apply_base_import(&database).is_err());
@@ -155,7 +198,7 @@ fn failed_execution_does_not_replace_saved_sql() {
 
     let error = execute_base_import_sql(
         &database,
-        &ExecuteBaseImportSqlRequest {
+        &ValidateBaseImportRequest {
             sql: "SELECT FROM".into(),
         },
     )
@@ -171,17 +214,17 @@ fn failed_execution_restores_existing_staging_and_validation() {
     let database = Database::open(directory.path().join("metadata.db")).unwrap();
     add_simple_input(&directory, &database);
     execute_simple(&database);
-    assert!(validate_base_import(&database).unwrap().can_apply);
+    assert!(validate_base_import_candidate(&database).unwrap().can_apply);
 
     execute_base_import_sql(
         &database,
-        &ExecuteBaseImportSqlRequest {
+        &ValidateBaseImportRequest {
             sql: "SELECT FROM".into(),
         },
     )
     .unwrap_err();
 
-    assert!(validate_base_import(&database).unwrap().can_apply);
+    assert!(validate_base_import_candidate(&database).unwrap().can_apply);
     assert_eq!(get_base_import_sql(&database).unwrap(), SIMPLE_IMPORT_SQL);
 }
 
@@ -242,7 +285,7 @@ fn source_removal_invalidates_staging_validation_and_candidate() {
     let database = Database::open(directory.path().join("metadata.db")).unwrap();
     add_simple_input(&directory, &database);
     execute_simple(&database);
-    assert!(validate_base_import(&database).unwrap().can_apply);
+    assert!(validate_base_import_candidate(&database).unwrap().can_apply);
     let workspace = workspace(&database).unwrap();
     assert!(workspace.join(STAGING_DATABASE).exists());
     assert!(workspace.join(CANDIDATE_DATABASE).exists());
@@ -374,12 +417,12 @@ fn built_in_sql_reads_a_named_sqlite_input() {
 
     execute_base_import_sql(
         &database,
-        &ExecuteBaseImportSqlRequest {
+        &ValidateBaseImportRequest {
             sql: get_base_import_sql(&database).unwrap(),
         },
     )
     .unwrap();
-    let validation = validate_base_import(&database).unwrap();
+    let validation = validate_base_import_candidate(&database).unwrap();
     assert!(validation.can_apply, "{:?}", validation.errors);
     assert_eq!(validation.taxa_count, 1);
 }
@@ -390,7 +433,7 @@ fn base_import_rejects_unregistered_attachments() {
     let database = Database::open(directory.path().join("metadata.db")).unwrap();
     let error = execute_base_import_sql(
         &database,
-        &ExecuteBaseImportSqlRequest {
+        &ValidateBaseImportRequest {
             sql: "ATTACH DATABASE 'other.db' AS other".into(),
         },
     )
@@ -404,7 +447,7 @@ fn external_staging_change_invalidates_apply() {
     let database = Database::open(directory.path().join("metadata.db")).unwrap();
     add_simple_input(&directory, &database);
     execute_simple(&database);
-    assert!(validate_base_import(&database).unwrap().can_apply);
+    assert!(validate_base_import_candidate(&database).unwrap().can_apply);
     let workspace = workspace(&database).unwrap();
     Connection::open(workspace.join(STAGING_DATABASE))
         .unwrap()
@@ -425,7 +468,7 @@ fn apply_returns_cleanup_warning_after_taxonomy_replacement() {
     let database = Database::open(directory.path().join("metadata.db")).unwrap();
     add_simple_input(&directory, &database);
     execute_simple(&database);
-    assert!(validate_base_import(&database).unwrap().can_apply);
+    assert!(validate_base_import_candidate(&database).unwrap().can_apply);
     let workspace = workspace(&database).unwrap();
     fs::create_dir(workspace.join(CANDIDATE_BUILD_DATABASE)).unwrap();
 

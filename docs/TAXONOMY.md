@@ -226,11 +226,12 @@ cleanup `warnings`.
 
 | Type | Fields |
 | --- | --- |
-| `ExecuteBaseImportSqlRequest` | `sql` |
+| `ValidateBaseImportRequest` | `sql` |
 | `BaseImportExecutionResult` | `statements_executed`, `messages`, `script_saved`, `warnings` |
 | `NameTypeCount` | `name_type`, `count` |
 | `BaseImportIssue` | `code`, `message`, `table`, `row_identifier` |
 | `BaseImportValidationResult` | `can_apply`, `taxa_count`, `name_counts`, `normalization_changes`, `total_warning_count`, `total_error_count`, `warnings`, `errors` |
+| `ValidateBaseImportResult` | `execution`, `validation`, `warnings`, `can_apply` |
 
 Validation returns at most 100 warning and error samples while the total count
 fields remain authoritative.
@@ -243,17 +244,17 @@ fields remain authoritative.
 | `list_base_import_inputs` | none | `Vec<PersistentSqlInput>` |
 | `add_base_import_input` | `request: &AddSqlInputRequest` | `AddSqlInputResult` |
 | `remove_base_import_input` | `request: &RemoveSqlInputRequest` | `RemoveSqlInputResult` |
-| `execute_base_import_sql` | `request: &ExecuteBaseImportSqlRequest` | `BaseImportExecutionResult` |
-| `validate_base_import` | none | `BaseImportValidationResult` |
+| `validate_base_import` | `request: &ValidateBaseImportRequest` | `ValidateBaseImportResult` |
 | `apply_base_import` | none | `TaxonomyBaseReplaceResult` |
 
 Base Import has one fixed workspace. Persistent inputs and the last successful
 SQL outlive tabs, application restarts, and successful Apply. Adding or
-removing an input, successfully executing new SQL, or recreating staging
+removing an input, validating new SQL, or recreating staging
 invalidates the prior staging-dependent candidate and validation state.
 Removal is rejected while another operation holds the workspace lock.
 
-Base Import SQL can read the isolated source and can attach only the
+Validate first executes Base Import SQL, which can read the isolated source
+and can attach only the
 backend-selected `vividarium_base.db` path with the `base` alias. It may create
 and mutate staging objects only in `base`; the execution result never creates
 a taxonomy operation or returns Custom SQL result sets. It reports only
@@ -261,13 +262,14 @@ per-statement messages or a syntax/runtime error. After a fully successful
 script commits, script persistence is attempted separately. Save failure is
 reported through `script_saved = false` and `warnings` without changing the
 execution result. A failed execution restores the prior staging and validation
-artifacts.
+artifacts and stops before candidate validation.
 
-`validate_base_import` separately checks file integrity, foreign keys, required
-schema and constraints, supported ranks and name types, canonical
-normalization, and the complete taxonomy invariants. The result reports
-whether apply is allowed, authoritative totals, and bounded warning and error
-samples. Any later source or SQL change requires validation again.
+After SQL succeeds, `validate_base_import` builds the candidate and checks file
+integrity, foreign keys, required schema and constraints, supported ranks and
+name types, canonical normalization, and the complete taxonomy invariants.
+The result reports SQL execution, whether apply is allowed, authoritative
+totals, and bounded warning and error samples. Any later source or SQL change
+requires validation again.
 
 `apply_base_import` accepts only the latest successfully validated candidate.
 Successful replacement assigns a new taxonomy identity, clears taxonomy

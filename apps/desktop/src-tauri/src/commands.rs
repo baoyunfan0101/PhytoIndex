@@ -21,12 +21,13 @@ use vividarium_core::naming::{
 use vividarium_core::operations::{OperationAuditRow, OperationPage, OperationSummary};
 use vividarium_core::photos::{PhotoFilenameFormatSettings, PhotoRenameOperationResult};
 use vividarium_core::taxonomy::{
-    AddSqlInputRequest, AddSqlInputResult, BaseImportExecutionResult, BaseImportValidationResult,
-    CustomSqlExecutionResult, CustomTaxonomySqlExportRequest, CustomTaxonomySqlRequest,
-    DeleteTaxonNameInput, ExecuteBaseImportSqlRequest, PersistentSqlInput, PromoteTaxonNameInput,
-    RemoveSqlInputRequest, RemoveSqlInputResult, SqlExportResult, TaxonChild, TaxonDetailNode,
-    TaxonInputRow, TaxonRowOutcome, TaxonSearchResult, TaxonSuggestion, TaxonUpdateInput,
-    TaxonomyBaseMetadata, TaxonomyOperationResult, TaxonomyPage, TaxonomyPreviewResult,
+    AddSqlInputRequest, AddSqlInputResult, CustomSqlExecutionResult,
+    CustomTaxonomySqlExportRequest, CustomTaxonomySqlRequest, DeleteTaxonNameInput,
+    PersistentSqlInput, PromoteTaxonNameInput, RemoveSqlInputRequest, RemoveSqlInputResult,
+    SqlExportResult, TaxonChild, TaxonDetailNode, TaxonInputRow, TaxonRowOutcome,
+    TaxonSearchResult, TaxonSuggestion, TaxonUpdateInput, TaxonomyBaseMetadata,
+    TaxonomyOperationResult, TaxonomyPage, TaxonomyPreviewResult, ValidateBaseImportRequest,
+    ValidateBaseImportResult,
 };
 use vividarium_core::{
     map::{self, MapBounds, MapPhoto, MapSettings},
@@ -915,18 +916,11 @@ pub fn remove_base_import_input(
 }
 
 #[tauri::command]
-pub fn execute_base_import_sql(
-    state: State<'_, AppState>,
-    request: ExecuteBaseImportSqlRequest,
-) -> CommandResult<BaseImportExecutionResult> {
-    taxonomy::execute_base_import_sql(&state.database, &request).map_err(error)
-}
-
-#[tauri::command]
 pub fn validate_base_import(
     state: State<'_, AppState>,
-) -> CommandResult<BaseImportValidationResult> {
-    taxonomy::validate_base_import(&state.database).map_err(error)
+    request: ValidateBaseImportRequest,
+) -> CommandResult<ValidateBaseImportResult> {
+    taxonomy::validate_base_import(&state.database, &request).map_err(error)
 }
 
 #[tauri::command]

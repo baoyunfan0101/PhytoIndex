@@ -28,10 +28,9 @@ pub use base::{
     replace_taxonomy_base_database,
 };
 pub use base_import::{
-    BaseImportExecutionResult, BaseImportIssue, BaseImportValidationResult,
-    ExecuteBaseImportSqlRequest, NameTypeCount, add_base_import_input, apply_base_import,
-    execute_base_import_sql, get_base_import_sql, list_base_import_inputs,
-    remove_base_import_input, validate_base_import,
+    BaseImportExecutionResult, BaseImportIssue, BaseImportValidationResult, NameTypeCount,
+    ValidateBaseImportRequest, ValidateBaseImportResult, add_base_import_input, apply_base_import,
+    get_base_import_sql, list_base_import_inputs, remove_base_import_input, validate_base_import,
 };
 pub use formatted::{
     TaxonChange, TaxonChangeKind, TaxonInputRow, TaxonRank, TaxonRowOutcome, TaxonRowStatus,

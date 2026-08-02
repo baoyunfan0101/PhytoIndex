@@ -110,7 +110,6 @@ pub fn run() {
             commands::list_base_import_inputs,
             commands::add_base_import_input,
             commands::remove_base_import_input,
-            commands::execute_base_import_sql,
             commands::validate_base_import,
             commands::apply_base_import,
             commands::get_mapping_metadata,

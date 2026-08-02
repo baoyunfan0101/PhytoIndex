@@ -37,7 +37,7 @@ const INITIAL_BASE_IMPORT_SQL: &str = include_str!("templates/initial_base_impor
 static WORKSPACE_LOCKS: OnceLock<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> = OnceLock::new();
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ExecuteBaseImportSqlRequest {
+pub struct ValidateBaseImportRequest {
     pub sql: String,
 }
 
@@ -73,6 +73,14 @@ pub struct BaseImportValidationResult {
     pub total_error_count: u64,
     pub warnings: Vec<BaseImportIssue>,
     pub errors: Vec<BaseImportIssue>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ValidateBaseImportResult {
+    pub execution: BaseImportExecutionResult,
+    pub validation: BaseImportValidationResult,
+    pub warnings: Vec<String>,
+    pub can_apply: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -129,9 +137,27 @@ pub fn remove_base_import_input(
     }
 }
 
-pub fn execute_base_import_sql(
+pub fn validate_base_import(
     database: &Database,
-    request: &ExecuteBaseImportSqlRequest,
+    request: &ValidateBaseImportRequest,
+) -> CoreResult<ValidateBaseImportResult> {
+    let workspace_mutex = workspace_mutex(database)?;
+    let _guard = lock_workspace(&workspace_mutex)?;
+    let workspace = workspace(database)?;
+    let execution = execute_base_import_sql_in_workspace(database, request, &workspace)?;
+    let validation = validate_base_import_candidate_in_workspace(&workspace)?;
+    Ok(ValidateBaseImportResult {
+        warnings: execution.warnings.clone(),
+        can_apply: validation.can_apply,
+        execution,
+        validation,
+    })
+}
+
+fn execute_base_import_sql_in_workspace(
+    database: &Database,
+    request: &ValidateBaseImportRequest,
+    workspace: &Path,
 ) -> CoreResult<BaseImportExecutionResult> {
     let sql = request.sql.trim();
     if sql.is_empty() {
@@ -139,10 +165,7 @@ pub fn execute_base_import_sql(
             "base import sql is required".into(),
         ));
     }
-    let workspace_mutex = workspace_mutex(database)?;
-    let _guard = lock_workspace(&workspace_mutex)?;
-    let workspace = workspace(database)?;
-    let invalidation = ArtifactInvalidation::stage(&workspace)?;
+    let invalidation = ArtifactInvalidation::stage(workspace)?;
     let staging = workspace.join(STAGING_DATABASE);
     let staging_path = staging.to_string_lossy().into_owned();
     let sql = replace_staging_literal(sql, &staging_path);
@@ -189,10 +212,9 @@ pub fn execute_base_import_sql(
     }
 }
 
-pub fn validate_base_import(database: &Database) -> CoreResult<BaseImportValidationResult> {
-    let workspace_mutex = workspace_mutex(database)?;
-    let _guard = lock_workspace(&workspace_mutex)?;
-    let workspace = workspace(database)?;
+fn validate_base_import_candidate_in_workspace(
+    workspace: &Path,
+) -> CoreResult<BaseImportValidationResult> {
     let staging = workspace.join(STAGING_DATABASE);
     let mut validation = BaseImportValidationResult {
         can_apply: false,
@@ -323,6 +345,25 @@ pub fn validate_base_import(database: &Database) -> CoreResult<BaseImportValidat
         )?;
     }
     Ok(validation)
+}
+
+#[cfg(test)]
+fn execute_base_import_sql(
+    database: &Database,
+    request: &ValidateBaseImportRequest,
+) -> CoreResult<BaseImportExecutionResult> {
+    let workspace_mutex = workspace_mutex(database)?;
+    let _guard = lock_workspace(&workspace_mutex)?;
+    let workspace = workspace(database)?;
+    execute_base_import_sql_in_workspace(database, request, &workspace)
+}
+
+#[cfg(test)]
+fn validate_base_import_candidate(database: &Database) -> CoreResult<BaseImportValidationResult> {
+    let workspace_mutex = workspace_mutex(database)?;
+    let _guard = lock_workspace(&workspace_mutex)?;
+    let workspace = workspace(database)?;
+    validate_base_import_candidate_in_workspace(&workspace)
 }
 
 pub fn apply_base_import(database: &Database) -> CoreResult<TaxonomyBaseReplaceResult> {
