@@ -26,7 +26,7 @@ pub struct GeneralSettings {
 impl Default for GeneralSettings {
     fn default() -> Self {
         Self {
-            theme: ThemePreference::System,
+            theme: ThemePreference::Dark,
             restore_tabs: true,
             recent_searches_limit: 10,
         }
@@ -204,7 +204,11 @@ mod tests {
         let (_directory, database) = test_database();
         assert_eq!(
             get_general_settings(&database).unwrap(),
-            GeneralSettings::default()
+            GeneralSettings {
+                theme: ThemePreference::Dark,
+                restore_tabs: true,
+                recent_searches_limit: 10,
+            }
         );
     }
 

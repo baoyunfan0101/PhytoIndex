@@ -25,7 +25,12 @@ import {
   type GeneralSettings as GeneralSettingsValue,
   type WorkspaceSettingsSection,
 } from "../../api/general";
-import { getAppVersion } from "../../api/updater";
+import {
+  checkAppUpdate,
+  getAppVersion,
+  installAppUpdate,
+  type AppUpdateInfo,
+} from "../../api/updater";
 import { errorMessage } from "../../api/common";
 import {
   getDatabaseLocations,
@@ -143,7 +148,6 @@ export function SettingsView({
             ))}
           </div>
         )}
-        <div className="settings-nav-spacer" />
         <button className={section === "About" ? "active" : ""} type="button" onClick={() => onSectionChange("About")}>
           <Info size={14} />About
         </button>
@@ -195,7 +199,7 @@ function GeneralSettings({
       const saved = await updateGeneralSettings(next);
       if (sequence === saveSequence.current) {
         onChange(saved);
-        setMessage("Saved");
+        setMessage("");
       }
     } catch (nextError) {
       if (sequence === saveSequence.current) {
@@ -263,7 +267,7 @@ function GeneralSettings({
         </label>
       </section>
       {(saving || message) && (
-        <div className={saving || message === "Saved" ? "editor-message" : "inline-error"} role={saving || message === "Saved" ? "status" : "alert"}>
+        <div className={saving ? "editor-message" : "inline-error"} role={saving ? "status" : "alert"}>
           {saving ? "Saving..." : message}
         </div>
       )}
@@ -443,25 +447,6 @@ function PhotoLibrariesSettings({ onChanged }: { onChanged?: (resetPhotoTabs: bo
   );
 }
 
-function AboutSettings() {
-  const [version, setVersion] = useState("3.0.0");
-  useEffect(() => { void getAppVersion().then(setVersion); }, []);
-  return (
-    <div className="settings-section">
-      <SectionHeader title="About" detail="View application, version, author, and project information." />
-      <div className="about-settings">
-        <strong>Vividarium</strong>
-        <Setting label="Version" value={version} />
-        <Setting label="Author" value="Yunfan Bao" />
-        <div className="setting-row">
-          <span>GitHub</span>
-          <a href="https://github.com/baoyunfan0101/Vividarium" target="_blank" rel="noreferrer">github.com/baoyunfan0101/Vividarium</a>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function StoragePath({
   label,
   value,
@@ -472,6 +457,72 @@ function StoragePath({
   action?: ReactNode;
 }) {
   return <div className="storage-path"><span>{label}</span><code title={value}>{value}</code>{action}</div>;
+}
+
+function AboutSettings() {
+  const [version, setVersion] = useState("3.0.0");
+  const [availableUpdate, setAvailableUpdate] = useState<AppUpdateInfo | null>(null);
+  const [updateBusy, setUpdateBusy] = useState(false);
+  const [updateMessage, setUpdateMessage] = useState("Updates are delivered from GitHub Releases.");
+  const [updateError, setUpdateError] = useState("");
+
+  useEffect(() => { void getAppVersion().then(setVersion); }, []);
+
+  async function checkUpdate() {
+    setUpdateBusy(true);
+    setUpdateError("");
+    setUpdateMessage("Checking GitHub Releases...");
+    try {
+      const update = await checkAppUpdate();
+      setAvailableUpdate(update);
+      setUpdateMessage(update ? `Version ${update.version} is available.` : "Vividarium is up to date.");
+    } catch (nextError) {
+      setUpdateError(errorMessage(nextError));
+    } finally {
+      setUpdateBusy(false);
+    }
+  }
+
+  async function installUpdate() {
+    setUpdateBusy(true);
+    setUpdateError("");
+    setUpdateMessage("Preparing update...");
+    try {
+      await installAppUpdate((event) => {
+        if (event.event === "started") setUpdateMessage("Downloading update...");
+        if (event.event === "progress") setUpdateMessage(`Downloaded ${event.data.downloaded} bytes.`);
+        if (event.event === "finished") setUpdateMessage("Installing and restarting...");
+      });
+    } catch (nextError) {
+      setUpdateError(errorMessage(nextError));
+      setUpdateBusy(false);
+    }
+  }
+
+  return (
+    <div className="settings-section">
+      <SectionHeader title="About" detail="View application, version, update, author, and project information." />
+      <div className="about-settings">
+        <strong>Vividarium</strong>
+        <Setting label="Version" value={version} />
+        <Setting label="Database schema" value="2" />
+        <Setting label="Author" value="Yunfan Bao" />
+        <div className="setting-row">
+          <span>GitHub</span>
+          <a href="https://github.com/baoyunfan0101/Vividarium" target="_blank" rel="noreferrer">github.com/baoyunfan0101/Vividarium</a>
+        </div>
+        <div className="about-update">
+          <div><strong>Software update</strong><span>{updateMessage}</span></div>
+          {availableUpdate ? (
+            <Button variant="primary" disabled={updateBusy} onClick={() => void installUpdate()}>Install and restart</Button>
+          ) : (
+            <Button disabled={updateBusy} onClick={() => void checkUpdate()}>Check for updates</Button>
+          )}
+        </div>
+        {updateError && <div className="inline-error" role="alert">{updateError}</div>}
+      </div>
+    </div>
+  );
 }
 
 function NamingSettings() {

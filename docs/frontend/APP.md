@@ -19,9 +19,13 @@ Returns: the React application tree containing `DesktopShell`.
 
 `App` is the composition entry point and contains no page or domain logic.
 
-### `DesktopShell()`
+### `DesktopShell(props)`
 
-Parameters: none.
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `generalSettings` | `GeneralSettings` | Current application-wide settings. |
+| `onGeneralSettingsChange` | `(settings) => void` | Applies an updated settings value. |
+| `generalSettingsLoadError` | optional string | Makes startup load errors visible in General settings. |
 
 Returns: the complete desktop workspace.
 

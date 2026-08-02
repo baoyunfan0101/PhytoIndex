@@ -50,7 +50,7 @@ export type WorkspaceState = {
 };
 
 export const defaultGeneralSettings = (): GeneralSettings => ({
-  theme: "system",
+  theme: "dark",
   restore_tabs: true,
   recent_searches_limit: 10,
 });

@@ -7,7 +7,11 @@ import {
 } from "../src/features/settings/generalSettings.ts";
 
 test("normalizes missing and invalid general settings to defaults", () => {
-  assert.deepEqual(normalizeGeneralSettings({}), defaultGeneralSettings());
+  assert.deepEqual(normalizeGeneralSettings({}), {
+    theme: "dark",
+    restore_tabs: true,
+    recent_searches_limit: 10,
+  });
   assert.deepEqual(normalizeGeneralSettings({
     theme: "invalid" as never,
     restore_tabs: "yes" as never,

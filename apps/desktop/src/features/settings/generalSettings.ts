@@ -2,7 +2,7 @@ import type { GeneralSettings, ThemePreference } from "../../api/generalModel";
 
 export function normalizeGeneralSettings(value: Partial<GeneralSettings>): GeneralSettings {
   const fallback: GeneralSettings = {
-    theme: "system",
+    theme: "dark",
     restore_tabs: true,
     recent_searches_limit: 10,
   };

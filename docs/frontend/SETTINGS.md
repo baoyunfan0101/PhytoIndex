@@ -15,6 +15,9 @@ through one settings workbench.
 | `onSectionChange` | `(section) => void` | Updates the settings page stored by the owning tab. |
 | `onWorkspaceChanged` | optional callback | Refreshes application state after Photo Library changes. |
 | `onBaseReplaced` | optional callback | Refreshes taxonomy and mapping state after replacement. |
+| `generalSettings` | `GeneralSettings` | Current application-wide settings. |
+| `onGeneralSettingsChange` | `(settings) => void` | Applies a committed General settings value to the application. |
+| `generalSettingsLoadError` | optional string | Reports a load failure while the default settings remain usable. |
 
 Returns the complete Settings workbench.
 
@@ -25,8 +28,9 @@ Databases, Naming, Map, Filename Parser, Synonym Splitter, and About.
 
 ### General
 
-Reserved for application-wide settings. It has no controls until a global
-setting is available.
+Reads and updates the application theme, workspace-tab restoration preference,
+and recent-search limit. Changes are persisted immediately; there is no
+page-level Save action. Recent-search contents remain in browser-local storage.
 
 ### Storage
 
@@ -71,7 +75,9 @@ unchanged. Saving persists the source and tests atomically.
 
 ### About
 
-Shows the product name, application version, author, and project GitHub link.
+Shows the product name, application version, database schema, author, and
+project GitHub link. It checks GitHub Releases for application updates and
+installs an available update through the desktop updater.
 
 ## Metadata notification
 
