@@ -103,6 +103,41 @@
 .syntax-function { color: #dcdcaa; }
 .syntax-identifier { color: #9cdcfe; }
 .editor-message { padding: 8px 12px; color: var(--muted); }
+.resizable-panels {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.resizable-panel { min-width: 0; min-height: 0; overflow: hidden; }
+.resizable-separator {
+  position: relative;
+  z-index: 3;
+  min-width: 0;
+  min-height: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  touch-action: none;
+}
+.resizable-separator::after {
+  position: absolute;
+  content: "";
+  background: var(--line);
+  transition: background-color 100ms ease, box-shadow 100ms ease;
+}
+.resizable-panels-horizontal > .resizable-separator { cursor: col-resize; }
+.resizable-panels-horizontal > .resizable-separator::after { inset: 0 3px; }
+.resizable-panels-vertical > .resizable-separator { cursor: row-resize; }
+.resizable-panels-vertical > .resizable-separator::after { inset: 3px 0; }
+.resizable-separator:hover::after,
+.resizable-separator:focus-visible::after,
+.resizable-panels.dragging > .resizable-separator::after {
+  background: var(--accent-bright);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-bright) 28%, transparent);
+}
 .modal-backdrop { position: fixed; z-index: 200; inset: 0; display: grid; place-items: center; background: #0008; }
 .modal-card { width: min(var(--modal-width), calc(100vw - 40px)); overflow: hidden; border: 1px solid #565656; border-radius: 6px; background: #252525; box-shadow: 0 16px 50px #000c; }
 .modal-card > header { display: flex; height: 42px; align-items: center; justify-content: space-between; padding: 0 10px 0 14px; border-bottom: 1px solid var(--line); }

@@ -14,6 +14,7 @@ import type { PersistentSqlInput } from "../../api/customSql";
 import { errorMessage } from "../../api/common";
 import { waitForOperation } from "../../api/tasks";
 import { CodeEditor } from "../../shared/CodeEditor";
+import { ResizablePanels } from "../../shared/ResizablePanels";
 import { Button, Modal, SectionHeader, VirtualList } from "../../shared/ui";
 import { SqlInputList } from "./SqlInputList";
 import { emitTaxonomyMutation } from "./taxonomyMutations";
@@ -125,6 +126,55 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
     }
   }
 
+  const primary = (
+    <div className="sql-workbench-primary">
+      <ResizablePanels
+        className="base-import-workbench"
+        initialSize={250}
+        minFirst={180}
+        minSecond={320}
+        separatorLabel="Resize Input sources"
+        first={<SqlInputList inputs={inputs} busy={Boolean(busy)} onAdd={addInput} onRemove={removeInput} />}
+        second={(<div className="base-import-editor">
+          <CodeEditor language="sql" ariaLabel="Base import SQL" value={sql} onChange={(value) => {
+            setSql(value);
+            setValidation(null);
+          }} />
+        </div>)}
+      />
+      {error
+        ? <div className="inline-error base-import-status" role="alert">{error}</div>
+        : (message || busy) && <div className="editor-message base-import-status">{busy || message}</div>}
+    </div>
+  );
+
+  const output = validation ? (
+    <div className="base-validation">
+      <div className="base-metadata-grid">
+        <Metric label="Candidate taxa" value={String(validation.taxa_count)} />
+        <Metric label="Normalization changes" value={String(validation.normalization_changes)} />
+        <Metric label="Warnings" value={String(validation.total_warning_count)} />
+        <Metric label="Errors" value={String(validation.total_error_count)} />
+      </div>
+      <div className="validation-counts">
+        {validation.name_counts.map((item) => <span key={item.name_type}>{item.name_type}: {item.count}</span>)}
+      </div>
+      <VirtualList
+        className="validation-issues"
+        items={[...validation.errors, ...validation.warnings]}
+        rowHeight={58}
+        itemKey={(item, index) => `${item.code}:${item.row_identifier}:${index}`}
+        renderItem={(item) => (
+          <div className="validation-issue">
+            <strong>{item.code}</strong>
+            <span>{item.message}</span>
+            <code>{[item.table, item.row_identifier].filter(Boolean).join(" / ")}</code>
+          </div>
+        )}
+      />
+    </div>
+  ) : null;
+
   return (
     <div className="base-import-settings">
       <SectionHeader
@@ -141,44 +191,18 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
           </>
         )}
       />
-      <div className="base-import-workbench">
-        <SqlInputList inputs={inputs} busy={Boolean(busy)} onAdd={addInput} onRemove={removeInput} />
-        <div className="base-import-editor">
-          <CodeEditor language="sql" ariaLabel="Base import SQL" value={sql} onChange={(value) => {
-            setSql(value);
-            setValidation(null);
-          }} />
-        </div>
-      </div>
-      {error
-        ? <div className="inline-error base-import-status" role="alert">{error}</div>
-        : (message || busy) && <div className="editor-message base-import-status">{busy || message}</div>}
-      {validation && (
-        <div className="base-validation">
-          <div className="base-metadata-grid">
-            <Metric label="Candidate taxa" value={String(validation.taxa_count)} />
-            <Metric label="Normalization changes" value={String(validation.normalization_changes)} />
-            <Metric label="Warnings" value={String(validation.total_warning_count)} />
-            <Metric label="Errors" value={String(validation.total_error_count)} />
-          </div>
-          <div className="validation-counts">
-            {validation.name_counts.map((item) => <span key={item.name_type}>{item.name_type}: {item.count}</span>)}
-          </div>
-          <VirtualList
-            className="validation-issues"
-            items={[...validation.errors, ...validation.warnings]}
-            rowHeight={58}
-            itemKey={(item, index) => `${item.code}:${item.row_identifier}:${index}`}
-            renderItem={(item) => (
-              <div className="validation-issue">
-                <strong>{item.code}</strong>
-                <span>{item.message}</span>
-                <code>{[item.table, item.row_identifier].filter(Boolean).join(" / ")}</code>
-              </div>
-            )}
-          />
-        </div>
-      )}
+      {output ? (
+        <ResizablePanels
+          className="sql-output-split"
+          direction="vertical"
+          initialRatio={0.55}
+          minFirst={250}
+          minSecond={150}
+          separatorLabel="Resize validation output"
+          first={primary}
+          second={output}
+        />
+      ) : primary}
       {confirming && (
         <Modal
           title="Apply base import"

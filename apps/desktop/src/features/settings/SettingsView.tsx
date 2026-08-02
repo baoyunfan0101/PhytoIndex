@@ -63,6 +63,7 @@ import {
 import { selectDatabaseDestination, selectPhotoDirectory, selectSqliteDatabase } from "../../api/dialogs";
 import { Button, IconButton, SectionHeader } from "../../shared/ui";
 import { CodeEditor } from "../../shared/CodeEditor";
+import { ResizablePanels } from "../../shared/ResizablePanels";
 import { BaseImportSettings } from "../taxonomy/BaseImportSettings";
 import { emitMetadataChange } from "../../shared/metadataChanges";
 import {
@@ -115,8 +116,13 @@ export function SettingsView({
   }, [hookSection]);
 
   return (
-    <div className="settings-workbench">
-      <aside className="settings-nav">
+    <ResizablePanels
+      className="settings-workbench"
+      initialSize={180}
+      minFirst={150}
+      minSecond={420}
+      separatorLabel="Resize Settings navigation"
+      first={(<aside className="settings-nav">
         {settingsSections.map(({ id, icon: Icon }) => (
           <button className={section === id ? "active" : ""} type="button" key={id} onClick={() => onSectionChange(id)}>
             <Icon size={14} />{id}
@@ -137,8 +143,8 @@ export function SettingsView({
         <button className={section === "About" ? "active" : ""} type="button" onClick={() => onSectionChange("About")}>
           <Info size={14} />About
         </button>
-      </aside>
-      <main className="settings-content">
+      </aside>)}
+      second={(<main className="settings-content">
         {section === "General" && <GeneralSettings />}
         {section === "Storage" && <StorageSettings />}
         {section === "Photo Libraries" && <PhotoLibrariesSettings onChanged={onWorkspaceChanged} />}
@@ -147,8 +153,8 @@ export function SettingsView({
         {section === "Map" && <MapSettingsPanel />}
         {hookSection && <HooksSettings kind={section === "Filename Parser" ? "photo_filename" : "synonym_authority"} />}
         {section === "About" && <AboutSettings />}
-      </main>
-    </div>
+      </main>)}
+    />
   );
 }
 
@@ -561,14 +567,20 @@ function HooksSettings({ kind }: { kind: NamingHookKind }) {
           <Button variant="primary" disabled={Boolean(busy) || testedSnapshot[kind] !== currentSnapshot} onClick={() => void save()}><Save size={13} />Save</Button>
         </>
       )} />
-      <div className="hook-columns">
-        <CodeEditor
-          language="rhai"
-          ariaLabel={`${kind} Rhai source`}
-          value={scripts[kind]}
-          onChange={(value) => invalidate({ ...scripts, [kind]: value })}
-        />
-        <div className="hook-tests">
+      <ResizablePanels
+        className="hook-columns"
+        initialRatio={{ horizontal: 0.55, vertical: 0.52 }}
+        minFirst={{ horizontal: 320, vertical: 180 }}
+        minSecond={{ horizontal: 300, vertical: 180 }}
+        responsiveBreakpoint={800}
+        separatorLabel="Resize Hook editor and Project tests"
+        first={(<CodeEditor
+            language="rhai"
+            ariaLabel={`${kind} Rhai source`}
+            value={scripts[kind]}
+            onChange={(value) => invalidate({ ...scripts, [kind]: value })}
+          />)}
+        second={(<div className="hook-tests">
           <header><strong>Project tests</strong><Button variant="ghost" size="small" onClick={() => invalidate(scripts, { ...cases, [kind]: [...cases[kind], { input: "", expected: { kind, output: {} } }] })}>+ Add</Button></header>
           <div className="hook-test-list">
             {cases[kind].map((item, index) => (
@@ -597,8 +609,8 @@ function HooksSettings({ kind }: { kind: NamingHookKind }) {
               </div>
             ))}
           </div>
-        </div>
-      </div>
+        </div>)}
+      />
       <div className="editor-message">{busy || (report ? `${report.passed} passed, ${report.failed} failed. ${message}` : message)}</div>
     </div>
   );

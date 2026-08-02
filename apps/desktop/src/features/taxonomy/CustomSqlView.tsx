@@ -15,6 +15,7 @@ import {
 import { errorMessage } from "../../api/common";
 import { selectCsvDestination } from "../../api/dialogs";
 import { CodeEditor } from "../../shared/CodeEditor";
+import { ResizablePanels } from "../../shared/ResizablePanels";
 import { Button, EmptyState, SectionHeader, VirtualList } from "../../shared/ui";
 import { SqlInputList } from "./SqlInputList";
 import { canExportFullQuery } from "./sqlResults";
@@ -106,6 +107,51 @@ export function CustomSqlView({
     }
   }
 
+  const workbench = (
+    <ResizablePanels
+      className="custom-sql-workbench"
+      initialSize={250}
+      minFirst={180}
+      minSecond={320}
+      separatorLabel="Resize Input sources"
+      first={<SqlInputList inputs={inputs} busy={Boolean(busy)} onAdd={addInput} onRemove={removeInput} />}
+      second={(<div className="custom-sql-editor">
+        <CodeEditor language="sql" ariaLabel="Custom taxonomy SQL" value={sql} onChange={setSql} />
+      </div>)}
+    />
+  );
+
+  const primary = (
+    <div className="sql-workbench-primary">
+      {workbench}
+      {(error || busy) && <div className={error ? "inline-error" : "editor-message"} role={error ? "alert" : undefined}>{error || busy}</div>}
+    </div>
+  );
+
+  const output = result ? (
+    <div className="sql-results">
+      <div className="sql-result-summary">
+        <span>{result.changeset_size} bytes changed</span>
+        <span>{result.operation_id === null ? "No operation created" : `Operation ${result.operation_id}`}</span>
+        <span>{result.script_saved ? "Script saved" : "Script not saved"}</span>
+        {canExportFullQuery(result) && (
+          <Button disabled={Boolean(busy)} onClick={() => void exportQuery()}>
+            <Download size={13} />Export full query
+          </Button>
+        )}
+      </div>
+      {result.messages.map((message) => (
+        <p className="sql-message" key={`${message.statement_index}:${message.message}`}>
+          Statement {message.statement_index}: {message.message}
+          {message.affected_rows !== null ? ` (${message.affected_rows} rows)` : ""}
+        </p>
+      ))}
+      {result.result_sets.length === 0 ? (
+        <EmptyState title="No result sets" detail="Mutation messages are shown above." />
+      ) : result.result_sets.map((set) => <SqlResultTable key={set.statement_index} result={set} />)}
+    </div>
+  ) : null;
+
   return (
     <div className="custom-sql-view">
       <SectionHeader
@@ -117,36 +163,18 @@ export function CustomSqlView({
           </Button>
         )}
       />
-      <div className="custom-sql-workbench">
-        <SqlInputList inputs={inputs} busy={Boolean(busy)} onAdd={addInput} onRemove={removeInput} />
-        <div className="custom-sql-editor">
-          <CodeEditor language="sql" ariaLabel="Custom taxonomy SQL" value={sql} onChange={setSql} />
-        </div>
-      </div>
-      {(error || busy) && <div className={error ? "inline-error" : "editor-message"} role={error ? "alert" : undefined}>{error || busy}</div>}
-      {result && (
-        <div className="sql-results">
-          <div className="sql-result-summary">
-            <span>{result.changeset_size} bytes changed</span>
-            <span>{result.operation_id === null ? "No operation created" : `Operation ${result.operation_id}`}</span>
-            <span>{result.script_saved ? "Script saved" : "Script not saved"}</span>
-            {canExportFullQuery(result) && (
-              <Button disabled={Boolean(busy)} onClick={() => void exportQuery()}>
-                <Download size={13} />Export full query
-              </Button>
-            )}
-          </div>
-          {result.messages.map((message) => (
-            <p className="sql-message" key={`${message.statement_index}:${message.message}`}>
-              Statement {message.statement_index}: {message.message}
-              {message.affected_rows !== null ? ` (${message.affected_rows} rows)` : ""}
-            </p>
-          ))}
-          {result.result_sets.length === 0 ? (
-            <EmptyState title="No result sets" detail="Mutation messages are shown above." />
-          ) : result.result_sets.map((set) => <SqlResultTable key={set.statement_index} result={set} />)}
-        </div>
-      )}
+      {output ? (
+        <ResizablePanels
+          className="sql-output-split"
+          direction="vertical"
+          initialRatio={0.55}
+          minFirst={230}
+          minSecond={130}
+          separatorLabel="Resize SQL output"
+          first={primary}
+          second={output}
+        />
+      ) : primary}
     </div>
   );
 }
