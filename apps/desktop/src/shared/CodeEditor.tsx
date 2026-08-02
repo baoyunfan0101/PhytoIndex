@@ -166,8 +166,8 @@ const vividariumEditorTheme = EditorView.theme({
   "&": {
     width: "100%",
     height: "100%",
-    color: "#cfcfcf",
-    backgroundColor: "#171717",
+    color: "var(--text)",
+    backgroundColor: "var(--code)",
   },
   "&.cm-focused": { outline: "none" },
   ".cm-scroller": {
@@ -180,10 +180,10 @@ const vividariumEditorTheme = EditorView.theme({
   ".cm-content": {
     minWidth: "max-content",
     padding: "16px",
-    caretColor: "#fff",
+    caretColor: "var(--text)",
   },
   ".cm-line": { padding: "0" },
-  ".cm-cursor, .cm-dropCursor": { borderLeftColor: "#fff" },
+  ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--text)" },
   ".cm-selectionBackground, &.cm-focused .cm-selectionBackground, ::selection": {
     backgroundColor: "#477057aa !important",
   },

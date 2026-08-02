@@ -26,6 +26,10 @@ export function removeRecentSearch(searches: string[], query: string): string[] 
   return searches.filter((item) => normalizeSearchQuery(item).toLocaleLowerCase() !== key);
 }
 
+export function trimRecentSearches(searches: string[], limit: number): string[] {
+  return searches.slice(0, limit);
+}
+
 export function loadRecentSearches(
   storage: RecentSearchStorage | null = browserStorage(),
   limit = RECENT_SEARCHES_LIMIT,

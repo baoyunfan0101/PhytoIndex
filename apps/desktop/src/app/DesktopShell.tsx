@@ -18,6 +18,11 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  getWorkspaceState,
+  saveWorkspaceState,
+  type GeneralSettings,
+} from "../api/general";
+import {
   getPhoto,
   type Photo,
 } from "../api/photos";
@@ -46,6 +51,7 @@ import {
   normalizeSearchQuery,
   removeRecentSearch,
   saveRecentSearches,
+  trimRecentSearches,
 } from "../features/photos/search/recentSearchStorage";
 import type { PhotoOpenHandlers } from "../features/photos/PhotoInteraction";
 import { emitPhotoMutation, usePhotoMutation } from "../features/photos/photoMutations";
@@ -71,33 +77,14 @@ import {
 import { closeAllTabsState, closeTabState } from "./tabState";
 import { nativeMenuActions, useNativeMenu } from "./nativeMenu";
 import { NativeAboutOverlay } from "./NativeAboutOverlay";
+import { getTaxonDetailNode } from "../api/taxonomy";
+import {
+  restoreWorkspaceState,
+  serializeWorkspaceState,
+  type AppTab,
+} from "./workspaceState";
 
-type TabKind =
-  | "folders"
-  | "photo-taxonomy"
-  | "map"
-  | "photo-history"
-  | "mapping"
-  | "taxonomy-search"
-  | "formatted-update"
-  | "custom-sql"
-  | "taxonomy-history"
-  | "settings"
-  | "search-photos"
-  | "taxon-photos"
-  | "photo-detail"
-  | "mapping-editor"
-  | "taxon-detail";
-
-type AppTab = {
-  id: string;
-  kind: TabKind;
-  title: string;
-  query?: string;
-  taxonId?: number;
-  photo?: Photo;
-  settingsSection?: SettingsSection;
-};
+type TabKind = AppTab["kind"];
 
 const initialTab: AppTab = { id: "folders", kind: "folders", title: "Folders" };
 const keepAliveTabKinds = new Set<TabKind>([
@@ -133,20 +120,31 @@ const photoTabKinds = new Set<TabKind>([
   "mapping-editor",
 ]);
 
-export function DesktopShell() {
-  const [tabs, setTabs] = useState<AppTab[]>([initialTab]);
-  const [activeId, setActiveId] = useState<string | null>(initialTab.id);
+export function DesktopShell({
+  generalSettings,
+  generalSettingsLoadError,
+  onGeneralSettingsChange,
+}: {
+  generalSettings: GeneralSettings;
+  generalSettingsLoadError?: string;
+  onGeneralSettingsChange: (settings: GeneralSettings) => void;
+}) {
+  const [tabs, setTabs] = useState<AppTab[]>([]);
+  const [activeId, setActiveId] = useState<string | null>(null);
   const [libraries, setLibraries] = useState<PhotoLibraryWorkspace[]>([]);
+  const [workspaceReady, setWorkspaceReady] = useState(false);
   const [operationsOpen, setOperationsOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
-  const [recentSearches, setRecentSearches] = useState(loadRecentSearches);
+  const [recentSearches, setRecentSearches] = useState(() => (
+    loadRecentSearches(undefined, generalSettings.recent_searches_limit)
+  ));
   const [status, setStatus] = useState("Ready");
   const emptySearchInputRef = useRef<HTMLInputElement>(null);
   const operationsMenuRef = useRef<HTMLDivElement>(null);
   const viewStateStores = useRef(new globalThis.Map<string, ViewStateStore>());
   const [navigationHistory, setNavigationHistory] = useState(
-    createNavigationHistory(initialTab.id),
+    createNavigationHistory(null),
   );
   const operations = useOperationObserver();
   const active = activeId === null ? null : tabs.find((tab) => tab.id === activeId) ?? null;
@@ -186,7 +184,66 @@ export function DesktopShell() {
     }
   });
 
-  useEffect(() => { void reloadLibraries(); }, []);
+  useEffect(() => {
+    let cancelled = false;
+    async function bootstrap() {
+      let nextLibraries: PhotoLibraryWorkspace[] = [];
+      try {
+        nextLibraries = await listPhotoLibraries();
+      } catch (nextError) {
+        if (!cancelled) setStatus(String(nextError));
+      }
+      if (cancelled) return;
+      setLibraries(nextLibraries);
+      if (generalSettings.restore_tabs) {
+        try {
+          const activeLibrary = nextLibraries.find((library) => library.active) ?? null;
+          const restored = await restoreWorkspaceState(await getWorkspaceState(), {
+            getPhoto,
+            photoWorkspaceAvailable: Boolean(
+              activeLibrary?.root_available && activeLibrary.database_available,
+            ),
+            taxonExists: async (taxonId) => {
+              try {
+                await getTaxonDetailNode(taxonId);
+                return true;
+              } catch {
+                return false;
+              }
+            },
+          });
+          if (cancelled) return;
+          setTabs(restored.tabs);
+          setActiveId(restored.activeId);
+          setNavigationHistory(createNavigationHistory(restored.activeId));
+        } catch (nextError) {
+          if (!cancelled) setStatus(`Workspace state could not be restored: ${String(nextError)}`);
+        }
+      }
+      if (!cancelled) setWorkspaceReady(true);
+    }
+    void bootstrap();
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    const next = trimRecentSearches(
+      recentSearches,
+      generalSettings.recent_searches_limit,
+    );
+    if (next.length === recentSearches.length) return;
+    setRecentSearches(next);
+    saveRecentSearches(next);
+  }, [generalSettings.recent_searches_limit, recentSearches]);
+
+  useEffect(() => {
+    if (!workspaceReady || !generalSettings.restore_tabs) return;
+    const timer = window.setTimeout(() => {
+      void saveWorkspaceState(serializeWorkspaceState(tabs, activeId))
+        .catch((nextError) => setStatus(`Workspace state could not be saved: ${String(nextError)}`));
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [activeId, generalSettings.restore_tabs, tabs, workspaceReady]);
 
   useEffect(() => {
     setNavigationHistory((current) => pruneNavigationHistory(
@@ -274,7 +331,11 @@ export function DesktopShell() {
     if (!workspaceAvailable) throw new Error("Photo Library unavailable");
     openTab({ id: `search:${value.toLocaleLowerCase()}`, kind: "search-photos", title: `Search: ${value}`, query: value });
     setRecentSearches((current) => {
-      const next = addRecentSearch(current, value);
+      const next = addRecentSearch(
+        current,
+        value,
+        generalSettings.recent_searches_limit,
+      );
       saveRecentSearches(next);
       return next;
     });
@@ -461,7 +522,7 @@ export function DesktopShell() {
           </div>
         </header>
         <main className="tab-content">
-          {tabs.length === 0 && (
+          {workspaceReady && tabs.length === 0 && (
             <EmptyWorkspace
               inputRef={emptySearchInputRef}
               recentSearches={recentSearches}
@@ -503,6 +564,9 @@ export function DesktopShell() {
                       if (resetPhotoTabs) resetPhotoWorkspace("Photo Library workspace changed");
                     }}
                     onBaseReplaced={resetTaxonomyResources}
+                    generalSettings={generalSettings}
+                    generalSettingsLoadError={generalSettingsLoadError}
+                    onGeneralSettingsChange={onGeneralSettingsChange}
                   />
                 </ViewStateProvider>
               </section>
@@ -537,6 +601,9 @@ function TabBody({
   onCreateLibrary,
   onWorkspaceChanged,
   onBaseReplaced,
+  generalSettings,
+  generalSettingsLoadError,
+  onGeneralSettingsChange,
 }: {
   active: boolean;
   tab: AppTab;
@@ -551,6 +618,9 @@ function TabBody({
   onCreateLibrary: () => void;
   onWorkspaceChanged: (resetPhotoTabs: boolean) => void;
   onBaseReplaced: () => void;
+  generalSettings: GeneralSettings;
+  generalSettingsLoadError?: string;
+  onGeneralSettingsChange: (settings: GeneralSettings) => void;
 }) {
   if (photoTabKinds.has(tab.kind) && !workspaceAvailable) {
     return (
@@ -579,7 +649,7 @@ function TabBody({
   if (tab.kind === "formatted-update") return <FormattedUpdateView mutationDisabled={taxonomyMutationLocked} />;
   if (tab.kind === "custom-sql") return <CustomSqlView onStatus={onStatus} mutationDisabled={taxonomyMutationLocked} />;
   if (tab.kind === "taxonomy-history") return <OperationHistoryView domain="taxonomy" onStatus={onStatus} />;
-  if (tab.kind === "settings") return <SettingsView section={tab.settingsSection ?? "General"} onSectionChange={(section) => updateSettingsTab(tab.id, section)} onBaseReplaced={onBaseReplaced} onWorkspaceChanged={onWorkspaceChanged} />;
+  if (tab.kind === "settings") return <SettingsView section={tab.settingsSection ?? "General"} onSectionChange={(section) => updateSettingsTab(tab.id, section)} onBaseReplaced={onBaseReplaced} onWorkspaceChanged={onWorkspaceChanged} generalSettings={generalSettings} generalSettingsLoadError={generalSettingsLoadError} onGeneralSettingsChange={onGeneralSettingsChange} />;
   if (tab.kind === "photo-detail" && tab.photo) return <PhotoDetailView photo={tab.photo} />;
   if (tab.kind === "mapping-editor" && tab.photo) return <MappingEditor photo={tab.photo} />;
   if (tab.kind === "search-photos" && tab.query) return <PhotoSet query={tab.query} handlers={handlers} />;

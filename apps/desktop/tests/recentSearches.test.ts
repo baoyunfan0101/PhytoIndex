@@ -7,6 +7,7 @@ import {
   normalizeSearchQuery,
   removeRecentSearch,
   saveRecentSearches,
+  trimRecentSearches,
   type RecentSearchStorage,
 } from "../src/features/photos/search/recentSearchStorage.ts";
 
@@ -39,6 +40,13 @@ test("limits searches in most-recent-first order", () => {
   assert.equal(searches.length, 10);
   assert.equal(searches[0], "query 13");
   assert.equal(searches[9], "query 4");
+});
+
+test("supports a configured limit and immediately trims existing searches", () => {
+  const searches = ["A", "B", "C", "D"];
+  assert.deepEqual(addRecentSearch(searches, "E", 3), ["E", "A", "B"]);
+  assert.deepEqual(trimRecentSearches(searches, 2), ["A", "B"]);
+  assert.deepEqual(loadRecentSearches(memoryStorage(JSON.stringify(searches)), 2), ["A", "B"]);
 });
 
 test("loads sanitized storage and supports removal and clearing", () => {

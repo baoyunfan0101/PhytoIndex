@@ -19,7 +19,12 @@ import {
   Trash2,
   type LucideIcon,
 } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  updateGeneralSettings,
+  type GeneralSettings as GeneralSettingsValue,
+  type WorkspaceSettingsSection,
+} from "../../api/general";
 import { getAppVersion } from "../../api/updater";
 import { errorMessage } from "../../api/common";
 import {
@@ -74,16 +79,7 @@ import {
   photoNamePriorityLabels,
 } from "./namingSettings";
 
-export type SettingsSection =
-  | "General"
-  | "Storage"
-  | "Photo Libraries"
-  | "Taxonomy Databases"
-  | "Naming"
-  | "Map"
-  | "Filename Parser"
-  | "Synonym Splitter"
-  | "About";
+export type SettingsSection = WorkspaceSettingsSection;
 
 const settingsSections: Array<{
   id: SettingsSection;
@@ -101,8 +97,14 @@ export function SettingsView({
   onBaseReplaced,
   onSectionChange,
   onWorkspaceChanged,
+  generalSettings,
+  generalSettingsLoadError,
+  onGeneralSettingsChange,
   section,
 }: {
+  generalSettings: GeneralSettingsValue;
+  generalSettingsLoadError?: string;
+  onGeneralSettingsChange: (settings: GeneralSettingsValue) => void;
   onBaseReplaced?: () => void;
   onSectionChange: (section: SettingsSection) => void;
   onWorkspaceChanged?: (resetPhotoTabs: boolean) => void;
@@ -147,7 +149,13 @@ export function SettingsView({
         </button>
       </aside>)}
       second={(<main className="settings-content">
-        {section === "General" && <GeneralSettings />}
+        {section === "General" && (
+          <GeneralSettings
+            settings={generalSettings}
+            loadError={generalSettingsLoadError}
+            onChange={onGeneralSettingsChange}
+          />
+        )}
         {section === "Storage" && <StorageSettings />}
         {section === "Photo Libraries" && <PhotoLibrariesSettings onChanged={onWorkspaceChanged} />}
         {section === "Taxonomy Databases" && <BaseImportSettings onApplied={onBaseReplaced} />}
@@ -160,10 +168,105 @@ export function SettingsView({
   );
 }
 
-function GeneralSettings() {
+function GeneralSettings({
+  settings,
+  loadError = "",
+  onChange,
+}: {
+  settings: GeneralSettingsValue;
+  loadError?: string;
+  onChange: (settings: GeneralSettingsValue) => void;
+}) {
+  const [message, setMessage] = useState(loadError);
+  const [saving, setSaving] = useState(false);
+  const saveSequence = useRef(0);
+
+  useEffect(() => {
+    if (loadError) setMessage(loadError);
+  }, [loadError]);
+
+  async function change(next: GeneralSettingsValue) {
+    const previous = settings;
+    const sequence = ++saveSequence.current;
+    onChange(next);
+    setSaving(true);
+    setMessage("");
+    try {
+      const saved = await updateGeneralSettings(next);
+      if (sequence === saveSequence.current) {
+        onChange(saved);
+        setMessage("Saved");
+      }
+    } catch (nextError) {
+      if (sequence === saveSequence.current) {
+        onChange(previous);
+        setMessage(errorMessage(nextError));
+      }
+    } finally {
+      if (sequence === saveSequence.current) setSaving(false);
+    }
+  }
+
   return (
     <div className="settings-section">
       <SectionHeader title="General" detail="Configure application-wide settings." />
+      <section className="settings-group" aria-labelledby="general-appearance-heading">
+        <h3 id="general-appearance-heading">Appearance</h3>
+        <label className="general-setting-row">
+          <span><strong>Theme</strong><small>Choose the application color scheme.</small></span>
+          <select
+            aria-label="Theme"
+            disabled={saving}
+            value={settings.theme}
+            onChange={(event) => void change({
+              ...settings,
+              theme: event.target.value as GeneralSettingsValue["theme"],
+            })}
+          >
+            <option value="system">System</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+          </select>
+        </label>
+      </section>
+      <section className="settings-group" aria-labelledby="general-startup-heading">
+        <h3 id="general-startup-heading">Startup</h3>
+        <label className="general-setting-row">
+          <span><strong>Restore previously opened tabs</strong><small>Restore valid tabs and the active tab on the next launch.</small></span>
+          <input
+            aria-label="Restore previously opened tabs"
+            disabled={saving}
+            type="checkbox"
+            checked={settings.restore_tabs}
+            onChange={(event) => void change({ ...settings, restore_tabs: event.target.checked })}
+          />
+        </label>
+      </section>
+      <section className="settings-group" aria-labelledby="general-search-heading">
+        <h3 id="general-search-heading">Search</h3>
+        <label className="general-setting-row">
+          <span><strong>Recent searches limit</strong><small>Keep between 1 and 50 searches on this computer.</small></span>
+          <input
+            aria-label="Recent searches limit"
+            disabled={saving}
+            type="number"
+            min={1}
+            max={50}
+            value={settings.recent_searches_limit}
+            onChange={(event) => {
+              const value = Number(event.target.value);
+              if (Number.isInteger(value) && value >= 1 && value <= 50) {
+                void change({ ...settings, recent_searches_limit: value });
+              }
+            }}
+          />
+        </label>
+      </section>
+      {(saving || message) && (
+        <div className={saving || message === "Saved" ? "editor-message" : "inline-error"} role={saving || message === "Saved" ? "status" : "alert"}>
+          {saving ? "Saving..." : message}
+        </div>
+      )}
     </div>
   );
 }

@@ -9,7 +9,7 @@
   background: var(--panel);
 }
 .section-header > div:first-child, .pane-header > div:first-child { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
-.section-header strong, .pane-header strong { font-size: 12px; color: #e1e1e1; }
+.section-header strong, .pane-header strong { font-size: 12px; color: var(--text); }
 .section-header span, .pane-header span { overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
 .section-actions { display: flex; align-items: center; gap: 6px; }
 .button, .record-actions button {
@@ -35,7 +35,7 @@
   background: var(--input);
 }
 .search-field input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; }
-.button-primary { border-color: #4e8661; color: #fff; background: var(--button-primary); }
+.button-primary { border-color: var(--accent); color: var(--on-accent); background: var(--button-primary); }
 .button-primary:hover:not(:disabled) { background: var(--button-primary-hover); filter: none; }
 .button-primary:active:not(:disabled) { background: var(--button-primary-active); filter: none; }
 .button-secondary:hover:not(:disabled), .button-ghost:hover:not(:disabled), .record-actions button:hover:not(:disabled) {
@@ -66,17 +66,17 @@
 }
 .virtual-grid-cell { min-width: 0; }
 ::-webkit-scrollbar { width: 10px; height: 10px; }
-::-webkit-scrollbar-thumb { background: #484848; border: 2px solid transparent; background-clip: padding-box; }
+::-webkit-scrollbar-thumb { background: var(--scrollbar); border: 2px solid transparent; background-clip: padding-box; }
 ::-webkit-scrollbar-track { background: transparent; }
 
 .segmented { display: inline-flex; overflow: hidden; border: 1px solid var(--line-strong); border-radius: 3px; }
-.segmented button { height: 26px; padding: 0 8px; border: 0; border-right: 1px solid var(--line-strong); color: var(--muted); background: #252525; text-transform: capitalize; }
+.segmented button { height: 26px; padding: 0 8px; border: 0; border-right: 1px solid var(--line-strong); color: var(--muted); background: var(--panel-2); text-transform: capitalize; }
 .segmented button:last-child { border-right: 0; }
-.segmented button.active { color: #fff; background: #3b3b3b; }
-.code-editor { position: relative; width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden; background: #171717; }
+.segmented button.active { color: var(--text); background: var(--active); }
+.code-editor { position: relative; width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden; background: var(--code); }
 .code-editor-mount, .code-editor-mount > .cm-editor { width: 100%; height: 100%; min-width: 0; min-height: 0; }
 .code-editor:has(.cm-focused) { box-shadow: inset 0 0 0 1px var(--accent-bright); }
-.code-editor-read-only { background: #1b1b1b; }
+.code-editor-read-only { background: var(--code-read-only); }
 .code-editor-auto-grow { height: auto; overflow: visible; }
 .code-editor-auto-grow .code-editor-mount,
 .code-editor-auto-grow .code-editor-mount > .cm-editor { height: auto; min-height: inherit; max-height: inherit; }
@@ -118,8 +118,8 @@
   background: var(--accent-bright);
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-bright) 28%, transparent);
 }
-.modal-backdrop { position: fixed; z-index: 200; inset: 0; display: grid; place-items: center; background: #0008; }
-.modal-card { width: min(var(--modal-width), calc(100vw - 40px)); overflow: hidden; border: 1px solid #565656; border-radius: 6px; background: #252525; box-shadow: 0 16px 50px #000c; }
+.modal-backdrop { position: fixed; z-index: 200; inset: 0; display: grid; place-items: center; background: var(--overlay); }
+.modal-card { width: min(var(--modal-width), calc(100vw - 40px)); overflow: hidden; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--popover); box-shadow: 0 16px 50px var(--shadow); }
 .modal-card > header { display: flex; height: 42px; align-items: center; justify-content: space-between; padding: 0 10px 0 14px; border-bottom: 1px solid var(--line); }
 .modal-body { padding: 8px; }
 .modal-card > footer { display: flex; justify-content: flex-end; gap: 6px; padding: 10px; border-top: 1px solid var(--line); }
@@ -133,4 +133,4 @@
 .spin { animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-.inline-error { padding: 7px; color: #ef9a9a; background: #492626; }
+.inline-error { padding: 7px; color: var(--danger-text); background: var(--danger-bg); }
