@@ -28,7 +28,6 @@ use vividarium_core::taxonomy::{
     SqlExportResult, TaxonChild, TaxonDetailNode, TaxonInputRow, TaxonRowOutcome,
     TaxonSearchResult, TaxonSuggestion, TaxonUpdateInput, TaxonomyBaseMetadata,
     TaxonomyOperationResult, TaxonomyPage, TaxonomyPreviewResult, ValidateBaseImportRequest,
-    ValidateBaseImportResult,
 };
 use vividarium_core::{
     map::{self, MapBounds, MapPhoto, MapSettings},
@@ -953,14 +952,6 @@ pub fn remove_base_import_input(
 }
 
 #[tauri::command]
-pub fn validate_base_import(
-    state: State<'_, AppState>,
-    request: ValidateBaseImportRequest,
-) -> CommandResult<ValidateBaseImportResult> {
-    taxonomy::validate_base_import(&state.database, &request).map_err(error)
-}
-
-#[tauri::command]
 pub fn start_base_import_validation(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -971,11 +962,20 @@ pub fn start_base_import_validation(
         app,
         "base_import",
         "validate_base_import",
-        move |progress| {
-            let result =
-                taxonomy::validate_base_import_with_progress(&database, &request, progress)
-                    .map_err(error)?;
-            serde_json::to_value(result).map_err(error)
+        move |progress| match taxonomy::validate_base_import_with_progress(
+            &database, &request, progress,
+        ) {
+            Ok(result) => serde_json::to_value(result).map_err(error),
+            Err(failure) => {
+                progress(vividarium_core::OperationProgress {
+                    stage: "operational_failure".into(),
+                    current: None,
+                    total: None,
+                    statement_index: None,
+                    statement_total: None,
+                });
+                Err(error(failure))
+            }
         },
     )
 }

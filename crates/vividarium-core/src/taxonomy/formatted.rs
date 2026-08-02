@@ -1,6 +1,6 @@
 //! Formatted taxonomy input, preview, apply, operation history, and rollback.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io::Cursor;
 
 use csv::{ReaderBuilder, WriterBuilder};
@@ -1640,33 +1640,115 @@ fn collect_changeset_integer(
     }
 }
 
-pub(super) fn validate_taxonomy(connection: &Connection) -> CoreResult<()> {
-    let invalid_taxon = connection
-        .query_row(
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct TaxonomyValidationIssue {
+    pub code: &'static str,
+    pub message: String,
+    pub taxon_id: Option<i64>,
+    pub related_taxon_id: Option<i64>,
+}
+
+pub(super) fn visit_taxonomy_validation_issues(
+    connection: &Connection,
+    require_normalized_names: bool,
+    mut visit: impl FnMut(TaxonomyValidationIssue) -> bool,
+) -> CoreResult<()> {
+    let taxa = connection
+        .prepare("SELECT taxon_id, parent_taxon_id, rank FROM taxa ORDER BY taxon_id")?
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, Option<i64>>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    let by_id = taxa
+        .iter()
+        .map(|(taxon_id, parent_taxon_id, rank)| (*taxon_id, (*parent_taxon_id, *rank)))
+        .collect::<HashMap<_, _>>();
+    let cycle_taxa = connection
+        .prepare(
             r#"
-            SELECT child.taxon_id
-            FROM taxa AS child
-            LEFT JOIN taxa AS parent ON parent.taxon_id = child.parent_taxon_id
-            WHERE (child.rank = 1 AND child.parent_taxon_id IS NOT NULL)
-               OR (child.rank > 1 AND (
-                    child.parent_taxon_id IS NULL
-                    OR parent.taxon_id IS NULL
-                    OR parent.rank >= child.rank
-               ))
-            LIMIT 1
+            WITH RECURSIVE ancestry(origin_taxon_id, ancestor_taxon_id) AS (
+                SELECT taxon_id, parent_taxon_id
+                FROM taxa
+                WHERE parent_taxon_id IS NOT NULL
+                UNION
+                SELECT ancestry.origin_taxon_id, parent.parent_taxon_id
+                FROM ancestry
+                JOIN taxa AS parent ON parent.taxon_id = ancestry.ancestor_taxon_id
+                WHERE parent.parent_taxon_id IS NOT NULL
+            )
+            SELECT DISTINCT origin_taxon_id
+            FROM ancestry
+            WHERE origin_taxon_id = ancestor_taxon_id
             "#,
-            [],
-            |row| row.get::<_, i64>(0),
-        )
-        .optional()?;
-    if let Some(taxon_id) = invalid_taxon {
-        return Err(CoreError::InvalidArgument(format!(
-            "taxon {taxon_id} has invalid parentage"
-        )));
+        )?
+        .query_map([], |row| row.get::<_, i64>(0))?
+        .collect::<Result<HashSet<_>, _>>()?;
+    for (taxon_id, parent_taxon_id, rank) in taxa {
+        if cycle_taxa.contains(&taxon_id) {
+            if !visit(TaxonomyValidationIssue {
+                code: "parent_cycle",
+                message: format!("Taxon {taxon_id} belongs to a cyclic parent relationship."),
+                taxon_id: Some(taxon_id),
+                related_taxon_id: parent_taxon_id,
+            }) {
+                return Ok(());
+            }
+            continue;
+        }
+        if rank == TaxonRank::Kingdom.code() {
+            if parent_taxon_id.is_some() {
+                if !visit(TaxonomyValidationIssue {
+                    code: "kingdom_has_parent",
+                    message: format!("Kingdom taxon {taxon_id} must be a root taxon."),
+                    taxon_id: Some(taxon_id),
+                    related_taxon_id: parent_taxon_id,
+                }) {
+                    return Ok(());
+                }
+            }
+            continue;
+        }
+        let Some(parent_taxon_id) = parent_taxon_id else {
+            if !visit(TaxonomyValidationIssue {
+                code: "missing_parent",
+                message: format!("Taxon {taxon_id} must have a parent taxon."),
+                taxon_id: Some(taxon_id),
+                related_taxon_id: None,
+            }) {
+                return Ok(());
+            }
+            continue;
+        };
+        let Some((_, parent_rank)) = by_id.get(&parent_taxon_id) else {
+            if !visit(TaxonomyValidationIssue {
+                code: "parent_not_found",
+                message: format!(
+                    "Taxon {taxon_id} references missing parent taxon {parent_taxon_id}."
+                ),
+                taxon_id: Some(taxon_id),
+                related_taxon_id: Some(parent_taxon_id),
+            }) {
+                return Ok(());
+            }
+            continue;
+        };
+        if *parent_rank >= rank {
+            if !visit(TaxonomyValidationIssue {
+                code: "invalid_parent_rank",
+                message: format!("Taxon {taxon_id} must have a parent with a higher rank."),
+                taxon_id: Some(taxon_id),
+                related_taxon_id: Some(parent_taxon_id),
+            }) {
+                return Ok(());
+            }
+        }
     }
-    let invalid_name = connection
-        .query_row(
-            r#"
+    let mut invalid_sci_names = connection.prepare(
+        r#"
             SELECT taxa.taxon_id
             FROM taxa
             LEFT JOIN taxon_names
@@ -1674,27 +1756,74 @@ pub(super) fn validate_taxonomy(connection: &Connection) -> CoreResult<()> {
              AND taxon_names.name_type = 1
             GROUP BY taxa.taxon_id
             HAVING COUNT(taxon_names.name_id) != 1
-            LIMIT 1
+            ORDER BY taxa.taxon_id
             "#,
-            [],
-            |row| row.get::<_, i64>(0),
-        )
-        .optional()?;
-    if let Some(taxon_id) = invalid_name {
-        return Err(CoreError::InvalidArgument(format!(
-            "taxon {taxon_id} must have exactly one sci_name"
-        )));
-    }
-    let mut statement = connection.prepare("SELECT name_id, name FROM taxon_names")?;
-    for row in statement.query_map([], |row| {
-        Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-    })? {
-        let (name_id, name) = row?;
-        if normalize_name(Some(&name)).as_deref() != Some(name.as_str()) {
-            return Err(CoreError::InvalidArgument(format!(
-                "taxon name {name_id} is not normalized"
-            )));
+    )?;
+    for row in invalid_sci_names.query_map([], |row| row.get::<_, i64>(0))? {
+        let taxon_id = row?;
+        if !visit(TaxonomyValidationIssue {
+            code: "invalid_sci_name_count",
+            message: format!("Taxon {taxon_id} must have exactly one scientific name."),
+            taxon_id: Some(taxon_id),
+            related_taxon_id: None,
+        }) {
+            return Ok(());
         }
+    }
+    let mut orphan_name_taxa = connection.prepare(
+        r#"
+            SELECT DISTINCT taxon_names.taxon_id
+            FROM taxon_names
+            LEFT JOIN taxa ON taxa.taxon_id = taxon_names.taxon_id
+            WHERE taxa.taxon_id IS NULL
+            ORDER BY taxon_names.taxon_id
+            "#,
+    )?;
+    for row in orphan_name_taxa.query_map([], |row| row.get::<_, i64>(0))? {
+        let taxon_id = row?;
+        if !visit(TaxonomyValidationIssue {
+            code: "name_taxon_not_found",
+            message: format!("Taxon names reference missing taxon {taxon_id}."),
+            taxon_id: Some(taxon_id),
+            related_taxon_id: None,
+        }) {
+            return Ok(());
+        }
+    }
+    if require_normalized_names {
+        let mut statement =
+            connection.prepare("SELECT name_id, taxon_id, name FROM taxon_names")?;
+        for row in statement.query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })? {
+            let (name_id, taxon_id, name) = row?;
+            if normalize_name(Some(&name)).as_deref() != Some(name.as_str()) {
+                if !visit(TaxonomyValidationIssue {
+                    code: "name_not_normalized",
+                    message: format!("Taxon name {name_id} is not normalized."),
+                    taxon_id: Some(taxon_id),
+                    related_taxon_id: None,
+                }) {
+                    return Ok(());
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn validate_taxonomy(connection: &Connection) -> CoreResult<()> {
+    let mut first_issue = None;
+    visit_taxonomy_validation_issues(connection, true, |issue| {
+        first_issue = Some(issue);
+        false
+    })?;
+    if let Some(issue) = first_issue {
+        return Err(CoreError::InvalidArgument(issue.message));
     }
     Ok(())
 }

@@ -84,6 +84,7 @@ fn validate_executes_sql_and_builds_the_candidate_in_one_request() {
     assert!(result.execution.statements_executed > 0);
     assert!(result.execution.script_saved);
     assert!(result.can_apply);
+    assert!(result.validation.valid);
     assert!(result.validation.can_apply);
     assert!(result.warnings.is_empty());
     let workspace = workspace(&database).unwrap();
@@ -250,9 +251,76 @@ fn execution_success_is_saved_even_when_validation_fails() {
     .unwrap();
     let validation = validate_base_import_candidate(&database).unwrap();
 
+    assert!(!validation.valid);
     assert!(!validation.can_apply);
+    assert_eq!(validation.errors[0].code, "invalid_sci_name_count");
+    assert_eq!(validation.errors[0].taxon_id, Some(101));
     assert!(apply_base_import(&database).is_err());
     assert_eq!(get_base_import_sql(&database).unwrap(), invalid_sql);
+}
+
+#[test]
+fn taxonomy_validation_failure_is_a_structured_result() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = Database::open(directory.path().join("metadata.db")).unwrap();
+    add_simple_input(&directory, &database);
+    let invalid_sql = SIMPLE_IMPORT_SQL.replace(
+        "COMMIT;",
+        r#"
+INSERT INTO base.taxa (taxon_id, parent_taxon_id, rank)
+VALUES (202, 101, 1);
+INSERT INTO base.taxon_names (name_id, taxon_id, name_type, name)
+VALUES (2, 202, 1, 'Second kingdom');
+COMMIT;"#,
+    );
+
+    let mut progress = Vec::new();
+    let result = validate_base_import_with_progress(
+        &database,
+        &ValidateBaseImportRequest { sql: invalid_sql },
+        &mut |event| progress.push(event),
+    )
+    .unwrap();
+
+    assert!(!result.validation.valid);
+    assert!(!result.validation.can_apply);
+    assert!(!result.can_apply);
+    assert_eq!(result.validation.total_error_count, 1);
+    assert_eq!(result.validation.errors[0].code, "kingdom_has_parent");
+    assert_eq!(result.validation.errors[0].taxon_id, Some(202));
+    assert_eq!(result.validation.errors[0].related_taxon_id, Some(101));
+    assert_eq!(
+        result.validation.errors[0].message,
+        "Kingdom taxon 202 must be a root taxon."
+    );
+    assert!(
+        progress
+            .iter()
+            .any(|event| event.stage == VALIDATING_TAXONOMY)
+    );
+    assert_eq!(progress.last().unwrap().stage, VALIDATION_FAILED);
+}
+
+#[test]
+fn normalized_name_conflicts_are_validation_results() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = Database::open(directory.path().join("metadata.db")).unwrap();
+    add_simple_input(&directory, &database);
+    let invalid_sql = SIMPLE_IMPORT_SQL.replace(
+        "COMMIT;",
+        r#"
+INSERT INTO base.taxon_names (name_id, taxon_id, name_type, name)
+VALUES (2, 101, 2, 'Animalia  old'),
+       (3, 101, 2, 'Animalia old');
+COMMIT;"#,
+    );
+
+    let result =
+        validate_base_import(&database, &ValidateBaseImportRequest { sql: invalid_sql }).unwrap();
+
+    assert!(!result.validation.valid);
+    assert_eq!(result.validation.errors[0].code, "duplicate_canonical_name");
+    assert_eq!(result.validation.errors[0].taxon_id, Some(101));
 }
 
 #[test]

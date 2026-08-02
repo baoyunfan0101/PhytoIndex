@@ -13,6 +13,11 @@ use `snake_case`.
 
 `TaxonRank` values are `kingdom`, `order`, `family`, `genus`, and `species`.
 
+A kingdom is a root taxon. Every other taxon has an existing parent whose
+rank is strictly higher than the child rank. Intermediate ranks may be
+omitted; equal-rank, reversed-rank, missing-parent, and cyclic relationships
+are invalid.
+
 `TaxonomyNameType` values are:
 
 | Value | Stored code | Meaning |
@@ -229,8 +234,8 @@ cleanup `warnings`.
 | `ValidateBaseImportRequest` | `sql` |
 | `BaseImportExecutionResult` | `statements_executed`, `messages`, `script_saved`, `warnings` |
 | `NameTypeCount` | `name_type`, `count` |
-| `BaseImportIssue` | `code`, `message`, `table`, `row_identifier` |
-| `BaseImportValidationResult` | `can_apply`, `taxa_count`, `name_counts`, `normalization_changes`, `total_warning_count`, `total_error_count`, `warnings`, `errors` |
+| `BaseImportIssue` | `code`, `message`, `taxon_id`, `related_taxon_id`, `table`, `row_identifier` |
+| `BaseImportValidationResult` | `valid`, `can_apply`, `taxa_count`, `name_counts`, `normalization_changes`, `total_warning_count`, `total_error_count`, `warnings`, `errors` |
 | `ValidateBaseImportResult` | `execution`, `validation`, `warnings`, `can_apply` |
 
 Validation returns at most 100 warning and error samples while the total count
@@ -245,6 +250,7 @@ fields remain authoritative.
 | `add_base_import_input` | `request: &AddSqlInputRequest` | `AddSqlInputResult` |
 | `remove_base_import_input` | `request: &RemoveSqlInputRequest` | `RemoveSqlInputResult` |
 | `validate_base_import` | `request: &ValidateBaseImportRequest` | `ValidateBaseImportResult` |
+| `validate_base_import_with_progress` | `request: &ValidateBaseImportRequest`, `progress: &mut FnMut(OperationProgress)` | `ValidateBaseImportResult` |
 | `apply_base_import` | none | `TaxonomyBaseReplaceResult` |
 
 Base Import has one fixed workspace. Persistent inputs and the last successful
@@ -264,12 +270,19 @@ reported through `script_saved = false` and `warnings` without changing the
 execution result. A failed execution restores the prior staging and validation
 artifacts and stops before candidate validation.
 
-After SQL succeeds, `validate_base_import` builds the candidate and checks file
-integrity, foreign keys, required schema and constraints, supported ranks and
-name types, canonical normalization, and the complete taxonomy invariants.
-The result reports SQL execution, whether apply is allowed, authoritative
-totals, and bounded warning and error samples. Any later source or SQL change
-requires validation again.
+After SQL succeeds, validation builds the candidate and checks file integrity,
+required schema and constraints, supported ranks and name types, canonical
+normalization, and the complete taxonomy invariants. Taxonomy data violations
+are returned with `valid = false`, `can_apply = false`, and structured issues;
+SQL, SQLite, file, and candidate-build failures remain interface errors. The
+result contains authoritative totals and bounded warning and error samples.
+Any later source or SQL change requires validation again.
+
+The progress callback reports a stage plus optional row counts and SQL
+statement indexes. Stages cover input preparation, SQL execution, staging,
+name normalization, candidate taxa and names, taxonomy validation, and the
+terminal validation result. Missing counts mean that only the stage is known;
+they do not represent a percentage.
 
 `apply_base_import` accepts only the latest successfully validated candidate.
 Successful replacement assigns a new taxonomy identity, clears taxonomy

@@ -1,0 +1,36 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { describeBaseImportProgress, formatElapsed } from "../src/features/taxonomy/baseImportProgress.ts";
+
+test("describes SQL statement progress without inventing a percentage", () => {
+  assert.equal(describeBaseImportProgress({
+    stage: "executing_sql",
+    current: null,
+    total: null,
+    statement_index: 2,
+    statement_total: 7,
+  }), "Executing SQL statement 2 / 7");
+});
+
+test("describes known row counts and phase-only progress", () => {
+  assert.equal(describeBaseImportProgress({
+    stage: "normalizing_names",
+    current: 120000,
+    total: 850000,
+    statement_index: null,
+    statement_total: null,
+  }), "Normalizing names: 120,000 / 850,000");
+  assert.equal(describeBaseImportProgress({
+    stage: "validating_taxonomy",
+    current: null,
+    total: null,
+    statement_index: null,
+    statement_total: null,
+  }), "Validating taxonomy");
+});
+
+test("formats elapsed duration", () => {
+  assert.equal(formatElapsed(5900), "0:05");
+  assert.equal(formatElapsed(65000), "1:05");
+  assert.equal(formatElapsed(3661000), "1:01:01");
+});

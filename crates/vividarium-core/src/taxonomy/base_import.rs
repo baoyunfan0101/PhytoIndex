@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::CString;
 use std::fs;
 use std::fs::File;
@@ -14,7 +14,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::base::{TaxonomyBaseMetadata, TaxonomyBaseReplaceResult};
-use super::formatted::{TaxonomyNameType, validate_taxonomy};
+use super::formatted::{
+    TaxonomyNameType, TaxonomyValidationIssue, validate_taxonomy, visit_taxonomy_validation_issues,
+};
 use super::sql::{SqlStatementMessage, detach_sources, prepare_sources, quote_identifier};
 use super::sql_inputs::{
     self, AddSqlInputRequest, AddSqlInputResult, PersistentSqlInput, RemoveSqlInputRequest,
@@ -71,12 +73,15 @@ pub struct NameTypeCount {
 pub struct BaseImportIssue {
     pub code: String,
     pub message: String,
+    pub taxon_id: Option<i64>,
+    pub related_taxon_id: Option<i64>,
     pub table: Option<String>,
     pub row_identifier: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BaseImportValidationResult {
+    pub valid: bool,
     pub can_apply: bool,
     pub taxa_count: u64,
     pub name_counts: Vec<NameTypeCount>,
@@ -241,6 +246,7 @@ fn validate_base_import_candidate_in_workspace(
 ) -> CoreResult<BaseImportValidationResult> {
     let staging = workspace.join(STAGING_DATABASE);
     let mut validation = BaseImportValidationResult {
+        valid: false,
         can_apply: false,
         taxa_count: 0,
         name_counts: Vec::new(),
@@ -252,15 +258,7 @@ fn validate_base_import_candidate_in_workspace(
     };
     if !staging.is_file() {
         clear_validation_artifacts(&workspace)?;
-        record_error(
-            &mut validation,
-            "staging_missing",
-            "base import staging database does not exist",
-            None,
-            None,
-        );
-        report_validation_outcome(progress, &validation);
-        return Ok(validation);
+        return Err(CoreError::NotFound("base import staging database".into()));
     }
     let staging_fingerprint = workspace_fingerprint(&workspace)?;
     if let Some(candidate) = read_validation_state(&workspace)?
@@ -272,23 +270,10 @@ fn validate_base_import_candidate_in_workspace(
         return Ok(candidate.validation_result);
     }
     clear_validation_artifacts(&workspace)?;
-    let connection = match Connection::open_with_flags(
+    let connection = Connection::open_with_flags(
         &staging,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    ) {
-        Ok(connection) => connection,
-        Err(error) => {
-            record_error(
-                &mut validation,
-                "staging_open_failed",
-                &error.to_string(),
-                None,
-                None,
-            );
-            report_validation_outcome(progress, &validation);
-            return Ok(validation);
-        }
-    };
+    )?;
     validate_integrity(&connection, &mut validation)?;
     validate_staging_schema(&connection, &mut validation)?;
     if validation.total_error_count == 0 {
@@ -320,16 +305,42 @@ fn validate_base_import_candidate_in_workspace(
             None,
             None,
         );
-        let mut names = connection.prepare("SELECT name_id, name FROM taxon_names")?;
+        let mut names = connection.prepare(
+            "SELECT name_id, taxon_id, name_type, name FROM taxon_names ORDER BY taxon_id, name_type, name_id",
+        )?;
         let mut processed_names = 0_u64;
+        let mut canonical_names = HashSet::new();
+        let mut canonical_name_group = None;
         for row in names.query_map([], |row| {
-            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, String>(3)?,
+            ))
         })? {
-            let (name_id, raw_name) = row?;
+            let (name_id, taxon_id, name_type, raw_name) = row?;
+            if canonical_name_group != Some((taxon_id, name_type)) {
+                canonical_names.clear();
+                canonical_name_group = Some((taxon_id, name_type));
+            }
             match normalize_taxonomy_name(&raw_name) {
                 Some(name) => {
                     if name != raw_name {
                         validation.normalization_changes += 1;
+                    }
+                    if !canonical_names.insert(name.clone()) {
+                        record_taxon_error(
+                            &mut validation,
+                            "duplicate_canonical_name",
+                            format!(
+                                "Taxon {taxon_id} has duplicate names after canonical normalization: {name}."
+                            ),
+                            Some(taxon_id),
+                            None,
+                            Some("taxon_names"),
+                            Some(name_id.to_string()),
+                        );
                     }
                 }
                 None => record_error(
@@ -360,32 +371,28 @@ fn validate_base_import_candidate_in_workspace(
             None,
             None,
         );
+        report_progress(progress, VALIDATING_TAXONOMY, None, None, None, None);
+        visit_taxonomy_validation_issues(&connection, false, |issue| {
+            record_taxonomy_error(&mut validation, issue);
+            true
+        })?;
     }
     drop(connection);
     if validation.total_error_count == 0 {
         let candidate_build = workspace.join(CANDIDATE_BUILD_DATABASE);
         remove_file_if_exists(&candidate_build)?;
-        if let Err(error) =
-            build_official_taxonomy(&staging, &candidate_build, "base-import", progress).and_then(
-                |_| {
-                    report_progress(progress, VALIDATING_TAXONOMY, None, None, None, None);
-                    validate_candidate_database(&candidate_build)
-                },
-            )
-        {
+        let build = build_official_taxonomy(&staging, &candidate_build, "base-import", progress)
+            .and_then(|_| {
+                report_progress(progress, VALIDATING_TAXONOMY, None, None, None, None);
+                validate_candidate_database(&candidate_build)
+            });
+        if let Err(error) = build {
             remove_file_if_exists(&candidate_build)?;
-            record_error(
-                &mut validation,
-                "taxonomy_validation_failed",
-                &error.to_string(),
-                None,
-                None,
-            );
-        } else {
-            let candidate_path = workspace.join(CANDIDATE_DATABASE);
-            remove_file_if_exists(&candidate_path)?;
-            fs::rename(candidate_build, &candidate_path)?;
+            return Err(error);
         }
+        let candidate_path = workspace.join(CANDIDATE_DATABASE);
+        remove_file_if_exists(&candidate_path)?;
+        fs::rename(candidate_build, &candidate_path)?;
     }
     if validation.normalization_changes > 0 {
         validation.total_warning_count += 1;
@@ -395,11 +402,14 @@ fn validate_base_import_candidate_in_workspace(
                 "{} names will change during canonical normalization",
                 validation.normalization_changes
             ),
+            taxon_id: None,
+            related_taxon_id: None,
             table: Some("taxon_names".into()),
             row_identifier: None,
         });
     }
-    validation.can_apply = validation.total_error_count == 0;
+    validation.valid = validation.total_error_count == 0;
+    validation.can_apply = validation.valid;
     if validation.can_apply && workspace.join(CANDIDATE_DATABASE).is_file() {
         write_validation_state(
             &workspace,
@@ -901,19 +911,6 @@ fn validate_integrity(
             record_error(validation, "integrity_check", &message, None, None);
         }
     }
-    let mut foreign_keys = connection.prepare("PRAGMA foreign_key_check")?;
-    for row in foreign_keys.query_map([], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, Option<i64>>(1)?))
-    })? {
-        let (table, row_id) = row?;
-        record_error(
-            validation,
-            "foreign_key_check",
-            "foreign key violation",
-            Some(&table),
-            row_id.map(|value| value.to_string()),
-        );
-    }
     Ok(())
 }
 
@@ -1361,6 +1358,45 @@ fn record_error(
         validation.errors.push(BaseImportIssue {
             code: code.into(),
             message: message.into(),
+            taxon_id: None,
+            related_taxon_id: None,
+            table: table.map(str::to_string),
+            row_identifier,
+        });
+    }
+}
+
+fn record_taxonomy_error(
+    validation: &mut BaseImportValidationResult,
+    issue: TaxonomyValidationIssue,
+) {
+    record_taxon_error(
+        validation,
+        issue.code,
+        issue.message,
+        issue.taxon_id,
+        issue.related_taxon_id,
+        Some("taxa"),
+        issue.taxon_id.map(|taxon_id| taxon_id.to_string()),
+    );
+}
+
+fn record_taxon_error(
+    validation: &mut BaseImportValidationResult,
+    code: &str,
+    message: String,
+    taxon_id: Option<i64>,
+    related_taxon_id: Option<i64>,
+    table: Option<&str>,
+    row_identifier: Option<String>,
+) {
+    validation.total_error_count += 1;
+    if validation.errors.len() < MAX_ISSUE_SAMPLES {
+        validation.errors.push(BaseImportIssue {
+            code: code.into(),
+            message,
+            taxon_id,
+            related_taxon_id,
             table: table.map(str::to_string),
             row_identifier,
         });

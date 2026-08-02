@@ -42,3 +42,8 @@ complete.
 Mutating calls return the committed backend result or an operation handle.
 Feature code uses the returned state as authoritative and presents warnings
 without converting a committed operation into a failure.
+
+Base Import validation returns a `base_import` operation handle. Its structured
+progress contains a stage and optional row counts or SQL statement indexes.
+The completed result distinguishes a valid candidate from structured taxonomy
+validation issues; execution failures remain operation errors.

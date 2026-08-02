@@ -1,4 +1,4 @@
-import { Send, ShieldCheck } from "lucide-react";
+import { LoaderCircle, Send, ShieldCheck } from "lucide-react";
 import { useEffect, useState } from "react";
 import {
   addBaseImportInput,
@@ -6,18 +6,20 @@ import {
   getBaseImportSql,
   listBaseImportInputs,
   removeBaseImportInput,
-  validateBaseImport,
+  startBaseImportValidation,
   type BaseImportValidationResult,
   type TaxonomyBaseReplaceResult,
+  type ValidateBaseImportResult,
 } from "../../api/baseImport";
 import type { PersistentSqlInput } from "../../api/customSql";
 import { errorMessage } from "../../api/common";
-import { waitForOperation } from "../../api/tasks";
+import { waitForOperation, type OperationProgress } from "../../api/tasks";
 import { CodeEditor } from "../../shared/CodeEditor";
 import { ResizablePanels } from "../../shared/ResizablePanels";
 import { Button, Modal, SectionHeader, VirtualList } from "../../shared/ui";
 import { SqlInputList } from "./SqlInputList";
 import { emitTaxonomyMutation } from "./taxonomyMutations";
+import { describeBaseImportProgress, formatElapsed } from "./baseImportProgress";
 import { resolveSqlWorkbenchLoads } from "./sqlWorkbenchLoading";
 
 export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
@@ -28,6 +30,17 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
   const [busy, setBusy] = useState("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [validationProgress, setValidationProgress] = useState<OperationProgress | null>(null);
+  const [validationStartedAt, setValidationStartedAt] = useState<number | null>(null);
+  const [validationElapsed, setValidationElapsed] = useState(0);
+
+  useEffect(() => {
+    if (validationStartedAt === null) return;
+    const updateElapsed = () => setValidationElapsed(Date.now() - validationStartedAt);
+    updateElapsed();
+    const timer = window.setInterval(updateElapsed, 250);
+    return () => window.clearInterval(timer);
+  }, [validationStartedAt]);
 
   useEffect(() => {
     void Promise.allSettled([getBaseImportSql(), listBaseImportInputs()])
@@ -56,11 +69,26 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
   }
 
   async function validate() {
-    setBusy("Executing SQL and validating candidate");
+    const startedAt = Date.now();
+    setBusy("Validating base import");
     setMessage("");
     setError("");
+    setValidation(null);
+    setValidationProgress(null);
+    setValidationStartedAt(startedAt);
+    setValidationElapsed(0);
     try {
-      const result = await validateBaseImport(sql);
+      const started = await startBaseImportValidation(sql);
+      const completed = started.task_id
+        ? await waitForOperation("base_import", started.task_id, (operation) => {
+            setValidationProgress(operation.progress);
+            setValidationElapsed(Date.now() - startedAt);
+          })
+        : started;
+      setValidationProgress(completed.progress);
+      if (completed.error) throw new Error(completed.error);
+      const result = completed.result as ValidateBaseImportResult | null;
+      if (!result) throw new Error("Base import validation completed without a result");
       setValidation(result.validation);
       const saveStatus = result.execution.script_saved ? "SQL saved." : "SQL was not saved.";
       setMessage([
@@ -74,6 +102,8 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
     } catch (nextError) {
       setError(errorMessage(nextError));
     } finally {
+      setValidationElapsed(Date.now() - startedAt);
+      setValidationStartedAt(null);
       setBusy("");
     }
   }
@@ -143,9 +173,17 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
           }} />
         </div>)}
       />
-      {error
-        ? <div className="inline-error base-import-status" role="alert">{error}</div>
-        : (message || busy) && <div className="editor-message base-import-status">{busy || message}</div>}
+      {error ? (
+        <div className="inline-error base-import-status" role="alert">{error}</div>
+      ) : busy && validationStartedAt !== null ? (
+        <div className="base-import-progress" role="status" aria-live="polite">
+          <LoaderCircle className="spin" size={15} />
+          <strong>{describeBaseImportProgress(validationProgress)}</strong>
+          <span>Elapsed {formatElapsed(validationElapsed)}</span>
+        </div>
+      ) : message ? (
+        <div className="editor-message base-import-status">{message}</div>
+      ) : null}
     </div>
   );
 
@@ -167,9 +205,8 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
         itemKey={(item, index) => `${item.code}:${item.row_identifier}:${index}`}
         renderItem={(item) => (
           <div className="validation-issue">
-            <strong>{item.code}</strong>
             <span>{item.message}</span>
-            <code>{[item.table, item.row_identifier].filter(Boolean).join(" / ")}</code>
+            <code>{issueContext(item)}</code>
           </div>
         )}
       />
@@ -228,4 +265,12 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
 
 function Metric({ label, value }: { label: string; value: string }) {
   return <div><span>{label}</span><strong title={value}>{value}</strong></div>;
+}
+
+function issueContext(issue: BaseImportValidationResult["errors"][number]): string {
+  const context = [];
+  if (issue.taxon_id !== null) context.push(`Taxon ${issue.taxon_id}`);
+  if (issue.related_taxon_id !== null) context.push(`Related taxon ${issue.related_taxon_id}`);
+  if (context.length === 0) context.push(...[issue.table, issue.row_identifier].filter(Boolean));
+  return context.join(" / ");
 }

@@ -117,7 +117,11 @@ fn rejects_an_invalid_base_without_changing_taxonomy() {
 
     let error = replace_taxonomy_base_database(&database, &invalid_path).unwrap_err();
 
-    assert!(error.to_string().contains("invalid parentage"));
+    assert!(
+        error
+            .to_string()
+            .contains("Kingdom taxon 202 must be a root taxon.")
+    );
     for taxon_id in taxon_ids {
         assert!(get_taxon_detail(&database, taxon_id).unwrap().is_some());
     }

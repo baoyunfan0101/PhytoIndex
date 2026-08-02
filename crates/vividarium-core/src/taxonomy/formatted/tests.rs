@@ -53,37 +53,56 @@ fn parentage_validation_accepts_skipped_ranks() {
 #[test]
 fn parentage_validation_rejects_equal_parent_and_child_ranks() {
     let error = validate_parentage(&[(1, None, 1), (2, Some(1), 2), (3, Some(2), 2)]).unwrap_err();
-    assert!(error.to_string().contains("taxon 3 has invalid parentage"));
+    assert_eq!(
+        error.to_string(),
+        "invalid argument: Taxon 3 must have a parent with a higher rank."
+    );
 }
 
 #[test]
 fn parentage_validation_rejects_a_lower_rank_parent() {
     let error = validate_parentage(&[(1, None, 1), (2, Some(1), 5), (3, Some(2), 3)]).unwrap_err();
-    assert!(error.to_string().contains("taxon 3 has invalid parentage"));
+    assert!(
+        error
+            .to_string()
+            .contains("Taxon 3 must have a parent with a higher rank.")
+    );
 }
 
 #[test]
 fn parentage_validation_rejects_a_missing_parent() {
     let error = validate_parentage(&[(1, None, 1), (2, Some(99), 2)]).unwrap_err();
-    assert!(error.to_string().contains("taxon 2 has invalid parentage"));
+    assert!(
+        error
+            .to_string()
+            .contains("Taxon 2 references missing parent taxon 99.")
+    );
 }
 
 #[test]
 fn parentage_validation_rejects_a_cycle() {
     let error = validate_parentage(&[(1, Some(2), 2), (2, Some(1), 3)]).unwrap_err();
-    assert!(error.to_string().contains("invalid parentage"));
+    assert!(error.to_string().contains("cyclic parent relationship"));
 }
 
 #[test]
 fn parentage_validation_rejects_a_parentless_non_kingdom() {
     let error = validate_parentage(&[(1, None, 1), (2, None, 3)]).unwrap_err();
-    assert!(error.to_string().contains("taxon 2 has invalid parentage"));
+    assert!(
+        error
+            .to_string()
+            .contains("Taxon 2 must have a parent taxon.")
+    );
 }
 
 #[test]
 fn parentage_validation_rejects_a_kingdom_with_a_parent() {
     let error = validate_parentage(&[(1, Some(2), 1), (2, None, 1)]).unwrap_err();
-    assert!(error.to_string().contains("taxon 1 has invalid parentage"));
+    assert!(
+        error
+            .to_string()
+            .contains("Kingdom taxon 1 must be a root taxon.")
+    );
 }
 
 #[test]

@@ -47,10 +47,13 @@ resources. It does not own photo browsing or mapping behavior.
 ### Taxonomy Databases
 
 Accepts persistent CSV and SQLite input sources plus SQL. `Validate` executes
-the SQL, builds a candidate database, and returns SQL messages and the
-validation report. `Apply` is enabled only for the latest successful
-validation and replaces the taxonomy database through the background
-operation API.
+the SQL and builds a candidate database through one background operation. The
+page displays its current stage, real counts when available, and elapsed time.
+The completed report shows each validation message once and keeps Apply
+disabled for invalid taxonomy data. SQL, SQLite, file, and candidate-build
+failures use the page error state. `Apply` is enabled only for the latest
+successful validation and replaces the taxonomy database through the
+background operation API.
 
 ### Naming
 

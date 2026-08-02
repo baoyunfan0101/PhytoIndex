@@ -8,8 +8,16 @@ export type BaseImportExecutionResult = {
   script_saved: boolean;
   warnings: string[];
 };
-export type BaseImportIssue = { code: string; message: string; table: string | null; row_identifier: string | null };
+export type BaseImportIssue = {
+  code: string;
+  message: string;
+  taxon_id: number | null;
+  related_taxon_id: number | null;
+  table: string | null;
+  row_identifier: string | null;
+};
 export type BaseImportValidationResult = {
+  valid: boolean;
   can_apply: boolean;
   taxa_count: number;
   name_counts: Array<{ name_type: string; count: number }>;
@@ -47,26 +55,6 @@ export const addBaseImportInput = (kind: "csv" | "sqlite", alias: string, path: 
   });
 export const removeBaseImportInput = (alias: string) =>
   call<RemoveSqlInputResult>("remove_base_import_input", { request: { alias } }, () => ({ inputs: [], warnings: [] }));
-export const validateBaseImport = (sql: string) =>
-  call<ValidateBaseImportResult>("validate_base_import", { request: { sql } }, () => {
-    const execution = {
-      statements_executed: sql.split(";").filter(Boolean).length,
-      messages: [{ statement_index: 1, affected_rows: null, message: "Script completed" }],
-      script_saved: true,
-      warnings: [],
-    } satisfies BaseImportExecutionResult;
-    const validation = {
-      can_apply: true,
-      taxa_count: 125000,
-      name_counts: [{ name_type: "sci_name", count: 125000 }, { name_type: "synonym", count: 60000 }],
-      normalization_changes: 0,
-      total_warning_count: 0,
-      total_error_count: 0,
-      warnings: [],
-      errors: [],
-    } satisfies BaseImportValidationResult;
-    return { execution, validation, warnings: [], can_apply: true };
-  });
 export const startBaseImportValidation = (sql: string) =>
   call<OperationState>("start_base_import_validation", { request: { sql } }, () => {
     const operation = demoOperation("base_import", "ready_to_apply");
@@ -79,6 +67,7 @@ export const startBaseImportValidation = (sql: string) =>
         warnings: [],
       },
       validation: {
+        valid: true,
         can_apply: true,
         taxa_count: 125000,
         name_counts: [{ name_type: "sci_name", count: 125000 }, { name_type: "synonym", count: 60000 }],
