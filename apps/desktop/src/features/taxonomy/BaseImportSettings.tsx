@@ -17,6 +17,7 @@ import { CodeEditor } from "../../shared/CodeEditor";
 import { Button, Modal, SectionHeader, VirtualList } from "../../shared/ui";
 import { SqlInputList } from "./SqlInputList";
 import { emitTaxonomyMutation } from "./taxonomyMutations";
+import { resolveSqlWorkbenchLoads } from "./sqlWorkbenchLoading";
 
 export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
   const [inputs, setInputs] = useState<PersistentSqlInput[]>([]);
@@ -25,26 +26,29 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState("");
   const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
 
   useEffect(() => {
-    Promise.all([getBaseImportSql(), listBaseImportInputs()])
-      .then(([savedSql, savedInputs]) => {
-        setSql(savedSql);
-        setInputs(savedInputs);
-      })
-      .catch((nextError) => setMessage(errorMessage(nextError)));
+    void Promise.allSettled([getBaseImportSql(), listBaseImportInputs()])
+      .then(([sqlResult, inputsResult]) => {
+        const loaded = resolveSqlWorkbenchLoads(sqlResult, inputsResult);
+        if (loaded.sql !== undefined) setSql(loaded.sql);
+        if (loaded.inputs !== undefined) setInputs(loaded.inputs);
+        setError(loaded.error);
+      });
   }, []);
 
   async function addInput(kind: "csv" | "sqlite", alias: string, path: string) {
     setBusy("Adding data source");
     setMessage("");
+    setError("");
     try {
       const result = await addBaseImportInput(kind, alias, path);
       setInputs(result.inputs);
       setValidation(null);
       setMessage(result.warnings.length > 0 ? result.warnings.join(" ") : "Data source added.");
     } catch (nextError) {
-      setMessage(errorMessage(nextError));
+      setError(errorMessage(nextError));
     } finally {
       setBusy("");
     }
@@ -53,6 +57,7 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
   async function validate() {
     setBusy("Executing SQL and validating candidate");
     setMessage("");
+    setError("");
     try {
       const result = await validateBaseImport(sql);
       setValidation(result.validation);
@@ -66,7 +71,7 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
         ...result.warnings,
       ].join(" "));
     } catch (nextError) {
-      setMessage(errorMessage(nextError));
+      setError(errorMessage(nextError));
     } finally {
       setBusy("");
     }
@@ -75,6 +80,7 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
   async function apply() {
     setBusy("Applying base import");
     setMessage("Replacing taxonomy database");
+    setError("");
     try {
       const operation = await applyBaseImport();
       const completed = await waitForOperation("mapping", operation.task_id, (next) => setMessage(next.message));
@@ -90,7 +96,8 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
         ...result.warnings,
       ].join(" "));
     } catch (nextError) {
-      setMessage(errorMessage(nextError));
+      setMessage("");
+      setError(errorMessage(nextError));
     } finally {
       setBusy("");
     }
@@ -105,13 +112,14 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
     }
     setBusy(`Removing ${input.alias}`);
     setMessage("");
+    setError("");
     try {
       const result = await removeBaseImportInput(input.alias);
       setInputs(result.inputs);
       setValidation(null);
       setMessage(result.warnings.length > 0 ? result.warnings.join(" ") : "Data source removed.");
     } catch (nextError) {
-      setMessage(errorMessage(nextError));
+      setError(errorMessage(nextError));
     } finally {
       setBusy("");
     }
@@ -142,7 +150,9 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
           }} />
         </div>
       </div>
-      {(message || busy) && <div className="editor-message base-import-status">{busy || message}</div>}
+      {error
+        ? <div className="inline-error base-import-status" role="alert">{error}</div>
+        : (message || busy) && <div className="editor-message base-import-status">{busy || message}</div>}
       {validation && (
         <div className="base-validation">
           <div className="base-metadata-grid">

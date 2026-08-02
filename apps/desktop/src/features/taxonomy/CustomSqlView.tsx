@@ -18,6 +18,7 @@ import { CodeEditor } from "../../shared/CodeEditor";
 import { Button, EmptyState, SectionHeader, VirtualList } from "../../shared/ui";
 import { SqlInputList } from "./SqlInputList";
 import { canExportFullQuery } from "./sqlResults";
+import { resolveSqlWorkbenchLoads } from "./sqlWorkbenchLoading";
 import { emitTaxonomyMutation } from "./taxonomyMutations";
 
 export function CustomSqlView({
@@ -34,12 +35,13 @@ export function CustomSqlView({
   const [error, setError] = useState("");
 
   useEffect(() => {
-    Promise.all([getCustomTaxonomySql(), listCustomSqlInputs()])
-      .then(([savedSql, savedInputs]) => {
-        setSql(savedSql);
-        setInputs(savedInputs);
-      })
-      .catch((nextError) => setError(errorMessage(nextError)));
+    void Promise.allSettled([getCustomTaxonomySql(), listCustomSqlInputs()])
+      .then(([sqlResult, inputsResult]) => {
+        const loaded = resolveSqlWorkbenchLoads(sqlResult, inputsResult);
+        if (loaded.sql !== undefined) setSql(loaded.sql);
+        if (loaded.inputs !== undefined) setInputs(loaded.inputs);
+        setError(loaded.error);
+      });
   }, []);
 
   async function addInput(kind: "csv" | "sqlite", alias: string, path: string) {
@@ -121,7 +123,7 @@ export function CustomSqlView({
           <CodeEditor language="sql" ariaLabel="Custom taxonomy SQL" value={sql} onChange={setSql} />
         </div>
       </div>
-      {(error || busy) && <div className={error ? "inline-error" : "editor-message"}>{error || busy}</div>}
+      {(error || busy) && <div className={error ? "inline-error" : "editor-message"} role={error ? "alert" : undefined}>{error || busy}</div>}
       {result && (
         <div className="sql-results">
           <div className="sql-result-summary">
