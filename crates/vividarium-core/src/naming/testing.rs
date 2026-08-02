@@ -25,7 +25,6 @@ impl NamingHookTestResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NamingHookTestCase {
-    pub name: String,
     pub input: String,
     pub expected: NamingHookTestResult,
 }
@@ -38,7 +37,6 @@ pub struct NamingHookTestCases {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NamingHookCaseResult {
-    pub name: String,
     pub input: String,
     pub expected: NamingHookTestResult,
     pub actual: Option<NamingHookTestResult>,
@@ -85,30 +83,6 @@ pub fn test_naming_hook(
 }
 
 pub fn run_naming_hook_tests(
-    database: &Database,
-    kind: NamingHookKind,
-    script: Option<&str>,
-) -> CoreResult<NamingHookTestReport> {
-    let connection = database.connect_metadata()?;
-    let cases = load_cases(&connection, kind)?;
-    let runner = match script {
-        Some(script) => HookRunner::from_script(kind, script)?,
-        None => HookRunner::load(&connection, kind)?,
-    };
-    run_cases(kind, runner, cases)
-}
-
-fn test_naming_hook_cases(
-    kind: NamingHookKind,
-    script: &str,
-    cases: &[NamingHookTestCase],
-) -> CoreResult<NamingHookTestReport> {
-    validate_cases(kind, cases)?;
-    run_cases(kind, HookRunner::from_script(kind, script)?, cases.to_vec())
-}
-
-pub fn test_and_save_naming_hook(
-    database: &Database,
     kind: NamingHookKind,
     script: &str,
     cases: &[NamingHookTestCase],
@@ -118,17 +92,30 @@ pub fn test_and_save_naming_hook(
             "naming hook script is required".into(),
         ));
     }
-    let report = test_naming_hook_cases(kind, script, cases)?;
-    if report.failed > 0 {
-        return Ok(report);
+    validate_cases(kind, cases)?;
+    run_cases(kind, HookRunner::from_script(kind, script)?, cases.to_vec())
+}
+
+pub fn save_naming_hook(
+    database: &Database,
+    kind: NamingHookKind,
+    script: &str,
+    cases: &[NamingHookTestCase],
+) -> CoreResult<()> {
+    if script.trim().is_empty() {
+        return Err(CoreError::InvalidArgument(
+            "naming hook script is required".into(),
+        ));
     }
+    validate_cases(kind, cases)?;
+    HookRunner::from_script(kind, script)?;
     let mut connection = database.connect_metadata()?;
     let transaction = connection.transaction()?;
     metadata::set_raw(&transaction, kind.metadata_key(), script)?;
     metadata::set_json(&transaction, tests_metadata_key(kind), &cases)?;
     transaction.commit()?;
     let _ = super::queue_photo_hook_remap(database, kind);
-    Ok(report)
+    Ok(())
 }
 
 fn run_cases(
@@ -146,7 +133,6 @@ fn run_cases(
                     passed += 1;
                 }
                 NamingHookCaseResult {
-                    name: case.name,
                     input: case.input,
                     expected: case.expected,
                     actual: Some(actual),
@@ -155,7 +141,6 @@ fn run_cases(
                 }
             }
             Err(error) => NamingHookCaseResult {
-                name: case.name,
                 input: case.input,
                 expected: case.expected,
                 actual: None,
@@ -177,43 +162,32 @@ pub(crate) fn default_test_cases(kind: NamingHookKind) -> Vec<NamingHookTestCase
         NamingHookKind::PhotoFilename => default_photo_filename_test_cases(),
         NamingHookKind::SynonymAuthority => vec![
             synonym_authority_test_case(
-                "parenthesized authority",
                 "Canis lupus (Linnaeus, 1758)",
                 "Canis lupus",
                 "(Linnaeus, 1758)",
             ),
             synonym_authority_test_case(
-                "lowercase authority prefix",
                 "Canis lupus de Silva, 1900",
                 "Canis lupus",
                 "de Silva, 1900",
             ),
             synonym_authority_test_case(
-                "de authority",
                 "\u{200c}Paidia moabitica de Freina, 2004",
                 "\u{200c}Paidia moabitica",
                 "de Freina, 2004",
             ),
             synonym_authority_test_case(
-                "apostrophe authority with year",
                 "\u{200c}Sedum eriocarpum subsp. spathulifolium 't Hart, 1995",
                 "\u{200c}Sedum eriocarpum subsp. spathulifolium",
                 "'t Hart, 1995",
             ),
+            synonym_authority_test_case("Sedum fragrans 't Hart", "Sedum fragrans", "'t Hart"),
             synonym_authority_test_case(
-                "apostrophe authority",
-                "Sedum fragrans 't Hart",
-                "Sedum fragrans",
-                "'t Hart",
-            ),
-            synonym_authority_test_case(
-                "von authority",
                 "Hippocampus natalensis von Bonde, 1923",
                 "Hippocampus natalensis",
                 "von Bonde, 1923",
             ),
             synonym_authority_test_case(
-                "van authority",
                 "Hylophilus moxensis van Els, T. Wijpkema, J.T. Wijpkema, Avalos & Montenegro-Avila, 2026",
                 "Hylophilus moxensis",
                 "van Els, T. Wijpkema, J.T. Wijpkema, Avalos & Montenegro-Avila, 2026",
@@ -225,7 +199,6 @@ pub(crate) fn default_test_cases(kind: NamingHookKind) -> Vec<NamingHookTestCase
 fn default_photo_filename_test_cases() -> Vec<NamingHookTestCase> {
     vec![
         photo_filename_test_case(
-            "family suffix",
             "Herbertaceae003.jpg",
             TaxonomicNameInfo {
                 family_sci: Some("Herbertaceae".into()),
@@ -234,7 +207,6 @@ fn default_photo_filename_test_cases() -> Vec<NamingHookTestCase> {
             "003.jpg",
         ),
         photo_filename_test_case(
-            "genus",
             "Herbertus005.jpg",
             TaxonomicNameInfo {
                 genus_sci: Some("Herbertus".into()),
@@ -243,7 +215,6 @@ fn default_photo_filename_test_cases() -> Vec<NamingHookTestCase> {
             "005.jpg",
         ),
         photo_filename_test_case(
-            "species",
             "Herbertus dicranus010.jpg",
             TaxonomicNameInfo {
                 genus_sci: Some("Herbertus".into()),
@@ -253,7 +224,6 @@ fn default_photo_filename_test_cases() -> Vec<NamingHookTestCase> {
             "010.jpg",
         ),
         photo_filename_test_case(
-            "quoted internal apostrophe",
             "Iris 'a'b'030.jpg",
             TaxonomicNameInfo {
                 genus_sci: Some("Iris".into()),
@@ -263,7 +233,6 @@ fn default_photo_filename_test_cases() -> Vec<NamingHookTestCase> {
             "030.jpg",
         ),
         photo_filename_test_case(
-            "curly double quotes",
             "Iris \u{201c}Blue\u{201d}030.jpg",
             TaxonomicNameInfo {
                 genus_sci: Some("Iris".into()),
@@ -273,7 +242,6 @@ fn default_photo_filename_test_cases() -> Vec<NamingHookTestCase> {
             "030.jpg",
         ),
         photo_filename_test_case(
-            "cultivar conversion",
             "Hosta cv. blue_eyes030.jpg",
             TaxonomicNameInfo {
                 genus_sci: Some("Hosta 'Blue".into()),
@@ -283,7 +251,6 @@ fn default_photo_filename_test_cases() -> Vec<NamingHookTestCase> {
             "030.jpg",
         ),
         photo_filename_test_case(
-            "sex marker",
             "Herbertus dicranusM010.jpg",
             TaxonomicNameInfo {
                 genus_sci: Some("Herbertus".into()),
@@ -293,7 +260,6 @@ fn default_photo_filename_test_cases() -> Vec<NamingHookTestCase> {
             "M010.jpg",
         ),
         photo_filename_test_case(
-            "doubtful marker",
             "Herbertus dicranusYN010.jpg",
             TaxonomicNameInfo {
                 genus_sci: Some("Herbertus".into()),
@@ -303,7 +269,6 @@ fn default_photo_filename_test_cases() -> Vec<NamingHookTestCase> {
             "YN010.jpg",
         ),
         photo_filename_test_case(
-            "leading hybrid genus",
             "\u{00d7} Gasteraloe030.jpg",
             TaxonomicNameInfo {
                 genus_sci: Some("x Gasteraloe".into()),
@@ -312,7 +277,6 @@ fn default_photo_filename_test_cases() -> Vec<NamingHookTestCase> {
             "030.jpg",
         ),
         photo_filename_test_case(
-            "leading hybrid species",
             "\u{00d7} Gasteraloe beguinii030.jpg",
             TaxonomicNameInfo {
                 genus_sci: Some("x Gasteraloe".into()),
@@ -322,7 +286,6 @@ fn default_photo_filename_test_cases() -> Vec<NamingHookTestCase> {
             "030.jpg",
         ),
         photo_filename_test_case(
-            "infix hybrid species",
             "Pinus X pekinensis030.jpg",
             TaxonomicNameInfo {
                 genus_sci: Some("Pinus x".into()),
@@ -332,7 +295,6 @@ fn default_photo_filename_test_cases() -> Vec<NamingHookTestCase> {
             "030.jpg",
         ),
         photo_filename_test_case(
-            "family genus species Chinese",
             "\u{9999}\u{79d1}\u{9999}\u{5c5e}\u{9999}\u{79cd} Canis lupus020.jpg",
             TaxonomicNameInfo {
                 genus_sci: Some("Canis".into()),
@@ -345,7 +307,6 @@ fn default_photo_filename_test_cases() -> Vec<NamingHookTestCase> {
             "020.jpg",
         ),
         photo_filename_test_case(
-            "ke ke shu exception",
             "\u{9999}\u{79d1}\u{79d1}\u{5c5e}020.jpg",
             TaxonomicNameInfo {
                 genus_zh: Some("\u{9999}\u{79d1}\u{79d1}\u{5c5e}".into()),
@@ -354,7 +315,6 @@ fn default_photo_filename_test_cases() -> Vec<NamingHookTestCase> {
             "020.jpg",
         ),
         photo_filename_test_case(
-            "quoted ASCII inside Chinese species",
             "\u{9999}\u{79d1}\u{9999}\u{5c5e}\u{9999}'abc' Gasteraloe 'Wonder'030.jpg",
             TaxonomicNameInfo {
                 genus_sci: Some("Gasteraloe".into()),
@@ -367,7 +327,6 @@ fn default_photo_filename_test_cases() -> Vec<NamingHookTestCase> {
             "030.jpg",
         ),
         photo_filename_test_case(
-            "parenthesized ASCII inside Chinese species",
             "\u{9999}\u{79d1}\u{9999}\u{5c5e}\u{9999}(abc) Gasteraloe beguinii030.jpg",
             TaxonomicNameInfo {
                 genus_sci: Some("Gasteraloe".into()),
@@ -383,13 +342,11 @@ fn default_photo_filename_test_cases() -> Vec<NamingHookTestCase> {
 }
 
 fn photo_filename_test_case(
-    name: &str,
     input: &str,
     info: TaxonomicNameInfo,
     suffix: &str,
 ) -> NamingHookTestCase {
     NamingHookTestCase {
-        name: name.into(),
         input: input.into(),
         expected: NamingHookTestResult::PhotoFilename(ParsedPhotoFilename {
             info,
@@ -399,13 +356,11 @@ fn photo_filename_test_case(
 }
 
 fn synonym_authority_test_case(
-    case_name: &str,
     input: &str,
     name: &str,
     authority_year: &str,
 ) -> NamingHookTestCase {
     NamingHookTestCase {
-        name: case_name.into(),
         input: input.into(),
         expected: NamingHookTestResult::SynonymAuthority(ScientificNameParts {
             name: name.into(),
@@ -440,12 +395,6 @@ fn load_cases(
 
 fn validate_cases(kind: NamingHookKind, cases: &[NamingHookTestCase]) -> CoreResult<()> {
     for (index, case) in cases.iter().enumerate() {
-        if case.name.trim().is_empty() {
-            return Err(CoreError::InvalidArgument(format!(
-                "hook test {} requires a name",
-                index + 1
-            )));
-        }
         if case.expected.kind() != kind {
             return Err(CoreError::InvalidArgument(format!(
                 "hook test {} expected output has the wrong kind",
@@ -469,17 +418,6 @@ enum HookRunner {
 }
 
 impl HookRunner {
-    fn load(connection: &rusqlite::Connection, kind: NamingHookKind) -> CoreResult<Self> {
-        match kind {
-            NamingHookKind::PhotoFilename => {
-                Ok(Self::PhotoFilename(PhotoFilenameParser::load(connection)?))
-            }
-            NamingHookKind::SynonymAuthority => Ok(Self::SynonymAuthority(
-                SynonymAuthorityParser::load(connection)?,
-            )),
-        }
-    }
-
     fn from_script(kind: NamingHookKind, script: &str) -> CoreResult<Self> {
         match kind {
             NamingHookKind::PhotoFilename => Ok(Self::PhotoFilename(
@@ -519,10 +457,10 @@ mod tests {
             NamingHookKind::PhotoFilename,
             NamingHookKind::SynonymAuthority,
         ] {
-            let expected_count = default_test_cases(kind).len();
+            let cases = default_test_cases(kind);
+            let expected_count = cases.len();
             let report =
-                run_naming_hook_tests(&database, kind, Some(get_naming_hook_template(kind)))
-                    .unwrap();
+                run_naming_hook_tests(kind, get_naming_hook_template(kind), &cases).unwrap();
             assert_eq!(report.failed, 0);
             assert_eq!(report.passed, expected_count);
             assert!(report.cases.iter().all(|case| case.actual.is_some()));
@@ -534,11 +472,31 @@ mod tests {
     }
 
     #[test]
+    fn ignores_legacy_test_names_when_loading_metadata() {
+        let directory = TempDir::new().unwrap();
+        let database = Database::open(directory.path().join("test.db")).unwrap();
+        let expected = default_test_cases(NamingHookKind::SynonymAuthority)
+            .into_iter()
+            .next()
+            .unwrap();
+        let mut stored = serde_json::to_value(vec![expected.clone()]).unwrap();
+        stored[0]["name"] = serde_json::Value::String("legacy label".into());
+        metadata::set_raw(
+            &database.connect_metadata().unwrap(),
+            tests_metadata_key(NamingHookKind::SynonymAuthority),
+            &serde_json::to_string(&stored).unwrap(),
+        )
+        .unwrap();
+
+        let loaded = get_naming_hook_test_cases(&database).unwrap();
+        assert_eq!(loaded.synonym_authority, vec![expected]);
+    }
+
+    #[test]
     fn saves_project_test_cases_and_reports_actual_failures() {
         let directory = TempDir::new().unwrap();
         let database = Database::open(directory.path().join("test.db")).unwrap();
         let cases = vec![NamingHookTestCase {
-            name: "expected mismatch".into(),
             input: "Canidae.jpg".into(),
             expected: NamingHookTestResult::PhotoFilename(ParsedPhotoFilename {
                 info: TaxonomicNameInfo::default(),
@@ -549,7 +507,12 @@ mod tests {
 
         let saved = get_naming_hook_test_cases(&database).unwrap();
         assert_eq!(saved.photo_filename, cases);
-        let report = run_naming_hook_tests(&database, NamingHookKind::PhotoFilename, None).unwrap();
+        let report = run_naming_hook_tests(
+            NamingHookKind::PhotoFilename,
+            get_naming_hook_template(NamingHookKind::PhotoFilename),
+            &cases,
+        )
+        .unwrap();
         assert_eq!(report.passed, 0);
         assert_eq!(report.failed, 1);
         assert!(report.cases[0].actual.is_some());
@@ -557,7 +520,7 @@ mod tests {
     }
 
     #[test]
-    fn test_and_save_keeps_the_last_successful_hook_on_failure() {
+    fn test_and_save_are_independent() {
         let directory = TempDir::new().unwrap();
         let database = Database::open(directory.path().join("test.db")).unwrap();
         let script = get_naming_hook_template(NamingHookKind::SynonymAuthority);
@@ -568,8 +531,7 @@ mod tests {
         });
 
         let failed =
-            test_and_save_naming_hook(&database, NamingHookKind::SynonymAuthority, script, &cases)
-                .unwrap();
+            run_naming_hook_tests(NamingHookKind::SynonymAuthority, script, &cases).unwrap();
         assert_eq!(failed.failed, 1);
         assert_eq!(
             crate::naming::get_naming_hook_settings(&database)
@@ -580,9 +542,16 @@ mod tests {
 
         let cases = default_test_cases(NamingHookKind::SynonymAuthority);
         let passed =
-            test_and_save_naming_hook(&database, NamingHookKind::SynonymAuthority, script, &cases)
-                .unwrap();
+            run_naming_hook_tests(NamingHookKind::SynonymAuthority, script, &cases).unwrap();
         assert_eq!(passed.failed, 0);
+        assert_eq!(
+            crate::naming::get_naming_hook_settings(&database)
+                .unwrap()
+                .synonym_authority,
+            None
+        );
+
+        save_naming_hook(&database, NamingHookKind::SynonymAuthority, script, &cases).unwrap();
         assert_eq!(
             crate::naming::get_naming_hook_settings(&database)
                 .unwrap()

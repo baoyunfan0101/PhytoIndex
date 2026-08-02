@@ -3,6 +3,7 @@ import {
   ArrowUp,
   Beaker,
   BookOpen,
+  BugPlay,
   CaseSensitive,
   Database,
   FolderCog,
@@ -51,10 +52,11 @@ import {
   getPhotoFilenameFormatSettings,
   getPhotoNameMatchSettings,
   getTaxonomyNameSeparator,
+  runNamingHookTests,
+  saveNamingHook,
   setPhotoFilenameFormatSettings,
   setPhotoNameMatchSettings,
   setTaxonomyNameSeparator,
-  testAndSaveNamingHook,
   type NamingHookKind,
   type NamingHookTestCase,
   type NamingHookTestReport,
@@ -516,6 +518,7 @@ function HooksSettings() {
   const [scripts, setScripts] = useState<Record<NamingHookKind, string>>({ photo_filename: "", synonym_authority: "" });
   const [cases, setCases] = useState<Record<NamingHookKind, NamingHookTestCase[]>>({ photo_filename: [], synonym_authority: [] });
   const [report, setReport] = useState<NamingHookTestReport | null>(null);
+  const [testedSnapshot, setTestedSnapshot] = useState<Record<NamingHookKind, string | null>>({ photo_filename: null, synonym_authority: null });
   const [message, setMessage] = useState("");
 
   useEffect(() => {
@@ -543,15 +546,37 @@ function HooksSettings() {
     };
   }, []);
 
+  const currentSnapshot = JSON.stringify({ script: scripts[kind], cases: cases[kind] });
+
+  function invalidate(nextScripts = scripts, nextCases = cases) {
+    setScripts(nextScripts);
+    setCases(nextCases);
+    setReport(null);
+    setTestedSnapshot({ ...testedSnapshot, [kind]: null });
+  }
+
   async function run() {
     try {
-      const next = await testAndSaveNamingHook(kind, scripts[kind], cases[kind]);
+      const snapshot = currentSnapshot;
+      const next = await runNamingHookTests(kind, scripts[kind], cases[kind]);
       setReport(next);
       if (next.failed === 0) {
-        setMessage("All tests passed. Hook and project tests saved.");
+        setTestedSnapshot({ ...testedSnapshot, [kind]: snapshot });
+        setMessage("All tests passed. The current Hook can be saved.");
       } else {
-        setMessage("Hook was not saved because tests failed.");
+        setTestedSnapshot({ ...testedSnapshot, [kind]: null });
+        setMessage("Tests failed. Review the actual output before saving.");
       }
+    } catch (nextError) {
+      setTestedSnapshot({ ...testedSnapshot, [kind]: null });
+      setMessage(errorMessage(nextError));
+    }
+  }
+
+  async function save() {
+    try {
+      await saveNamingHook(kind, scripts[kind], cases[kind]);
+      setMessage("Hook and project tests saved.");
     } catch (nextError) {
       setMessage(errorMessage(nextError));
     }
@@ -559,9 +584,12 @@ function HooksSettings() {
 
   return (
     <div className="hooks-settings">
-      <SectionHeader title="Rhai hooks" detail="Default implementations and user overrides share the same execution path" actions={
-        <Button variant="primary" onClick={() => void run()}><Beaker size={13} />Test and save</Button>
-      } />
+      <SectionHeader title="Rhai hooks" detail="Default implementations and user overrides share the same execution path" actions={(
+        <>
+          <Button onClick={() => void run()}><BugPlay size={13} />Test</Button>
+          <Button variant="primary" disabled={testedSnapshot[kind] !== currentSnapshot} onClick={() => void save()}><Save size={13} />Save</Button>
+        </>
+      )} />
       <Segmented value={kind} items={["photo_filename", "synonym_authority"] as const} onChange={(next) => {
         setKind(next);
         setReport(null);
@@ -571,23 +599,23 @@ function HooksSettings() {
           language="rhai"
           ariaLabel={`${kind} Rhai source`}
           value={scripts[kind]}
-          onChange={(value) => setScripts({ ...scripts, [kind]: value })}
+          onChange={(value) => invalidate({ ...scripts, [kind]: value })}
         />
         <div className="hook-tests">
-          <header><strong>Project tests</strong><Button variant="ghost" size="small" onClick={() => setCases({ ...cases, [kind]: [...cases[kind], { name: "New test", input: "", expected: { kind, output: {} } }] })}>+ Add</Button></header>
+          <header><strong>Project tests</strong><Button variant="ghost" size="small" onClick={() => invalidate(scripts, { ...cases, [kind]: [...cases[kind], { input: "", expected: { kind, output: {} } }] })}>+ Add</Button></header>
           <VirtualList
             items={cases[kind]}
             rowHeight={report ? 252 : 228}
             itemKey={(_, index) => index}
             renderItem={(item, index) => (
               <div className={`hook-test-row${report?.cases[index] && !report.cases[index].passed ? " failed" : ""}`}>
-                <input value={item.name} onChange={(event) => changeCase(cases, setCases, kind, index, { ...item, name: event.target.value })} />
-                <input value={item.input} placeholder="Raw input" onChange={(event) => changeCase(cases, setCases, kind, index, { ...item, input: event.target.value })} />
-                <Button size="small" onClick={() => setCases({ ...cases, [kind]: cases[kind].filter((_, itemIndex) => itemIndex !== index) })}>Delete</Button>
+                <strong>Test {index + 1}</strong>
+                <input value={item.input} placeholder="Raw input" onChange={(event) => invalidate(scripts, changeCase(cases, kind, index, { ...item, input: event.target.value }))} />
+                <Button size="small" onClick={() => invalidate(scripts, { ...cases, [kind]: cases[kind].filter((_, itemIndex) => itemIndex !== index) })}>Delete</Button>
                 <ExpectedEditor
                   value={item.expected}
-                  testName={item.name}
-                  onChange={(expected) => changeCase(cases, setCases, kind, index, { ...item, expected })}
+                  testNumber={index + 1}
+                  onChange={(expected) => invalidate(scripts, changeCase(cases, kind, index, { ...item, expected }))}
                 />
                 {report?.cases[index] && <span className="hook-test-actual">Actual: {JSON.stringify(report.cases[index].actual)}</span>}
               </div>
@@ -602,11 +630,11 @@ function HooksSettings() {
 
 function ExpectedEditor({
   value,
-  testName,
+  testNumber,
   onChange,
 }: {
   value: NamingHookTestResult;
-  testName: string;
+  testNumber: number;
   onChange: (value: NamingHookTestResult) => void;
 }) {
   const serialized = JSON.stringify(value, null, 2);
@@ -631,19 +659,18 @@ function ExpectedEditor({
 
   return (
     <div className={`hook-expected${error ? " invalid" : ""}`} title={error}>
-      <CodeEditor language="json" ariaLabel={`${testName} expected output`} value={draft} onChange={update} />
+      <CodeEditor language="json" ariaLabel={`Test ${testNumber} expected output`} value={draft} onChange={update} />
     </div>
   );
 }
 
 function changeCase(
   cases: Record<NamingHookKind, NamingHookTestCase[]>,
-  setCases: (value: Record<NamingHookKind, NamingHookTestCase[]>) => void,
   kind: NamingHookKind,
   index: number,
   value: NamingHookTestCase,
-) {
-  setCases({ ...cases, [kind]: cases[kind].map((item, itemIndex) => itemIndex === index ? value : item) });
+): Record<NamingHookKind, NamingHookTestCase[]> {
+  return { ...cases, [kind]: cases[kind].map((item, itemIndex) => itemIndex === index ? value : item) };
 }
 
 function Setting({ label, value }: { label: string; value: string }) {

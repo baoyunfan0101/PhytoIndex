@@ -53,7 +53,7 @@ pub fn run() {
             commands::test_naming_hook,
             commands::get_naming_hook_test_cases,
             commands::run_naming_hook_tests,
-            commands::test_and_save_naming_hook,
+            commands::save_naming_hook,
             commands::get_photo_name_match_settings,
             commands::set_photo_name_match_settings,
             commands::get_photo_filename_format_settings,

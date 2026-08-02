@@ -28,8 +28,8 @@ pub use synonym::{
 pub use templates::{NamingHookTemplates, get_naming_hook_template, get_naming_hook_templates};
 pub use testing::{
     NamingHookCaseResult, NamingHookTestCase, NamingHookTestCases, NamingHookTestReport,
-    NamingHookTestResult, get_naming_hook_test_cases, run_naming_hook_tests,
-    test_and_save_naming_hook, test_naming_hook,
+    NamingHookTestResult, get_naming_hook_test_cases, run_naming_hook_tests, save_naming_hook,
+    test_naming_hook,
 };
 
 #[cfg(test)]

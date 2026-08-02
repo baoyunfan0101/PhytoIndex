@@ -8,7 +8,7 @@ export type NamingHookTemplates = { photo_filename: string; synonym_authority: s
 export type NamingHookTestResult =
   | { kind: "photo_filename"; output: unknown }
   | { kind: "synonym_authority"; output: unknown };
-export type NamingHookTestCase = { name: string; input: string; expected: NamingHookTestResult };
+export type NamingHookTestCase = { input: string; expected: NamingHookTestResult };
 export type NamingHookTestCases = {
   photo_filename: NamingHookTestCase[];
   synonym_authority: NamingHookTestCase[];
@@ -37,7 +37,6 @@ export type PhotoFilenameFormatSettings = {
 
 const defaultCases = (): NamingHookTestCases => ({
   photo_filename: [{
-    name: "species",
     input: "Herbertus dicranus010.jpg",
     expected: {
       kind: "photo_filename",
@@ -55,7 +54,6 @@ const defaultCases = (): NamingHookTestCases => ({
     },
   }],
   synonym_authority: [{
-    name: "parenthesized authority",
     input: "Canis lupus (Linnaeus, 1758)",
     expected: {
       kind: "synonym_authority",
@@ -73,20 +71,14 @@ export const getNamingHookTemplates = () =>
   }));
 export const getNamingHookTestCases = () =>
   call<NamingHookTestCases>("get_naming_hook_test_cases", undefined, defaultCases);
-export const runNamingHookTests = (kind: NamingHookKind, script: string | null) =>
-  call<NamingHookTestReport>("run_naming_hook_tests", { kind, script }, async () => {
-    const cases = (await getNamingHookTestCases())[kind];
+export const runNamingHookTests = (kind: NamingHookKind, script: string, cases: NamingHookTestCase[]) =>
+  call<NamingHookTestReport>("run_naming_hook_tests", { kind, script, cases }, () => {
     return { kind, passed: cases.length, failed: 0, cases: cases.map((item) => ({
       ...item, actual: item.expected, passed: true, error: null,
     })) };
   });
-export const testAndSaveNamingHook = (kind: NamingHookKind, script: string, cases: NamingHookTestCase[]) =>
-  call<NamingHookTestReport>("test_and_save_naming_hook", { kind, script, cases }, () => ({
-    kind,
-    passed: cases.length,
-    failed: 0,
-    cases: cases.map((item) => ({ ...item, actual: item.expected, passed: true, error: null })),
-  }));
+export const saveNamingHook = (kind: NamingHookKind, script: string, cases: NamingHookTestCase[]) =>
+  call<void>("save_naming_hook", { kind, script, cases }, () => undefined);
 export const getPhotoNameMatchSettings = () =>
   call<PhotoNameMatchSettings>("get_photo_name_match_settings", undefined, () => ({
     priority: ["species_sci", "species_zh", "genus_sci", "genus_zh", "family_sci", "family_zh"],

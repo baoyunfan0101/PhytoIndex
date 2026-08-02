@@ -373,21 +373,21 @@ pub fn get_naming_hook_test_cases(
 
 #[tauri::command]
 pub fn run_naming_hook_tests(
-    state: State<'_, AppState>,
-    kind: NamingHookKind,
-    script: Option<String>,
-) -> CommandResult<NamingHookTestReport> {
-    naming::run_naming_hook_tests(&state.database, kind, script.as_deref()).map_err(error)
-}
-
-#[tauri::command]
-pub fn test_and_save_naming_hook(
-    state: State<'_, AppState>,
     kind: NamingHookKind,
     script: String,
     cases: Vec<NamingHookTestCase>,
 ) -> CommandResult<NamingHookTestReport> {
-    naming::test_and_save_naming_hook(&state.database, kind, &script, &cases).map_err(error)
+    naming::run_naming_hook_tests(kind, &script, &cases).map_err(error)
+}
+
+#[tauri::command]
+pub fn save_naming_hook(
+    state: State<'_, AppState>,
+    kind: NamingHookKind,
+    script: String,
+    cases: Vec<NamingHookTestCase>,
+) -> CommandResult<()> {
+    naming::save_naming_hook(&state.database, kind, &script, &cases).map_err(error)
 }
 
 #[tauri::command]

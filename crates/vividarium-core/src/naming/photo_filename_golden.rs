@@ -4,15 +4,18 @@ use crate::naming::testing::{NamingHookTestResult, default_test_cases};
 
 #[test]
 fn legacy_parse_file_name_golden_cases() {
-    for case in default_test_cases(NamingHookKind::PhotoFilename) {
+    for (index, case) in default_test_cases(NamingHookKind::PhotoFilename)
+        .into_iter()
+        .enumerate()
+    {
         let NamingHookTestResult::PhotoFilename(expected) = case.expected else {
             panic!("photo filename case has the wrong output kind");
         };
         assert_eq!(
             default_parse_photo_filename(&case.input).unwrap(),
             expected,
-            "{}",
-            case.name
+            "case {}",
+            index + 1
         );
     }
 }
