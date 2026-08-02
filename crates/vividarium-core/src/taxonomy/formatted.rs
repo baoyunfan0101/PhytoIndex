@@ -1648,7 +1648,11 @@ pub(super) fn validate_taxonomy(connection: &Connection) -> CoreResult<()> {
             FROM taxa AS child
             LEFT JOIN taxa AS parent ON parent.taxon_id = child.parent_taxon_id
             WHERE (child.rank = 1 AND child.parent_taxon_id IS NOT NULL)
-               OR (child.rank > 1 AND (parent.taxon_id IS NULL OR parent.rank != child.rank - 1))
+               OR (child.rank > 1 AND (
+                    child.parent_taxon_id IS NULL
+                    OR parent.taxon_id IS NULL
+                    OR parent.rank >= child.rank
+               ))
             LIMIT 1
             "#,
             [],

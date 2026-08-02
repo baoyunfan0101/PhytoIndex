@@ -8,6 +8,84 @@ fn database() -> (TempDir, Database) {
     (directory, database)
 }
 
+fn validate_parentage(rows: &[(i64, Option<i64>, i64)]) -> CoreResult<()> {
+    let (_directory, database) = database();
+    let connection = database.connect_taxonomy_metadata_context()?;
+    connection.execute_batch("PRAGMA foreign_keys = OFF")?;
+    for (taxon_id, parent_taxon_id, rank) in rows {
+        connection.execute(
+            "INSERT INTO taxa (taxon_id, parent_taxon_id, rank) VALUES (?, ?, ?)",
+            params![taxon_id, parent_taxon_id, rank],
+        )?;
+        connection.execute(
+            "INSERT INTO taxon_names (taxon_id, name_type, name) VALUES (?, 1, ?)",
+            params![taxon_id, format!("Taxon {taxon_id}")],
+        )?;
+    }
+    validate_taxonomy(&connection)
+}
+
+#[test]
+fn parentage_validation_accepts_the_complete_five_rank_tree() {
+    validate_parentage(&[
+        (1, None, 1),
+        (2, Some(1), 2),
+        (3, Some(2), 3),
+        (4, Some(3), 4),
+        (5, Some(4), 5),
+    ])
+    .unwrap();
+}
+
+#[test]
+fn parentage_validation_accepts_skipped_ranks() {
+    validate_parentage(&[
+        (1, None, 1),
+        (2, Some(1), 2),
+        (3, Some(1), 3),
+        (4, Some(1), 4),
+        (5, Some(2), 5),
+        (6, Some(3), 5),
+    ])
+    .unwrap();
+}
+
+#[test]
+fn parentage_validation_rejects_equal_parent_and_child_ranks() {
+    let error = validate_parentage(&[(1, None, 1), (2, Some(1), 2), (3, Some(2), 2)]).unwrap_err();
+    assert!(error.to_string().contains("taxon 3 has invalid parentage"));
+}
+
+#[test]
+fn parentage_validation_rejects_a_lower_rank_parent() {
+    let error = validate_parentage(&[(1, None, 1), (2, Some(1), 5), (3, Some(2), 3)]).unwrap_err();
+    assert!(error.to_string().contains("taxon 3 has invalid parentage"));
+}
+
+#[test]
+fn parentage_validation_rejects_a_missing_parent() {
+    let error = validate_parentage(&[(1, None, 1), (2, Some(99), 2)]).unwrap_err();
+    assert!(error.to_string().contains("taxon 2 has invalid parentage"));
+}
+
+#[test]
+fn parentage_validation_rejects_a_cycle() {
+    let error = validate_parentage(&[(1, Some(2), 2), (2, Some(1), 3)]).unwrap_err();
+    assert!(error.to_string().contains("invalid parentage"));
+}
+
+#[test]
+fn parentage_validation_rejects_a_parentless_non_kingdom() {
+    let error = validate_parentage(&[(1, None, 1), (2, None, 3)]).unwrap_err();
+    assert!(error.to_string().contains("taxon 2 has invalid parentage"));
+}
+
+#[test]
+fn parentage_validation_rejects_a_kingdom_with_a_parent() {
+    let error = validate_parentage(&[(1, Some(2), 1), (2, None, 1)]).unwrap_err();
+    assert!(error.to_string().contains("taxon 1 has invalid parentage"));
+}
+
 #[test]
 fn name_type_codes_follow_public_name_order() {
     for (index, name_type) in TaxonomyNameType::ALL.into_iter().enumerate() {

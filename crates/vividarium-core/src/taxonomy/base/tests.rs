@@ -241,7 +241,7 @@ fn create_invalid_base_database(path: &Path) {
                     taxon_id, parent_taxon_id, rank, geological_range
                 ) VALUES
                     (201, NULL, 1, NULL),
-                    (202, 201, 3, NULL);
+                    (202, 201, 1, NULL);
                 INSERT INTO taxon_names (
                     name_id, taxon_id, name_type, name
                 ) VALUES
