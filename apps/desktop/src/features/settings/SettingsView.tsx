@@ -604,7 +604,16 @@ function HooksSettings({ kind }: { kind: NamingHookKind }) {
                 {report?.cases[index] && (
                   <div className="hook-test-actual">
                     <span>Actual output</span>
-                    <pre>{JSON.stringify(report.cases[index].actual, null, 2)}</pre>
+                    <CodeEditor
+                      autoGrow
+                      language="json"
+                      ariaLabel={`Test ${index + 1} actual output`}
+                      minHeight={72}
+                      maxHeight={160}
+                      onChange={() => undefined}
+                      readOnly
+                      value={JSON.stringify(report.cases[index].actual, null, 2)}
+                    />
                     {report.cases[index].error && <p>{report.cases[index].error}</p>}
                   </div>
                 )}
@@ -652,7 +661,15 @@ function ExpectedEditor({
 
   return (
     <div className={`hook-expected${error ? " invalid" : ""}`} title={error}>
-      <CodeEditor language="json" ariaLabel={`Test ${testNumber} expected output`} value={draft} onChange={update} />
+      <CodeEditor
+        autoGrow
+        language="json"
+        ariaLabel={`Test ${testNumber} expected output`}
+        minHeight={72}
+        maxHeight={160}
+        value={draft}
+        onChange={update}
+      />
     </div>
   );
 }

@@ -73,35 +73,15 @@
 .segmented button { height: 26px; padding: 0 8px; border: 0; border-right: 1px solid var(--line-strong); color: var(--muted); background: #252525; text-transform: capitalize; }
 .segmented button:last-child { border-right: 0; }
 .segmented button.active { color: #fff; background: #3b3b3b; }
-.code-editor { position: relative; min-width: 0; min-height: 0; overflow: hidden; background: #171717; }
-.code-editor pre, .code-editor textarea {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  margin: 0;
-  padding: 16px;
-  overflow: auto;
-  border: 0;
-  font: 12px/1.65 "SFMono-Regular", Consolas, monospace;
-  tab-size: 2;
-  white-space: pre;
-}
-.code-editor pre { color: #cfcfcf; overflow: hidden; pointer-events: none; }
-.code-editor textarea {
-  color: transparent;
-  caret-color: #fff;
-  background: transparent;
-  resize: none;
-  -webkit-text-fill-color: transparent;
-}
-.code-editor textarea::selection { background: #477057aa; }
-.syntax-keyword { color: #c586c0; }
-.syntax-string { color: #ce9178; }
-.syntax-number { color: #b5cea8; }
-.syntax-comment { color: #6a9955; font-style: italic; }
-.syntax-function { color: #dcdcaa; }
-.syntax-identifier { color: #9cdcfe; }
+.code-editor { position: relative; width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden; background: #171717; }
+.code-editor-mount, .code-editor-mount > .cm-editor { width: 100%; height: 100%; min-width: 0; min-height: 0; }
+.code-editor:has(.cm-focused) { box-shadow: inset 0 0 0 1px var(--accent-bright); }
+.code-editor-read-only { background: #1b1b1b; }
+.code-editor-auto-grow { height: auto; overflow: visible; }
+.code-editor-auto-grow .code-editor-mount,
+.code-editor-auto-grow .code-editor-mount > .cm-editor { height: auto; min-height: inherit; max-height: inherit; }
+.code-editor-auto-grow .cm-scroller { min-height: inherit; max-height: inherit; }
+.code-editor-error { height: 100%; overflow: auto; }
 .editor-message { padding: 8px 12px; color: var(--muted); }
 .resizable-panels {
   display: grid;

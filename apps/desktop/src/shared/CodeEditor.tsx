@@ -1,90 +1,201 @@
-import { useRef, type ReactNode, type UIEvent } from "react";
+import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
+import {
+  HighlightStyle,
+  bracketMatching,
+  indentOnInput,
+  syntaxHighlighting,
+} from "@codemirror/language";
+import { Compartment, EditorState } from "@codemirror/state";
+import {
+  EditorView,
+  drawSelection,
+  dropCursor,
+  keymap,
+} from "@codemirror/view";
+import { tags } from "@lezer/highlight";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
+import {
+  externalValueTransaction,
+  externalValueUpdate,
+  languageExtension,
+  type CodeLanguage,
+} from "./codeEditorSupport";
 
-type CodeLanguage = "json" | "rhai" | "sql";
-
-const keywordSets: Record<CodeLanguage, Set<string>> = {
-  json: new Set(["false", "null", "true"]),
-  rhai: new Set([
-    "break", "continue", "else", "false", "fn", "for", "if", "in", "let",
-    "private", "return", "switch", "throw", "true", "while",
-  ]),
-  sql: new Set([
-    "alter", "and", "as", "begin", "by", "case", "commit", "create", "delete",
-    "distinct", "drop", "else", "end", "from", "group", "having", "in", "insert",
-    "into", "is", "join", "limit", "not", "null", "on", "or", "order", "rollback",
-    "select", "set", "table", "then", "union", "update", "values", "when", "where",
-  ]),
+export type CodeEditorProps = {
+  ariaLabel: string;
+  autoGrow?: boolean;
+  className?: string;
+  height?: CSSProperties["height"];
+  language: CodeLanguage;
+  maxHeight?: CSSProperties["maxHeight"];
+  minHeight?: CSSProperties["minHeight"];
+  onChange: (value: string) => void;
+  readOnly?: boolean;
+  value: string;
 };
 
-const rhaiFunctions = new Set([
-  "contains", "ends_with", "get", "index_of", "is_ascii_alpha", "is_uppercase",
-  "is_whitespace", "len", "normalize_name", "replace", "starts_with",
-  "sub_string", "trim",
-]);
-
-const tokenPattern =
-  /(\/\/[^\n]*|--[^\n]*|\/\*[\s\S]*?\*\/|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\b\d+(?:\.\d+)?\b|\b[A-Za-z_][A-Za-z0-9_]*\b)/g;
-
 export function CodeEditor({
-  language,
-  value,
-  onChange,
   ariaLabel,
-}: {
-  language: CodeLanguage;
-  value: string;
-  onChange: (value: string) => void;
-  ariaLabel: string;
-}) {
-  const highlightRef = useRef<HTMLPreElement>(null);
+  autoGrow = false,
+  className = "",
+  height,
+  language,
+  maxHeight,
+  minHeight,
+  onChange,
+  readOnly = false,
+  value,
+}: CodeEditorProps) {
+  const parentRef = useRef<HTMLDivElement>(null);
+  const viewRef = useRef<EditorView | null>(null);
+  const onChangeRef = useRef(onChange);
+  const languageCompartment = useRef(new Compartment());
+  const readOnlyCompartment = useRef(new Compartment());
+  const accessibilityCompartment = useRef(new Compartment());
+  const [initializationError, setInitializationError] = useState("");
+  onChangeRef.current = onChange;
 
-  function syncScroll(event: UIEvent<HTMLTextAreaElement>) {
-    if (!highlightRef.current) return;
-    highlightRef.current.scrollTop = event.currentTarget.scrollTop;
-    highlightRef.current.scrollLeft = event.currentTarget.scrollLeft;
-  }
+  useEffect(() => {
+    if (!parentRef.current) return;
+    try {
+      const view = new EditorView({
+        parent: parentRef.current,
+        state: EditorState.create({
+          doc: value,
+          extensions: [
+            history(),
+            drawSelection(),
+            dropCursor(),
+            indentOnInput(),
+            bracketMatching(),
+            keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
+            syntaxHighlighting(vividariumHighlightStyle),
+            vividariumEditorTheme,
+            languageCompartment.current.of(languageExtension(language)),
+            readOnlyCompartment.current.of(readOnlyExtensions(readOnly)),
+            accessibilityCompartment.current.of(accessibilityAttributes(ariaLabel, readOnly)),
+            EditorView.updateListener.of((update) => {
+              if (
+                update.docChanged
+                && !update.transactions.some((transaction) => transaction.annotation(externalValueUpdate))
+              ) {
+                onChangeRef.current(update.state.doc.toString());
+              }
+            }),
+          ],
+        }),
+      });
+      viewRef.current = view;
+      return () => {
+        viewRef.current = null;
+        view.destroy();
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`CodeEditor initialization failed for ${language}:`, error);
+      setInitializationError(`Code editor could not be initialized: ${message}`);
+    }
+  }, []);
+
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    const transaction = externalValueTransaction(view.state, value);
+    if (transaction) view.dispatch(transaction);
+  }, [value]);
+
+  useEffect(() => {
+    viewRef.current?.dispatch({
+      effects: languageCompartment.current.reconfigure(languageExtension(language)),
+    });
+  }, [language]);
+
+  useEffect(() => {
+    viewRef.current?.dispatch({
+      effects: readOnlyCompartment.current.reconfigure(readOnlyExtensions(readOnly)),
+    });
+  }, [readOnly]);
+
+  useEffect(() => {
+    viewRef.current?.dispatch({
+      effects: accessibilityCompartment.current.reconfigure(accessibilityAttributes(ariaLabel, readOnly)),
+    });
+  }, [ariaLabel, readOnly]);
+
+  const classes = [
+    "code-editor",
+    `language-${language}`,
+    autoGrow ? "code-editor-auto-grow" : "",
+    readOnly ? "code-editor-read-only" : "",
+    className,
+  ].filter(Boolean).join(" ");
 
   return (
-    <div className={`code-editor language-${language}`}>
-      <pre ref={highlightRef} aria-hidden="true">
-        <code>{highlight(value, language)}{"\n"}</code>
-      </pre>
-      <textarea
-        aria-label={ariaLabel}
-        spellCheck={false}
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        onScroll={syncScroll}
-      />
+    <div
+      className={classes}
+      style={{ height, maxHeight, minHeight }}
+    >
+      {initializationError
+        ? <div className="inline-error code-editor-error" role="alert">{initializationError}</div>
+        : <div className="code-editor-mount" ref={parentRef} />}
     </div>
   );
 }
 
-function highlight(value: string, language: CodeLanguage): ReactNode[] {
-  const output: ReactNode[] = [];
-  let cursor = 0;
-  tokenPattern.lastIndex = 0;
-  for (let match = tokenPattern.exec(value); match; match = tokenPattern.exec(value)) {
-    if (match.index > cursor) output.push(value.slice(cursor, match.index));
-    const token = match[0];
-    output.push(
-      <span className={`syntax-${classify(token, language)}`} key={`${match.index}:${token}`}>
-        {token}
-      </span>,
-    );
-    cursor = match.index + token.length;
-  }
-  if (cursor < value.length) output.push(value.slice(cursor));
-  return output;
+function readOnlyExtensions(readOnly: boolean) {
+  return [
+    EditorState.readOnly.of(readOnly),
+    EditorView.editable.of(!readOnly),
+    EditorView.editorAttributes.of({ class: readOnly ? "cm-readonly" : "cm-editable" }),
+  ];
 }
 
-function classify(token: string, language: CodeLanguage): string {
-  if (token.startsWith("//") || token.startsWith("--") || token.startsWith("/*")) {
-    return "comment";
-  }
-  if (token.startsWith("\"") || token.startsWith("'")) return "string";
-  if (/^\d/.test(token)) return "number";
-  if (keywordSets[language].has(token.toLocaleLowerCase())) return "keyword";
-  if (language === "rhai" && rhaiFunctions.has(token)) return "function";
-  return "identifier";
+function accessibilityAttributes(ariaLabel: string, readOnly: boolean) {
+  return EditorView.contentAttributes.of({
+    "aria-label": ariaLabel,
+    "aria-readonly": String(readOnly),
+  });
 }
+
+const vividariumEditorTheme = EditorView.theme({
+  "&": {
+    width: "100%",
+    height: "100%",
+    color: "#cfcfcf",
+    backgroundColor: "#171717",
+  },
+  "&.cm-focused": { outline: "none" },
+  ".cm-scroller": {
+    overflow: "auto",
+    overscrollBehavior: "contain",
+    fontFamily: '"SFMono-Regular", Consolas, monospace',
+    fontSize: "12px",
+    lineHeight: "1.65",
+  },
+  ".cm-content": {
+    minWidth: "max-content",
+    padding: "16px",
+    caretColor: "#fff",
+  },
+  ".cm-line": { padding: "0" },
+  ".cm-cursor, .cm-dropCursor": { borderLeftColor: "#fff" },
+  ".cm-selectionBackground, &.cm-focused .cm-selectionBackground, ::selection": {
+    backgroundColor: "#477057aa !important",
+  },
+  ".cm-content[contenteditable=false]": { caretColor: "transparent" },
+});
+
+const vividariumHighlightStyle = HighlightStyle.define([
+  { tag: tags.keyword, color: "#c586c0" },
+  { tag: [tags.string, tags.special(tags.string)], color: "#ce9178" },
+  { tag: [tags.number, tags.bool, tags.null], color: "#b5cea8" },
+  { tag: [tags.lineComment, tags.blockComment], color: "#6a9955", fontStyle: "italic" },
+  { tag: tags.function(tags.variableName), color: "#dcdcaa" },
+  { tag: [tags.variableName, tags.propertyName], color: "#9cdcfe" },
+  { tag: [tags.operator, tags.bracket], color: "#d4d4d4" },
+]);
