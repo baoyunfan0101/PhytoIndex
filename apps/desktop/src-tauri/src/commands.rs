@@ -743,11 +743,16 @@ pub fn list_custom_sql_inputs(
 }
 
 #[tauri::command]
-pub fn add_custom_sql_input(
+pub async fn add_custom_sql_input(
     state: State<'_, AppState>,
     request: AddSqlInputRequest,
 ) -> CommandResult<AddSqlInputResult> {
-    taxonomy::add_custom_sql_input(&state.database, &request).map_err(error)
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        taxonomy::add_custom_sql_input(&database, &request).map_err(error)
+    })
+    .await
+    .map_err(error)?
 }
 
 #[tauri::command]
@@ -927,11 +932,16 @@ pub fn list_base_import_inputs(
 }
 
 #[tauri::command]
-pub fn add_base_import_input(
+pub async fn add_base_import_input(
     state: State<'_, AppState>,
     request: AddSqlInputRequest,
 ) -> CommandResult<AddSqlInputResult> {
-    taxonomy::add_base_import_input(&state.database, &request).map_err(error)
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        taxonomy::add_base_import_input(&database, &request).map_err(error)
+    })
+    .await
+    .map_err(error)?
 }
 
 #[tauri::command]
