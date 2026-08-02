@@ -1,15 +1,16 @@
 import {
   Activity,
+  ArrowDownUp,
   ArrowLeft,
-  ArrowRightLeft,
   ArrowRight,
-  Braces,
+  Code,
   Database,
+  DatabaseSearch,
   FileClock,
-  FolderOpen,
-  History,
-  ListTree,
-  Map,
+  Folder,
+  FolderClock,
+  MapPinned,
+  Network,
   Search,
   Settings,
   TableProperties,
@@ -108,15 +109,15 @@ const keepAliveTabKinds = new Set<TabKind>([
 ]);
 
 const photoItems: Array<[TabKind, string, IconComponent]> = [
-  ["folders", "Folders", FolderOpen],
-  ["photo-taxonomy", "Photo hierarchy", ListTree],
-  ["map", "Map", Map],
-  ["photo-history", "Rename history", History],
+  ["folders", "Folders", Folder],
+  ["photo-taxonomy", "Taxon Tree", Network],
+  ["map", "Map", MapPinned],
+  ["photo-history", "Rename history", FolderClock],
 ];
 const taxonomyItems: Array<[TabKind, string, IconComponent]> = [
-  ["taxonomy-search", "Taxonomy search", Database],
+  ["taxonomy-search", "Taxonomy search", DatabaseSearch],
   ["formatted-update", "Formatted update", TableProperties],
-  ["custom-sql", "Custom SQL", Braces],
+  ["custom-sql", "Custom SQL", Code],
   ["taxonomy-history", "Update history", FileClock],
 ];
 
@@ -394,7 +395,7 @@ export function DesktopShell() {
         <div className="activity-divider" />
         {photoItems.map(([kind, label, icon]) => <ActivityButton key={kind} icon={icon} label={label} active={active?.kind === kind} disabled={!workspaceAvailable} onClick={() => openModule(kind, label)} />)}
         <div className="activity-divider" />
-        <ActivityButton icon={ArrowRightLeft} label="Mapping" active={active?.kind === "mapping"} disabled={!workspaceAvailable} onClick={() => openModule("mapping", "Mapping")} />
+        <ActivityButton icon={ArrowDownUp} label="Mapping" active={active?.kind === "mapping"} disabled={!workspaceAvailable} onClick={() => openModule("mapping", "Mapping")} />
         <div className="activity-divider" />
         {taxonomyItems.map(([kind, label, icon]) => <ActivityButton key={kind} icon={icon} label={label} active={active?.kind === kind} onClick={() => openModule(kind, label)} />)}
         <div className="activity-spacer" />
