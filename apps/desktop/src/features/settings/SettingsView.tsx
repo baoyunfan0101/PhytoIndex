@@ -135,7 +135,9 @@ export function SettingsView({
         {hooksExpanded && (
           <div className="settings-subnav">
             {(["Filename Parser", "Synonym Splitter"] as const).map((id) => (
-              <button className={section === id ? "active" : ""} type="button" key={id} onClick={() => onSectionChange(id)}>{id}</button>
+              <button className={section === id ? "active" : ""} type="button" key={id} onClick={() => onSectionChange(id)}>
+                {id}<span className="settings-language-badge">Rhai</span>
+              </button>
             ))}
           </div>
         )}
