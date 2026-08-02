@@ -115,6 +115,7 @@ pub fn run() {
             commands::add_base_import_input,
             commands::remove_base_import_input,
             commands::validate_base_import,
+            commands::start_base_import_validation,
             commands::apply_base_import,
             commands::get_mapping_metadata,
             commands::search_photo_taxa,

@@ -1,5 +1,13 @@
 import { call } from "./client";
 
+export type OperationProgress = {
+  stage: string;
+  current: number | null;
+  total: number | null;
+  statement_index: number | null;
+  statement_total: number | null;
+};
+
 export type OperationState = {
   module: string;
   task_id: string | null;
@@ -10,6 +18,7 @@ export type OperationState = {
   message: string;
   processed: number;
   total: number | null;
+  progress: OperationProgress | null;
   result: unknown;
   error: string | null;
 };
@@ -27,6 +36,7 @@ export function demoOperation(module: string, message: string): OperationState {
     message,
     processed: 0,
     total: null,
+    progress: null,
     result: null,
     error: null,
   };

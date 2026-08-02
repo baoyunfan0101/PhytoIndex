@@ -9,7 +9,7 @@ use chrono::Local;
 use serde_json::Value;
 use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
-use vividarium_core::{Database, OperationState, OperationsStatus};
+use vividarium_core::{Database, OperationProgress, OperationState, OperationsStatus};
 
 static GLOBAL_STATE: OnceLock<AppState> = OnceLock::new();
 const PROGRESS_EVENT_INTERVAL: Duration = Duration::from_millis(100);
@@ -125,7 +125,7 @@ pub struct OperationManager {
 
 impl OperationManager {
     fn new() -> Self {
-        let states = ["photos", "mapping"]
+        let states = ["photos", "mapping", "base_import"]
             .into_iter()
             .map(|module| (module.to_string(), idle_state(module)))
             .collect();
@@ -153,6 +153,32 @@ impl OperationManager {
             + Send
             + 'static,
     {
+        self.start_with_progress(app, module, operation, move |report| {
+            let mut legacy_report = |processed: u64, total: Option<u64>, message: &str| {
+                report(OperationProgress {
+                    stage: message.into(),
+                    current: Some(processed),
+                    total,
+                    statement_index: None,
+                    statement_total: None,
+                });
+            };
+            callback(&mut legacy_report)
+        })
+    }
+
+    pub fn start_with_progress<F>(
+        &self,
+        app: AppHandle,
+        module: &'static str,
+        operation: &'static str,
+        callback: F,
+    ) -> Result<OperationState, String>
+    where
+        F: FnOnce(&mut (dyn FnMut(OperationProgress) + Send)) -> Result<Value, String>
+            + Send
+            + 'static,
+    {
         let task_id = Uuid::new_v4().simple().to_string();
         let state = {
             let mut states = self.states.lock().map_err(|error| error.to_string())?;
@@ -169,6 +195,7 @@ impl OperationManager {
                 message: format!("{operation} running"),
                 processed: 0,
                 total: None,
+                progress: None,
                 result: None,
                 error: None,
             };
@@ -181,16 +208,11 @@ impl OperationManager {
             let progress_app = app.clone();
             let progress_task_id = task_id.clone();
             let mut throttle = ProgressEventThrottle::new();
-            let mut progress = move |processed: u64, total: Option<u64>, message: &str| {
-                let emit = throttle.should_emit(processed, total, message);
-                let current = progress_manager.update_progress(
-                    module,
-                    &progress_task_id,
-                    processed,
-                    total,
-                    message,
-                    emit,
-                );
+            let mut progress = move |progress: OperationProgress| {
+                let processed = progress.current.unwrap_or(0);
+                let emit = throttle.should_emit(processed, progress.total, &progress.stage);
+                let current =
+                    progress_manager.update_progress(module, &progress_task_id, &progress, emit);
                 if let Some(current) = current {
                     let _ = progress_app.emit("operation-progress", current);
                 }
@@ -208,9 +230,7 @@ impl OperationManager {
         &self,
         module: &str,
         task_id: &str,
-        processed: u64,
-        total: Option<u64>,
-        message: &str,
+        progress: &OperationProgress,
         snapshot: bool,
     ) -> Option<OperationState> {
         let mut states = self.states.lock().ok()?;
@@ -218,9 +238,10 @@ impl OperationManager {
         if state.task_id.as_deref() != Some(task_id) || !state.running {
             return None;
         }
-        state.processed = processed;
-        state.total = total;
-        state.message = message.into();
+        state.processed = progress.current.unwrap_or(0);
+        state.total = progress.total;
+        state.message = progress.stage.clone();
+        state.progress = Some(progress.clone());
         snapshot.then(|| state.clone())
     }
 
@@ -263,6 +284,7 @@ fn idle_state(module: &str) -> OperationState {
         message: "idle".into(),
         processed: 0,
         total: None,
+        progress: None,
         result: None,
         error: None,
     }
@@ -295,6 +317,45 @@ mod tests {
         assert!(!throttle.should_emit(1, Some(100), "Importing"));
         assert!(throttle.should_emit(100, Some(100), "Importing"));
         assert!(throttle.should_emit(100, None, "Committing"));
+    }
+
+    #[test]
+    fn structured_progress_is_retained_in_operation_status() {
+        let manager = OperationManager::new();
+        {
+            let mut states = manager.states.lock().unwrap();
+            let state = states.get_mut("base_import").unwrap();
+            state.task_id = Some("validate-1".into());
+            state.operation = Some("validate_base_import".into());
+            state.running = true;
+        }
+        let progress = OperationProgress {
+            stage: "executing_sql".into(),
+            current: Some(2),
+            total: Some(7),
+            statement_index: Some(2),
+            statement_total: Some(7),
+        };
+
+        let state = manager
+            .update_progress("base_import", "validate-1", &progress, true)
+            .unwrap();
+
+        assert_eq!(state.message, "executing_sql");
+        assert_eq!(state.processed, 2);
+        assert_eq!(state.total, Some(7));
+        assert_eq!(state.progress, Some(progress));
+    }
+
+    #[test]
+    fn a_base_import_operation_blocks_another_base_import_operation() {
+        let mut states = OperationManager::new().status();
+        states.get_mut("base_import").unwrap().running = true;
+
+        assert_eq!(
+            blocked_by(&states, "base_import").as_deref(),
+            Some("base_import")
+        );
     }
 
     #[test]

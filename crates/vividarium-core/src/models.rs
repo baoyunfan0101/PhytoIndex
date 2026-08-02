@@ -104,6 +104,15 @@ pub struct MappingMetadata {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct OperationProgress {
+    pub stage: String,
+    pub current: Option<u64>,
+    pub total: Option<u64>,
+    pub statement_index: Option<u64>,
+    pub statement_total: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct OperationState {
     pub module: String,
     pub task_id: Option<String>,
@@ -114,6 +123,7 @@ pub struct OperationState {
     pub message: String,
     pub processed: u64,
     pub total: Option<u64>,
+    pub progress: Option<OperationProgress>,
     pub result: Option<serde_json::Value>,
     pub error: Option<String>,
 }

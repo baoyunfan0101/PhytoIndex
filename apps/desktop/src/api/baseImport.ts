@@ -67,6 +67,32 @@ export const validateBaseImport = (sql: string) =>
     } satisfies BaseImportValidationResult;
     return { execution, validation, warnings: [], can_apply: true };
   });
+export const startBaseImportValidation = (sql: string) =>
+  call<OperationState>("start_base_import_validation", { request: { sql } }, () => {
+    const operation = demoOperation("base_import", "ready_to_apply");
+    operation.operation = "validate_base_import";
+    operation.result = {
+      execution: {
+        statements_executed: sql.split(";").filter(Boolean).length,
+        messages: [{ statement_index: 1, affected_rows: null, message: "Script completed" }],
+        script_saved: true,
+        warnings: [],
+      },
+      validation: {
+        can_apply: true,
+        taxa_count: 125000,
+        name_counts: [{ name_type: "sci_name", count: 125000 }, { name_type: "synonym", count: 60000 }],
+        normalization_changes: 0,
+        total_warning_count: 0,
+        total_error_count: 0,
+        warnings: [],
+        errors: [],
+      },
+      warnings: [],
+      can_apply: true,
+    } satisfies ValidateBaseImportResult;
+    return operation;
+  });
 export const applyBaseImport = () => call<OperationState>("apply_base_import", undefined, () => {
   const operation = demoOperation("mapping", "Base import applied");
   operation.result = {

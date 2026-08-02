@@ -92,6 +92,72 @@ fn validate_executes_sql_and_builds_the_candidate_in_one_request() {
 }
 
 #[test]
+fn validate_reports_real_stages_and_sql_statement_progress() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = Database::open(directory.path().join("metadata.db")).unwrap();
+    add_simple_input(&directory, &database);
+    let mut progress = Vec::new();
+
+    let result = validate_base_import_with_progress(
+        &database,
+        &ValidateBaseImportRequest {
+            sql: SIMPLE_IMPORT_SQL.into(),
+        },
+        &mut |event| progress.push(event),
+    )
+    .unwrap();
+
+    assert!(result.can_apply);
+    let stages = progress
+        .iter()
+        .map(|event| event.stage.as_str())
+        .collect::<Vec<_>>();
+    let expected = [
+        PREPARING_INPUT_SOURCES,
+        EXECUTING_SQL,
+        BUILDING_STAGING_DATABASE,
+        NORMALIZING_NAMES,
+        BUILDING_CANDIDATE_TAXA,
+        BUILDING_CANDIDATE_NAMES,
+        VALIDATING_TAXONOMY,
+        READY_TO_APPLY,
+    ];
+    let mut previous = 0;
+    for stage in expected {
+        let index = stages[previous..]
+            .iter()
+            .position(|candidate| *candidate == stage)
+            .map(|index| index + previous)
+            .unwrap_or_else(|| panic!("missing progress stage {stage}: {stages:?}"));
+        previous = index;
+    }
+    let sql_events = progress
+        .iter()
+        .filter(|event| event.stage == EXECUTING_SQL)
+        .collect::<Vec<_>>();
+    assert!(!sql_events.is_empty());
+    assert_eq!(sql_events[0].statement_index, Some(1));
+    assert_eq!(
+        sql_events[0].statement_total,
+        Some(result.execution.statements_executed as u64)
+    );
+    assert!(progress.iter().any(|event| {
+        event.stage == NORMALIZING_NAMES && event.current == event.total && event.total == Some(1)
+    }));
+    assert!(progress.iter().any(|event| {
+        event.stage == BUILDING_CANDIDATE_NAMES
+            && event.current == event.total
+            && event.total == Some(1)
+    }));
+}
+
+#[test]
+fn sql_statement_count_uses_sqlite_statement_boundaries() {
+    assert_eq!(count_sql_statements("SELECT ';'; SELECT 2;").unwrap(), 2);
+    assert_eq!(count_sql_statements("SELECT 1").unwrap(), 1);
+}
+
+#[test]
 fn validate_stops_after_sql_execution_failure() {
     let directory = tempfile::tempdir().unwrap();
     let database = Database::open(directory.path().join("metadata.db")).unwrap();

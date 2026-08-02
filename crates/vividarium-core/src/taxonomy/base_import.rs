@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::ffi::CString;
 use std::fs;
 use std::fs::File;
 use std::io::{BufReader, Read};
@@ -24,6 +25,7 @@ use crate::db::{
     LOCAL_TAXON_ID_FLOOR, TaxonomyReplacementGuard, initialize_taxonomy_database_file,
 };
 use crate::metadata::{self, MetadataKey};
+use crate::models::OperationProgress;
 use crate::naming::normalize_taxonomy_name;
 use crate::{CoreError, CoreResult, Database};
 
@@ -35,6 +37,16 @@ const IMPORT_BATCH_SIZE: i64 = 10_000;
 const MAX_ISSUE_SAMPLES: usize = 100;
 const INITIAL_BASE_IMPORT_SQL: &str = include_str!("templates/initial_base_import.sql");
 static WORKSPACE_LOCKS: OnceLock<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> = OnceLock::new();
+
+const PREPARING_INPUT_SOURCES: &str = "preparing_input_sources";
+const EXECUTING_SQL: &str = "executing_sql";
+const BUILDING_STAGING_DATABASE: &str = "building_staging_database";
+const NORMALIZING_NAMES: &str = "normalizing_names";
+const BUILDING_CANDIDATE_TAXA: &str = "building_candidate_taxa";
+const BUILDING_CANDIDATE_NAMES: &str = "building_candidate_names";
+const VALIDATING_TAXONOMY: &str = "validating_taxonomy";
+const READY_TO_APPLY: &str = "ready_to_apply";
+const VALIDATION_FAILED: &str = "validation_failed";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ValidateBaseImportRequest {
@@ -141,11 +153,19 @@ pub fn validate_base_import(
     database: &Database,
     request: &ValidateBaseImportRequest,
 ) -> CoreResult<ValidateBaseImportResult> {
+    validate_base_import_with_progress(database, request, &mut |_| {})
+}
+
+pub fn validate_base_import_with_progress(
+    database: &Database,
+    request: &ValidateBaseImportRequest,
+    progress: &mut (dyn FnMut(OperationProgress) + Send),
+) -> CoreResult<ValidateBaseImportResult> {
     let workspace_mutex = workspace_mutex(database)?;
     let _guard = lock_workspace(&workspace_mutex)?;
     let workspace = workspace(database)?;
-    let execution = execute_base_import_sql_in_workspace(database, request, &workspace)?;
-    let validation = validate_base_import_candidate_in_workspace(&workspace)?;
+    let execution = execute_base_import_sql_in_workspace(database, request, &workspace, progress)?;
+    let validation = validate_base_import_candidate_in_workspace(&workspace, progress)?;
     Ok(ValidateBaseImportResult {
         warnings: execution.warnings.clone(),
         can_apply: validation.can_apply,
@@ -158,6 +178,7 @@ fn execute_base_import_sql_in_workspace(
     database: &Database,
     request: &ValidateBaseImportRequest,
     workspace: &Path,
+    progress: &mut (dyn FnMut(OperationProgress) + Send),
 ) -> CoreResult<BaseImportExecutionResult> {
     let sql = request.sql.trim();
     if sql.is_empty() {
@@ -170,11 +191,13 @@ fn execute_base_import_sql_in_workspace(
     let staging_path = staging.to_string_lossy().into_owned();
     let sql = replace_staging_literal(sql, &staging_path);
     let execution: CoreResult<Vec<SqlStatementMessage>> = (|| {
+        report_progress(progress, PREPARING_INPUT_SOURCES, None, None, None, None);
         let mut connection = Connection::open_in_memory()?;
         connection.execute_batch("PRAGMA foreign_keys = ON")?;
         let sources = sql_inputs::stored_sources(database, SqlInputScope::BaseImport)?;
         let attached = prepare_sources(&mut connection, &sources)?;
-        let execution = execute_base_import_script(&connection, &sql, &staging_path);
+        let execution = execute_base_import_script(&connection, &sql, &staging_path, progress);
+        report_progress(progress, BUILDING_STAGING_DATABASE, None, None, None, None);
         let attachments = validate_base_import_attachments(&connection, &attached);
         let autocommit = unsafe { ffi::sqlite3_get_autocommit(connection.handle()) != 0 };
         if !autocommit {
@@ -214,6 +237,7 @@ fn execute_base_import_sql_in_workspace(
 
 fn validate_base_import_candidate_in_workspace(
     workspace: &Path,
+    progress: &mut (dyn FnMut(OperationProgress) + Send),
 ) -> CoreResult<BaseImportValidationResult> {
     let staging = workspace.join(STAGING_DATABASE);
     let mut validation = BaseImportValidationResult {
@@ -235,6 +259,7 @@ fn validate_base_import_candidate_in_workspace(
             None,
             None,
         );
+        report_validation_outcome(progress, &validation);
         return Ok(validation);
     }
     let staging_fingerprint = workspace_fingerprint(&workspace)?;
@@ -243,6 +268,7 @@ fn validate_base_import_candidate_in_workspace(
         && workspace.join(CANDIDATE_DATABASE).is_file()
         && validate_candidate_database(&workspace.join(CANDIDATE_DATABASE)).is_ok()
     {
+        report_validation_outcome(progress, &candidate.validation_result);
         return Ok(candidate.validation_result);
     }
     clear_validation_artifacts(&workspace)?;
@@ -259,6 +285,7 @@ fn validate_base_import_candidate_in_workspace(
                 None,
                 None,
             );
+            report_validation_outcome(progress, &validation);
             return Ok(validation);
         }
     };
@@ -280,7 +307,21 @@ fn validate_base_import_candidate_in_workspace(
                     .map(|name_type| NameTypeCount { name_type, count })
             })
             .collect();
+        let total_names = validation
+            .name_counts
+            .iter()
+            .map(|count| count.count)
+            .sum::<u64>();
+        report_progress(
+            progress,
+            NORMALIZING_NAMES,
+            Some(0),
+            Some(total_names),
+            None,
+            None,
+        );
         let mut names = connection.prepare("SELECT name_id, name FROM taxon_names")?;
+        let mut processed_names = 0_u64;
         for row in names.query_map([], |row| {
             Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
         })? {
@@ -299,14 +340,38 @@ fn validate_base_import_candidate_in_workspace(
                     Some(name_id.to_string()),
                 ),
             }
+            processed_names += 1;
+            if processed_names % IMPORT_BATCH_SIZE as u64 == 0 {
+                report_progress(
+                    progress,
+                    NORMALIZING_NAMES,
+                    Some(processed_names),
+                    Some(total_names),
+                    None,
+                    None,
+                );
+            }
         }
+        report_progress(
+            progress,
+            NORMALIZING_NAMES,
+            Some(processed_names),
+            Some(total_names),
+            None,
+            None,
+        );
     }
     drop(connection);
     if validation.total_error_count == 0 {
         let candidate_build = workspace.join(CANDIDATE_BUILD_DATABASE);
         remove_file_if_exists(&candidate_build)?;
-        if let Err(error) = build_official_taxonomy(&staging, &candidate_build, "base-import")
-            .and_then(|_| validate_candidate_database(&candidate_build))
+        if let Err(error) =
+            build_official_taxonomy(&staging, &candidate_build, "base-import", progress).and_then(
+                |_| {
+                    report_progress(progress, VALIDATING_TAXONOMY, None, None, None, None);
+                    validate_candidate_database(&candidate_build)
+                },
+            )
         {
             remove_file_if_exists(&candidate_build)?;
             record_error(
@@ -344,6 +409,7 @@ fn validate_base_import_candidate_in_workspace(
             },
         )?;
     }
+    report_validation_outcome(progress, &validation);
     Ok(validation)
 }
 
@@ -355,7 +421,7 @@ fn execute_base_import_sql(
     let workspace_mutex = workspace_mutex(database)?;
     let _guard = lock_workspace(&workspace_mutex)?;
     let workspace = workspace(database)?;
-    execute_base_import_sql_in_workspace(database, request, &workspace)
+    execute_base_import_sql_in_workspace(database, request, &workspace, &mut |_| {})
 }
 
 #[cfg(test)]
@@ -363,7 +429,7 @@ fn validate_base_import_candidate(database: &Database) -> CoreResult<BaseImportV
     let workspace_mutex = workspace_mutex(database)?;
     let _guard = lock_workspace(&workspace_mutex)?;
     let workspace = workspace(database)?;
-    validate_base_import_candidate_in_workspace(&workspace)
+    validate_base_import_candidate_in_workspace(&workspace, &mut |_| {})
 }
 
 pub fn apply_base_import(database: &Database) -> CoreResult<TaxonomyBaseReplaceResult> {
@@ -673,10 +739,21 @@ fn execute_base_import_script(
     connection: &Connection,
     sql: &str,
     staging_path: &str,
+    progress: &mut (dyn FnMut(OperationProgress) + Send),
 ) -> CoreResult<Vec<SqlStatementMessage>> {
     let mut offset = 0;
     let mut messages = Vec::new();
+    let statement_total = count_sql_statements(sql)?;
     while offset < sql.len() {
+        let statement_index = messages.len() as u64 + 1;
+        report_progress(
+            progress,
+            EXECUTING_SQL,
+            Some(statement_index),
+            Some(statement_total),
+            Some(statement_index),
+            Some(statement_total),
+        );
         connection.authorizer(Some(base_import_authorizer(staging_path.to_string())));
         let execution = unsafe { execute_statement_to_completion_raw(connection, &sql[offset..]) };
         connection.authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
@@ -697,6 +774,27 @@ fn execute_base_import_script(
         }
     }
     Ok(messages)
+}
+
+fn count_sql_statements(sql: &str) -> CoreResult<u64> {
+    let mut statement_start = 0;
+    let mut statement_count = 0_u64;
+    for (index, character) in sql.char_indices() {
+        if character != ';' {
+            continue;
+        }
+        let statement_end = index + character.len_utf8();
+        let candidate = CString::new(&sql[statement_start..statement_end])
+            .map_err(|error| CoreError::InvalidArgument(format!("invalid sql: {error}")))?;
+        if unsafe { ffi::sqlite3_complete(candidate.as_ptr()) } != 0 {
+            statement_count += 1;
+            statement_start = statement_end;
+        }
+    }
+    if !sql[statement_start..].trim().is_empty() {
+        statement_count += 1;
+    }
+    Ok(statement_count)
 }
 
 fn validate_base_import_attachments(
@@ -1077,12 +1175,24 @@ fn build_official_taxonomy(
     staging: &Path,
     destination: &Path,
     source_label: &str,
+    progress: &mut (dyn FnMut(OperationProgress) + Send),
 ) -> CoreResult<TaxonomyBaseMetadata> {
     initialize_taxonomy_database_file(destination)?;
     let mut connection = Connection::open(destination)?;
     connection.execute_batch("PRAGMA foreign_keys = ON")?;
     connection.execute("ATTACH DATABASE ? AS staging", [staging.to_string_lossy()])?;
     let transaction = connection.transaction()?;
+    let taxa_total = transaction.query_row("SELECT COUNT(*) FROM staging.taxa", [], |row| {
+        row.get::<_, u64>(0)
+    })?;
+    report_progress(
+        progress,
+        BUILDING_CANDIDATE_TAXA,
+        Some(0),
+        Some(taxa_total),
+        None,
+        None,
+    );
     transaction.execute(
         r#"
         INSERT INTO taxa (taxon_id, parent_taxon_id, rank, geological_range)
@@ -1092,6 +1202,26 @@ fn build_official_taxonomy(
         "#,
         [],
     )?;
+    report_progress(
+        progress,
+        BUILDING_CANDIDATE_TAXA,
+        Some(taxa_total),
+        Some(taxa_total),
+        None,
+        None,
+    );
+    let names_total =
+        transaction.query_row("SELECT COUNT(*) FROM staging.taxon_names", [], |row| {
+            row.get::<_, u64>(0)
+        })?;
+    report_progress(
+        progress,
+        BUILDING_CANDIDATE_NAMES,
+        Some(0),
+        Some(names_total),
+        None,
+        None,
+    );
     let mut insert = transaction.prepare_cached(
         r#"
         INSERT INTO taxon_names (
@@ -1100,6 +1230,7 @@ fn build_official_taxonomy(
         "#,
     )?;
     let mut last_name_id = None;
+    let mut processed_names = 0_u64;
     loop {
         let names = {
             let (sql, cursor) = match last_name_id {
@@ -1141,6 +1272,7 @@ fn build_official_taxonomy(
         if names.is_empty() {
             break;
         }
+        let batch_size = names.len() as u64;
         for (name_id, taxon_id, name_type, raw_name, authority_year, source) in names {
             let name = normalize_taxonomy_name(&raw_name).ok_or_else(|| {
                 CoreError::InvalidArgument(format!(
@@ -1157,8 +1289,18 @@ fn build_official_taxonomy(
             ])?;
             last_name_id = Some(name_id);
         }
+        processed_names += batch_size;
+        report_progress(
+            progress,
+            BUILDING_CANDIDATE_NAMES,
+            Some(processed_names),
+            Some(names_total),
+            None,
+            None,
+        );
     }
     drop(insert);
+    report_progress(progress, VALIDATING_TAXONOMY, None, None, None, None);
     validate_taxonomy(&transaction)?;
     transaction.execute(
         r#"
@@ -1223,6 +1365,41 @@ fn record_error(
             row_identifier,
         });
     }
+}
+
+fn report_progress(
+    progress: &mut (dyn FnMut(OperationProgress) + Send),
+    stage: &str,
+    current: Option<u64>,
+    total: Option<u64>,
+    statement_index: Option<u64>,
+    statement_total: Option<u64>,
+) {
+    progress(OperationProgress {
+        stage: stage.into(),
+        current,
+        total,
+        statement_index,
+        statement_total,
+    });
+}
+
+fn report_validation_outcome(
+    progress: &mut (dyn FnMut(OperationProgress) + Send),
+    validation: &BaseImportValidationResult,
+) {
+    report_progress(
+        progress,
+        if validation.can_apply {
+            READY_TO_APPLY
+        } else {
+            VALIDATION_FAILED
+        },
+        None,
+        None,
+        None,
+        None,
+    );
 }
 
 fn remove_file_if_exists(path: &Path) -> CoreResult<()> {

@@ -961,6 +961,26 @@ pub fn validate_base_import(
 }
 
 #[tauri::command]
+pub fn start_base_import_validation(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    request: ValidateBaseImportRequest,
+) -> CommandResult<OperationState> {
+    let database = state.database.clone();
+    state.operations.start_with_progress(
+        app,
+        "base_import",
+        "validate_base_import",
+        move |progress| {
+            let result =
+                taxonomy::validate_base_import_with_progress(&database, &request, progress)
+                    .map_err(error)?;
+            serde_json::to_value(result).map_err(error)
+        },
+    )
+}
+
+#[tauri::command]
 pub fn apply_base_import(
     app: AppHandle,
     state: State<'_, AppState>,

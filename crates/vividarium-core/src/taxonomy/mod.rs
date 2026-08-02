@@ -31,6 +31,7 @@ pub use base_import::{
     BaseImportExecutionResult, BaseImportIssue, BaseImportValidationResult, NameTypeCount,
     ValidateBaseImportRequest, ValidateBaseImportResult, add_base_import_input, apply_base_import,
     get_base_import_sql, list_base_import_inputs, remove_base_import_input, validate_base_import,
+    validate_base_import_with_progress,
 };
 pub use formatted::{
     TaxonChange, TaxonChangeKind, TaxonInputRow, TaxonRank, TaxonRowOutcome, TaxonRowStatus,
