@@ -3,6 +3,20 @@ PRAGMA foreign_keys = ON;
 BEGIN IMMEDIATE;
 
 -- ============================================================
+-- Import rules
+--
+-- 1. Preserve source taxon IDs and retain only kingdom, order,
+--    family, genus, and species, mapped to ranks 1 through 5.
+-- 2. Import a retained taxon only when its lineage, including
+--    itself, reaches a kingdom (source rank 60).
+-- 3. Kingdoms are roots. Other taxa skip unretained ancestors and
+--    ancestors of the same or lower rank, then use the nearest
+--    remaining ancestor as parent.
+-- 4. For rows with the same taxon and name, aggregate them into
+--    one row and use MAX(authority_year) as the authority year.
+-- ============================================================
+
+-- ============================================================
 -- Source database schema
 --
 -- CREATE TABLE taxa (
@@ -75,11 +89,12 @@ CREATE TABLE base.taxon_names (
 -- Trim ranks
 WITH RECURSIVE
 
--- Retained taxa
-kept AS (
+-- Map all source taxa once; target_rank is NULL for discarded ranks.
+source_taxa AS (
     SELECT
         id AS taxon_id
         ,parent AS source_parent_id
+        ,rank AS source_rank
         ,CASE rank
             WHEN 60 THEN 1
             WHEN 301 THEN 2
@@ -89,70 +104,104 @@ kept AS (
         END AS target_rank
         ,NULLIF(trim(geological_range), '') AS geological_range
     FROM biolib.taxa
-    WHERE rank IN (
-        60 -- kingdom
-        ,301 -- order
-        ,401 -- family
-        ,501 -- genus
-        ,601 -- species
-    )
 ),
 
--- Find all ancestors for each retained taxon until encountering a retained one.
-parent_walk (
-    taxon_id -- who is searching for a parent
-    ,candidate_id -- parent candidate
-) AS (
-    -- Anchor query: Start from every retained taxon.
+-- Retained-rank taxa before lineage validation.
+retained AS (
     SELECT
-        taxon_id -- itself
-        ,source_parent_id -- its parent
-    FROM kept
+        taxon_id
+        ,source_parent_id
+        ,source_rank
+        ,target_rank
+        ,geological_range
+    FROM source_taxa
+    WHERE target_rank IS NOT NULL
+),
+
+-- Walk each retained taxon's complete lineage, including itself.
+-- Stop at a kingdom, a missing parent, or a previously visited taxon.
+lineage (
+    taxon_id -- retained taxon whose lineage is being walked
+    ,ancestor_id -- current taxon or ancestor
+    ,ancestor_parent_id -- current ancestor's source parent
+    ,ancestor_source_rank
+    ,depth
+    ,path
+) AS (
+    -- Anchor query: Start from every retained taxon itself.
+    SELECT
+        taxon_id
+        ,taxon_id
+        ,source_parent_id
+        ,source_rank
+        ,0
+        ,printf(',%d,', taxon_id)
+    FROM retained
 
     UNION ALL
 
-    -- Recursive query: Continue upward while encountering a discarded taxon.
+    -- Recursive query: Continue upward until reaching a kingdom.
     SELECT
-        walk.taxon_id -- original retained taxon
-        ,parent.parent -- this candidate's parent
+        walk.taxon_id
+        ,parent.taxon_id
+        ,parent.source_parent_id
+        ,parent.source_rank
+        ,walk.depth + 1
+        ,walk.path || parent.taxon_id || ','
+    FROM lineage AS walk
+    JOIN source_taxa AS parent
+        ON walk.ancestor_parent_id = parent.taxon_id
+    WHERE walk.ancestor_source_rank <> 60
+        -- Prevent malformed cycles from recursing forever.
+        AND instr(
+            walk.path
+            ,printf(',%d,', parent.taxon_id)
+        ) = 0
+),
 
-    -- Previous results.
-    FROM parent_walk AS walk
-
-    -- Previous results' parents.
-    JOIN biolib.taxa AS parent
-        ON walk.candidate_id = parent.id
-
-    -- If this candidate is a discarded taxon, continue.
-    WHERE parent.rank NOT IN (
-        60
-        ,301
-        ,401
-        ,501
-        ,601
+-- Keep only taxa whose lineage reaches a kingdom.
+valid_taxa AS (
+    SELECT
+        retained.taxon_id
+        ,retained.source_parent_id
+        ,retained.target_rank
+        ,retained.geological_range
+    FROM retained
+    WHERE EXISTS (
+        SELECT 1
+        FROM lineage
+        WHERE lineage.taxon_id = retained.taxon_id
+            AND lineage.ancestor_source_rank = 60
     )
 ),
 
--- Select the retained ancestor.
+-- Find every retained ancestor whose rank is strictly higher than
+-- the child taxon's rank. Invalid retained ancestors are skipped.
+parent_candidates AS (
+    SELECT
+        child.taxon_id
+        ,parent.taxon_id AS parent_taxon_id
+        ,lineage.depth
+        ,ROW_NUMBER() OVER (
+            PARTITION BY child.taxon_id
+            ORDER BY lineage.depth
+        ) AS priority
+    FROM valid_taxa AS child
+    JOIN lineage
+        ON child.taxon_id = lineage.taxon_id
+    JOIN valid_taxa AS parent
+        ON lineage.ancestor_id = parent.taxon_id
+    WHERE lineage.depth > 0
+        AND parent.target_rank < child.target_rank
+),
+
+-- Select the nearest valid retained ancestor.
 nearest_parent AS (
     SELECT
         taxon_id
-        ,candidate_id AS parent_taxon_id
-    FROM (
-        SELECT
-            walk.taxon_id
-            ,walk.candidate_id
-        FROM parent_walk AS walk
-        JOIN biolib.taxa AS candidate
-            ON walk.candidate_id = candidate.id
-        WHERE candidate.rank IN (
-            60
-            ,301
-            ,401
-            ,501
-            ,601
-        )
-    )
+        ,parent_taxon_id
+    FROM parent_candidates
+    WHERE priority = 1
 )
 
 INSERT INTO base.taxa (
@@ -162,19 +211,19 @@ INSERT INTO base.taxa (
     ,geological_range
 )
 SELECT
-    kept.taxon_id
+    valid_taxa.taxon_id
     ,CASE
-        WHEN kept.target_rank = 1 THEN NULL
+        WHEN valid_taxa.target_rank = 1 THEN NULL
         ELSE nearest_parent.parent_taxon_id
     END -- kingdom -> no parent
-    ,kept.target_rank
-    ,kept.geological_range
-FROM kept
+    ,valid_taxa.target_rank
+    ,valid_taxa.geological_range
+FROM valid_taxa
 LEFT JOIN nearest_parent
-    ON kept.taxon_id = nearest_parent.taxon_id
+    ON valid_taxa.taxon_id = nearest_parent.taxon_id
 ORDER BY
-    kept.target_rank
-    ,kept.taxon_id;
+    valid_taxa.target_rank
+    ,valid_taxa.taxon_id;
 
 -- ============================================================
 
