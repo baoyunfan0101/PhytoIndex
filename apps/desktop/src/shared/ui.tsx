@@ -13,6 +13,7 @@ import {
   type ButtonHTMLAttributes,
   type CSSProperties,
   type KeyboardEvent,
+  type MouseEvent,
   type ReactNode,
   type UIEvent,
 } from "react";
@@ -81,6 +82,7 @@ export function VirtualList<T>({
   onClearActive,
   onMoveActive,
   onNearEnd,
+  onContextMenu,
   onTypeSelect,
   stateKey,
 }: {
@@ -95,6 +97,7 @@ export function VirtualList<T>({
   onClearActive?: () => void;
   onMoveActive?: (direction: -1 | 1) => void;
   onNearEnd?: () => void;
+  onContextMenu?: (event: MouseEvent<HTMLDivElement>) => void;
   onTypeSelect?: (query: string, shouldCycle: boolean) => void;
   stateKey?: string;
 }) {
@@ -193,6 +196,7 @@ export function VirtualList<T>({
       className={`virtual-viewport ${className}`}
       ref={viewportRef}
       onScroll={handleScroll}
+      onContextMenu={onContextMenu}
       onKeyDown={handleKeyDown}
       tabIndex={0}
     >

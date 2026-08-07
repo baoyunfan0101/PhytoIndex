@@ -450,11 +450,14 @@ export function TaxonPhotosView({
   }
 
   function openCurrentTaxonContextMenu(event: MouseEvent<HTMLElement>) {
-    if (!currentTaxon) return;
+    const item = rows[activeRowIndex];
+    const taxon = currentTaxon ?? (item?.kind === "taxon" ? item.taxon : null);
+    if (!taxon) return;
     const target = event.target as HTMLElement | null;
     if (target?.closest(".finder-row")) return;
     event.preventDefault();
-    setTaxonContext({ taxon: currentTaxon, x: event.clientX, y: event.clientY, showExpandAll: false });
+    event.stopPropagation();
+    setTaxonContext({ taxon, x: event.clientX, y: event.clientY, showExpandAll: false });
   }
 
   function openTaxonPhotoContextMenu(event: MouseEvent, item: Extract<TaxonTreeRow, { kind: "photo" }>) {
@@ -526,6 +529,7 @@ export function TaxonPhotosView({
             }}
             onMoveActive={moveTaxonRow}
             onNearEnd={() => void page.loadMore()}
+            onContextMenu={openCurrentTaxonContextMenu}
             onTypeSelect={typeSelectTaxonRow}
             renderItem={(item) => (
               item.kind === "taxon" ? (
