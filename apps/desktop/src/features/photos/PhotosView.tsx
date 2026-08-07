@@ -1,6 +1,6 @@
 import "maplibre-gl/dist/maplibre-gl.css";
 
-import { ChevronDown, ChevronRight, Folder, Images, Network, RefreshCw } from "lucide-react";
+import { ChevronDown, ChevronRight, Folder, Images, Network } from "lucide-react";
 import maplibregl, { type Map as MapLibreMap } from "maplibre-gl";
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import {
@@ -206,11 +206,6 @@ export function FolderPhotosView({
     if (directoryId !== null) await reportDirectoryCounts(directoryId);
   }
 
-  async function refresh() {
-    if (directoryId === null) return;
-    await refreshDirectory(directoryId);
-  }
-
   function enter(directory: PhotoDirectory) {
     tree.clear();
     setActiveRowKey(null);
@@ -285,7 +280,6 @@ export function FolderPhotosView({
             }}>{item.name}</button></span>
           ))}
         </div>
-        <IconButton aria-label="Refresh" onClick={() => void refresh()} title="Refresh"><RefreshCw size={14} /></IconButton>
       </header>
       <ResizablePanels
         className="explorer-columns"
