@@ -64,7 +64,7 @@ export function PhotoBrowser({
           <VirtualList
             stateKey="photo-browser.list"
             items={photos}
-            rowHeight={43}
+            rowHeight={34}
             itemKey={(photo) => photo.photo_id}
             onNearEnd={() => void page.loadMore()}
             onTypeSelect={typeSelect}

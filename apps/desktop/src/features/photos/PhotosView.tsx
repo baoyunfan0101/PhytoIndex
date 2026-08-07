@@ -190,7 +190,7 @@ export function FolderPhotosView({
           <VirtualList
             stateKey="folders.list"
             items={rows}
-            rowHeight={40}
+            rowHeight={34}
             itemKey={(item) => item.kind === "directory"
               ? `d:${item.directory.directory_id}`
               : item.kind === "photo"
@@ -301,7 +301,7 @@ export function TaxonPhotosView({ handlers }: { handlers: PhotoOpenHandlers }) {
           <VirtualList
             stateKey="photo-taxonomy.list"
             items={rows}
-            rowHeight={48}
+            rowHeight={40}
             itemKey={(item) => item.kind === "taxon"
               ? `t:${item.taxon.taxon_id}`
               : item.kind === "photo"
