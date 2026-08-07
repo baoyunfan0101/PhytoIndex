@@ -2,7 +2,7 @@ import "maplibre-gl/dist/maplibre-gl.css";
 
 import { ChevronDown, ChevronRight, Folder, Images, Network, RefreshCw } from "lucide-react";
 import maplibregl, { type Map as MapLibreMap } from "maplibre-gl";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   browsePhotoDirectory,
   getPhotoDirectoryCounts,
@@ -161,6 +161,13 @@ export function FolderPhotosView({
     void Promise.all([page.reload(), tree.reloadExpanded()]);
   });
 
+  const reportDirectoryCounts = useCallback(async (id: number) => {
+    try {
+      const counts = await getPhotoDirectoryCounts(id);
+      onStatus(`${counts.directory_count} folders, ${counts.file_count} photos`);
+    } catch {}
+  }, [onStatus]);
+
   useEffect(() => {
     getPhotoLibrary().then((next) => {
       setLibrary(next);
@@ -173,17 +180,16 @@ export function FolderPhotosView({
 
   useEffect(() => {
     if (directoryId === null) return;
-    void getPhotoDirectoryCounts(directoryId)
-      .then((counts) => onStatus(`${counts.directory_count} folders, ${counts.file_count} photos`))
-      .catch(() => undefined);
-  }, [directoryId, onStatus]);
+    void reportDirectoryCounts(directoryId);
+  }, [directoryId, reportDirectoryCounts]);
 
   async function refresh() {
     if (directoryId === null) return;
     onStatus("Refreshing photo library", true);
     const started = await refreshPhotoDirectory(directoryId);
     await waitForOperation("photos", started.operation.task_id, (operation) => onStatus(operation.message, true));
-    await page.reload();
+    await Promise.all([page.reload(), tree.reloadExpanded()]);
+    await reportDirectoryCounts(directoryId);
   }
 
   function enter(directory: PhotoDirectory) {
