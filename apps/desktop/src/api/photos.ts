@@ -133,6 +133,13 @@ export const renamePhoto = (photoId: number, newFilename: string) =>
     photo.filename = newFilename;
     return { ...photo };
   });
+export const renamePhotoDirectory = (directoryId: number, newName: string) =>
+  call<PhotoDirectory>("rename_photo_directory", { directoryId, newName }, () => ({
+    directory_id: directoryId,
+    parent_directory_id: 1,
+    name: newName,
+    relative_path: newName,
+  }));
 export const renamePhotoFromTaxon = (photoId: number) =>
   call<Photo>("rename_photo_from_taxon", { photoId }, () => getPhoto(photoId));
 export const renamePhotosInDirectoryFromTaxa = (directoryId: number, includeDescendants = true) =>

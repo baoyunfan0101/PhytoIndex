@@ -362,6 +362,13 @@ export function FolderPhotosView({
           {...directoryContext}
           onClose={() => setDirectoryContext(null)}
           onRefresh={(directory) => refreshDirectory(directory.directory_id)}
+          onDirectoryRenamed={async (directory) => {
+            setTrail((current) => current.map((item) => (
+              item.directory_id === directory.directory_id ? directory : item
+            )));
+            await Promise.all([page.reload(), tree.reloadExpanded()]);
+            emitPhotoMutation({ photoId: null, kind: "photo" });
+          }}
           onRenamed={(result) => {
             const photoIds = result.rows.map((row) => row.photo_id);
             if (photoIds.length > 0) emitPhotoMutation({ photoId: null, photoIds, kind: "photo" });

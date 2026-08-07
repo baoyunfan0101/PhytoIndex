@@ -77,6 +77,7 @@ Blank search text returns an empty page.
 | Function | Parameters after `database` | Return | Description |
 | --- | --- | --- | --- |
 | `rename_photo` | `photo_id: i64`, `new_filename: &str` | `Photo` | Rename one file to an explicit filename. |
+| `rename_directory` | `directory_id: i64`, `new_name: &str` | `PhotoDirectory` | Rename one indexed directory and update descendant directory paths. |
 | `rename_photo_from_taxon` | `photo_id: i64` | `Photo` | Rename one currently matched photo with naming settings. |
 | `rename_photos_from_taxa` | `photo_ids: &[i64]` | `PhotoRenameOperationResult` | Rename selected photos; rows may succeed independently. |
 | `rename_photos_in_directory_from_taxa` | `directory_id: i64`, `include_descendants: bool` | `PhotoRenameOperationResult` | Rename current matched photos in the requested scope. |

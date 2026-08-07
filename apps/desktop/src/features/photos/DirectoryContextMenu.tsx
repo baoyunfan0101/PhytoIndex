@@ -1,12 +1,14 @@
-import { ArrowRightLeft, FolderOpen, RefreshCw, type LucideIcon } from "lucide-react";
+import { ArrowRightLeft, FilePenLine, FolderOpen, RefreshCw, type LucideIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import {
   openPhotoDirectoryInFileManager,
+  renamePhotoDirectory,
   renamePhotosInDirectoryFromTaxa,
   type PhotoDirectory,
   type PhotoRenameOperationResult,
 } from "../../api/photos";
 import { errorMessage } from "../../api/common";
+import { Button, Modal } from "../../shared/ui";
 
 export function DirectoryContextMenu({
   directory,
@@ -14,6 +16,7 @@ export function DirectoryContextMenu({
   y,
   onClose,
   onRefresh,
+  onDirectoryRenamed,
   onRenamed,
   onStatus,
 }: {
@@ -22,14 +25,19 @@ export function DirectoryContextMenu({
   y: number;
   onClose: () => void;
   onRefresh: (directory: PhotoDirectory) => Promise<void>;
+  onDirectoryRenamed: (directory: PhotoDirectory) => Promise<void> | void;
   onRenamed: (result: PhotoRenameOperationResult) => Promise<void> | void;
   onStatus: (message: string, busy?: boolean) => void;
 }) {
   const menuRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [renaming, setRenaming] = useState(false);
+  const [newName, setNewName] = useState(directory.name);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
 
   useEffect(() => {
+    if (renaming) return;
     const close = (event: MouseEvent) => {
       if (!menuRef.current?.contains(event.target as Node)) onClose();
     };
@@ -42,7 +50,13 @@ export function DirectoryContextMenu({
       window.removeEventListener("mousedown", close);
       window.removeEventListener("keydown", closeKey);
     };
-  }, [onClose]);
+  }, [onClose, renaming]);
+
+  useEffect(() => {
+    if (!renaming || !inputRef.current) return;
+    inputRef.current.focus();
+    inputRef.current.select();
+  }, [renaming]);
 
   async function run(label: string, action: () => Promise<void>) {
     setBusy(label);
@@ -63,41 +77,84 @@ export function DirectoryContextMenu({
     await onRenamed(result);
   }
 
+  async function renameDirectoryOnly() {
+    const renamed = await renamePhotoDirectory(directory.directory_id, newName);
+    onStatus("Folder renamed");
+    await onDirectoryRenamed(renamed);
+  }
+
   return (
-    <div
-      className="context-menu"
-      ref={menuRef}
-      role="menu"
-      style={{ left: Math.min(x, window.innerWidth - 270), top: Math.min(y, window.innerHeight - 160) }}
-    >
-      <MenuButton
-        icon={RefreshCw}
-        label="Refresh folder"
-        disabled={Boolean(busy)}
-        onClick={() => void run("Refreshing", () => onRefresh(directory))}
-      />
-      <div className="context-separator" role="separator" />
-      <MenuButton
-        icon={ArrowRightLeft}
-        label="Rename files from taxonomy"
-        disabled={Boolean(busy)}
-        onClick={() => void run("Renaming", () => renameDirectoryPhotos(false))}
-      />
-      <MenuButton
-        icon={ArrowRightLeft}
-        label="Rename files recursively from taxonomy"
-        disabled={Boolean(busy)}
-        onClick={() => void run("Renaming", () => renameDirectoryPhotos(true))}
-      />
-      <div className="context-separator" role="separator" />
-      <MenuButton
-        icon={FolderOpen}
-        label="Open in Finder / Explorer"
-        disabled={Boolean(busy)}
-        onClick={() => void run("Opening", () => openPhotoDirectoryInFileManager(directory.directory_id))}
-      />
-      {error && <div className="context-error">{error}</div>}
-    </div>
+    <>
+      <div
+        className="context-menu"
+        ref={menuRef}
+        role="menu"
+        style={{ left: Math.min(x, window.innerWidth - 270), top: Math.min(y, window.innerHeight - 190) }}
+      >
+        <MenuButton
+          icon={RefreshCw}
+          label="Refresh folder"
+          disabled={Boolean(busy)}
+          onClick={() => void run("Refreshing", () => onRefresh(directory))}
+        />
+        <MenuButton
+          icon={FilePenLine}
+          label="Rename folder"
+          disabled={directory.parent_directory_id === null || Boolean(busy)}
+          onClick={() => {
+            setNewName(directory.name);
+            setError("");
+            setRenaming(true);
+          }}
+        />
+        <div className="context-separator" role="separator" />
+        <MenuButton
+          icon={ArrowRightLeft}
+          label="Rename files from taxonomy"
+          disabled={Boolean(busy)}
+          onClick={() => void run("Renaming", () => renameDirectoryPhotos(false))}
+        />
+        <MenuButton
+          icon={ArrowRightLeft}
+          label="Rename files recursively from taxonomy"
+          disabled={Boolean(busy)}
+          onClick={() => void run("Renaming", () => renameDirectoryPhotos(true))}
+        />
+        <div className="context-separator" role="separator" />
+        <MenuButton
+          icon={FolderOpen}
+          label="Open in Finder / Explorer"
+          disabled={Boolean(busy)}
+          onClick={() => void run("Opening", () => openPhotoDirectoryInFileManager(directory.directory_id))}
+        />
+        {error && <div className="context-error">{error}</div>}
+      </div>
+
+      {renaming && (
+        <Modal
+          title="Rename folder"
+          onClose={() => setRenaming(false)}
+          actions={
+            <>
+              <Button onClick={() => setRenaming(false)}>Cancel</Button>
+              <Button
+                variant="primary"
+                disabled={!newName.trim() || Boolean(busy)}
+                onClick={() => void run("Renaming", renameDirectoryOnly)}
+              >
+                Rename
+              </Button>
+            </>
+          }
+        >
+          <label className="field-stack">
+            <span>Folder name</span>
+            <input ref={inputRef} value={newName} onChange={(event) => setNewName(event.target.value)} />
+          </label>
+          {error && <div className="inline-error">{error}</div>}
+        </Modal>
+      )}
+    </>
   );
 }
 

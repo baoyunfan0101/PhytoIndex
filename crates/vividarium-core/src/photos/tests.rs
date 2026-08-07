@@ -80,6 +80,66 @@ fn resolves_photo_directory_path_inside_the_library_root() {
 }
 
 #[test]
+fn renames_photo_directory_and_updates_descendant_paths() {
+    let data = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    fs::create_dir(root.path().join("nested")).unwrap();
+    fs::create_dir(root.path().join("nested").join("deep")).unwrap();
+    fs::write(root.path().join("nested").join("nested.jpg"), b"nested").unwrap();
+    fs::write(
+        root.path().join("nested").join("deep").join("deep.jpg"),
+        b"deep",
+    )
+    .unwrap();
+    let database = Database::open(data.path().join("vividarium.db")).unwrap();
+    let library = open_library(&database, root.path().to_str().unwrap()).unwrap();
+    refresh_directory(&database, library.root_directory_id).unwrap();
+    let listing = browse_directory(&database, library.root_directory_id, None, 20).unwrap();
+    let nested_directory_id = match &listing.items[0] {
+        PhotoDirectoryItem::Directory { directory } => directory.directory_id,
+        PhotoDirectoryItem::Photo { .. } => panic!("expected a directory first"),
+    };
+
+    let renamed = rename_directory(&database, nested_directory_id, "renamed").unwrap();
+
+    assert_eq!(renamed.name, "renamed");
+    assert_eq!(renamed.relative_path, "renamed");
+    assert!(!root.path().join("nested").exists());
+    assert!(root.path().join("renamed").is_dir());
+    assert!(
+        root.path()
+            .join("renamed")
+            .join("deep")
+            .join("deep.jpg")
+            .is_file()
+    );
+    let photos = list_photos(&database).unwrap();
+    assert_eq!(photos.len(), 2);
+    assert!(
+        photos
+            .iter()
+            .any(|photo| photo.relative_path == "renamed/nested.jpg")
+    );
+    assert!(
+        photos
+            .iter()
+            .any(|photo| photo.relative_path == "renamed/deep/deep.jpg")
+    );
+}
+
+#[test]
+fn rejects_renaming_photo_library_root() {
+    let data = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let database = Database::open(data.path().join("vividarium.db")).unwrap();
+    let library = open_library(&database, root.path().to_str().unwrap()).unwrap();
+
+    let error = rename_directory(&database, library.root_directory_id, "renamed").unwrap_err();
+
+    assert!(error.to_string().contains("root cannot be renamed"));
+}
+
+#[test]
 fn refresh_queues_a_photo_without_mapping_state() {
     let data = tempfile::tempdir().unwrap();
     let root = tempfile::tempdir().unwrap();

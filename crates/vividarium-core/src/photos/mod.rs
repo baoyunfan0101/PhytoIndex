@@ -611,6 +611,96 @@ pub fn rename_photo_from_taxon(database: &Database, photo_id: i64) -> CoreResult
     finish_single_photo_rename(database, operation_id, photo_id, result)
 }
 
+pub fn rename_directory(
+    database: &Database,
+    directory_id: i64,
+    new_name: &str,
+) -> CoreResult<PhotoDirectory> {
+    let _guard = PHOTO_WRITE_LOCK
+        .lock()
+        .map_err(|_| CoreError::InvalidArgument("photo workspace lock is poisoned".into()))?;
+    let new_name = validate_directory_name(new_name)?;
+    let connection = database.connect()?;
+    let root = library_root(&connection)?;
+    let directory = load_directory(&connection, directory_id)?
+        .ok_or_else(|| CoreError::NotFound(format!("photo directory {directory_id}")))?;
+    let parent_id = directory
+        .parent_directory_id
+        .ok_or_else(|| CoreError::InvalidArgument("photo library root cannot be renamed".into()))?;
+    if directory.name == new_name {
+        return Ok(directory);
+    }
+    let parent = load_directory(&connection, parent_id)?
+        .ok_or_else(|| CoreError::NotFound(format!("photo directory {parent_id}")))?;
+    let parent_path = safe_directory_path(&root, &parent.relative_path)?;
+    let source = safe_directory_path(&root, &directory.relative_path)?;
+    let destination = parent_path.join(&new_name);
+    let temporary = parent_path.join(format!(".vividarium-rename-directory-{directory_id}.tmp"));
+    let new_relative_path = join_relative_path(&parent.relative_path, &new_name);
+    rename_file(&source, &destination, &temporary)?;
+
+    let result = (|| -> CoreResult<PhotoDirectory> {
+        let mut connection = database.connect()?;
+        let transaction = connection.transaction()?;
+        transaction.execute(
+            r#"
+            UPDATE photo_directories
+            SET name = ?, relative_path = ?
+            WHERE directory_id = ?
+            "#,
+            params![new_name, new_relative_path, directory_id],
+        )?;
+        let old_prefix = format!("{}/", directory.relative_path);
+        let new_prefix = format!("{}/", new_relative_path);
+        let descendants = transaction
+            .prepare(
+                r#"
+                WITH RECURSIVE descendants(directory_id, relative_path) AS (
+                    SELECT directory_id, relative_path
+                    FROM photo_directories
+                    WHERE parent_directory_id = ?1
+                    UNION ALL
+                    SELECT child.directory_id, child.relative_path
+                    FROM photo_directories AS child
+                    JOIN descendants
+                      ON child.parent_directory_id = descendants.directory_id
+                )
+                SELECT directory_id, relative_path FROM descendants
+                "#,
+            )?
+            .query_map([directory_id], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        for (descendant_id, relative_path) in descendants {
+            let suffix = relative_path.strip_prefix(&old_prefix).ok_or_else(|| {
+                CoreError::Consistency(format!(
+                    "photo directory {} is not under {}",
+                    descendant_id, directory.relative_path
+                ))
+            })?;
+            transaction.execute(
+                "UPDATE photo_directories SET relative_path = ? WHERE directory_id = ?",
+                params![format!("{new_prefix}{suffix}"), descendant_id],
+            )?;
+        }
+        let updated = load_directory(&transaction, directory_id)?
+            .ok_or_else(|| CoreError::NotFound(format!("photo directory {directory_id}")))?;
+        transaction.commit()?;
+        Ok(updated)
+    })();
+
+    match result {
+        Ok(directory) => Ok(directory),
+        Err(error) => match rename_file(&destination, &source, &temporary) {
+            Ok(()) => Err(error),
+            Err(rollback_error) => Err(CoreError::Consistency(format!(
+                "photo directory database update failed: {error}; filesystem rollback failed: {rollback_error}"
+            ))),
+        },
+    }
+}
+
 pub fn rename_photos_from_taxa(
     database: &Database,
     photo_ids: &[i64],
@@ -1092,6 +1182,21 @@ fn validate_filename(value: &str) -> CoreResult<String> {
     {
         return Err(CoreError::InvalidArgument(
             "photo filename must be one image filename without a path".into(),
+        ));
+    }
+    Ok(value.into())
+}
+
+fn validate_directory_name(value: &str) -> CoreResult<String> {
+    let value = value.trim();
+    let path = Path::new(value);
+    if value.is_empty()
+        || path.components().count() != 1
+        || matches!(value, "." | "..")
+        || value.contains(['/', '\\'])
+    {
+        return Err(CoreError::InvalidArgument(
+            "photo directory name must be one folder name without a path".into(),
         ));
     }
     Ok(value.into())

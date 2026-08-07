@@ -64,6 +64,7 @@ pub fn run() {
             commands::set_photo_filename_format_settings,
             commands::format_photo_filename,
             commands::rename_photo,
+            commands::rename_photo_directory,
             commands::rename_photo_from_taxon,
             commands::rename_photos_from_taxa,
             commands::rename_photos_in_directory_from_taxa,

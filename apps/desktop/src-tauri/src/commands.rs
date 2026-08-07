@@ -12,7 +12,8 @@ use vividarium_core::mapping::{
 };
 use vividarium_core::models::{
     DatabaseLocations, DirectoryEntryCounts, MappingMetadata, OperationState, OperationsStatus,
-    Photo, PhotoDirectoryItem, PhotoLibrary, PhotoLibraryRegistration, PhotoMetadata, PhotoPage,
+    Photo, PhotoDirectory, PhotoDirectoryItem, PhotoLibrary, PhotoLibraryRegistration,
+    PhotoMetadata, PhotoPage,
 };
 use vividarium_core::naming::{
     NamingHookKind, NamingHookSettings, NamingHookTemplates, NamingHookTestCase,
@@ -463,6 +464,15 @@ pub fn rename_photo(
     new_filename: String,
 ) -> CommandResult<Photo> {
     photos::rename_photo(&state.database, photo_id, &new_filename).map_err(error)
+}
+
+#[tauri::command]
+pub fn rename_photo_directory(
+    state: State<'_, AppState>,
+    directory_id: i64,
+    new_name: String,
+) -> CommandResult<PhotoDirectory> {
+    photos::rename_directory(&state.database, directory_id, &new_name).map_err(error)
 }
 
 #[tauri::command]
