@@ -532,9 +532,14 @@ fn built_in_sql_reads_a_named_sqlite_input() {
                 PRIMARY KEY (id, chinese_name)
             );
             INSERT INTO taxa VALUES
-                (10, NULL, 0, 60, 'Animalia', NULL, 'Recent', 'Animals');
+                (10, NULL, 0, 60, 'Animalia', NULL, 'Recent', 'Animals'),
+                (11, 10, 0, 601, 'Fallback species', NULL, 'Recent', NULL);
             INSERT INTO synonyms VALUES (10, 0, 'Metazoa', NULL);
-            INSERT INTO chinese VALUES (10, 1, 'Animals zh', 'test');
+            INSERT INTO chinese VALUES
+                (10, 1, 'Animals zh', 'test'),
+                (11, 1, '   ', 'ignored'),
+                (11, 0, 'Fallback alias B', 'test'),
+                (11, 0, 'Fallback alias A', 'test');
             "#,
         )
         .unwrap();
@@ -556,9 +561,29 @@ fn built_in_sql_reads_a_named_sqlite_input() {
         },
     )
     .unwrap();
+    let staging = Connection::open(workspace(&database).unwrap().join(STAGING_DATABASE)).unwrap();
+    let fallback_names = staging
+        .prepare(
+            "SELECT name_type, name FROM taxon_names WHERE taxon_id = 11 ORDER BY name_type, name",
+        )
+        .unwrap()
+        .query_map([], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(
+        fallback_names,
+        vec![
+            (1, "Fallback species".into()),
+            (3, "Fallback alias A".into()),
+            (4, "Fallback alias B".into()),
+        ]
+    );
     let validation = validate_base_import_candidate(&database).unwrap();
     assert!(validation.can_apply, "{:?}", validation.errors);
-    assert_eq!(validation.taxa_count, 1);
+    assert_eq!(validation.taxa_count, 2);
 }
 
 #[test]

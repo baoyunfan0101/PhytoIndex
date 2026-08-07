@@ -47,6 +47,38 @@ BEGIN IMMEDIATE;
 -- );
 -- ============================================================
 
+-- ============================================================
+-- Target database schema
+--
+-- CREATE TABLE taxa (
+--     taxon_id INTEGER PRIMARY KEY AUTOINCREMENT
+--     ,parent_taxon_id INTEGER
+--     ,rank INTEGER NOT NULL
+--     ,geological_range TEXT
+--     ,CHECK (rank IN (1, 2, 3, 4, 5))
+--     ,FOREIGN KEY (parent_taxon_id)
+--         REFERENCES taxa(taxon_id)
+--         ON DELETE RESTRICT
+-- );
+--
+-- CREATE TABLE taxon_names (
+--     name_id INTEGER PRIMARY KEY AUTOINCREMENT
+--     ,taxon_id INTEGER NOT NULL
+--     ,name_type INTEGER NOT NULL
+--     ,name TEXT NOT NULL
+--     ,normalized_name TEXT
+--         GENERATED ALWAYS AS (lower(name)) STORED
+--     ,authority_year TEXT
+--     ,source TEXT
+--     ,UNIQUE (taxon_id, name_type, name)
+--     ,CHECK (name_type BETWEEN 1 AND 6)
+--     ,CHECK (length(trim(name)) > 0)
+--     ,FOREIGN KEY (taxon_id)
+--         REFERENCES taxa(taxon_id)
+--         ON DELETE CASCADE
+-- );
+-- ============================================================
+
 -- Create taxonomy base db
 CREATE TABLE base.taxa (
     taxon_id INTEGER PRIMARY KEY AUTOINCREMENT
@@ -96,11 +128,11 @@ source_taxa AS (
         ,parent AS source_parent_id
         ,rank AS source_rank
         ,CASE rank
-            WHEN 60 THEN 1
-            WHEN 301 THEN 2
-            WHEN 401 THEN 3
-            WHEN 501 THEN 4
-            WHEN 601 THEN 5
+            WHEN 60 THEN 1 -- kingdom
+            WHEN 301 THEN 2 -- order
+            WHEN 401 THEN 3 -- family
+            WHEN 501 THEN 4 -- genus
+            WHEN 601 THEN 5 -- species
         END AS target_rank
         ,NULLIF(trim(geological_range), '') AS geological_range
     FROM biolib.taxa
@@ -287,6 +319,25 @@ ORDER BY
 -- ============================================================
 
 -- Import Chinese names
+WITH valid_chinese AS (
+    SELECT
+        chinese.id
+        ,chinese.is_accepted
+        ,chinese.chinese_name
+        ,chinese.source
+        ,ROW_NUMBER() OVER (
+            PARTITION BY chinese.id
+            ORDER BY
+                chinese.is_accepted DESC
+                ,chinese.chinese_name
+        ) AS priority -- Prefer the original accepted name; otherwise promote one remaining name.
+    FROM biolib.chinese AS chinese
+    JOIN base.taxa AS retained
+        ON chinese.id = retained.taxon_id
+    WHERE chinese.chinese_name IS NOT NULL
+        AND trim(chinese.chinese_name) <> ''
+)
+
 INSERT INTO base.taxon_names (
     taxon_id
     ,name_type
@@ -295,23 +346,18 @@ INSERT INTO base.taxon_names (
     ,source
 )
 SELECT
-    chinese.id
+    id
     ,CASE
-        WHEN chinese.is_accepted = 1 THEN 3
+        WHEN priority = 1 THEN 3
         ELSE 4
     END
-    ,chinese.chinese_name
+    ,chinese_name
     ,NULL
-    ,NULLIF(trim(chinese.source), '')
-FROM biolib.chinese AS chinese
-JOIN base.taxa AS retained
-    ON chinese.id = retained.taxon_id
-WHERE chinese.chinese_name IS NOT NULL
-    AND trim(chinese.chinese_name) <> ''
+    ,NULLIF(trim(source), '')
+FROM valid_chinese
 ORDER BY
-    chinese.id
-    ,chinese.is_accepted DESC
-    ,chinese.chinese_name;
+    id
+    ,priority;
 
 -- ============================================================
 
