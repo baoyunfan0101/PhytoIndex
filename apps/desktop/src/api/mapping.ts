@@ -112,10 +112,9 @@ export const getPhotoTaxonNode = (taxonId: number | null, showEmpty = false) =>
 export const browsePhotoTaxon = (
   taxonId: number | null,
   showEmpty = false,
-  includeDescendants = true,
   cursor: string | null = null,
   limit = 80,
-) => call<Page<PhotoTaxonItem>>("browse_photo_taxon", { taxonId, showEmpty, includeDescendants, cursor, limit }, () => ({
+) => call<Page<PhotoTaxonItem>>("browse_photo_taxon", { taxonId, showEmpty, cursor, limit }, () => ({
   items: taxonId === null
     ? demoTaxa.map((taxon) => ({
         kind: "taxon" as const,
@@ -127,6 +126,9 @@ export const browsePhotoTaxon = (
           subtree_photo_count: 24,
         },
       }))
-    : demoPhotos.slice(0, limit).map((photo) => ({ kind: "photo" as const, photo })),
+    : demoPhotos
+        .filter((photo) => demoMappings.get(photo.photo_id)?.taxon_id === taxonId)
+        .slice(0, limit)
+        .map((photo) => ({ kind: "photo" as const, photo })),
   next_cursor: null,
 }));

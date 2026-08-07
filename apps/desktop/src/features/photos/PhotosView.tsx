@@ -327,11 +327,11 @@ export function TaxonPhotosView({
     params: currentId,
     resetKey: currentId,
     stateKey: "photo-taxonomy.page",
-    loadPage: (taxonId, cursor) => browsePhotoTaxon(taxonId, false, true, cursor),
+    loadPage: (taxonId, cursor) => browsePhotoTaxon(taxonId, false, cursor),
   });
   const tree = useCursorTree<PhotoTaxonItem, number>({
     stateKey: "photo-taxonomy.tree",
-    loadPage: (taxonId, cursor) => browsePhotoTaxon(taxonId, false, true, cursor),
+    loadPage: (taxonId, cursor) => browsePhotoTaxon(taxonId, false, cursor),
   });
   const rows = useMemo(
     () => flattenTaxonItems(page.items, tree.nodes),
