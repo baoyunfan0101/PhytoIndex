@@ -105,6 +105,94 @@ fn parentage_validation_rejects_a_kingdom_with_a_parent() {
     );
 }
 
+fn accepted_name_count_issues(name_type: TaxonomyNameType) -> Vec<TaxonomyValidationIssue> {
+    let (_directory, database) = database();
+    let connection = database.connect_taxonomy_metadata_context().unwrap();
+    connection
+        .execute_batch(&format!(
+            "DROP INDEX idx_taxon_names_one_{}_name",
+            match name_type {
+                TaxonomyNameType::ZhName => "zh",
+                TaxonomyNameType::EnName => "en",
+                _ => unreachable!(),
+            }
+        ))
+        .unwrap();
+    connection
+        .execute("INSERT INTO taxa (taxon_id, rank) VALUES (1, 1)", [])
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO taxon_names (taxon_id, name_type, name) VALUES (1, 1, 'Animalia')",
+            [],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO taxon_names (taxon_id, name_type, name) VALUES (1, ?, 'Accepted one'), (1, ?, 'Accepted two')",
+            params![name_type.code(), name_type.code()],
+        )
+        .unwrap();
+    let mut issues = Vec::new();
+    visit_taxonomy_validation_issues(&connection, true, |issue| {
+        issues.push(issue);
+        true
+    })
+    .unwrap();
+    issues
+}
+
+#[test]
+fn taxonomy_validation_rejects_multiple_chinese_accepted_names() {
+    let issues = accepted_name_count_issues(TaxonomyNameType::ZhName);
+
+    assert_eq!(issues.len(), 1);
+    assert_eq!(issues[0].code, "invalid_zh_name_count");
+    assert_eq!(issues[0].taxon_id, Some(1));
+    assert_eq!(
+        issues[0].message,
+        "Taxon 1 must have at most one Chinese accepted name."
+    );
+}
+
+#[test]
+fn taxonomy_validation_rejects_multiple_english_accepted_names() {
+    let issues = accepted_name_count_issues(TaxonomyNameType::EnName);
+
+    assert_eq!(issues.len(), 1);
+    assert_eq!(issues[0].code, "invalid_en_name_count");
+    assert_eq!(issues[0].taxon_id, Some(1));
+    assert_eq!(
+        issues[0].message,
+        "Taxon 1 must have at most one English accepted name."
+    );
+}
+
+#[test]
+fn taxonomy_validation_allows_multiple_alias_names() {
+    let (_directory, database) = database();
+    let connection = database.connect_taxonomy_metadata_context().unwrap();
+    connection
+        .execute("INSERT INTO taxa (taxon_id, rank) VALUES (1, 1)", [])
+        .unwrap();
+    connection
+        .execute_batch(
+            r#"
+            INSERT INTO taxon_names (taxon_id, name_type, name) VALUES
+                (1, 1, 'Animalia'),
+                (1, 2, 'Scientific alias one'),
+                (1, 2, 'Scientific alias two'),
+                (1, 4, 'Chinese alias one'),
+                (1, 4, 'Chinese alias two'),
+                (1, 6, 'English alias one'),
+                (1, 6, 'English alias two');
+            "#,
+        )
+        .unwrap();
+
+    validate_taxonomy(&connection).unwrap();
+}
+
 #[test]
 fn name_type_codes_follow_public_name_order() {
     for (index, name_type) in TaxonomyNameType::ALL.into_iter().enumerate() {

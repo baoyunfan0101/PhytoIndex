@@ -29,6 +29,9 @@ are invalid.
 | `en_name` | `5` | Unique accepted English name. |
 | `en_alias` | `6` | English alias. |
 
+Every taxon has exactly one `sci_name`, at most one `zh_name`, and at most one
+`en_name`. Synonyms and Chinese or English aliases have no count limit.
+
 `TaxonomyPage<T>` contains `items` and an opaque `next_cursor`. Pass `None`
 for the first page and reuse a returned cursor only with the same interface
 and parent resource. Page limits are clamped to `1..=500`.

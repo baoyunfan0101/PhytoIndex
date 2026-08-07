@@ -1770,6 +1770,38 @@ pub(super) fn visit_taxonomy_validation_issues(
             return Ok(());
         }
     }
+    let mut duplicate_accepted_names = connection.prepare(
+        r#"
+            SELECT taxon_id, name_type
+            FROM taxon_names
+            WHERE name_type IN (?, ?)
+            GROUP BY taxon_id, name_type
+            HAVING COUNT(name_id) > 1
+            ORDER BY taxon_id, name_type
+            "#,
+    )?;
+    for row in duplicate_accepted_names.query_map(
+        params![
+            TaxonomyNameType::ZhName.code(),
+            TaxonomyNameType::EnName.code()
+        ],
+        |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+    )? {
+        let (taxon_id, name_type) = row?;
+        let (code, language) = if name_type == TaxonomyNameType::ZhName.code() {
+            ("invalid_zh_name_count", "Chinese")
+        } else {
+            ("invalid_en_name_count", "English")
+        };
+        if !visit(TaxonomyValidationIssue {
+            code,
+            message: format!("Taxon {taxon_id} must have at most one {language} accepted name."),
+            taxon_id: Some(taxon_id),
+            related_taxon_id: None,
+        }) {
+            return Ok(());
+        }
+    }
     let mut orphan_name_taxa = connection.prepare(
         r#"
             SELECT DISTINCT taxon_names.taxon_id
