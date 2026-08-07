@@ -112,6 +112,9 @@ export function SqlInputList({
               value={pending.alias}
               disabled={adding}
               aria-invalid={Boolean(aliasError)}
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
               onChange={(event) => setPending({ ...pending, alias: event.target.value })}
               onKeyDown={(event) => {
                 if (event.key === "Enter") {
