@@ -2,7 +2,7 @@ import "maplibre-gl/dist/maplibre-gl.css";
 
 import { ChevronDown, ChevronRight, Folder, Images, Network, RefreshCw } from "lucide-react";
 import maplibregl, { type Map as MapLibreMap } from "maplibre-gl";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import {
   browsePhotoDirectory,
   getPhotoDirectoryCounts,
@@ -19,9 +19,10 @@ import { browsePhotoTaxon, type PhotoTaxonItem, type PhotoTaxonUsage } from "../
 import type { TaxonTreeNameParts } from "../../api/general";
 import { waitForOperation } from "../../api/tasks";
 import { EmptyState, IconButton, SectionHeader, VirtualList } from "../../shared/ui";
+import { DirectoryContextMenu } from "./DirectoryContextMenu";
 import { PhotoStage } from "./PhotoMedia";
 import { usePhotoInteraction, type PhotoOpenHandlers } from "./PhotoInteraction";
-import { useDeferredPhotoMutation, usePhotoMutation } from "./photoMutations";
+import { emitPhotoMutation, useDeferredPhotoMutation, usePhotoMutation } from "./photoMutations";
 import { findTypeSelectIndex, nextListIndex } from "./photoListNavigation";
 import { useCursorPage } from "../../shared/useCursorPage";
 import { useCursorTree, type CursorTreeNode } from "../../shared/useCursorTree";
@@ -130,6 +131,11 @@ export function FolderPhotosView({
   const [activeRowKey, setActiveRowKey] = useViewState<string | null>("folders.active-row", null);
   const [libraryLoading, setLibraryLoading] = useState(library === null);
   const [libraryError, setLibraryError] = useState("");
+  const [directoryContext, setDirectoryContext] = useState<{
+    directory: PhotoDirectory;
+    x: number;
+    y: number;
+  } | null>(null);
   const directoryId = trail[trail.length - 1]?.directory_id ?? library?.root_directory_id ?? null;
   const page = useCursorPage<PhotoDirectoryItem, number | null>({
     params: directoryId,
@@ -183,13 +189,17 @@ export function FolderPhotosView({
     void reportDirectoryCounts(directoryId);
   }, [directoryId, reportDirectoryCounts]);
 
-  async function refresh() {
-    if (directoryId === null) return;
+  async function refreshDirectory(refreshDirectoryId: number) {
     onStatus("Refreshing photo library", true);
-    const started = await refreshPhotoDirectory(directoryId);
+    const started = await refreshPhotoDirectory(refreshDirectoryId);
     await waitForOperation("photos", started.operation.task_id, (operation) => onStatus(operation.message, true));
     await Promise.all([page.reload(), tree.reloadExpanded()]);
-    await reportDirectoryCounts(directoryId);
+    if (directoryId !== null) await reportDirectoryCounts(directoryId);
+  }
+
+  async function refresh() {
+    if (directoryId === null) return;
+    await refreshDirectory(directoryId);
   }
 
   function enter(directory: PhotoDirectory) {
@@ -202,6 +212,13 @@ export function FolderPhotosView({
     setActiveRowKey(directoryTreeRowKey(item));
     if (item.kind === "photo") interaction.selectPhoto(item.photo);
     else interaction.clearSelection();
+  }
+
+  function openDirectoryContextMenu(event: MouseEvent, item: Extract<DirectoryTreeRow, { kind: "directory" }>) {
+    event.preventDefault();
+    event.stopPropagation();
+    selectDirectoryRow(item);
+    setDirectoryContext({ directory: item.directory, x: event.clientX, y: event.clientY });
   }
 
   function activateDirectoryRow() {
@@ -272,7 +289,11 @@ export function FolderPhotosView({
             onTypeSelect={typeSelectDirectoryRow}
             renderItem={(item) => (
               item.kind === "directory" ? (
-                <div className={`finder-row tree${directoryTreeRowKey(item) === resolvedActiveRowKey ? " active" : ""}`} style={{ paddingLeft: 4 + item.depth * 14 }}>
+                <div
+                  className={`finder-row tree${directoryTreeRowKey(item) === resolvedActiveRowKey ? " active" : ""}`}
+                  style={{ paddingLeft: 4 + item.depth * 14 }}
+                  onContextMenu={(event) => openDirectoryContextMenu(event, item)}
+                >
                   <IconButton
                     aria-label={tree.nodes.get(item.directory.directory_id)?.expanded ? "Collapse folder" : "Expand folder"}
                     className="tree-toggle"
@@ -314,6 +335,18 @@ export function FolderPhotosView({
         </aside>)}
         second={<PhotoStage photo={interaction.selected} onContextMenu={interaction.openContextMenu} />}
       />
+      {directoryContext && (
+        <DirectoryContextMenu
+          {...directoryContext}
+          onClose={() => setDirectoryContext(null)}
+          onRefresh={(directory) => refreshDirectory(directory.directory_id)}
+          onRenamed={(result) => {
+            const photoIds = result.rows.map((row) => row.photo_id);
+            if (photoIds.length > 0) emitPhotoMutation({ photoId: null, photoIds, kind: "photo" });
+          }}
+          onStatus={onStatus}
+        />
+      )}
       {interaction.contextMenu}
     </div>
   );

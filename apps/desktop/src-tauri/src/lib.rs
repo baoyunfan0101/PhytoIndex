@@ -79,6 +79,7 @@ pub fn run() {
             commands::get_photo_metadata,
             commands::get_photo_availability,
             commands::reveal_photo_in_file_manager,
+            commands::open_photo_directory_in_file_manager,
             commands::search_taxa,
             commands::suggest_taxa,
             commands::get_taxon_detail_node,

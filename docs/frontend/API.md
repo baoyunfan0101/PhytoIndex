@@ -9,7 +9,7 @@ owns one backend domain, its request types, and response types.
 
 | Module | Interface group |
 | --- | --- |
-| `photos` | Photo records, directories, refresh, search, rename, metadata, media URLs, and file-manager reveal. |
+| `photos` | Photo records, directories, refresh, search, rename, metadata, media URLs, and file-manager reveal or open actions. |
 | `mapping` | Mapping states, candidates, assignment, remapping, mapping queues, and photographed-taxonomy browsing. |
 | `taxonomy` | Taxon views, search, suggestions, children, taxon photos, formatted input, preview, and apply. |
 | `operations` | Photo and taxonomy operation summaries, audit pages, rollback, and exports. |

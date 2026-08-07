@@ -23,6 +23,14 @@ pub fn photo_file_path(database: &Database, photo_id: i64) -> CoreResult<PathBuf
     safe_file_path(&root, &directory.join(photo.filename))
 }
 
+pub fn photo_directory_path(database: &Database, directory_id: i64) -> CoreResult<PathBuf> {
+    let connection = database.connect()?;
+    let root = library_root(&connection)?;
+    let directory = load_directory(&connection, directory_id)?
+        .ok_or_else(|| CoreError::NotFound(format!("photo directory {directory_id}")))?;
+    safe_directory_path(&root, &directory.relative_path)
+}
+
 pub fn get_photo_metadata(database: &Database, photo_id: i64) -> CoreResult<PhotoMetadata> {
     let connection = database.connect()?;
     if let Some(metadata) = connection

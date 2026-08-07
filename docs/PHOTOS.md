@@ -67,6 +67,7 @@ Blank search text returns an empty page.
 | Function | Parameters after `database` | Return | Description |
 | --- | --- | --- | --- |
 | `photo_file_path` | `photo_id: i64` | `PathBuf` | Resolve and validate the current absolute file path. |
+| `photo_directory_path` | `directory_id: i64` | `PathBuf` | Resolve and validate the current absolute directory path. |
 | `get_photo_metadata` | `photo_id: i64` | `PhotoMetadata` | Return cached metadata or extract and cache it. |
 | `get_or_create_thumbnail` | `photo_id: i64`, `thumbnail_root: &Path` | `PathBuf` | Return or create a WebP thumbnail. |
 | `rebase_thumbnail_paths` | `thumbnail_root: &Path` | `usize` | Rebind stored thumbnail paths to files found under a new cache root. |

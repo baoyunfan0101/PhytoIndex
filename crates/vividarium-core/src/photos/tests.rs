@@ -60,6 +60,26 @@ fn refresh_removes_missing_directory_subtrees() {
 }
 
 #[test]
+fn resolves_photo_directory_path_inside_the_library_root() {
+    let data = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    fs::create_dir(root.path().join("nested")).unwrap();
+    let database = Database::open(data.path().join("vividarium.db")).unwrap();
+    let library = open_library(&database, root.path().to_str().unwrap()).unwrap();
+    refresh_directory(&database, library.root_directory_id).unwrap();
+    let listing = browse_directory(&database, library.root_directory_id, None, 20).unwrap();
+    let nested_directory_id = match &listing.items[0] {
+        PhotoDirectoryItem::Directory { directory } => directory.directory_id,
+        PhotoDirectoryItem::Photo { .. } => panic!("expected a directory first"),
+    };
+
+    assert_eq!(
+        photo_directory_path(&database, nested_directory_id).unwrap(),
+        root.path().join("nested").canonicalize().unwrap(),
+    );
+}
+
+#[test]
 fn refresh_queues_a_photo_without_mapping_state() {
     let data = tempfile::tempdir().unwrap();
     let root = tempfile::tempdir().unwrap();

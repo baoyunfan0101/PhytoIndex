@@ -614,6 +614,15 @@ pub fn reveal_photo_in_file_manager(
 }
 
 #[tauri::command]
+pub fn open_photo_directory_in_file_manager(
+    state: State<'_, AppState>,
+    directory_id: i64,
+) -> CommandResult<()> {
+    let path = photos::photo_directory_path(&state.database, directory_id).map_err(error)?;
+    crate::file_manager::open_directory(&path)
+}
+
+#[tauri::command]
 pub fn get_photo_metadata(
     state: State<'_, AppState>,
     photo_id: i64,

@@ -24,6 +24,20 @@ export type PhotoMetadata = {
   exif_json: string | null;
 };
 
+export type PhotoRenameRowStatus = "applied" | "no_change" | "failed";
+export type PhotoRenameRowOutcome = {
+  row_number: number;
+  photo_id: number;
+  operation_id: number | null;
+  status: PhotoRenameRowStatus;
+  message: string;
+  photo: Photo | null;
+};
+export type PhotoRenameOperationResult = {
+  operation_id: number | null;
+  rows: PhotoRenameRowOutcome[];
+};
+
 export type PhotoLibrary = { root_path: string; root_directory_id: number };
 export type PhotoDirectory = {
   directory_id: number;
@@ -121,5 +135,13 @@ export const renamePhoto = (photoId: number, newFilename: string) =>
   });
 export const renamePhotoFromTaxon = (photoId: number) =>
   call<Photo>("rename_photo_from_taxon", { photoId }, () => getPhoto(photoId));
+export const renamePhotosInDirectoryFromTaxa = (directoryId: number, includeDescendants = true) =>
+  call<PhotoRenameOperationResult>(
+    "rename_photos_in_directory_from_taxa",
+    { directoryId, includeDescendants },
+    () => ({ operation_id: null, rows: [] }),
+  );
 export const revealPhotoInFileManager = (photoId: number) =>
   call<void>("reveal_photo_in_file_manager", { photoId }, () => undefined);
+export const openPhotoDirectoryInFileManager = (directoryId: number) =>
+  call<void>("open_photo_directory_in_file_manager", { directoryId }, () => undefined);

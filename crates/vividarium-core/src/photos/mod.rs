@@ -28,7 +28,8 @@ mod page;
 mod search;
 
 pub use media::{
-    get_or_create_thumbnail, get_photo_metadata, photo_file_path, rebase_thumbnail_paths,
+    get_or_create_thumbnail, get_photo_metadata, photo_directory_path, photo_file_path,
+    rebase_thumbnail_paths,
 };
 pub use naming::{
     PhotoFilenameFormatSettings, format_photo_filename, get_photo_filename_format_settings,
