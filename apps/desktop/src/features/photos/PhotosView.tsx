@@ -137,6 +137,14 @@ export function FolderPhotosView({
     y: number;
   } | null>(null);
   const directoryId = trail[trail.length - 1]?.directory_id ?? library?.root_directory_id ?? null;
+  const currentDirectory = trail[trail.length - 1] ?? (library
+    ? {
+        directory_id: library.root_directory_id,
+        parent_directory_id: null,
+        name: "Root",
+        relative_path: "",
+      }
+    : null);
   const page = useCursorPage<PhotoDirectoryItem, number | null>({
     params: directoryId,
     resetKey: directoryId,
@@ -221,6 +229,14 @@ export function FolderPhotosView({
     setDirectoryContext({ directory: item.directory, x: event.clientX, y: event.clientY });
   }
 
+  function openCurrentDirectoryContextMenu(event: MouseEvent<HTMLElement>) {
+    if (!currentDirectory) return;
+    const target = event.target as HTMLElement | null;
+    if (target?.closest(".finder-row")) return;
+    event.preventDefault();
+    setDirectoryContext({ directory: currentDirectory, x: event.clientX, y: event.clientY });
+  }
+
   function activateDirectoryRow() {
     const item = rows[activeRowIndex];
     if (!item) return;
@@ -272,7 +288,7 @@ export function FolderPhotosView({
         minSecond={320}
         separatorLabel="Resize folder browser and photo preview"
         stateKey="folders.columns"
-        first={(<aside className="finder-pane">
+        first={(<aside className="finder-pane" onContextMenu={openCurrentDirectoryContextMenu}>
           <VirtualList
             stateKey="folders.list"
             items={rows}
