@@ -190,7 +190,7 @@ export function FolderPhotosView({
           <VirtualList
             stateKey="folders.list"
             items={rows}
-            rowHeight={34}
+            rowHeight={28}
             itemKey={(item) => item.kind === "directory"
               ? `d:${item.directory.directory_id}`
               : item.kind === "photo"
@@ -199,7 +199,7 @@ export function FolderPhotosView({
             onNearEnd={() => void page.loadMore()}
             renderItem={(item) => (
               item.kind === "directory" ? (
-                <div className="finder-row tree" style={{ paddingLeft: 6 + item.depth * 18 }}>
+                <div className="finder-row tree" style={{ paddingLeft: 4 + item.depth * 14 }}>
                   <IconButton
                     aria-label={tree.nodes.get(item.directory.directory_id)?.expanded ? "Collapse folder" : "Expand folder"}
                     className="tree-toggle"
@@ -216,7 +216,7 @@ export function FolderPhotosView({
               ) : item.kind === "photo" ? (
                 <button
                   className={`finder-row${interaction.selectedId === item.photo.photo_id ? " active" : ""}`}
-                  style={{ paddingLeft: 30 + item.depth * 18 }}
+                  style={{ paddingLeft: 22 + item.depth * 14 }}
                   type="button"
                   onClick={() => interaction.selectPhoto(item.photo)}
                   onContextMenu={(event) => interaction.openContextMenu(event, item.photo)}
@@ -226,7 +226,7 @@ export function FolderPhotosView({
               ) : (
                 <button
                   className="finder-row tree-more"
-                  style={{ paddingLeft: 30 + item.depth * 18 }}
+                  style={{ paddingLeft: 22 + item.depth * 14 }}
                   type="button"
                   disabled={item.loading}
                   onClick={() => void tree.loadMore(item.parentId)}
@@ -301,7 +301,7 @@ export function TaxonPhotosView({ handlers }: { handlers: PhotoOpenHandlers }) {
           <VirtualList
             stateKey="photo-taxonomy.list"
             items={rows}
-            rowHeight={40}
+            rowHeight={32}
             itemKey={(item) => item.kind === "taxon"
               ? `t:${item.taxon.taxon_id}`
               : item.kind === "photo"
@@ -310,7 +310,7 @@ export function TaxonPhotosView({ handlers }: { handlers: PhotoOpenHandlers }) {
             onNearEnd={() => void page.loadMore()}
             renderItem={(item) => (
               item.kind === "taxon" ? (
-                <div className="finder-row tree taxon" style={{ paddingLeft: 6 + item.depth * 18 }}>
+                <div className="finder-row tree taxon" style={{ paddingLeft: 4 + item.depth * 14 }}>
                   <IconButton
                     aria-label={tree.nodes.get(item.taxon.taxon_id)?.expanded ? "Collapse taxon" : "Expand taxon"}
                     className="tree-toggle"
@@ -328,13 +328,13 @@ export function TaxonPhotosView({ handlers }: { handlers: PhotoOpenHandlers }) {
                   </button>
                 </div>
               ) : item.kind === "photo" ? (
-                <button className={`finder-row${interaction.selectedId === item.photo.photo_id ? " active" : ""}`} style={{ paddingLeft: 30 + item.depth * 18 }} type="button" onClick={() => interaction.selectPhoto(item.photo)} onContextMenu={(event) => interaction.openContextMenu(event, item.photo)}>
+                <button className={`finder-row${interaction.selectedId === item.photo.photo_id ? " active" : ""}`} style={{ paddingLeft: 22 + item.depth * 14 }} type="button" onClick={() => interaction.selectPhoto(item.photo)} onContextMenu={(event) => interaction.openContextMenu(event, item.photo)}>
                   <Images size={14} /><span>{item.photo.filename}</span>
                 </button>
               ) : (
                 <button
                   className="finder-row tree-more"
-                  style={{ paddingLeft: 30 + item.depth * 18 }}
+                  style={{ paddingLeft: 22 + item.depth * 14 }}
                   type="button"
                   disabled={item.loading}
                   onClick={() => void tree.loadMore(item.parentId)}

@@ -87,8 +87,8 @@
   height: 100%;
   min-width: 0;
   align-items: center;
-  gap: 6px;
-  padding: 0 8px;
+  gap: 5px;
+  padding: 0 6px;
   overflow: hidden;
   border: 0;
   text-align: left;
@@ -154,11 +154,14 @@
 .breadcrumbs button:hover { color: #fff; background: var(--hover); }
 .finder-row > span { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .finder-row.taxon > span { display: flex; flex-direction: column; }
-.finder-row small { color: var(--quiet); line-height: 1.2; }
-.finder-row.tree { padding-right: 8px; }
+.finder-row small { color: var(--quiet); line-height: 1.15; }
+.finder-row.tree { padding-right: 6px; }
 .finder-row.tree:hover { background: var(--hover); }
 .tree-toggle {
-  flex: 0 0 28px;
+  width: 22px;
+  min-width: 22px;
+  flex: 0 0 22px;
+  padding: 0;
   border: 0;
   color: var(--quiet);
   background: transparent;
@@ -166,7 +169,7 @@
 .tree-label {
   min-width: 0;
   flex: 1;
-  padding: 4px 0;
+  padding: 2px 0;
   overflow: hidden;
   border: 0;
   text-align: left;
@@ -175,6 +178,7 @@
   background: transparent;
 }
 .tree-label.stacked { display: flex; flex-direction: column; }
+.tree-label.stacked strong { line-height: 1.15; }
 .tree-label.stacked small { font-weight: 400; }
 .tree-more { color: var(--accent-bright); }
 .pane-overlay { position: absolute; z-index: 3; right: 0; bottom: 0; left: 0; padding: 7px; color: var(--muted); text-align: center; background: #181818dd; }

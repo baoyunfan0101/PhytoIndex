@@ -119,7 +119,7 @@ export function MappingView({
         first={(<aside className="mapping-photo-list">
           <VirtualList
             items={page.items}
-            rowHeight={34}
+            rowHeight={28}
             itemKey={(item) => item.photo.photo_id}
             onNearEnd={() => void page.loadMore()}
             renderItem={(item) => (
