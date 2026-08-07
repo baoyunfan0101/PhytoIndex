@@ -70,11 +70,11 @@
   color: var(--quiet);
   background: transparent;
 }
-.recent-searches > div { overflow: hidden; border: 1px solid var(--line); border-radius: 5px; background: var(--panel); }
-.recent-search-row { display: grid; grid-template-columns: minmax(0, 1fr) 34px; border-bottom: 1px solid var(--line); }
-.recent-search-row:last-child { border-bottom: 0; }
-.recent-search-row > button { height: 34px; padding: 0 10px; overflow: hidden; border: 0; text-align: left; text-overflow: ellipsis; white-space: nowrap; background: transparent; }
-.recent-search-row > button:last-child { display: grid; place-items: center; padding: 0; color: var(--quiet); opacity: 0; }
+.recent-searches > div { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; }
+.recent-search-row { display: grid; grid-template-columns: minmax(0, 1fr) 28px; align-items: center; border-radius: 4px; }
+.recent-search-row > button:first-child { height: 30px; padding: 0 6px; overflow: hidden; border: 0; color: var(--muted); text-align: left; text-overflow: ellipsis; white-space: nowrap; background: transparent; }
+.recent-search-row > button:first-child:hover:not(:disabled), .recent-search-row > button:first-child:active:not(:disabled) { color: var(--text); background: transparent; filter: none; transform: none; }
+.recent-search-row > button:last-child { display: grid; width: 28px; height: 28px; place-items: center; padding: 0; color: var(--quiet); opacity: 0; }
 .recent-search-row:hover { background: var(--hover); }
 .recent-search-row:hover > button:last-child, .recent-search-row > button:last-child:focus-visible { opacity: 1; }
 
