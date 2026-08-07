@@ -297,17 +297,19 @@ export function TaxonPhotosView({
 
   return (
     <div className="folder-workbench">
-      <header className="workbench-toolbar breadcrumbs">
-        <button type="button" onClick={() => {
-          tree.clear();
-          setTrail([]);
-        }}>Taxonomy</button>
-        {trail.map((item, index) => (
-          <span key={item.taxon_id}><ChevronRight size={12} /><button type="button" onClick={() => {
+      <header className="workbench-toolbar">
+        <div className="breadcrumbs">
+          <button type="button" onClick={() => {
             tree.clear();
-            setTrail(trail.slice(0, index + 1));
-          }}>{item.names.sci_name ?? `Taxon ${item.taxon_id}`}</button></span>
-        ))}
+            setTrail([]);
+          }}>Taxonomy</button>
+          {trail.map((item, index) => (
+            <span key={item.taxon_id}><ChevronRight size={12} /><button type="button" onClick={() => {
+              tree.clear();
+              setTrail(trail.slice(0, index + 1));
+            }}>{item.names.sci_name ?? `Taxon ${item.taxon_id}`}</button></span>
+          ))}
+        </div>
       </header>
       <ResizablePanels
         className="explorer-columns"

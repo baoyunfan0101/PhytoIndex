@@ -148,10 +148,10 @@
 .explorer-columns { min-height: 0; }
 .finder-pane { position: relative; height: 100%; min-height: 0; background: var(--panel); }
 .folder-photos { min-width: 0; min-height: 0; }
-.breadcrumbs { display: flex; min-width: 0; align-items: center; gap: 3px; overflow: hidden; }
+.breadcrumbs { display: flex; min-width: 0; align-items: center; gap: 4px; overflow: hidden; }
 .breadcrumbs span { display: flex; min-width: 0; align-items: center; gap: 3px; }
-.breadcrumbs button { max-width: 180px; padding: 3px 5px; overflow: hidden; border: 0; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; background: transparent; }
-.breadcrumbs button:hover { color: #fff; background: var(--hover); }
+.breadcrumbs button { max-width: 180px; height: 32px; padding: 0 9px; overflow: hidden; border: 0; border-radius: 4px; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; background: transparent; }
+.breadcrumbs button:hover { color: var(--text); background: var(--hover); filter: none; }
 .finder-row > span { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .finder-row.taxon > span { display: flex; flex-direction: column; }
 .finder-row small { color: var(--quiet); line-height: 1.15; }
