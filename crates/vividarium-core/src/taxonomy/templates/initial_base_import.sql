@@ -244,6 +244,8 @@ SELECT
 FROM biolib.taxa AS source
 JOIN base.taxa AS retained
     ON source.id = retained.taxon_id
+WHERE source.scientific_name IS NOT NULL
+    AND trim(source.scientific_name) <> ''
 ORDER BY
     source.id;
 
@@ -275,6 +277,8 @@ FROM (
 ) AS synonym
 JOIN base.taxa AS retained
     ON synonym.parent = retained.taxon_id
+WHERE synonym IS NOT NULL
+    AND trim(synonym) <> ''
 ORDER BY
     synonym.parent
     ,synonym.synonym
@@ -302,6 +306,8 @@ SELECT
 FROM biolib.chinese AS chinese
 JOIN base.taxa AS retained
     ON chinese.id = retained.taxon_id
+WHERE chinese.chinese_name IS NOT NULL
+    AND trim(chinese.chinese_name) <> ''
 ORDER BY
     chinese.id
     ,chinese.is_accepted DESC
