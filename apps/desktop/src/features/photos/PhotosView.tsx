@@ -167,6 +167,7 @@ export function FolderPhotosView({
   const interaction = usePhotoInteraction({
     photos,
     handlers,
+    selectFirst: false,
     stateKey: "folders.interaction",
   });
   const resolvedActiveRowKey = activeRowKey ?? (interaction.selectedId === null ? null : `p:${interaction.selectedId}`);
@@ -227,6 +228,11 @@ export function FolderPhotosView({
     event.stopPropagation();
     selectDirectoryRow(item);
     setDirectoryContext({ directory: item.directory, x: event.clientX, y: event.clientY });
+  }
+
+  function openDirectoryPhotoContextMenu(event: MouseEvent, item: Extract<DirectoryTreeRow, { kind: "photo" }>) {
+    selectDirectoryRow(item);
+    interaction.openContextMenu(event, item.photo);
   }
 
   function openCurrentDirectoryContextMenu(event: MouseEvent<HTMLElement>) {
@@ -325,11 +331,11 @@ export function FolderPhotosView({
                 </div>
               ) : item.kind === "photo" ? (
                 <button
-                  className={`finder-row${interaction.selectedId === item.photo.photo_id ? " active" : ""}`}
+                  className={`finder-row${directoryTreeRowKey(item) === resolvedActiveRowKey ? " active" : ""}`}
                   style={{ paddingLeft: 4 + item.depth * 14 }}
                   type="button"
                   onClick={() => selectDirectoryRow(item)}
-                  onContextMenu={(event) => interaction.openContextMenu(event, item.photo)}
+                  onContextMenu={(event) => openDirectoryPhotoContextMenu(event, item)}
                 >
                   <Images size={14} /><span>{item.photo.filename}</span>
                 </button>
@@ -399,6 +405,7 @@ export function TaxonPhotosView({
   const interaction = usePhotoInteraction({
     photos,
     handlers,
+    selectFirst: false,
     stateKey: "photo-taxonomy.interaction",
   });
   const resolvedActiveRowKey = activeRowKey ?? (interaction.selectedId === null ? null : `p:${interaction.selectedId}`);
@@ -417,6 +424,11 @@ export function TaxonPhotosView({
     setActiveRowKey(taxonTreeRowKey(item));
     if (item.kind === "photo") interaction.selectPhoto(item.photo);
     else interaction.clearSelection();
+  }
+
+  function openTaxonPhotoContextMenu(event: MouseEvent, item: Extract<TaxonTreeRow, { kind: "photo" }>) {
+    selectTaxonRow(item);
+    interaction.openContextMenu(event, item.photo);
   }
 
   function activateTaxonRow() {
@@ -501,7 +513,7 @@ export function TaxonPhotosView({
                   </button>
                 </div>
               ) : item.kind === "photo" ? (
-                <button className={`finder-row${interaction.selectedId === item.photo.photo_id ? " active" : ""}`} style={{ paddingLeft: 4 + item.depth * 14 }} type="button" onClick={() => selectTaxonRow(item)} onContextMenu={(event) => interaction.openContextMenu(event, item.photo)}>
+                <button className={`finder-row${taxonTreeRowKey(item) === resolvedActiveRowKey ? " active" : ""}`} style={{ paddingLeft: 4 + item.depth * 14 }} type="button" onClick={() => selectTaxonRow(item)} onContextMenu={(event) => openTaxonPhotoContextMenu(event, item)}>
                   <Images size={14} /><span>{item.photo.filename}</span>
                 </button>
               ) : (
