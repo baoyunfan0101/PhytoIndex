@@ -11,6 +11,11 @@ test("normalizes missing and invalid general settings to defaults", () => {
     theme: "dark",
     restore_tabs: true,
     recent_searches_limit: 10,
+    taxon_tree_name_parts: {
+      sci_name: true,
+      zh_name: true,
+      en_name: true,
+    },
   });
   assert.deepEqual(normalizeGeneralSettings({
     theme: "invalid" as never,
@@ -24,11 +29,31 @@ test("preserves valid general settings", () => {
     theme: "light",
     restore_tabs: false,
     recent_searches_limit: 1,
+    taxon_tree_name_parts: {
+      sci_name: false,
+      zh_name: true,
+      en_name: false,
+    },
   }), {
     theme: "light",
     restore_tabs: false,
     recent_searches_limit: 1,
+    taxon_tree_name_parts: {
+      sci_name: false,
+      zh_name: true,
+      en_name: false,
+    },
   });
+});
+
+test("keeps at least one taxon tree name part visible", () => {
+  assert.deepEqual(normalizeGeneralSettings({
+    taxon_tree_name_parts: {
+      sci_name: false,
+      zh_name: false,
+      en_name: false,
+    },
+  }), defaultGeneralSettings());
 });
 
 test("applies forced themes and removes the override for system theme", () => {

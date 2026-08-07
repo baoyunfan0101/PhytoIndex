@@ -640,7 +640,7 @@ function TabBody({
     );
   }
   if (tab.kind === "folders") return <FolderPhotosView handlers={handlers} onStatus={onStatus} />;
-  if (tab.kind === "photo-taxonomy") return <TaxonPhotosView handlers={handlers} />;
+  if (tab.kind === "photo-taxonomy") return <TaxonPhotosView handlers={handlers} nameParts={generalSettings.taxon_tree_name_parts} />;
   if (tab.kind === "map") return <PhotoMapView active={active} handlers={handlers} />;
   if (tab.kind === "photo-history") return <OperationHistoryView domain="photo" onStatus={onStatus} />;
   if (tab.kind === "mapping") return <MappingView active={active} onStatus={onStatus} handlers={handlers} />;

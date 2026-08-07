@@ -1,9 +1,16 @@
 export type ThemePreference = "system" | "light" | "dark";
 
+export type TaxonTreeNameParts = {
+  sci_name: boolean;
+  zh_name: boolean;
+  en_name: boolean;
+};
+
 export type GeneralSettings = {
   theme: ThemePreference;
   restore_tabs: boolean;
   recent_searches_limit: number;
+  taxon_tree_name_parts: TaxonTreeNameParts;
 };
 
 export type WorkspaceTabKind =
@@ -53,4 +60,9 @@ export const defaultGeneralSettings = (): GeneralSettings => ({
   theme: "dark",
   restore_tabs: true,
   recent_searches_limit: 10,
+  taxon_tree_name_parts: {
+    sci_name: true,
+    zh_name: true,
+    en_name: true,
+  },
 });

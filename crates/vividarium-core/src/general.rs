@@ -21,6 +21,29 @@ pub struct GeneralSettings {
     pub theme: ThemePreference,
     pub restore_tabs: bool,
     pub recent_searches_limit: u8,
+    #[serde(default = "default_taxon_tree_name_parts")]
+    pub taxon_tree_name_parts: TaxonTreeNameParts,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct TaxonTreeNameParts {
+    pub sci_name: bool,
+    pub zh_name: bool,
+    pub en_name: bool,
+}
+
+impl Default for TaxonTreeNameParts {
+    fn default() -> Self {
+        Self {
+            sci_name: true,
+            zh_name: true,
+            en_name: true,
+        }
+    }
+}
+
+fn default_taxon_tree_name_parts() -> TaxonTreeNameParts {
+    TaxonTreeNameParts::default()
 }
 
 impl Default for GeneralSettings {
@@ -29,6 +52,7 @@ impl Default for GeneralSettings {
             theme: ThemePreference::Dark,
             restore_tabs: true,
             recent_searches_limit: 10,
+            taxon_tree_name_parts: TaxonTreeNameParts::default(),
         }
     }
 }
@@ -137,6 +161,14 @@ fn validate_general_settings(settings: &GeneralSettings) -> CoreResult<()> {
             "recent_searches_limit must be between 1 and 50".to_string(),
         ));
     }
+    if !settings.taxon_tree_name_parts.sci_name
+        && !settings.taxon_tree_name_parts.zh_name
+        && !settings.taxon_tree_name_parts.en_name
+    {
+        return Err(CoreError::InvalidArgument(
+            "at least one taxon tree name part must be visible".to_string(),
+        ));
+    }
     Ok(())
 }
 
@@ -208,6 +240,7 @@ mod tests {
                 theme: ThemePreference::Dark,
                 restore_tabs: true,
                 recent_searches_limit: 10,
+                taxon_tree_name_parts: TaxonTreeNameParts::default(),
             }
         );
     }
@@ -219,6 +252,11 @@ mod tests {
             theme: ThemePreference::Light,
             restore_tabs: false,
             recent_searches_limit: 24,
+            taxon_tree_name_parts: TaxonTreeNameParts {
+                sci_name: true,
+                zh_name: false,
+                en_name: true,
+            },
         };
         assert_eq!(
             update_general_settings(&database, &settings).unwrap(),
@@ -240,6 +278,23 @@ mod tests {
                 Err(CoreError::InvalidArgument(_))
             ));
         }
+    }
+
+    #[test]
+    fn rejects_hidden_taxon_tree_name_parts() {
+        let (_directory, database) = test_database();
+        let settings = GeneralSettings {
+            taxon_tree_name_parts: TaxonTreeNameParts {
+                sci_name: false,
+                zh_name: false,
+                en_name: false,
+            },
+            ..GeneralSettings::default()
+        };
+        assert!(matches!(
+            update_general_settings(&database, &settings),
+            Err(CoreError::InvalidArgument(_))
+        ));
     }
 
     #[test]

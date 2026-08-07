@@ -1,6 +1,6 @@
 import "maplibre-gl/dist/maplibre-gl.css";
 
-import { ChevronDown, ChevronRight, Folder, Images, RefreshCw } from "lucide-react";
+import { ChevronDown, ChevronRight, Folder, Images, Network, RefreshCw } from "lucide-react";
 import maplibregl, { type Map as MapLibreMap } from "maplibre-gl";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -16,6 +16,7 @@ import {
 import { errorMessage } from "../../api/common";
 import { getMapSettings, listMapPhotos, type MapBounds, type MapPhoto } from "../../api/map";
 import { browsePhotoTaxon, type PhotoTaxonItem, type PhotoTaxonUsage } from "../../api/mapping";
+import type { TaxonTreeNameParts } from "../../api/general";
 import { waitForOperation } from "../../api/tasks";
 import { EmptyState, IconButton, SectionHeader, VirtualList } from "../../shared/ui";
 import { PhotoStage } from "./PhotoMedia";
@@ -74,6 +75,18 @@ function flattenTaxonItems(
       : [];
     return [row, ...descendants, ...more];
   });
+}
+
+function formatTaxonTreeName(taxon: PhotoTaxonUsage, parts: TaxonTreeNameParts) {
+  const selected = [
+    parts.sci_name ? taxon.names.sci_name : null,
+    parts.zh_name ? taxon.names.zh_name : null,
+    parts.en_name ? taxon.names.en_name : null,
+  ].filter(Boolean);
+  const names = selected.length > 0
+    ? selected
+    : [taxon.names.sci_name, taxon.names.zh_name, taxon.names.en_name].filter(Boolean);
+  return names.length > 0 ? names.join(" \u00b7 ") : `Taxon ${taxon.taxon_id}`;
 }
 
 function normalizeLongitude(value: number) {
@@ -246,7 +259,13 @@ export function FolderPhotosView({
   );
 }
 
-export function TaxonPhotosView({ handlers }: { handlers: PhotoOpenHandlers }) {
+export function TaxonPhotosView({
+  handlers,
+  nameParts,
+}: {
+  handlers: PhotoOpenHandlers;
+  nameParts: TaxonTreeNameParts;
+}) {
   const [trail, setTrail] = useViewState<PhotoTaxonUsage[]>("photo-taxonomy.trail", []);
   const currentId = trail[trail.length - 1]?.taxon_id ?? null;
   const page = useCursorPage<PhotoTaxonItem, number | null>({
@@ -301,7 +320,7 @@ export function TaxonPhotosView({ handlers }: { handlers: PhotoOpenHandlers }) {
           <VirtualList
             stateKey="photo-taxonomy.list"
             items={rows}
-            rowHeight={32}
+            rowHeight={28}
             itemKey={(item) => item.kind === "taxon"
               ? `t:${item.taxon.taxon_id}`
               : item.kind === "photo"
@@ -319,12 +338,12 @@ export function TaxonPhotosView({ handlers }: { handlers: PhotoOpenHandlers }) {
                   >
                     {tree.nodes.get(item.taxon.taxon_id)?.expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
                   </IconButton>
-                  <button className="tree-label stacked" type="button" onClick={() => {
+                  <Network size={14} />
+                  <button className="tree-label" type="button" title={formatTaxonTreeName(item.taxon, nameParts)} onClick={() => {
                     tree.clear();
                     setTrail((current) => [...current, item.taxon]);
                   }}>
-                    <strong>{item.taxon.names.sci_name ?? `Taxon ${item.taxon.taxon_id}`}</strong>
-                    <small>{item.taxon.subtree_photo_count} photos</small>
+                    {formatTaxonTreeName(item.taxon, nameParts)}
                   </button>
                 </div>
               ) : item.kind === "photo" ? (

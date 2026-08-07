@@ -212,6 +212,21 @@ function GeneralSettings({
     }
   }
 
+  function changeTaxonTreeNamePart(
+    key: keyof GeneralSettingsValue["taxon_tree_name_parts"],
+    checked: boolean,
+  ) {
+    const next = {
+      ...settings.taxon_tree_name_parts,
+      [key]: checked,
+    };
+    if (!next.sci_name && !next.zh_name && !next.en_name) return;
+    void change({ ...settings, taxon_tree_name_parts: next });
+  }
+
+  const visibleTaxonTreeNameCount = Object.values(settings.taxon_tree_name_parts)
+    .filter(Boolean).length;
+
   return (
     <div className="settings-section">
       <SectionHeader title="General" detail="Configure application-wide settings." />
@@ -266,6 +281,32 @@ function GeneralSettings({
             }}
           />
         </label>
+      </section>
+      <section className="settings-group" aria-labelledby="general-taxon-tree-heading">
+        <h3 id="general-taxon-tree-heading">Taxon Tree</h3>
+        <div className="general-setting-row">
+          <span><strong>Visible taxon names</strong><small>Choose which names are shown in photo taxon tree rows.</small></span>
+          <div className="general-checkbox-stack" role="group" aria-label="Visible taxon names">
+            {([
+              ["sci_name", "Scientific"],
+              ["zh_name", "Chinese"],
+              ["en_name", "English"],
+            ] as const).map(([key, label]) => {
+              const checked = settings.taxon_tree_name_parts[key];
+              return (
+                <label key={key}>
+                  <input
+                    type="checkbox"
+                    disabled={saving || (checked && visibleTaxonTreeNameCount === 1)}
+                    checked={checked}
+                    onChange={(event) => changeTaxonTreeNamePart(key, event.target.checked)}
+                  />
+                  <span>{label}</span>
+                </label>
+              );
+            })}
+          </div>
+        </div>
       </section>
       {(saving || message) && (
         <div className={saving ? "editor-message" : "inline-error"} role={saving ? "status" : "alert"}>

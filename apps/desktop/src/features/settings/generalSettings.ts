@@ -5,6 +5,11 @@ export function normalizeGeneralSettings(value: Partial<GeneralSettings>): Gener
     theme: "dark",
     restore_tabs: true,
     recent_searches_limit: 10,
+    taxon_tree_name_parts: {
+      sci_name: true,
+      zh_name: true,
+      en_name: true,
+    },
   };
   const theme = isTheme(value.theme) ? value.theme : fallback.theme;
   const recentSearchesLimit = Number.isInteger(value.recent_searches_limit)
@@ -16,6 +21,7 @@ export function normalizeGeneralSettings(value: Partial<GeneralSettings>): Gener
     theme,
     restore_tabs: typeof value.restore_tabs === "boolean" ? value.restore_tabs : fallback.restore_tabs,
     recent_searches_limit: recentSearchesLimit,
+    taxon_tree_name_parts: normalizeTaxonTreeNameParts(value.taxon_tree_name_parts, fallback.taxon_tree_name_parts),
   };
 }
 
@@ -29,4 +35,16 @@ export function applyTheme(
 
 function isTheme(value: unknown): value is ThemePreference {
   return value === "system" || value === "light" || value === "dark";
+}
+
+function normalizeTaxonTreeNameParts(
+  value: Partial<GeneralSettings["taxon_tree_name_parts"]> | undefined,
+  fallback: GeneralSettings["taxon_tree_name_parts"],
+): GeneralSettings["taxon_tree_name_parts"] {
+  const next = {
+    sci_name: typeof value?.sci_name === "boolean" ? value.sci_name : fallback.sci_name,
+    zh_name: typeof value?.zh_name === "boolean" ? value.zh_name : fallback.zh_name,
+    en_name: typeof value?.en_name === "boolean" ? value.en_name : fallback.en_name,
+  };
+  return next.sci_name || next.zh_name || next.en_name ? next : fallback;
 }
