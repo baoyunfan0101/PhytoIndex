@@ -190,7 +190,15 @@ export function TaxonomySearchView({
         <header className="workbench-toolbar">
           <label className="search-field taxonomy-search-field">
             <Search size={14} />
-            <input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search scientific, Chinese, or English names" />
+            <input
+              autoFocus
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Search scientific, Chinese, or English names"
+            />
           </label>
         </header>
       )}
