@@ -44,6 +44,9 @@
 .editor-message.error-message { color: var(--red); }
 .field-stack { display: flex; flex-direction: column; gap: 6px; padding: 12px; }
 .field-stack > span { color: var(--muted); }
+.field-stack > span strong { color: var(--text); font-weight: 600; }
+.field-stack > .priority-list { margin: 0; }
+.field-stack > .checkbox-grid { padding: 0; }
 .field-stack input, .field-stack select { height: 30px; padding: 0 8px; border: 1px solid var(--line-strong); border-radius: 3px; background: var(--input); }
 .hooks-settings { display: grid; height: 100%; min-height: 0; grid-template-rows: auto minmax(0, 1fr) 32px; }
 .hook-columns { min-height: 0; border-top: 1px solid var(--line); }

@@ -621,28 +621,32 @@ function NamingSettings() {
   return (
     <div className="settings-section">
       <SectionHeader title="Naming" detail="Configure taxonomy matching and mapped-photo filename generation." actions={<Button variant="primary" onClick={() => void save()}><Save size={13} />Save</Button>} />
-      <h3>Mapping name priority</h3>
-      <div className="priority-list">
-        {priority.map((field, index) => (
-          <div key={field}>
-            <b>{index + 1}</b><span>{photoNamePriorityLabels[field]}</span>
-            <IconButton
-              aria-label={`Move ${photoNamePriorityLabels[field]} up`}
-              disabled={index === 0}
-              onClick={() => move(index, -1)}
-            ><ArrowUp size={13} /></IconButton>
-            <IconButton
-              aria-label={`Move ${photoNamePriorityLabels[field]} down`}
-              disabled={index === priority.length - 1}
-              onClick={() => move(index, 1)}
-            ><ArrowDown size={13} /></IconButton>
-          </div>
-        ))}
+      <div className="field-stack">
+        <span><strong>Mapping name priority</strong></span>
+        <div className="priority-list">
+          {priority.map((field, index) => (
+            <div key={field}>
+              <b>{index + 1}</b><span>{photoNamePriorityLabels[field]}</span>
+              <IconButton
+                aria-label={`Move ${photoNamePriorityLabels[field]} up`}
+                disabled={index === 0}
+                onClick={() => move(index, -1)}
+              ><ArrowUp size={13} /></IconButton>
+              <IconButton
+                aria-label={`Move ${photoNamePriorityLabels[field]} down`}
+                disabled={index === priority.length - 1}
+                onClick={() => move(index, 1)}
+              ><ArrowDown size={13} /></IconButton>
+            </div>
+          ))}
+        </div>
       </div>
-      <h3>Photo filename format</h3>
-      <div className="checkbox-grid">{photoFilenameFormatFields.map(({ field, label }) => (
-        <label key={field}><input type="checkbox" checked={format[field]} onChange={(event) => setFormat({ ...format, [field]: event.target.checked })} />{label}</label>
-      ))}</div>
+      <div className="field-stack">
+        <span><strong>Photo filename format</strong></span>
+        <div className="checkbox-grid">{photoFilenameFormatFields.map(({ field, label }) => (
+          <label key={field}><input type="checkbox" checked={format[field]} onChange={(event) => setFormat({ ...format, [field]: event.target.checked })} />{label}</label>
+        ))}</div>
+      </div>
       <label className="field-stack"><span><strong>Multiple-name separator</strong></span><input value={separator} maxLength={1} onChange={(event) => setSeparator(event.target.value)} /></label>
       {loadError && <div className="editor-message error-message" role="alert">{loadError}</div>}
       <div className="editor-message">{message}</div>
@@ -665,8 +669,8 @@ function MapSettingsPanel() {
   return (
     <div className="settings-section">
       <SectionHeader title="Map" detail="Configure the map tile provider and provider credentials." actions={<Button variant="primary" onClick={() => void save()}><Save size={13} />Save</Button>} />
-      <label className="field-stack"><span>Tile provider</span><select value={settings.provider} onChange={(event) => setSettings({ ...settings, provider: event.target.value as MapSettings["provider"] })}><option value="osm">OpenStreetMap</option><option value="tianditu">Tianditu</option></select></label>
-      <label className="field-stack"><span>Token</span><input disabled={settings.provider !== "tianditu"} value={settings.tianditu_token ?? ""} onChange={(event) => setSettings({ ...settings, tianditu_token: event.target.value || null })} /></label>
+      <label className="field-stack"><span><strong>Tile provider</strong></span><select value={settings.provider} onChange={(event) => setSettings({ ...settings, provider: event.target.value as MapSettings["provider"] })}><option value="osm">OpenStreetMap</option><option value="tianditu">Tianditu</option></select></label>
+      <label className="field-stack"><span><strong>Token</strong></span><input disabled={settings.provider !== "tianditu"} value={settings.tianditu_token ?? ""} onChange={(event) => setSettings({ ...settings, tianditu_token: event.target.value || null })} /></label>
       <div className="editor-message">{message}</div>
     </div>
   );
