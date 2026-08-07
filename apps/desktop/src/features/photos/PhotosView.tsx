@@ -221,9 +221,9 @@ export function FolderPhotosView({
                   >
                     {tree.nodes.get(item.directory.directory_id)?.expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
                   </IconButton>
-                  <Folder size={14} />
-                  <button className="tree-label" type="button" onClick={() => enter(item.directory)}>
-                    {item.directory.name}
+                  <button className="tree-node-button" type="button" onClick={() => enter(item.directory)}>
+                    <Folder size={14} />
+                    <span className="tree-label">{item.directory.name}</span>
                   </button>
                 </div>
               ) : item.kind === "photo" ? (
@@ -340,12 +340,12 @@ export function TaxonPhotosView({
                   >
                     {tree.nodes.get(item.taxon.taxon_id)?.expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
                   </IconButton>
-                  <Network size={14} />
-                  <button className="tree-label" type="button" title={formatTaxonTreeName(item.taxon, nameParts)} onClick={() => {
+                  <button className="tree-node-button" type="button" title={formatTaxonTreeName(item.taxon, nameParts)} onClick={() => {
                     tree.clear();
                     setTrail((current) => [...current, item.taxon]);
                   }}>
-                    {formatTaxonTreeName(item.taxon, nameParts)}
+                    <Network size={14} />
+                    <span className="tree-label">{formatTaxonTreeName(item.taxon, nameParts)}</span>
                   </button>
                 </div>
               ) : item.kind === "photo" ? (

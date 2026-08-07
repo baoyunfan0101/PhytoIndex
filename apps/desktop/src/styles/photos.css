@@ -157,6 +157,7 @@
 .finder-row small { color: var(--quiet); line-height: 1.15; }
 .finder-row.tree { padding-right: 6px; }
 .finder-row.tree:hover { background: var(--hover); }
+.finder-row.tree:active { color: var(--text); background: var(--selected); }
 .tree-toggle {
   width: 22px;
   min-width: 22px;
@@ -166,16 +167,28 @@
   color: var(--quiet);
   background: transparent;
 }
-.tree-label {
+.tree-toggle:hover:not(:disabled), .tree-toggle:active:not(:disabled) { background: transparent; filter: none; transform: none; }
+.tree-node-button {
+  display: flex;
+  height: 100%;
   min-width: 0;
   flex: 1;
-  padding: 2px 0;
+  align-items: center;
+  gap: 5px;
+  padding: 0;
   overflow: hidden;
   border: 0;
+  color: inherit;
   text-align: left;
+  background: transparent;
+}
+.tree-node-button:hover:not(:disabled), .tree-node-button:active:not(:disabled) { background: transparent; filter: none; transform: none; }
+.tree-label {
+  min-width: 0;
+  overflow: hidden;
+  flex: 1;
   text-overflow: ellipsis;
   white-space: nowrap;
-  background: transparent;
 }
 .tree-label.stacked { display: flex; flex-direction: column; }
 .tree-label.stacked strong { line-height: 1.15; }
