@@ -56,9 +56,9 @@ export function DirectoryContextMenu({
     }
   }
 
-  async function renameDirectoryPhotos() {
-    onStatus("Renaming directory photos", true);
-    const result = await renamePhotosInDirectoryFromTaxa(directory.directory_id, true);
+  async function renameDirectoryPhotos(includeDescendants: boolean) {
+    onStatus(includeDescendants ? "Renaming directory photos recursively" : "Renaming directory photos", true);
+    const result = await renamePhotosInDirectoryFromTaxa(directory.directory_id, includeDescendants);
     onStatus(summarizeRenameResult(result));
     await onRenamed(result);
   }
@@ -72,15 +72,22 @@ export function DirectoryContextMenu({
     >
       <MenuButton
         icon={RefreshCw}
-        label="Refresh"
+        label="Refresh folder"
         disabled={Boolean(busy)}
         onClick={() => void run("Refreshing", () => onRefresh(directory))}
       />
+      <div className="context-separator" role="separator" />
       <MenuButton
         icon={ArrowRightLeft}
-        label="Rename from taxonomy recursively"
+        label="Rename files from taxonomy"
         disabled={Boolean(busy)}
-        onClick={() => void run("Renaming", renameDirectoryPhotos)}
+        onClick={() => void run("Renaming", () => renameDirectoryPhotos(false))}
+      />
+      <MenuButton
+        icon={ArrowRightLeft}
+        label="Rename files recursively from taxonomy"
+        disabled={Boolean(busy)}
+        onClick={() => void run("Renaming", () => renameDirectoryPhotos(true))}
       />
       <div className="context-separator" role="separator" />
       <MenuButton
