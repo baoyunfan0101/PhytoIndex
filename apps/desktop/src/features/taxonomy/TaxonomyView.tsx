@@ -6,6 +6,7 @@ import {
   Images,
   Play,
   Search,
+  Trash2,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -308,6 +309,10 @@ export function FormattedUpdateView({ mutationDisabled = false }: { mutationDisa
     } : row));
   }
 
+  function deleteRow(index: number) {
+    setRows((current) => current.filter((_, rowIndex) => rowIndex !== index));
+  }
+
   async function run(kind: "preview" | "apply") {
     setBusy(true);
     setMessage("");
@@ -351,7 +356,7 @@ export function FormattedUpdateView({ mutationDisabled = false }: { mutationDisa
         separatorLabel="Resize formatted input and result log"
         stateKey="formatted-update.rows"
         first={(<div className="input-table">
-        <div className="input-table-head"><span>#</span>{inputFields.map((field) => <span key={field}>{field}</span>)}</div>
+        <div className="input-table-head"><span>#</span>{inputFields.map((field) => <span key={field}>{field}</span>)}<span /></div>
         <VirtualList
           items={rows}
           rowHeight={38}
@@ -360,6 +365,7 @@ export function FormattedUpdateView({ mutationDisabled = false }: { mutationDisa
             <div className="input-table-row">
               <span>{index + 1}</span>
               {inputFields.map((field) => <input key={field} value={Array.isArray(row[field]) ? (row[field] as string[]).join(separator) : String(row[field] ?? "")} onChange={(event) => updateRow(index, field, event.target.value)} />)}
+              <button className="input-row-delete" type="button" aria-label={`Delete row ${index + 1}`} title="Delete row" onClick={() => deleteRow(index)}><Trash2 size={14} /></button>
             </div>
           )}
         />
