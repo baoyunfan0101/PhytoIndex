@@ -141,23 +141,6 @@
   will-change: transform;
 }
 .photo-stage.compact { min-height: 240px; }
-.photo-stage-caption {
-  position: absolute;
-  right: 12px;
-  bottom: 10px;
-  left: 12px;
-  padding: 5px 8px;
-  overflow: hidden;
-  border-radius: 3px;
-  color: #ddd;
-  text-align: center;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  background: #111b;
-  opacity: 0;
-  transition: opacity .15s;
-}
-.photo-stage:hover .photo-stage-caption { opacity: 1; }
 .photo-loader { position: absolute; }
 
 .folder-workbench { display: grid; height: 100%; min-height: 0; grid-template-rows: 42px minmax(0, 1fr); }

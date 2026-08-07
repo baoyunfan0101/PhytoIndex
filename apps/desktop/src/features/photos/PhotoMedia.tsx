@@ -186,7 +186,6 @@ export function PhotoStage({
           }}
         />
       </div>
-      <div className="photo-stage-caption">{photo.filename}</div>
     </div>
   );
 }
