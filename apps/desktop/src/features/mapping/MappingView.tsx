@@ -89,26 +89,26 @@ export function MappingView({
   return (
     <div className="mapping-workbench">
       <header className="workbench-toolbar">
+        <div className="mapping-summary" aria-label="Mapping status filters">
+          {statuses.map((item) => (
+            <button
+              className={`mapping-summary-button${status === item ? " active" : ""}`}
+              type="button"
+              key={item}
+              aria-pressed={status === item}
+              onClick={() => setStatus(item)}
+            >
+              <MappingBadge status={item} />
+              <span>{counts[item]}</span>
+            </button>
+          ))}
+        </div>
         <label className="search-field mapping-filter">
           <Search size={14} />
           <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={`Search ${status} photos`} />
         </label>
         <Button onClick={() => void mapAll()}><RefreshCw size={13} />Map all</Button>
       </header>
-      <div className="mapping-summary">
-        {statuses.map((item) => (
-          <button
-            className={`mapping-summary-button${status === item ? " active" : ""}`}
-            type="button"
-            key={item}
-            aria-pressed={status === item}
-            onClick={() => setStatus(item)}
-          >
-            <MappingBadge status={item} />
-            <span>{counts[item]}</span>
-          </button>
-        ))}
-      </div>
       <ResizablePanels
         className="mapping-three-columns"
         initialSize={240}
