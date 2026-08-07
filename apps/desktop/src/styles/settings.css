@@ -11,16 +11,16 @@
 .settings-content { width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: auto; }
 .settings-section { max-width: 960px; margin: 0 auto; }
 .settings-section h3 { margin: 22px 12px 8px; font-size: 12px; font-weight: 600; }
-.settings-group { margin: 0 12px 12px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); }
-.settings-group > h3 { margin: 0; padding: 10px 12px; border-bottom: 1px solid var(--line); }
-.general-setting-row { display: grid; min-height: 58px; grid-template-columns: minmax(220px, 1fr) minmax(120px, 220px); align-items: center; gap: 20px; padding: 10px 12px; }
+.settings-group { margin: 8px 12px 18px; }
+.settings-group > h3 { margin: 0 0 4px; padding: 0 0 6px; border-bottom: 1px solid var(--line); }
+.general-setting-row { display: grid; min-height: 42px; grid-template-columns: minmax(220px, 1fr) minmax(180px, 340px); align-items: center; gap: 20px; padding: 6px 0; }
 .general-setting-row > span { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
 .general-setting-row small { color: var(--muted); font-weight: 400; }
 .general-setting-row select, .general-setting-row input[type="number"] { width: 100%; height: 30px; padding: 0 8px; border: 1px solid var(--line-strong); border-radius: 3px; background: var(--input); }
 .general-setting-row input[type="checkbox"] { width: 16px; height: 16px; justify-self: end; accent-color: var(--accent); }
-.general-checkbox-stack { display: flex; flex-direction: column; gap: 7px; justify-self: end; }
-.general-checkbox-stack label { display: flex; align-items: center; justify-content: flex-end; gap: 7px; color: var(--muted); }
-.general-checkbox-stack input[type="checkbox"] { justify-self: auto; }
+.general-checkbox-row { display: grid; grid-template-columns: repeat(3, max-content); gap: 12px; justify-self: end; }
+.general-checkbox-row label { display: flex; align-items: center; gap: 7px; color: var(--muted); }
+.general-checkbox-row input[type="checkbox"] { justify-self: auto; }
 .setting-row { display: grid; grid-template-columns: 220px 1fr; gap: 20px; padding: 12px; border-bottom: 1px solid var(--line); }
 .setting-row span { color: var(--muted); }
 .base-database-action {

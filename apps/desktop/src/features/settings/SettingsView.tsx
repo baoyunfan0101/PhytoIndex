@@ -286,7 +286,7 @@ function GeneralSettings({
         <h3 id="general-taxon-tree-heading">Taxon Tree</h3>
         <div className="general-setting-row">
           <span><strong>Visible taxon names</strong><small>Choose which names are shown in photo taxon tree rows.</small></span>
-          <div className="general-checkbox-stack" role="group" aria-label="Visible taxon names">
+          <div className="general-checkbox-row" role="group" aria-label="Visible taxon names">
             {([
               ["sci_name", "Scientific"],
               ["zh_name", "Chinese"],
@@ -643,7 +643,7 @@ function NamingSettings() {
       <div className="checkbox-grid">{photoFilenameFormatFields.map(({ field, label }) => (
         <label key={field}><input type="checkbox" checked={format[field]} onChange={(event) => setFormat({ ...format, [field]: event.target.checked })} />{label}</label>
       ))}</div>
-      <label className="field-stack"><span>Multiple-name separator</span><input value={separator} maxLength={1} onChange={(event) => setSeparator(event.target.value)} /></label>
+      <label className="field-stack"><span><strong>Multiple-name separator</strong></span><input value={separator} maxLength={1} onChange={(event) => setSeparator(event.target.value)} /></label>
       {loadError && <div className="editor-message error-message" role="alert">{loadError}</div>}
       <div className="editor-message">{message}</div>
     </div>
