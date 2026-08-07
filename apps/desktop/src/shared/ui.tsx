@@ -71,27 +71,36 @@ export function IconButton({
 
 export function VirtualList<T>({
   items,
+  activeIndex = null,
   rowHeight = 42,
   className = "",
   overscan = 8,
   itemKey,
   renderItem,
+  onActivateActive,
+  onClearActive,
+  onMoveActive,
   onNearEnd,
   onTypeSelect,
   stateKey,
 }: {
   items: T[];
+  activeIndex?: number | null;
   rowHeight?: number;
   className?: string;
   overscan?: number;
   itemKey: (item: T, index: number) => string | number;
   renderItem: (item: T, index: number) => ReactNode;
+  onActivateActive?: () => void;
+  onClearActive?: () => void;
+  onMoveActive?: (direction: -1 | 1) => void;
   onNearEnd?: () => void;
-  onTypeSelect?: (query: string) => void;
+  onTypeSelect?: (query: string, shouldCycle: boolean) => void;
   stateKey?: string;
 }) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const typeBuffer = useRef("");
+  const typeUpdatedAt = useRef(0);
   const typeTimer = useRef<number | null>(null);
   const [height, setHeight] = useState(0);
   const [scrollTop, setScrollTop] = useViewState(
@@ -114,6 +123,22 @@ export function VirtualList<T>({
   const end = Math.min(items.length, Math.ceil((scrollTop + height) / rowHeight) + overscan);
   const visible = items.slice(start, end);
 
+  useEffect(() => {
+    const element = viewportRef.current;
+    if (!element || activeIndex === null || activeIndex < 0) return;
+    const itemTop = activeIndex * rowHeight;
+    const itemBottom = itemTop + rowHeight;
+    const viewportTop = element.scrollTop;
+    const viewportBottom = viewportTop + element.clientHeight;
+    let nextScrollTop = viewportTop;
+    if (itemTop < viewportTop) nextScrollTop = itemTop;
+    else if (itemBottom > viewportBottom) nextScrollTop = itemBottom - element.clientHeight;
+    nextScrollTop = Math.max(0, Math.min(nextScrollTop, element.scrollHeight - element.clientHeight));
+    if (nextScrollTop === viewportTop) return;
+    element.scrollTop = nextScrollTop;
+    setScrollTop(nextScrollTop);
+  }, [activeIndex, rowHeight, setScrollTop]);
+
   function handleScroll(event: UIEvent<HTMLDivElement>) {
     const element = event.currentTarget;
     setScrollTop(element.scrollTop);
@@ -123,16 +148,44 @@ export function VirtualList<T>({
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
-    if (!onTypeSelect || event.metaKey || event.ctrlKey || event.altKey || event.key.length !== 1) {
+    if (event.target instanceof HTMLElement && ["INPUT", "SELECT", "TEXTAREA"].includes(event.target.tagName)) {
       return;
     }
-    typeBuffer.current += event.key.toLocaleLowerCase();
-    onTypeSelect(typeBuffer.current);
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      if (!onMoveActive) return;
+      event.preventDefault();
+      onMoveActive(event.key === "ArrowDown" ? 1 : -1);
+      return;
+    }
+    if (event.key === "Enter" || event.key === " ") {
+      if (!onActivateActive) return;
+      event.preventDefault();
+      onActivateActive();
+      return;
+    }
+    if (event.key === "Escape") {
+      if (!onClearActive) return;
+      event.preventDefault();
+      onClearActive();
+      return;
+    }
+    if (!onTypeSelect || event.metaKey || event.ctrlKey || event.altKey || event.key.length !== 1 || /\s/.test(event.key)) return;
+    event.preventDefault();
+    const now = Date.now();
+    const character = event.key.toLocaleLowerCase();
+    const nextBuffer = now - typeUpdatedAt.current > 900
+      ? character
+      : typeBuffer.current + character;
+    const shouldCycle = nextBuffer.length > 1 && [...nextBuffer].every((item) => item === character);
+    typeBuffer.current = nextBuffer;
+    typeUpdatedAt.current = now;
+    onTypeSelect(shouldCycle ? character : nextBuffer, shouldCycle);
     if (typeTimer.current !== null) window.clearTimeout(typeTimer.current);
     typeTimer.current = window.setTimeout(() => {
       typeBuffer.current = "";
+      typeUpdatedAt.current = 0;
       typeTimer.current = null;
-    }, 700);
+    }, 900);
   }
 
   return (

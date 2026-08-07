@@ -22,6 +22,7 @@ import { EmptyState, IconButton, SectionHeader, VirtualList } from "../../shared
 import { PhotoStage } from "./PhotoMedia";
 import { usePhotoInteraction, type PhotoOpenHandlers } from "./PhotoInteraction";
 import { useDeferredPhotoMutation, usePhotoMutation } from "./photoMutations";
+import { findTypeSelectIndex, nextListIndex } from "./photoListNavigation";
 import { useCursorPage } from "../../shared/useCursorPage";
 import { useCursorTree, type CursorTreeNode } from "../../shared/useCursorTree";
 import { useViewState } from "../../shared/viewState";
@@ -36,6 +37,18 @@ type TaxonTreeRow =
   | { kind: "taxon"; taxon: PhotoTaxonUsage; depth: number }
   | { kind: "photo"; photo: Photo; depth: number }
   | { kind: "more"; parentId: number; depth: number; loading: boolean };
+
+function directoryTreeRowKey(item: DirectoryTreeRow) {
+  if (item.kind === "directory") return `d:${item.directory.directory_id}`;
+  if (item.kind === "photo") return `p:${item.photo.photo_id}`;
+  return `m:${item.parentId}`;
+}
+
+function taxonTreeRowKey(item: TaxonTreeRow) {
+  if (item.kind === "taxon") return `t:${item.taxon.taxon_id}`;
+  if (item.kind === "photo") return `p:${item.photo.photo_id}`;
+  return `m:${item.parentId}`;
+}
 
 function flattenDirectoryItems(
   items: PhotoDirectoryItem[],
@@ -114,6 +127,7 @@ export function FolderPhotosView({
 }) {
   const [library, setLibrary] = useViewState<PhotoLibrary | null>("folders.library", null);
   const [trail, setTrail] = useViewState<PhotoDirectory[]>("folders.trail", []);
+  const [activeRowKey, setActiveRowKey] = useViewState<string | null>("folders.active-row", null);
   const [libraryLoading, setLibraryLoading] = useState(library === null);
   const [libraryError, setLibraryError] = useState("");
   const directoryId = trail[trail.length - 1]?.directory_id ?? library?.root_directory_id ?? null;
@@ -141,6 +155,8 @@ export function FolderPhotosView({
     handlers,
     stateKey: "folders.interaction",
   });
+  const resolvedActiveRowKey = activeRowKey ?? (interaction.selectedId === null ? null : `p:${interaction.selectedId}`);
+  const activeRowIndex = rows.findIndex((row) => directoryTreeRowKey(row) === resolvedActiveRowKey);
   usePhotoMutation(() => {
     void Promise.all([page.reload(), tree.reloadExpanded()]);
   });
@@ -172,7 +188,41 @@ export function FolderPhotosView({
 
   function enter(directory: PhotoDirectory) {
     tree.clear();
+    setActiveRowKey(null);
     setTrail((current) => [...current, directory]);
+  }
+
+  function selectDirectoryRow(item: DirectoryTreeRow) {
+    setActiveRowKey(directoryTreeRowKey(item));
+    if (item.kind === "photo") interaction.selectPhoto(item.photo);
+    else interaction.clearSelection();
+  }
+
+  function activateDirectoryRow() {
+    const item = rows[activeRowIndex];
+    if (!item) return;
+    if (item.kind === "directory") enter(item.directory);
+    else if (item.kind === "photo") interaction.selectPhoto(item.photo);
+    else void tree.loadMore(item.parentId);
+  }
+
+  function moveDirectoryRow(direction: -1 | 1) {
+    const nextIndex = nextListIndex(rows.length, activeRowIndex, direction);
+    if (nextIndex >= 0) selectDirectoryRow(rows[nextIndex]);
+  }
+
+  function typeSelectDirectoryRow(query: string, shouldCycle: boolean) {
+    const matchIndex = findTypeSelectIndex(
+      rows,
+      query,
+      (item) => item.kind === "directory"
+        ? [item.directory.name, item.directory.relative_path]
+        : item.kind === "photo"
+          ? [item.photo.filename, item.photo.relative_path]
+          : ["Load more"],
+      shouldCycle && activeRowIndex >= 0 ? activeRowIndex + 1 : 0,
+    );
+    if (matchIndex >= 0) selectDirectoryRow(rows[matchIndex]);
   }
 
   return (
@@ -203,16 +253,20 @@ export function FolderPhotosView({
           <VirtualList
             stateKey="folders.list"
             items={rows}
+            activeIndex={activeRowIndex}
             rowHeight={28}
-            itemKey={(item) => item.kind === "directory"
-              ? `d:${item.directory.directory_id}`
-              : item.kind === "photo"
-                ? `p:${item.photo.photo_id}`
-                : `m:${item.parentId}`}
+            itemKey={directoryTreeRowKey}
+            onActivateActive={activateDirectoryRow}
+            onClearActive={() => {
+              setActiveRowKey(null);
+              interaction.clearSelection();
+            }}
+            onMoveActive={moveDirectoryRow}
             onNearEnd={() => void page.loadMore()}
+            onTypeSelect={typeSelectDirectoryRow}
             renderItem={(item) => (
               item.kind === "directory" ? (
-                <div className="finder-row tree" style={{ paddingLeft: 4 + item.depth * 14 }}>
+                <div className={`finder-row tree${directoryTreeRowKey(item) === resolvedActiveRowKey ? " active" : ""}`} style={{ paddingLeft: 4 + item.depth * 14 }}>
                   <IconButton
                     aria-label={tree.nodes.get(item.directory.directory_id)?.expanded ? "Collapse folder" : "Expand folder"}
                     className="tree-toggle"
@@ -231,14 +285,14 @@ export function FolderPhotosView({
                   className={`finder-row${interaction.selectedId === item.photo.photo_id ? " active" : ""}`}
                   style={{ paddingLeft: 4 + item.depth * 14 }}
                   type="button"
-                  onClick={() => interaction.selectPhoto(item.photo)}
+                  onClick={() => selectDirectoryRow(item)}
                   onContextMenu={(event) => interaction.openContextMenu(event, item.photo)}
                 >
                   <Images size={14} /><span>{item.photo.filename}</span>
                 </button>
               ) : (
                 <button
-                  className="finder-row tree-more"
+                  className={`finder-row tree-more${directoryTreeRowKey(item) === resolvedActiveRowKey ? " active" : ""}`}
                   style={{ paddingLeft: 4 + item.depth * 14 }}
                   type="button"
                   disabled={item.loading}
@@ -267,6 +321,7 @@ export function TaxonPhotosView({
   nameParts: TaxonTreeNameParts;
 }) {
   const [trail, setTrail] = useViewState<PhotoTaxonUsage[]>("photo-taxonomy.trail", []);
+  const [activeRowKey, setActiveRowKey] = useViewState<string | null>("photo-taxonomy.active-row", null);
   const currentId = trail[trail.length - 1]?.taxon_id ?? null;
   const page = useCursorPage<PhotoTaxonItem, number | null>({
     params: currentId,
@@ -291,9 +346,50 @@ export function TaxonPhotosView({
     handlers,
     stateKey: "photo-taxonomy.interaction",
   });
+  const resolvedActiveRowKey = activeRowKey ?? (interaction.selectedId === null ? null : `p:${interaction.selectedId}`);
+  const activeRowIndex = rows.findIndex((row) => taxonTreeRowKey(row) === resolvedActiveRowKey);
   usePhotoMutation(() => {
     void Promise.all([page.reload(), tree.reloadExpanded()]);
   });
+
+  function enterTaxon(taxon: PhotoTaxonUsage) {
+    tree.clear();
+    setActiveRowKey(null);
+    setTrail((current) => [...current, taxon]);
+  }
+
+  function selectTaxonRow(item: TaxonTreeRow) {
+    setActiveRowKey(taxonTreeRowKey(item));
+    if (item.kind === "photo") interaction.selectPhoto(item.photo);
+    else interaction.clearSelection();
+  }
+
+  function activateTaxonRow() {
+    const item = rows[activeRowIndex];
+    if (!item) return;
+    if (item.kind === "taxon") enterTaxon(item.taxon);
+    else if (item.kind === "photo") interaction.selectPhoto(item.photo);
+    else void tree.loadMore(item.parentId);
+  }
+
+  function moveTaxonRow(direction: -1 | 1) {
+    const nextIndex = nextListIndex(rows.length, activeRowIndex, direction);
+    if (nextIndex >= 0) selectTaxonRow(rows[nextIndex]);
+  }
+
+  function typeSelectTaxonRow(query: string, shouldCycle: boolean) {
+    const matchIndex = findTypeSelectIndex(
+      rows,
+      query,
+      (item) => item.kind === "taxon"
+        ? [item.taxon.names.sci_name, item.taxon.names.zh_name, item.taxon.names.en_name]
+        : item.kind === "photo"
+          ? [item.photo.filename, item.photo.relative_path]
+          : ["Load more"],
+      shouldCycle && activeRowIndex >= 0 ? activeRowIndex + 1 : 0,
+    );
+    if (matchIndex >= 0) selectTaxonRow(rows[matchIndex]);
+  }
 
   return (
     <div className="folder-workbench">
@@ -322,16 +418,20 @@ export function TaxonPhotosView({
           <VirtualList
             stateKey="photo-taxonomy.list"
             items={rows}
+            activeIndex={activeRowIndex}
             rowHeight={28}
-            itemKey={(item) => item.kind === "taxon"
-              ? `t:${item.taxon.taxon_id}`
-              : item.kind === "photo"
-                ? `p:${item.photo.photo_id}`
-                : `m:${item.parentId}`}
+            itemKey={taxonTreeRowKey}
+            onActivateActive={activateTaxonRow}
+            onClearActive={() => {
+              setActiveRowKey(null);
+              interaction.clearSelection();
+            }}
+            onMoveActive={moveTaxonRow}
             onNearEnd={() => void page.loadMore()}
+            onTypeSelect={typeSelectTaxonRow}
             renderItem={(item) => (
               item.kind === "taxon" ? (
-                <div className="finder-row tree taxon" style={{ paddingLeft: 4 + item.depth * 14 }}>
+                <div className={`finder-row tree taxon${taxonTreeRowKey(item) === resolvedActiveRowKey ? " active" : ""}`} style={{ paddingLeft: 4 + item.depth * 14 }}>
                   <IconButton
                     aria-label={tree.nodes.get(item.taxon.taxon_id)?.expanded ? "Collapse taxon" : "Expand taxon"}
                     className="tree-toggle"
@@ -340,21 +440,18 @@ export function TaxonPhotosView({
                   >
                     {tree.nodes.get(item.taxon.taxon_id)?.expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
                   </IconButton>
-                  <button className="tree-node-button" type="button" title={formatTaxonTreeName(item.taxon, nameParts)} onClick={() => {
-                    tree.clear();
-                    setTrail((current) => [...current, item.taxon]);
-                  }}>
+                  <button className="tree-node-button" type="button" title={formatTaxonTreeName(item.taxon, nameParts)} onClick={() => enterTaxon(item.taxon)}>
                     <Network size={14} />
                     <span className="tree-label">{formatTaxonTreeName(item.taxon, nameParts)}</span>
                   </button>
                 </div>
               ) : item.kind === "photo" ? (
-                <button className={`finder-row${interaction.selectedId === item.photo.photo_id ? " active" : ""}`} style={{ paddingLeft: 4 + item.depth * 14 }} type="button" onClick={() => interaction.selectPhoto(item.photo)} onContextMenu={(event) => interaction.openContextMenu(event, item.photo)}>
+                <button className={`finder-row${interaction.selectedId === item.photo.photo_id ? " active" : ""}`} style={{ paddingLeft: 4 + item.depth * 14 }} type="button" onClick={() => selectTaxonRow(item)} onContextMenu={(event) => interaction.openContextMenu(event, item.photo)}>
                   <Images size={14} /><span>{item.photo.filename}</span>
                 </button>
               ) : (
                 <button
-                  className="finder-row tree-more"
+                  className={`finder-row tree-more${taxonTreeRowKey(item) === resolvedActiveRowKey ? " active" : ""}`}
                   style={{ paddingLeft: 4 + item.depth * 14 }}
                   type="button"
                   disabled={item.loading}

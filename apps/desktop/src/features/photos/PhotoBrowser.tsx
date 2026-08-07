@@ -9,6 +9,7 @@ import {
 import { PhotoStage, PhotoThumb } from "./PhotoMedia";
 import { usePhotoInteraction, type PhotoOpenHandlers } from "./PhotoInteraction";
 import { usePhotoMutation } from "./photoMutations";
+import { findTypeSelectIndex, nextListIndex } from "./photoListNavigation";
 import type { CursorPageController } from "../../shared/useCursorPage";
 import { useViewState } from "../../shared/viewState";
 import { ResizablePanels } from "../../shared/ResizablePanels";
@@ -37,9 +38,21 @@ export function PhotoBrowser({
     void page.reload();
   });
 
-  const typeSelect = (query: string) => {
-    const match = photos.find((photo) => photo.filename.toLocaleLowerCase().startsWith(query));
-    if (match) interaction.selectPhoto(match);
+  const activeIndex = photos.findIndex((photo) => photo.photo_id === interaction.selectedId);
+
+  const moveSelection = (direction: -1 | 1) => {
+    const nextIndex = nextListIndex(photos.length, activeIndex, direction);
+    if (nextIndex >= 0) interaction.selectPhoto(photos[nextIndex]);
+  };
+
+  const typeSelect = (query: string, shouldCycle: boolean) => {
+    const matchIndex = findTypeSelectIndex(
+      photos,
+      query,
+      (photo) => [photo.filename, photo.relative_path],
+      shouldCycle && activeIndex >= 0 ? activeIndex + 1 : 0,
+    );
+    if (matchIndex >= 0) interaction.selectPhoto(photos[matchIndex]);
   };
 
   const status = useMemo(
@@ -64,9 +77,11 @@ export function PhotoBrowser({
           <VirtualList
             stateKey="photo-browser.list"
             items={photos}
+            activeIndex={activeIndex}
             rowHeight={28}
             itemKey={(photo) => photo.photo_id}
             onNearEnd={() => void page.loadMore()}
+            onMoveActive={moveSelection}
             onTypeSelect={typeSelect}
             renderItem={(photo) => (
               <button

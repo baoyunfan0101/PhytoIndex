@@ -15,6 +15,7 @@ import { PhotoStage } from "../photos/PhotoMedia";
 import { MappingBadge } from "./MappingBadge";
 import { MappingEditor } from "./MappingEditor";
 import { usePhotoInteraction, type PhotoOpenHandlers } from "../photos/PhotoInteraction";
+import { findTypeSelectIndex, nextListIndex } from "../photos/photoListNavigation";
 import { emitPhotoMutation, useDeferredPhotoMutation } from "../photos/photoMutations";
 import { useCursorPage } from "../../shared/useCursorPage";
 import { ResizablePanels } from "../../shared/ResizablePanels";
@@ -70,6 +71,22 @@ export function MappingView({
     setEditorRevision((current) => current + 1);
   });
   const selected = page.items.find((item) => item.photo.photo_id === interaction.selectedId) ?? null;
+  const activeIndex = page.items.findIndex((item) => item.photo.photo_id === interaction.selectedId);
+
+  function moveSelection(direction: -1 | 1) {
+    const nextIndex = nextListIndex(page.items.length, activeIndex, direction);
+    if (nextIndex >= 0) interaction.selectPhoto(page.items[nextIndex].photo);
+  }
+
+  function typeSelect(query: string, shouldCycle: boolean) {
+    const matchIndex = findTypeSelectIndex(
+      page.items,
+      query,
+      (item) => [item.photo.filename, item.photo.relative_path],
+      shouldCycle && activeIndex >= 0 ? activeIndex + 1 : 0,
+    );
+    if (matchIndex >= 0) interaction.selectPhoto(page.items[matchIndex].photo);
+  }
 
   async function mapAll() {
     onStatus("Mapping photos", true);
@@ -119,9 +136,12 @@ export function MappingView({
         first={(<aside className="mapping-photo-list">
           <VirtualList
             items={page.items}
+            activeIndex={activeIndex}
             rowHeight={28}
             itemKey={(item) => item.photo.photo_id}
             onNearEnd={() => void page.loadMore()}
+            onMoveActive={moveSelection}
+            onTypeSelect={typeSelect}
             renderItem={(item) => (
               <button
                 className={`mapping-photo-row${selected?.photo.photo_id === item.photo.photo_id ? " active" : ""}`}

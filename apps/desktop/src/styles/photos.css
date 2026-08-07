@@ -123,7 +123,23 @@
   background: #101010;
 }
 .photo-stage.empty { align-content: center; gap: 8px; color: var(--quiet); }
-.photo-stage img { width: 100%; height: 100%; object-fit: contain; user-select: none; }
+.photo-stage-frame { position: absolute; inset: 0; overflow: hidden; touch-action: none; }
+.photo-stage-frame.pannable { cursor: grab; }
+.photo-stage-frame.dragging { cursor: grabbing; }
+.photo-stage-image {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: block;
+  max-width: none;
+  max-height: none;
+  min-height: 0;
+  object-fit: initial;
+  user-select: none;
+  transform-origin: center center;
+  backface-visibility: hidden;
+  will-change: transform;
+}
 .photo-stage.compact { min-height: 240px; }
 .photo-stage-caption {
   position: absolute;
