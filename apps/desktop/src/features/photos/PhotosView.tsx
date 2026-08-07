@@ -222,7 +222,7 @@ export function FolderPhotosView({
                     {tree.nodes.get(item.directory.directory_id)?.expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
                   </IconButton>
                   <Folder size={14} />
-                  <button className="tree-label" type="button" onDoubleClick={() => enter(item.directory)}>
+                  <button className="tree-label" type="button" onClick={() => enter(item.directory)}>
                     {item.directory.name}
                   </button>
                 </div>
