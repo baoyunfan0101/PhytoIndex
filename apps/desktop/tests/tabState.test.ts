@@ -11,7 +11,14 @@ test("closing the final tab leaves an empty workspace", () => {
   });
 });
 
-test("closing the active tab prefers its previous neighbor", () => {
+test("closing the active tab prefers the previous active tab", () => {
+  assert.deepEqual(closeTabState([tab("A"), tab("B"), tab("C")], "C", "C", "A"), {
+    tabs: [tab("A"), tab("B")],
+    activeId: "A",
+  });
+});
+
+test("closing the active tab falls back to its previous neighbor", () => {
   assert.deepEqual(closeTabState([tab("A"), tab("B"), tab("C")], "B", "B"), {
     tabs: [tab("A"), tab("C")],
     activeId: "A",

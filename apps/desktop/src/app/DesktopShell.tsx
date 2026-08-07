@@ -311,7 +311,13 @@ export function DesktopShell({
   }
 
   function closeTab(id: string) {
-    const next = closeTabState(tabs, activeId, id);
+    const remainingIds = new Set(tabs
+      .filter((tab) => tab.id !== id)
+      .map((tab) => tab.id));
+    const previousActiveId = activeId === id
+      ? findNavigationTarget(navigationHistory, remainingIds, -1)?.tabId ?? null
+      : null;
+    const next = closeTabState(tabs, activeId, id, previousActiveId);
     if (next.tabs === tabs) return;
     viewStateStores.current.delete(id);
     setTabs(next.tabs);
