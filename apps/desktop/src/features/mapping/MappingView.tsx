@@ -10,7 +10,7 @@ import {
   type PhotoTaxonStatus,
 } from "../../api/mapping";
 import { waitForOperation } from "../../api/tasks";
-import { Button, Segmented, VirtualList } from "../../shared/ui";
+import { Button, VirtualList } from "../../shared/ui";
 import { PhotoStage } from "../photos/PhotoMedia";
 import { MappingBadge } from "./MappingBadge";
 import { MappingEditor } from "./MappingEditor";
@@ -89,7 +89,6 @@ export function MappingView({
   return (
     <div className="mapping-workbench">
       <header className="workbench-toolbar">
-        <Segmented value={status} items={statuses} onChange={setStatus} />
         <label className="search-field mapping-filter">
           <Search size={14} />
           <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={`Search ${status} photos`} />
@@ -97,7 +96,18 @@ export function MappingView({
         <Button onClick={() => void mapAll()}><RefreshCw size={13} />Map all</Button>
       </header>
       <div className="mapping-summary">
-        {statuses.map((item) => <span key={item}><MappingBadge status={item} />{counts[item]}</span>)}
+        {statuses.map((item) => (
+          <button
+            className={`mapping-summary-button${status === item ? " active" : ""}`}
+            type="button"
+            key={item}
+            aria-pressed={status === item}
+            onClick={() => setStatus(item)}
+          >
+            <MappingBadge status={item} />
+            <span>{counts[item]}</span>
+          </button>
+        ))}
       </div>
       <ResizablePanels
         className="mapping-three-columns"
@@ -109,7 +119,7 @@ export function MappingView({
         first={(<aside className="mapping-photo-list">
           <VirtualList
             items={page.items}
-            rowHeight={54}
+            rowHeight={42}
             itemKey={(item) => item.photo.photo_id}
             onNearEnd={() => void page.loadMore()}
             renderItem={(item) => (
@@ -119,7 +129,7 @@ export function MappingView({
                 onClick={() => interaction.selectPhoto(item.photo)}
                 onContextMenu={(event) => interaction.openContextMenu(event, item.photo)}
               >
-                <span>{item.photo.filename}</span><MappingBadge status={item.mapping.status} />
+                <span>{item.photo.filename}</span>
               </button>
             )}
           />
