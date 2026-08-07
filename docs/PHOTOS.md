@@ -33,7 +33,7 @@ clamped to `1..=500`.
 | `Photo` | `photo_id`, `directory_id`, `relative_path`, `filename`, `file_size`, `modified_at_ns`, `thumbnail_path` | One indexed image file. |
 | `PhotoMetadata` | `photo_id`, `captured_at`, `camera`, `width`, `height`, `longitude`, `latitude`, `exif_json` | Cached image metadata. |
 | `DirectoryEntryCounts` | `directory_count`, `file_count` | Immediate child counts. |
-| `PhotoSyncResult` | `directory_id`, `inserted`, `unchanged`, `updated`, `deleted`, `directories_inserted`, `directories_deleted` | Refresh result. |
+| `PhotoSyncResult` | `directory_id`, `inserted`, `unchanged`, `updated`, `deleted`, `directories_inserted`, `directories_deleted` | Recursive refresh result for the requested directory subtree. |
 
 `PhotoDirectoryItem` is a tagged enum with either
 `directory: PhotoDirectory` or `photo: Photo`. Directory browse pages return
@@ -49,9 +49,9 @@ child directories before photos.
 | `get_directory_counts` | `directory_id: i64` | `DirectoryEntryCounts` | Count immediate directories and photos. |
 | `get_photo` | `photo_id: i64` | `Option<Photo>` | Load one photo. |
 | `browse_directory` | `directory_id: i64`, `cursor: Option<&str>`, `limit: usize` | `PhotoPage<PhotoDirectoryItem>` | Browse one directory as a cursor page. |
-| `refresh_directory` | `directory_id: i64` | `PhotoSyncResult` | Reconcile immediate entries; removed child directories also remove their indexed subtrees. |
+| `refresh_directory` | `directory_id: i64` | `PhotoSyncResult` | Reconcile the requested directory and every descendant directory. |
 
-Every newly discovered or changed photo is queued for automatic mapping.
+Every newly discovered, changed, or unqueued indexed photo is queued for automatic mapping.
 
 ### Search interfaces
 

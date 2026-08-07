@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn opens_and_refreshes_only_the_requested_directory() {
+fn opens_and_refreshes_the_requested_directory_subtree() {
     let data = tempfile::tempdir().unwrap();
     let root = tempfile::tempdir().unwrap();
     fs::create_dir(root.path().join("nested")).unwrap();
@@ -10,13 +10,13 @@ fn opens_and_refreshes_only_the_requested_directory() {
     let database = Database::open(data.path().join("vividarium.db")).unwrap();
     let library = open_library(&database, root.path().to_str().unwrap()).unwrap();
     let result = refresh_directory(&database, library.root_directory_id).unwrap();
-    assert_eq!(result.inserted, 1);
+    assert_eq!(result.inserted, 2);
     assert_eq!(result.directories_inserted, 1);
-    assert_eq!(list_photos(&database).unwrap().len(), 1);
+    assert_eq!(list_photos(&database).unwrap().len(), 2);
     let listing = browse_directory(&database, library.root_directory_id, None, 20).unwrap();
     assert_eq!(listing.items.len(), 2);
-    let nested_directory_id = match &listing.items[0] {
-        PhotoDirectoryItem::Directory { directory } => directory.directory_id,
+    match &listing.items[0] {
+        PhotoDirectoryItem::Directory { .. } => {}
         PhotoDirectoryItem::Photo { .. } => panic!("expected a directory first"),
     };
     assert!(matches!(listing.items[1], PhotoDirectoryItem::Photo { .. }));
@@ -27,9 +27,36 @@ fn opens_and_refreshes_only_the_requested_directory() {
             file_count: 1,
         }
     );
-    refresh_directory(&database, nested_directory_id).unwrap();
-    assert_eq!(list_photos(&database).unwrap().len(), 2);
     assert_eq!(get_photo_count(&database).unwrap(), 2);
+}
+
+#[test]
+fn refresh_removes_missing_directory_subtrees() {
+    let data = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    fs::create_dir(root.path().join("nested")).unwrap();
+    fs::create_dir(root.path().join("nested").join("deep")).unwrap();
+    fs::write(root.path().join("root.jpg"), b"root").unwrap();
+    fs::write(root.path().join("nested").join("nested.jpg"), b"nested").unwrap();
+    fs::write(
+        root.path().join("nested").join("deep").join("deep.jpg"),
+        b"deep",
+    )
+    .unwrap();
+    let database = Database::open(data.path().join("vividarium.db")).unwrap();
+    let library = open_library(&database, root.path().to_str().unwrap()).unwrap();
+    let initial = refresh_directory(&database, library.root_directory_id).unwrap();
+    assert_eq!(initial.inserted, 3);
+    assert_eq!(initial.directories_inserted, 2);
+
+    fs::remove_dir_all(root.path().join("nested")).unwrap();
+    let result = refresh_directory(&database, library.root_directory_id).unwrap();
+
+    assert_eq!(result.unchanged, 1);
+    assert_eq!(result.deleted, 2);
+    assert_eq!(result.directories_deleted, 2);
+    assert_eq!(list_photos(&database).unwrap().len(), 1);
+    assert_eq!(get_photo_count(&database).unwrap(), 1);
 }
 
 #[test]
