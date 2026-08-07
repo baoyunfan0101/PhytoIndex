@@ -414,6 +414,12 @@ export function PhotoMapView({
   }, []);
 
   useEffect(() => {
+    if (!active || !map.current) return;
+    const frame = window.requestAnimationFrame(() => map.current?.resize());
+    return () => window.cancelAnimationFrame(frame);
+  }, [active]);
+
+  useEffect(() => {
     if (!mapReady || !map.current) return;
     const visibleIds = new Set(page.items.map((item) => item.photo.photo_id));
     markers.current.forEach((marker, photoId) => {

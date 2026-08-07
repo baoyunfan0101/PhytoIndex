@@ -83,8 +83,8 @@
 .app-tab-close svg { display: block; }
 .app-tab:hover .app-tab-close, .app-tab.active .app-tab-close, .app-tab-close:focus-visible { opacity: 1; }
 .tab-content { position: relative; min-width: 0; min-height: 0; overflow: hidden; background: var(--activity); }
-.tab-panel { position: absolute; inset: 0; min-width: 0; min-height: 0; overflow: hidden; visibility: hidden; pointer-events: none; }
-.tab-panel.active { visibility: visible; pointer-events: auto; }
+.tab-panel { position: absolute; inset: 0; display: none; min-width: 0; min-height: 0; overflow: hidden; pointer-events: none; }
+.tab-panel.active { display: block; pointer-events: auto; }
 .status-bar { display: flex; align-items: center; gap: 7px; padding: 0 9px; border-top: 1px solid var(--line); color: var(--muted); background: var(--activity); }
 .status-bar > :last-child { margin-left: auto; color: var(--quiet); }
 .status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent-bright); }
