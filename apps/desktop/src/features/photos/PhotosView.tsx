@@ -22,6 +22,7 @@ import { EmptyState, IconButton, SectionHeader, VirtualList } from "../../shared
 import { DirectoryContextMenu } from "./DirectoryContextMenu";
 import { PhotoStage } from "./PhotoMedia";
 import { usePhotoInteraction, type PhotoOpenHandlers } from "./PhotoInteraction";
+import { TaxonContextMenu } from "./TaxonContextMenu";
 import { emitPhotoMutation, useDeferredPhotoMutation, usePhotoMutation } from "./photoMutations";
 import { findTypeSelectIndex, nextListIndex } from "./photoListNavigation";
 import { useCursorPage } from "../../shared/useCursorPage";
@@ -384,7 +385,14 @@ export function TaxonPhotosView({
 }) {
   const [trail, setTrail] = useViewState<PhotoTaxonUsage[]>("photo-taxonomy.trail", []);
   const [activeRowKey, setActiveRowKey] = useViewState<string | null>("photo-taxonomy.active-row", null);
+  const [taxonContext, setTaxonContext] = useState<{
+    taxon: PhotoTaxonUsage;
+    x: number;
+    y: number;
+    showExpandAll: boolean;
+  } | null>(null);
   const currentId = trail[trail.length - 1]?.taxon_id ?? null;
+  const currentTaxon = trail[trail.length - 1] ?? null;
   const page = useCursorPage<PhotoTaxonItem, number | null>({
     params: currentId,
     resetKey: currentId,
@@ -425,6 +433,28 @@ export function TaxonPhotosView({
     setActiveRowKey(taxonTreeRowKey(item));
     if (item.kind === "photo") interaction.selectPhoto(item.photo);
     else interaction.clearSelection();
+  }
+
+  async function expandTaxonSubtree(taxon: PhotoTaxonUsage) {
+    await tree.expandSubtree(
+      taxon.taxon_id,
+      (item) => item.kind === "taxon" ? item.taxon.taxon_id : null,
+    );
+  }
+
+  function openTaxonContextMenu(event: MouseEvent, item: Extract<TaxonTreeRow, { kind: "taxon" }>) {
+    event.preventDefault();
+    event.stopPropagation();
+    selectTaxonRow(item);
+    setTaxonContext({ taxon: item.taxon, x: event.clientX, y: event.clientY, showExpandAll: true });
+  }
+
+  function openCurrentTaxonContextMenu(event: MouseEvent<HTMLElement>) {
+    if (!currentTaxon) return;
+    const target = event.target as HTMLElement | null;
+    if (target?.closest(".finder-row")) return;
+    event.preventDefault();
+    setTaxonContext({ taxon: currentTaxon, x: event.clientX, y: event.clientY, showExpandAll: false });
   }
 
   function openTaxonPhotoContextMenu(event: MouseEvent, item: Extract<TaxonTreeRow, { kind: "photo" }>) {
@@ -482,7 +512,7 @@ export function TaxonPhotosView({
         minSecond={320}
         separatorLabel="Resize taxon browser and photo preview"
         stateKey="photo-taxonomy.columns"
-        first={(<aside className="finder-pane">
+        first={(<aside className="finder-pane" onContextMenu={openCurrentTaxonContextMenu}>
           <VirtualList
             stateKey="photo-taxonomy.list"
             items={rows}
@@ -499,7 +529,7 @@ export function TaxonPhotosView({
             onTypeSelect={typeSelectTaxonRow}
             renderItem={(item) => (
               item.kind === "taxon" ? (
-                <div className={`finder-row tree taxon${taxonTreeRowKey(item) === resolvedActiveRowKey ? " active" : ""}`} style={{ paddingLeft: 4 + item.depth * 14 }}>
+                <div className={`finder-row tree taxon${taxonTreeRowKey(item) === resolvedActiveRowKey ? " active" : ""}`} style={{ paddingLeft: 4 + item.depth * 14 }} onContextMenu={(event) => openTaxonContextMenu(event, item)}>
                   <IconButton
                     aria-label={tree.nodes.get(item.taxon.taxon_id)?.expanded ? "Collapse taxon" : "Expand taxon"}
                     className="tree-toggle"
@@ -535,6 +565,16 @@ export function TaxonPhotosView({
         </aside>)}
         second={<PhotoStage photo={interaction.selected} onContextMenu={interaction.openContextMenu} />}
       />
+      {taxonContext && (
+        <TaxonContextMenu
+          taxon={taxonContext.taxon}
+          x={taxonContext.x}
+          y={taxonContext.y}
+          onClose={() => setTaxonContext(null)}
+          onExpandAll={taxonContext.showExpandAll ? expandTaxonSubtree : undefined}
+          onOpenTaxonomy={(taxon) => handlers.openTaxon(taxon.taxon_id)}
+        />
+      )}
       {interaction.contextMenu}
     </div>
   );
