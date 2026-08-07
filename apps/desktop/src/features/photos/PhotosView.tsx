@@ -229,7 +229,7 @@ export function FolderPhotosView({
               ) : item.kind === "photo" ? (
                 <button
                   className={`finder-row${interaction.selectedId === item.photo.photo_id ? " active" : ""}`}
-                  style={{ paddingLeft: 22 + item.depth * 14 }}
+                  style={{ paddingLeft: 4 + item.depth * 14 }}
                   type="button"
                   onClick={() => interaction.selectPhoto(item.photo)}
                   onContextMenu={(event) => interaction.openContextMenu(event, item.photo)}
@@ -239,7 +239,7 @@ export function FolderPhotosView({
               ) : (
                 <button
                   className="finder-row tree-more"
-                  style={{ paddingLeft: 22 + item.depth * 14 }}
+                  style={{ paddingLeft: 4 + item.depth * 14 }}
                   type="button"
                   disabled={item.loading}
                   onClick={() => void tree.loadMore(item.parentId)}
@@ -349,13 +349,13 @@ export function TaxonPhotosView({
                   </button>
                 </div>
               ) : item.kind === "photo" ? (
-                <button className={`finder-row${interaction.selectedId === item.photo.photo_id ? " active" : ""}`} style={{ paddingLeft: 22 + item.depth * 14 }} type="button" onClick={() => interaction.selectPhoto(item.photo)} onContextMenu={(event) => interaction.openContextMenu(event, item.photo)}>
+                <button className={`finder-row${interaction.selectedId === item.photo.photo_id ? " active" : ""}`} style={{ paddingLeft: 4 + item.depth * 14 }} type="button" onClick={() => interaction.selectPhoto(item.photo)} onContextMenu={(event) => interaction.openContextMenu(event, item.photo)}>
                   <Images size={14} /><span>{item.photo.filename}</span>
                 </button>
               ) : (
                 <button
                   className="finder-row tree-more"
-                  style={{ paddingLeft: 22 + item.depth * 14 }}
+                  style={{ paddingLeft: 4 + item.depth * 14 }}
                   type="button"
                   disabled={item.loading}
                   onClick={() => void tree.loadMore(item.parentId)}
