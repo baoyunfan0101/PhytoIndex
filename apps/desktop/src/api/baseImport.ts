@@ -83,7 +83,7 @@ export const startBaseImportValidation = (sql: string) =>
     return operation;
   });
 export const applyBaseImport = () => call<OperationState>("apply_base_import", undefined, () => {
-  const operation = demoOperation("mapping", "Base import applied");
+  const operation = demoOperation("base_import", "Base import applied");
   operation.result = {
     metadata: {
       source_path: "demo-base.db",

@@ -20,6 +20,7 @@ import { Button, Modal, SectionHeader, VirtualList } from "../../shared/ui";
 import { SqlInputList } from "./SqlInputList";
 import { emitTaxonomyMutation } from "./taxonomyMutations";
 import { describeBaseImportProgress, formatElapsed } from "./baseImportProgress";
+import { formatBaseImportApplyMessage } from "./baseImportMessages";
 import { resolveSqlWorkbenchLoads } from "./sqlWorkbenchLoading";
 
 export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
@@ -114,7 +115,7 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
     setError("");
     try {
       const operation = await applyBaseImport();
-      const completed = await waitForOperation("mapping", operation.task_id, (next) => setMessage(next.message));
+      const completed = await waitForOperation(operation.module, operation.task_id, (next) => setMessage(next.message));
       if (completed.error) throw new Error(completed.error);
       const result = completed.result as TaxonomyBaseReplaceResult | null;
       if (!result) throw new Error("Base import completed without a replacement result");
@@ -122,10 +123,7 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
       setConfirming(false);
       onApplied?.();
       emitTaxonomyMutation({ kind: "replacement" });
-      setMessage([
-        "Taxonomy database replaced successfully. Photo mappings are being rebuilt in the background.",
-        ...result.warnings,
-      ].join(" "));
+      setMessage(formatBaseImportApplyMessage(result.warnings));
     } catch (nextError) {
       setMessage("");
       setError(errorMessage(nextError));

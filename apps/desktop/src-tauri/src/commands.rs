@@ -990,7 +990,7 @@ pub fn apply_base_import(
     let sync_app = app.clone();
     state
         .operations
-        .start(app, "mapping", "apply_base_import", move |progress| {
+        .start(app, "base_import", "apply_base_import", move |progress| {
             progress(0, None, "Validating base import candidate");
             let result = taxonomy::apply_base_import(&database).map_err(error)?;
             progress(1, Some(1), "Taxonomy base import applied");
