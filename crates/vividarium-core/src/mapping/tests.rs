@@ -224,9 +224,15 @@ fn matches_the_filename_stem_and_builds_sparse_usage() {
     assert_eq!(node.subtree_photo_count, 1);
     let sparse_root = get_photo_taxon_node(&database, None, false).unwrap();
     assert_eq!(sparse_root.subtree_photo_count, 1);
-    let root_page = browse_photo_taxon(&database, None, false, true, None, 20).unwrap();
+    let root_page = browse_photo_taxon(&database, None, false, None, 20).unwrap();
     assert!(matches!(root_page.items[0], PhotoTaxonItem::Taxon { .. }));
-    let page = browse_photo_taxon(&database, mapping.taxon_id, false, true, None, 20).unwrap();
+    assert!(
+        root_page
+            .items
+            .iter()
+            .all(|item| matches!(item, PhotoTaxonItem::Taxon { .. }))
+    );
+    let page = browse_photo_taxon(&database, mapping.taxon_id, false, None, 20).unwrap();
     assert_eq!(
         page.items,
         vec![PhotoTaxonItem::Photo {
@@ -717,7 +723,7 @@ fn taxon_browse_cursor_spans_children_and_photos() {
         .unwrap();
     drop(connection);
 
-    let first = browse_photo_taxon(&database, Some(parent_taxon_id), true, false, None, 2).unwrap();
+    let first = browse_photo_taxon(&database, Some(parent_taxon_id), true, None, 2).unwrap();
     assert_eq!(first.items.len(), 2);
     assert!(
         first
@@ -747,7 +753,6 @@ fn taxon_browse_cursor_spans_children_and_photos() {
         &database,
         Some(child_taxon_ids[0]),
         true,
-        false,
         first.next_cursor.as_deref(),
         2,
     )
@@ -758,7 +763,6 @@ fn taxon_browse_cursor_spans_children_and_photos() {
         &database,
         Some(parent_taxon_id),
         true,
-        false,
         first.next_cursor.as_deref(),
         2,
     )
@@ -772,6 +776,126 @@ fn taxon_browse_cursor_spans_children_and_photos() {
         }]
     );
     assert_eq!(second.next_cursor, None);
+}
+
+#[test]
+fn taxon_browse_lists_direct_photos_and_subtree_photos_are_separate() {
+    let data = tempfile::tempdir().unwrap();
+    let database = Database::open_test(data.path().join("vividarium.db")).unwrap();
+    let connection = database.connect().unwrap();
+    connection
+        .execute(
+            "INSERT INTO taxa (parent_taxon_id, rank) VALUES (NULL, 1)",
+            [],
+        )
+        .unwrap();
+    let parent_taxon_id = connection.last_insert_rowid();
+    connection
+        .execute(
+            r#"
+                INSERT INTO taxon_names (taxon_id, name_type, name)
+                VALUES (?, 1, 'Parent taxon')
+                "#,
+            [parent_taxon_id],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO taxa (parent_taxon_id, rank) VALUES (?, 2)",
+            [parent_taxon_id],
+        )
+        .unwrap();
+    let child_taxon_id = connection.last_insert_rowid();
+    connection
+        .execute(
+            r#"
+                INSERT INTO taxon_names (taxon_id, name_type, name)
+                VALUES (?, 1, 'Child taxon')
+                "#,
+            [child_taxon_id],
+        )
+        .unwrap();
+    connection
+        .execute(
+            r#"
+                INSERT INTO photo_directories (
+                    parent_directory_id, name, relative_path
+                ) VALUES (NULL, '', '')
+                "#,
+            [],
+        )
+        .unwrap();
+    let directory_id = connection.last_insert_rowid();
+    let parent_photo_id = insert_test_photo(&connection, directory_id, "parent.jpg");
+    let child_photo_id = insert_test_photo(&connection, directory_id, "child.jpg");
+    for (photo_id, taxon_id) in [
+        (parent_photo_id, parent_taxon_id),
+        (child_photo_id, child_taxon_id),
+    ] {
+        connection
+            .execute(
+                r#"
+                    INSERT INTO photo_taxon_mapping (photo_id, taxon_id, status)
+                    VALUES (?, ?, 'matched')
+                    "#,
+                params![photo_id, taxon_id],
+            )
+            .unwrap();
+    }
+    for (taxon_id, direct_photo_count, subtree_photo_count) in
+        [(parent_taxon_id, 1, 2), (child_taxon_id, 1, 1)]
+    {
+        connection
+            .execute(
+                r#"
+                    INSERT INTO photo_taxon_usage (
+                        taxon_id, direct_photo_count, subtree_photo_count
+                    ) VALUES (?, ?, ?)
+                    "#,
+                params![taxon_id, direct_photo_count, subtree_photo_count],
+            )
+            .unwrap();
+    }
+    drop(connection);
+
+    let root_page = browse_photo_taxon(&database, None, false, None, 20).unwrap();
+    assert!(
+        root_page
+            .items
+            .iter()
+            .all(|item| matches!(item, PhotoTaxonItem::Taxon { .. }))
+    );
+
+    let browse_page =
+        browse_photo_taxon(&database, Some(parent_taxon_id), false, None, 20).unwrap();
+    let taxon_ids = browse_page
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            PhotoTaxonItem::Taxon { taxon } => Some(taxon.taxon_id),
+            PhotoTaxonItem::Photo { .. } => None,
+        })
+        .collect::<Vec<_>>();
+    let photo_ids = browse_page
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            PhotoTaxonItem::Taxon { .. } => None,
+            PhotoTaxonItem::Photo { photo } => Some(photo.photo_id),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(taxon_ids, vec![child_taxon_id]);
+    assert_eq!(photo_ids, vec![parent_photo_id]);
+
+    let subtree_page = list_taxon_photos(&database, parent_taxon_id, None, 20).unwrap();
+    assert_eq!(
+        subtree_page
+            .items
+            .into_iter()
+            .map(|photo| photo.photo_id)
+            .collect::<Vec<_>>(),
+        vec![parent_photo_id, child_photo_id],
+    );
 }
 
 #[test]

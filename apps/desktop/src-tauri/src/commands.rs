@@ -1177,7 +1177,6 @@ pub fn browse_photo_taxon(
     state: State<'_, AppState>,
     taxon_id: Option<i64>,
     show_empty: Option<bool>,
-    include_descendants: Option<bool>,
     cursor: Option<String>,
     limit: Option<usize>,
 ) -> CommandResult<PhotoPage<PhotoTaxonItem>> {
@@ -1185,7 +1184,6 @@ pub fn browse_photo_taxon(
         &state.database,
         taxon_id,
         show_empty.unwrap_or(false),
-        include_descendants.unwrap_or(true),
         cursor.as_deref(),
         limit.unwrap_or(50),
     )

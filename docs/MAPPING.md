@@ -73,7 +73,7 @@ states search filename only.
 | `suggest_photo_taxa` | `query: &str`, `limit: usize` | `Vec<TaxonSuggestion>` | Lightweight autocomplete restricted to taxa with photos. |
 | `list_taxon_photos` | `taxon_id: i64`, `cursor: Option<&str>`, `limit: usize` | `PhotoPage<Photo>` | List current matched photos for the taxon and descendants. |
 | `get_photo_taxon_node` | `taxon_id: Option<i64>`, `show_empty: bool` | `PhotoTaxonNode` | Load one photo taxonomy node or the virtual root. |
-| `browse_photo_taxon` | `taxon_id: Option<i64>`, `show_empty: bool`, `include_descendants: bool`, `cursor: Option<&str>`, `limit: usize` | `PhotoPage<PhotoTaxonItem>` | Browse child taxa followed by photos. |
+| `browse_photo_taxon` | `taxon_id: Option<i64>`, `show_empty: bool`, `cursor: Option<&str>`, `limit: usize` | `PhotoPage<PhotoTaxonItem>` | Browse direct child taxa followed by directly mapped photos. |
 
 `PhotoTaxonUsage` contains `taxon_id`, `rank`, accepted `names`,
 `direct_photo_count`, and `subtree_photo_count`.

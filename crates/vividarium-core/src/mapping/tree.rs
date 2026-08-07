@@ -1,4 +1,4 @@
-use rusqlite::{OptionalExtension, params, types::Value as SqlValue};
+use rusqlite::{OptionalExtension, params};
 
 use super::{PhotoTaxonItem, PhotoTaxonNode, PhotoTaxonUsage};
 use crate::models::{Photo, PhotoPage};
@@ -41,7 +41,6 @@ pub fn browse_photo_taxon(
     database: &Database,
     taxon_id: Option<i64>,
     show_empty: bool,
-    include_descendants: bool,
     cursor: Option<&str>,
     limit: usize,
 ) -> CoreResult<PhotoPage<PhotoTaxonItem>> {
@@ -55,14 +54,10 @@ pub fn browse_photo_taxon(
         Some(PhotoCursor::TaxonEntries {
             taxon_id: cursor_taxon_id,
             show_empty: cursor_show_empty,
-            include_descendants: cursor_include_descendants,
             section,
             rank,
             item_id,
-        }) if cursor_taxon_id == taxon_id
-            && cursor_show_empty == show_empty
-            && cursor_include_descendants == include_descendants =>
-        {
+        }) if cursor_taxon_id == taxon_id && cursor_show_empty == show_empty => {
             (section, rank, item_id)
         }
         Some(_) => return Err(invalid_photo_cursor()),
@@ -88,7 +83,6 @@ pub fn browse_photo_taxon(
                     encode_photo_cursor(&PhotoCursor::TaxonEntries {
                         taxon_id,
                         show_empty,
-                        include_descendants,
                         section: PhotoPageSection::Containers,
                         rank: taxon.rank.code(),
                         item_id: taxon.taxon_id,
@@ -110,13 +104,8 @@ pub fn browse_photo_taxon(
     } else {
         0
     };
-    let mut photos = load_photos_for_taxon(
-        &connection,
-        taxon_id,
-        include_descendants,
-        after_photo_id,
-        remaining + 1,
-    )?;
+    let mut photos =
+        load_direct_photos_for_taxon(&connection, taxon_id, after_photo_id, remaining + 1)?;
     if photos.len() > remaining {
         photos.pop();
         has_more = true;
@@ -126,7 +115,6 @@ pub fn browse_photo_taxon(
             Some(encode_photo_cursor(&PhotoCursor::TaxonEntries {
                 taxon_id,
                 show_empty,
-                include_descendants,
                 section: PhotoPageSection::Photos,
                 rank: 0,
                 item_id: photo.photo_id,
@@ -137,7 +125,6 @@ pub fn browse_photo_taxon(
                     encode_photo_cursor(&PhotoCursor::TaxonEntries {
                         taxon_id,
                         show_empty,
-                        include_descendants,
                         section: PhotoPageSection::Containers,
                         rank: taxon.rank.code(),
                         item_id: taxon.taxon_id,
@@ -160,63 +147,28 @@ pub fn browse_photo_taxon(
     Ok(PhotoPage { items, next_cursor })
 }
 
-fn load_photos_for_taxon(
+fn load_direct_photos_for_taxon(
     connection: &rusqlite::Connection,
     taxon_id: Option<i64>,
-    include_descendants: bool,
     after_photo_id: i64,
     limit: usize,
 ) -> CoreResult<Vec<Photo>> {
-    let suffix = match (taxon_id, include_descendants) {
-        (Some(_), true) => {
-            r#"
-            JOIN current_photo_taxon_mapping
-              ON current_photo_taxon_mapping.photo_id = photos.photo_id
-            JOIN (
-                WITH RECURSIVE descendants(taxon_id) AS (
-                    SELECT taxon_id FROM taxa WHERE taxon_id = ?1
-                    UNION ALL
-                    SELECT child.taxon_id
-                    FROM taxa AS child
-                    JOIN descendants ON child.parent_taxon_id = descendants.taxon_id
-                )
-                SELECT taxon_id FROM descendants
-            ) AS selected_taxa
-              ON selected_taxa.taxon_id = current_photo_taxon_mapping.taxon_id
-            WHERE photos.photo_id > ?2
-            ORDER BY photos.photo_id LIMIT ?3
-        "#
-        }
-        (Some(_), false) => {
-            r#"
-            JOIN current_photo_taxon_mapping
-              ON current_photo_taxon_mapping.photo_id = photos.photo_id
-            WHERE current_photo_taxon_mapping.taxon_id = ?1
-              AND photos.photo_id > ?2
-            ORDER BY photos.photo_id LIMIT ?3
-        "#
-        }
-        (None, _) => {
-            r#"
-            JOIN current_photo_taxon_mapping
-              ON current_photo_taxon_mapping.photo_id = photos.photo_id
-            WHERE photos.photo_id > ?2
-            ORDER BY photos.photo_id LIMIT ?3
-        "#
-        }
+    let Some(taxon_id) = taxon_id else {
+        return Ok(Vec::new());
     };
+    let suffix = r#"
+        JOIN current_photo_taxon_mapping
+          ON current_photo_taxon_mapping.photo_id = photos.photo_id
+        WHERE current_photo_taxon_mapping.taxon_id = ?1
+          AND photos.photo_id > ?2
+        ORDER BY photos.photo_id LIMIT ?3
+    "#;
     let sql = photo_query(suffix);
     let mut statement = connection.prepare(&sql)?;
-    let rows = match taxon_id {
-        Some(taxon_id) => statement.query_map(
-            params![taxon_id, after_photo_id, limit as i64],
-            crate::db::photo_from_row,
-        )?,
-        None => statement.query_map(
-            params![SqlValue::Null, after_photo_id, limit as i64],
-            crate::db::photo_from_row,
-        )?,
-    };
+    let rows = statement.query_map(
+        params![taxon_id, after_photo_id, limit as i64],
+        crate::db::photo_from_row,
+    )?;
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }
 
