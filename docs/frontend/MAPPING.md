@@ -21,10 +21,14 @@ Parameters:
 
 - `photo`: the photo being edited.
 - `embedded`: whether the editor is placed inside the Mapping workspace.
+- `onOpenTaxon`: opens the requested search-result taxon.
 - `refreshKey`: optional external invalidation value.
 
 Returns: current mapping details, persisted Ambiguous candidates, taxonomy
-search, and controls to clear, assign, replace, or automatically remap.
+search, and controls to open a result in Taxonomy, clear, assign, replace, or
+automatically remap. The taxonomy search receives the larger default share of
+the vertical editor split, and its result controls use immediate hover and
+pressed states without animation.
 
 The Mapping workspace exposes independent dividers between the photo list,
 preview, and editor. The standalone editor also separates its photo from the

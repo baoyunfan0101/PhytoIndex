@@ -1,4 +1,4 @@
-import { Link2Off, Search, Sparkles } from "lucide-react";
+import { Link, Search, Sparkles, Tags, Unlink } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import {
   clearPhotoMapping,
@@ -22,10 +22,12 @@ import { ResizablePanels } from "../../shared/ResizablePanels";
 export function MappingEditor({
   photo,
   embedded = false,
+  onOpenTaxon,
   refreshKey = 0,
 }: {
   photo: Photo;
   embedded?: boolean;
+  onOpenTaxon: (taxonId: number) => void;
   refreshKey?: number;
 }) {
   const [match, setMatch] = useViewState<PhotoMappingDetail | null>("mapping-editor.match", null);
@@ -112,7 +114,7 @@ export function MappingEditor({
             <strong>{mappedTaxon ? displayTaxon(mappedTaxon) : match.mapping.taxon_id}</strong>
           </div>
           <Button disabled={Boolean(busy)} onClick={() => void mutate("Clearing", () => clearPhotoMapping(photo.photo_id))}>
-            <Link2Off size={13} /> Clear mapping
+            <Unlink size={13} /> Clear mapping
           </Button>
         </div>
       ) : match?.mapping.status === "ambiguous" ? (
@@ -156,9 +158,14 @@ export function MappingEditor({
             compact
             taxon={item.summary}
             actions={
-              <Button size="small" disabled={Boolean(busy)} onClick={() => void mutate("Mapping", () => setPhotoMapping(photo.photo_id, item.summary.taxon_id))}>
-                Map
-              </Button>
+              <>
+                <Button size="small" onClick={() => onOpenTaxon(item.summary.taxon_id)}>
+                  <Tags size={12} /> Go to taxonomy
+                </Button>
+                <Button size="small" disabled={Boolean(busy)} onClick={() => void mutate("Mapping", () => setPhotoMapping(photo.photo_id, item.summary.taxon_id))}>
+                  <Link size={12} /> Map
+                </Button>
+              </>
             }
           />
         )}
@@ -170,7 +177,7 @@ export function MappingEditor({
       <ResizablePanels
         className="editor-mapping-split"
         direction="vertical"
-        initialRatio={0.42}
+        initialRatio={0.36}
         minFirst={180}
         minSecond={180}
         separatorLabel="Resize current mapping and taxonomy search"

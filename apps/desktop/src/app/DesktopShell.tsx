@@ -661,7 +661,7 @@ function TabBody({
   if (tab.kind === "taxonomy-history") return <OperationHistoryView domain="taxonomy" onStatus={onStatus} />;
   if (tab.kind === "settings") return <SettingsView section={tab.settingsSection ?? "General"} onSectionChange={(section) => updateSettingsTab(tab.id, section)} onBaseReplaced={onBaseReplaced} onWorkspaceChanged={onWorkspaceChanged} generalSettings={generalSettings} generalSettingsLoadError={generalSettingsLoadError} onGeneralSettingsChange={onGeneralSettingsChange} />;
   if (tab.kind === "photo-detail" && tab.photo) return <PhotoDetailView photo={tab.photo} />;
-  if (tab.kind === "mapping-editor" && tab.photo) return <MappingEditor photo={tab.photo} />;
+  if (tab.kind === "mapping-editor" && tab.photo) return <MappingEditor photo={tab.photo} onOpenTaxon={handlers.openTaxon} />;
   if (tab.kind === "search-photos" && tab.query) return <PhotoSet query={tab.query} handlers={handlers} />;
   if (tab.kind === "taxon-photos" && tab.taxonId !== undefined) return <PhotoSet taxonId={tab.taxonId} handlers={handlers} />;
   return null;

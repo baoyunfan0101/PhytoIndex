@@ -22,7 +22,11 @@
 .editor-mapping-split { width: 100%; height: 100%; min-height: 0; }
 .mapping-current, .mapping-search { height: 100%; min-height: 0; padding: 10px; }
 .mapping-current > header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
-.mapping-search { display: grid; grid-template-rows: 34px minmax(0, 1fr); gap: 8px; }
+.mapping-search { display: grid; grid-template-rows: 36px minmax(0, 1fr); gap: 8px; }
+.mapping-search > .search-field { height: 36px; }
+.mapping-search-results button { transition: none; }
+.mapping-search-results button:hover:not(:disabled) { filter: none; }
+.mapping-search-results button:active:not(:disabled) { filter: none; transform: none; }
 .candidate-stack { height: calc(100% - 30px); }
 .current-mapping-card { display: flex; align-items: center; justify-content: space-between; padding: 10px; border: 1px solid var(--line); background: #222; }
 .current-mapping-card > div { display: flex; flex-direction: column; gap: 3px; }
