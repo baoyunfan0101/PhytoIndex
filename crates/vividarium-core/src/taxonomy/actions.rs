@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 
@@ -7,6 +9,7 @@ use super::{
     TaxonInputRow, TaxonRank, TaxonRowStatus, TaxonomyNameType, TaxonomyOperationResult,
     apply_rows, preview_rows,
 };
+use crate::naming::normalize_taxonomy_name;
 use crate::operations::{self, NewAuditRow, NewOperation};
 use crate::{CoreError, CoreResult, Database};
 
@@ -33,6 +36,28 @@ pub struct DeleteTaxonNameInput {
 pub struct PromoteTaxonNameInput {
     pub taxon_id: i64,
     pub name_id: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TaxonNameMetadataInput {
+    pub name_id: i64,
+    pub authority_year: Option<String>,
+    pub source: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NewTaxonNameInput {
+    pub name: String,
+    pub authority_year: Option<String>,
+    pub source: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SaveTaxonNameGroupInput {
+    pub taxon_id: i64,
+    pub name_type: TaxonomyNameType,
+    pub updates: Vec<TaxonNameMetadataInput>,
+    pub additions: Vec<NewTaxonNameInput>,
 }
 
 pub fn update_taxon(
@@ -212,6 +237,309 @@ pub fn promote_taxon_name(database: &Database, input: PromoteTaxonNameInput) -> 
     super::sync::record_event(&transaction, Some(operation_id), [input.taxon_id], false)?;
     transaction.commit()?;
     Ok(())
+}
+
+pub fn save_taxon_name_group(
+    database: &Database,
+    input: SaveTaxonNameGroupInput,
+) -> CoreResult<()> {
+    let _guard = database.try_taxonomy_mutation()?;
+    let mut connection = database.connect_taxonomy_metadata_context()?;
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let (rank_code, parent_taxon_id) = transaction
+        .query_row(
+            "SELECT rank, parent_taxon_id FROM taxa WHERE taxon_id = ?",
+            [input.taxon_id],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Option<i64>>(1)?)),
+        )
+        .optional()?
+        .ok_or_else(|| CoreError::NotFound(format!("taxon {}", input.taxon_id)))?;
+    let rank = TaxonRank::from_code(rank_code)?;
+
+    validate_name_group_additions(
+        &transaction,
+        input.taxon_id,
+        rank,
+        parent_taxon_id,
+        input.name_type,
+        &input.additions,
+    )?;
+
+    let mut session = start_taxonomy_session(&transaction)?;
+    let mut seen_name_ids = HashSet::new();
+    let mut before_records = Vec::new();
+    let mut after_records = Vec::new();
+    let mut changed_count = 0usize;
+
+    for update in input.updates {
+        if !seen_name_ids.insert(update.name_id) {
+            return Err(CoreError::InvalidArgument(format!(
+                "name {} is included more than once",
+                update.name_id
+            )));
+        }
+        let current = transaction
+            .query_row(
+                r#"
+                SELECT name_type, name, authority_year, source
+                FROM taxon_names
+                WHERE taxon_id = ? AND name_id = ?
+                "#,
+                params![input.taxon_id, update.name_id],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or_else(|| {
+                CoreError::NotFound(format!(
+                    "name {} for taxon {}",
+                    update.name_id, input.taxon_id
+                ))
+            })?;
+        let current_name_type = TaxonomyNameType::from_code(current.0)?;
+        if current_name_type != input.name_type {
+            return Err(CoreError::InvalidArgument(format!(
+                "name {} is {}, not {}",
+                update.name_id,
+                current_name_type.as_str(),
+                input.name_type.as_str()
+            )));
+        }
+        let authority_year = normalized_optional(update.authority_year.as_deref());
+        let source = normalized_optional(update.source.as_deref());
+        if current.2 == authority_year && current.3 == source {
+            continue;
+        }
+        transaction.execute(
+            r#"
+            UPDATE taxon_names
+            SET authority_year = ?, source = ?
+            WHERE taxon_id = ? AND name_id = ?
+            "#,
+            params![authority_year, source, input.taxon_id, update.name_id],
+        )?;
+        before_records.push(serde_json::json!({
+            "name_id": update.name_id,
+            "name": current.1.clone(),
+            "name_type": input.name_type.as_str(),
+            "authority_year": current.2,
+            "source": current.3,
+        }));
+        after_records.push(serde_json::json!({
+            "name_id": update.name_id,
+            "name": current.1,
+            "name_type": input.name_type.as_str(),
+            "authority_year": authority_year,
+            "source": source,
+        }));
+        changed_count += 1;
+    }
+
+    for addition in input.additions {
+        let name = normalize_taxonomy_name(&addition.name)
+            .ok_or_else(|| CoreError::InvalidArgument("taxonomy name must not be blank".into()))?;
+        let authority_year = normalized_optional(addition.authority_year.as_deref());
+        let source = normalized_optional(addition.source.as_deref());
+        transaction.execute(
+            r#"
+            INSERT INTO taxon_names (taxon_id, name_type, name, authority_year, source)
+            VALUES (?, ?, ?, ?, ?)
+            "#,
+            params![
+                input.taxon_id,
+                input.name_type.code(),
+                name,
+                authority_year,
+                source
+            ],
+        )?;
+        let name_id = transaction.last_insert_rowid();
+        after_records.push(serde_json::json!({
+            "name_id": name_id,
+            "name": name,
+            "name_type": input.name_type.as_str(),
+            "authority_year": authority_year,
+            "source": source,
+        }));
+        changed_count += 1;
+    }
+
+    if changed_count == 0 {
+        drop(session);
+        transaction.commit()?;
+        return Ok(());
+    }
+
+    validate_taxonomy(&transaction)?;
+    let mut changeset_blob = Vec::new();
+    session.changeset_strm(&mut changeset_blob)?;
+    drop(session);
+    let operation_id = operations::insert_operation(
+        &transaction,
+        NewOperation {
+            kind: "taxonomy_name_group_save",
+            source: "ui_name_group",
+            total_items: 1,
+            succeeded_items: 1,
+            failed_items: 0,
+            rollbackable: true,
+            has_formatted_input: false,
+        },
+    )?;
+    transaction.execute(
+        r#"
+        INSERT INTO operation_changesets (operation_id, changeset_blob)
+        VALUES (?, ?)
+        "#,
+        params![operation_id, changeset_blob],
+    )?;
+    operations::insert_audit_row(
+        &transaction,
+        operation_id,
+        NewAuditRow {
+            sequence: 1,
+            entity_type: "taxon_name_group",
+            entity_id: Some(input.taxon_id.to_string()),
+            action: "save",
+            before_json: Some(serde_json::json!({
+                "taxon_id": input.taxon_id,
+                "name_type": input.name_type.as_str(),
+                "records": before_records,
+            })),
+            after_json: Some(serde_json::json!({
+                "taxon_id": input.taxon_id,
+                "name_type": input.name_type.as_str(),
+                "records": after_records,
+            })),
+            succeeded: true,
+            message: "saved taxonomy name group",
+        },
+    )?;
+    super::sync::record_event(&transaction, Some(operation_id), [input.taxon_id], false)?;
+    transaction.commit()?;
+    Ok(())
+}
+
+fn validate_name_group_additions(
+    transaction: &rusqlite::Transaction<'_>,
+    taxon_id: i64,
+    rank: TaxonRank,
+    parent_taxon_id: Option<i64>,
+    name_type: TaxonomyNameType,
+    additions: &[NewTaxonNameInput],
+) -> CoreResult<()> {
+    if additions.is_empty() {
+        return Ok(());
+    }
+    if name_type.is_primary() && additions.len() > 1 {
+        return Err(CoreError::InvalidArgument(format!(
+            "{} accepts only one name",
+            name_type.as_str()
+        )));
+    }
+    let accepted_exists: bool = transaction.query_row(
+        r#"
+        SELECT EXISTS(
+            SELECT 1 FROM taxon_names
+            WHERE taxon_id = ? AND name_type = ?
+        )
+        "#,
+        params![taxon_id, name_type.accepted_type().code()],
+        |row| row.get(0),
+    )?;
+    if name_type.is_primary() && accepted_exists {
+        return Err(CoreError::InvalidArgument(format!(
+            "taxon {taxon_id} already has {}",
+            name_type.as_str()
+        )));
+    }
+    if !name_type.is_primary() && !accepted_exists {
+        return Err(CoreError::InvalidArgument(format!(
+            "add {} before adding {} records",
+            name_type.accepted_type().as_str(),
+            name_type.as_str()
+        )));
+    }
+
+    let parent_scientific_name = if rank == TaxonRank::Species
+        && matches!(
+            name_type,
+            TaxonomyNameType::SciName | TaxonomyNameType::Synonym
+        ) {
+        let parent_taxon_id = parent_taxon_id.ok_or_else(|| {
+            CoreError::InvalidArgument(format!("species taxon {taxon_id} has no parent genus"))
+        })?;
+        Some(
+            transaction
+                .query_row(
+                    r#"
+                    SELECT name FROM taxon_names
+                    WHERE taxon_id = ? AND name_type = ?
+                    "#,
+                    params![parent_taxon_id, TaxonomyNameType::SciName.code()],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?
+                .ok_or_else(|| {
+                    CoreError::InvalidArgument(format!(
+                        "parent genus {parent_taxon_id} has no sci_name"
+                    ))
+                })?,
+        )
+    } else {
+        None
+    };
+
+    let accepted_type = name_type.accepted_type();
+    let alias_type = name_type.alias_type();
+    let mut seen_names = HashSet::new();
+    for addition in additions {
+        let name = normalize_taxonomy_name(&addition.name)
+            .ok_or_else(|| CoreError::InvalidArgument("taxonomy name must not be blank".into()))?;
+        if !seen_names.insert(name.to_lowercase()) {
+            return Err(CoreError::InvalidArgument(format!(
+                "taxonomy name '{name}' is included more than once"
+            )));
+        }
+        if let Some(parent_name) = parent_scientific_name.as_deref()
+            && name.split_whitespace().next() != Some(parent_name)
+        {
+            return Err(CoreError::InvalidArgument(format!(
+                "species scientific name '{name}' does not start with parent genus '{parent_name}'"
+            )));
+        }
+        let duplicate: bool = transaction.query_row(
+            r#"
+            SELECT EXISTS(
+                SELECT 1 FROM taxon_names
+                WHERE taxon_id = ?
+                  AND name_type IN (?, ?)
+                  AND normalized_name = lower(?)
+            )
+            "#,
+            params![taxon_id, accepted_type.code(), alias_type.code(), name],
+            |row| row.get(0),
+        )?;
+        if duplicate {
+            return Err(CoreError::InvalidArgument(format!(
+                "taxonomy name '{name}' already exists in this name group"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn normalized_optional(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
 }
 
 pub fn delete_taxon_name(database: &Database, input: DeleteTaxonNameInput) -> CoreResult<()> {
@@ -402,6 +730,208 @@ mod tests {
         let directory = TempDir::new().unwrap();
         let database = Database::open_test(directory.path().join("test.db")).unwrap();
         (directory, database)
+    }
+
+    fn canis_species(database: &Database) -> (i64, i64, i64) {
+        apply_rows(
+            database,
+            &[
+                TaxonInputRow {
+                    kingdom: Some("Animalia".into()),
+                    ..TaxonInputRow::default()
+                },
+                TaxonInputRow {
+                    kingdom: Some("Animalia".into()),
+                    order: Some("Carnivora".into()),
+                    ..TaxonInputRow::default()
+                },
+                TaxonInputRow {
+                    kingdom: Some("Animalia".into()),
+                    order: Some("Carnivora".into()),
+                    family: Some("Canidae".into()),
+                    ..TaxonInputRow::default()
+                },
+                TaxonInputRow {
+                    kingdom: Some("Animalia".into()),
+                    order: Some("Carnivora".into()),
+                    family: Some("Canidae".into()),
+                    genus: Some("Canis".into()),
+                    ..TaxonInputRow::default()
+                },
+                TaxonInputRow {
+                    kingdom: Some("Animalia".into()),
+                    order: Some("Carnivora".into()),
+                    family: Some("Canidae".into()),
+                    genus: Some("Canis".into()),
+                    species: Some("Canis lupus".into()),
+                    synonyms: vec!["Canis lycaon".into()],
+                    ..TaxonInputRow::default()
+                },
+            ],
+        )
+        .unwrap();
+        database
+            .connect_taxonomy_metadata_context()
+            .unwrap()
+            .query_row(
+                r#"
+                SELECT sci.taxon_id, sci.name_id, synonym.name_id
+                FROM taxon_names AS sci
+                JOIN taxon_names AS synonym USING (taxon_id)
+                WHERE sci.name = 'Canis lupus' AND synonym.name = 'Canis lycaon'
+                "#,
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn saving_a_name_group_updates_metadata_adds_names_and_rolls_back() {
+        let (_directory, database) = database();
+        let (taxon_id, _sci_name_id, synonym_id) = canis_species(&database);
+
+        save_taxon_name_group(
+            &database,
+            SaveTaxonNameGroupInput {
+                taxon_id,
+                name_type: TaxonomyNameType::Synonym,
+                updates: vec![TaxonNameMetadataInput {
+                    name_id: synonym_id,
+                    authority_year: Some("  Schreber, 1775 ".into()),
+                    source: Some(" Revised checklist ".into()),
+                }],
+                additions: vec![NewTaxonNameInput {
+                    name: " Canis familiaris ".into(),
+                    authority_year: Some("Linnaeus, 1758".into()),
+                    source: Some("Catalogue".into()),
+                }],
+            },
+        )
+        .unwrap();
+
+        let connection = database.connect_taxonomy_metadata_context().unwrap();
+        let updated: (Option<String>, Option<String>) = connection
+            .query_row(
+                "SELECT authority_year, source FROM taxon_names WHERE name_id = ?",
+                [synonym_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(updated.0.as_deref(), Some("Schreber, 1775"));
+        assert_eq!(updated.1.as_deref(), Some("Revised checklist"));
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT COUNT(*) FROM taxon_names WHERE taxon_id = ? AND name = 'Canis familiaris' AND authority_year = 'Linnaeus, 1758' AND source = 'Catalogue'",
+                    [taxon_id],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            1
+        );
+        drop(connection);
+
+        let operation = crate::taxonomy::list_operations(&database, None, 1)
+            .unwrap()
+            .items
+            .remove(0);
+        assert_eq!(operation.kind, "taxonomy_name_group_save");
+        assert!(operation.rollbackable);
+        crate::taxonomy::rollback_operation(&database, operation.operation_id).unwrap();
+        let connection = database.connect_taxonomy_metadata_context().unwrap();
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT COUNT(*) FROM taxon_names WHERE taxon_id = ? AND name = 'Canis familiaris'",
+                    [taxon_id],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            0
+        );
+        let restored: (Option<String>, Option<String>) = connection
+            .query_row(
+                "SELECT authority_year, source FROM taxon_names WHERE name_id = ?",
+                [synonym_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(restored, (None, None));
+    }
+
+    #[test]
+    fn saving_a_name_group_validates_type_primary_and_species_names() {
+        let (_directory, database) = database();
+        let (taxon_id, sci_name_id, _synonym_id) = canis_species(&database);
+
+        let invalid_species = save_taxon_name_group(
+            &database,
+            SaveTaxonNameGroupInput {
+                taxon_id,
+                name_type: TaxonomyNameType::Synonym,
+                updates: vec![],
+                additions: vec![NewTaxonNameInput {
+                    name: "Felis lupus".into(),
+                    authority_year: None,
+                    source: None,
+                }],
+            },
+        )
+        .unwrap_err();
+        assert!(invalid_species.to_string().contains("parent genus"));
+
+        let missing_primary = save_taxon_name_group(
+            &database,
+            SaveTaxonNameGroupInput {
+                taxon_id,
+                name_type: TaxonomyNameType::ZhAlias,
+                updates: vec![],
+                additions: vec![NewTaxonNameInput {
+                    name: "wolf".into(),
+                    authority_year: None,
+                    source: None,
+                }],
+            },
+        )
+        .unwrap_err();
+        assert!(missing_primary.to_string().contains("add zh_name"));
+
+        let wrong_group = save_taxon_name_group(
+            &database,
+            SaveTaxonNameGroupInput {
+                taxon_id,
+                name_type: TaxonomyNameType::Synonym,
+                updates: vec![TaxonNameMetadataInput {
+                    name_id: sci_name_id,
+                    authority_year: None,
+                    source: None,
+                }],
+                additions: vec![],
+            },
+        )
+        .unwrap_err();
+        assert!(wrong_group.to_string().contains("not synonym"));
+
+        let duplicate_primary = save_taxon_name_group(
+            &database,
+            SaveTaxonNameGroupInput {
+                taxon_id,
+                name_type: TaxonomyNameType::SciName,
+                updates: vec![],
+                additions: vec![NewTaxonNameInput {
+                    name: "Canis familiaris".into(),
+                    authority_year: None,
+                    source: None,
+                }],
+            },
+        )
+        .unwrap_err();
+        assert!(
+            duplicate_primary
+                .to_string()
+                .contains("already has sci_name")
+        );
     }
 
     #[test]

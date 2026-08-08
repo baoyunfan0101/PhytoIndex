@@ -74,10 +74,14 @@ export function OperationHistoryView({
   }
 
   async function exportAllInput() {
+    setBusy("Exporting replayable input");
+    setError("");
     try {
       downloadCsv("taxonomy-formatted-input.csv", await exportAllReplayableTaxonomyInputs());
     } catch (nextError) {
       setError(errorMessage(nextError));
+    } finally {
+      setBusy("");
     }
   }
 
@@ -100,16 +104,18 @@ export function OperationHistoryView({
     <div className="history-view">
       <SectionHeader
         title={domain === "photo" ? "Rename history" : "Taxonomy history"}
-        detail={`${summaries.items.length} operations loaded`}
+        detail={busy || (summaries.loading
+          ? "Loading operations..."
+          : `${summaries.items.length} operations loaded`)}
         actions={(
           <>
             {domain === "taxonomy" && (
-              <Button onClick={() => void exportAllInput()}>
-                <FileInput size={13} />Export replayable input
+              <Button disabled={Boolean(busy)} onClick={() => void exportAllInput()}>
+                <FileInput size={13} />{busy === "Exporting replayable input" ? "Exporting..." : "Export replayable input"}
               </Button>
             )}
             <Button disabled={Boolean(busy)} onClick={() => void exportAllAudit()}>
-              <Download size={13} />Export all audit
+              <Download size={13} />{busy === "Exporting audit" ? "Exporting..." : "Export all audit"}
             </Button>
           </>
         )}
@@ -192,6 +198,8 @@ function OperationAuditDetail({
   }
 
   async function exportInput() {
+    setBusy("Exporting formatted input");
+    setError("");
     try {
       downloadCsv(
         `taxonomy-operation-${operation.operation_id}-input.csv`,
@@ -199,6 +207,8 @@ function OperationAuditDetail({
       );
     } catch (nextError) {
       setError(errorMessage(nextError));
+    } finally {
+      setBusy("");
     }
   }
 
@@ -225,25 +235,27 @@ function OperationAuditDetail({
     <div className="history-view">
       <SectionHeader
         title={`${operation.kind} #${operation.operation_id}`}
-        detail={`${operation.applied_at} / ${operation.total_items} audit rows`}
+        detail={busy || (audit.loading
+          ? "Loading audit rows..."
+          : `${operation.applied_at} / ${operation.total_items} audit rows`)}
         actions={(
           <>
             <Button onClick={onBack}>
               <ChevronLeft size={13} />Operations
             </Button>
             {domain === "taxonomy" && operation.has_formatted_input && (
-              <Button onClick={() => void exportInput()}>
-                <FileInput size={13} />Formatted input
+              <Button disabled={Boolean(busy)} onClick={() => void exportInput()}>
+                <FileInput size={13} />{busy === "Exporting formatted input" ? "Exporting..." : "Formatted input"}
               </Button>
             )}
             <Button disabled={Boolean(busy)} onClick={() => void exportAudit()}>
-              <Download size={13} />Export audit
+              <Download size={13} />{busy === "Exporting" ? "Exporting..." : "Export audit"}
             </Button>
             <Button
               disabled={Boolean(busy) || !operation.rollbackable}
               onClick={() => void rollback()}
             >
-              <RotateCcw size={13} />Rollback
+              <RotateCcw size={13} />{busy === "Rolling back" ? "Rolling back..." : "Rollback"}
             </Button>
           </>
         )}

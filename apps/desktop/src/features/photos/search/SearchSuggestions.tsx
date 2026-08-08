@@ -1,3 +1,4 @@
+import { LoaderCircle } from "lucide-react";
 import type { TaxonSuggestion } from "../../../api/taxonomy";
 
 export function suggestionLabel(suggestion: TaxonSuggestion, fallback: string): string {
@@ -13,16 +14,23 @@ export function SearchSuggestions({
   onSelect,
   selectedIndex,
   suggestions,
+  loading = false,
 }: {
   idPrefix: string;
+  loading?: boolean;
   onHover: (index: number) => void;
   onSelect: (suggestion: TaxonSuggestion) => void;
   selectedIndex: number;
   suggestions: TaxonSuggestion[];
 }) {
-  if (suggestions.length === 0) return null;
+  if (!loading && suggestions.length === 0) return null;
   return (
     <div className="photo-search-suggestions" id={`${idPrefix}-listbox`} role="listbox">
+      {loading && suggestions.length === 0 ? (
+        <div className="suggestion-loading" role="status" aria-live="polite">
+          <LoaderCircle className="spin" size={13} /> Loading suggestions...
+        </div>
+      ) : null}
       {suggestions.map((suggestion, index) => (
         <button
           className={index === selectedIndex ? "active" : ""}

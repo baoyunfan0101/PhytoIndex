@@ -34,6 +34,7 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
   const [validationProgress, setValidationProgress] = useState<OperationProgress | null>(null);
   const [validationStartedAt, setValidationStartedAt] = useState<number | null>(null);
   const [validationElapsed, setValidationElapsed] = useState(0);
+  const [loadingWorkbench, setLoadingWorkbench] = useState(true);
 
   useEffect(() => {
     if (validationStartedAt === null) return;
@@ -50,7 +51,8 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
         if (loaded.sql !== undefined) setSql(loaded.sql);
         if (loaded.inputs !== undefined) setInputs(loaded.inputs);
         setError(loaded.error);
-      });
+      })
+      .finally(() => setLoadingWorkbench(false));
   }, []);
 
   async function addInput(kind: "csv" | "sqlite", alias: string, path: string) {
@@ -163,7 +165,7 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
         minSecond={320}
         separatorLabel="Resize Input sources"
         stateKey="base-import.inputs"
-        first={<SqlInputList inputs={inputs} busy={Boolean(busy)} onAdd={addInput} onRemove={removeInput} />}
+        first={<SqlInputList inputs={inputs} busy={Boolean(busy) || loadingWorkbench} onAdd={addInput} onRemove={removeInput} />}
         second={(<div className="base-import-editor">
           <CodeEditor language="sql" ariaLabel="Base import SQL" value={sql} onChange={(value) => {
             setSql(value);
@@ -173,11 +175,21 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
       />
       {error ? (
         <div className="inline-error base-import-status" role="alert">{error}</div>
+      ) : loadingWorkbench ? (
+        <div className="base-import-progress" role="status" aria-live="polite">
+          <LoaderCircle className="spin" size={15} />
+          <strong>Loading taxonomy database workspace...</strong>
+        </div>
       ) : busy && validationStartedAt !== null ? (
         <div className="base-import-progress" role="status" aria-live="polite">
           <LoaderCircle className="spin" size={15} />
           <strong>{describeBaseImportProgress(validationProgress)}</strong>
           <span>Elapsed {formatElapsed(validationElapsed)}</span>
+        </div>
+      ) : busy ? (
+        <div className="base-import-progress" role="status" aria-live="polite">
+          <LoaderCircle className="spin" size={15} />
+          <strong>{busy}...</strong>
         </div>
       ) : message ? (
         <div className="editor-message base-import-status">{message}</div>
@@ -218,10 +230,10 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
         detail="Build, validate, and apply a replacement taxonomy database."
         actions={(
           <>
-            <Button disabled={Boolean(busy) || !sql.trim()} onClick={() => void validate()}>
+            <Button disabled={Boolean(busy) || loadingWorkbench || !sql.trim()} onClick={() => void validate()}>
               <ShieldCheck size={13} />Validate
             </Button>
-            <Button variant="primary" disabled={Boolean(busy) || !validation?.can_apply} onClick={() => setConfirming(true)}>
+            <Button variant="primary" disabled={Boolean(busy) || loadingWorkbench || !validation?.can_apply} onClick={() => setConfirming(true)}>
               <Send size={13} />Apply
             </Button>
           </>

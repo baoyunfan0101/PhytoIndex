@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import {
   useEffect,
+  useId,
   useRef,
   useState,
   type ButtonHTMLAttributes,
@@ -343,6 +344,7 @@ export function Modal({
   onClose: () => void;
   width?: number;
 }) {
+  const titleId = useId();
   useEffect(() => {
     const close = (event: globalThis.KeyboardEvent) => {
       if (event.key === "Escape") onClose();
@@ -353,9 +355,16 @@ export function Modal({
 
   return (
     <div className="modal-backdrop" onMouseDown={onClose}>
-      <section className="modal-card" style={{ "--modal-width": `${width}px` } as CSSProperties} onMouseDown={(event) => event.stopPropagation()}>
+      <section
+        className="modal-card"
+        style={{ "--modal-width": `${width}px` } as CSSProperties}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        onMouseDown={(event) => event.stopPropagation()}
+      >
         <header>
-          <strong>{title}</strong>
+          <strong id={titleId}>{title}</strong>
           <IconButton onClick={onClose} aria-label="Close"><X size={15} /></IconButton>
         </header>
         <div className="modal-body">{children}</div>

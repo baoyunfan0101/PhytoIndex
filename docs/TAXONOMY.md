@@ -140,7 +140,8 @@ and the same ordered row log.
 | `set_taxonomy_name_separator` | `separator: &str` | `()` |
 
 Preview evaluates the same changes as apply and leaves no stored taxonomy or
-operation changes.
+operation changes. The desktop parse, preview, and apply commands execute
+database work on blocking workers and resolve asynchronously.
 
 ## Direct UI changes
 
@@ -151,15 +152,28 @@ normal `TaxonomyOperationResult`.
 `PromoteTaxonNameInput` and `DeleteTaxonNameInput` both identify a name by
 `taxon_id` plus stable `name_id`.
 
+`SaveTaxonNameGroupInput` saves one of the six `TaxonomyNameType` groups. Its
+`updates` entries identify existing records by `name_id` and replace their
+`authority_year` and `source`; `null` clears the corresponding value. Its
+`additions` entries contain `name`, `authority_year`, and `source`. A primary
+group accepts at most one name, and an alias or synonym can be added only when
+its accepted-name group is present. New species scientific names and synonyms
+must start with the accepted scientific name of the parent genus. Blank,
+duplicate, mismatched-group, and otherwise invalid additions are rejected
+without applying any part of the group save.
+
 | Function | Parameters after `database` | Return | Description |
 | --- | --- | --- | --- |
 | `update_taxon` | `input: TaxonUpdateInput` | `TaxonomyOperationResult` | Apply one direct edit as formatted input. |
 | `promote_taxon_name` | `input: PromoteTaxonNameInput` | `()` | Exchange an alias type with its accepted type. |
+| `save_taxon_name_group` | `input: SaveTaxonNameGroupInput` | `()` | Atomically update metadata and append records in one name group. |
 | `delete_taxon_name` | `input: DeleteTaxonNameInput` | `()` | Delete a non-`sci_name` record. |
 | `delete_taxon` | `taxon_id: i64` | `()` | Delete a childless taxon. |
 
-Promotion and deletion create rollbackable audit operations without formatted
-input.
+Group saves, promotion, and deletion create rollbackable audit operations
+without formatted input. Desktop direct-change commands execute database work
+on blocking workers and resolve asynchronously before scheduling taxonomy
+synchronization.
 
 ## Custom SQL
 
@@ -228,6 +242,8 @@ commit succeed. A script-save failure returns the committed execution with
 `script_saved = false` and a warning; an execution failure does not replace
 the last successful SQL. Export accepts exactly one
 read-only query and streams its rows to the destination CSV.
+Desktop source removal, SQL execution, and query export commands execute file
+and database work on blocking workers and resolve asynchronously.
 
 ## Base database
 
@@ -360,4 +376,6 @@ Taxonomy adds formatted input export:
 Selected input export fails if any requested operation has no formatted input;
 it never silently skips unsupported operations. Successful rollback applies
 the reverse changeset, records pending photo-library synchronization, and
-deletes the original operation.
+deletes the original operation. Desktop history pagination, rollback, audit
+export, and formatted-input export execute database and file work on blocking
+workers and resolve asynchronously.

@@ -24,7 +24,7 @@ export function PhotoSearch({
   const resolvedInputRef = inputRef ?? localInputRef;
   const [selectedIndex, setSelectedIndex] = useState(-1);
   const [suggestionsOpen, setSuggestionsOpen] = useState(false);
-  const { suggestions } = useSearchSuggestions(controller.query, enabled);
+  const { loading, suggestions } = useSearchSuggestions(controller.query, enabled);
   const hasQuery = Boolean(normalizeSearchQuery(controller.query));
 
   useEffect(() => {
@@ -70,7 +70,7 @@ export function PhotoSearch({
     >
       <SearchInput
         activeDescendant={selectedIndex >= 0 ? `${idPrefix}-option-${selectedIndex}` : undefined}
-        expanded={suggestionsOpen && hasQuery && suggestions.length > 0}
+        expanded={suggestionsOpen && hasQuery && (loading || suggestions.length > 0)}
         inputRef={resolvedInputRef}
         listboxId={`${idPrefix}-listbox`}
         value={controller.query}
@@ -115,6 +115,7 @@ export function PhotoSearch({
       {suggestionsOpen && hasQuery && (
         <SearchSuggestions
           idPrefix={idPrefix}
+          loading={loading}
           suggestions={suggestions}
           selectedIndex={selectedIndex}
           onHover={setSelectedIndex}

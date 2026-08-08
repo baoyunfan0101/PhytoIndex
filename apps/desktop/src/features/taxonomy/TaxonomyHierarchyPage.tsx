@@ -1,10 +1,15 @@
-import { ChevronDown, ChevronRight, Images } from "lucide-react";
+import { ChevronDown, ChevronRight, Images, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import {
   displayTaxon,
   displayTaxonDetail,
+  deleteTaxon,
+  deleteTaxonName,
   getTaxonDetail,
   listTaxonChildren,
+  promoteTaxonName,
+  saveTaxonNameGroup,
+  type SaveTaxonNameGroupInput,
   type TaxonChild,
   type TaxonDetail,
   type TaxonNameDetail,
@@ -12,27 +17,44 @@ import {
 import { errorMessage } from "../../api/common";
 import { Busy, Button, EmptyState } from "../../shared/ui";
 import { useCursorPage } from "../../shared/useCursorPage";
-import { useTaxonomyMutation } from "./taxonomyMutations";
+import { emitTaxonomyMutation, useTaxonomyMutation } from "./taxonomyMutations";
 import {
   createHierarchyNavigationState,
   hierarchyNavigationReducer,
 } from "./hierarchyNavigation";
+import {
+  TaxonConfirmationModal,
+  type TaxonConfirmation,
+} from "./TaxonConfirmationModal";
+import { TaxonNameGroupEditor } from "./TaxonNameGroupEditor";
+import {
+  acceptedTaxonNameGroup,
+  taxonNameGroupLabels,
+  type TaxonNameGroupKind,
+} from "./taxonEditing";
 
 type TaxonomyHierarchyPageProps = {
   initialTaxonId: number;
   onTaxonChange?: (taxonId: number, label: string) => void;
   onOpenPhotos: (taxonId: number, label: string) => void;
+  mutationDisabled?: boolean;
 };
 
 type NameGroup = {
-  label: string;
+  kind: TaxonNameGroupKind;
   records: TaxonNameDetail[];
 };
+
+type EditingState =
+  | { kind: "name-group"; group: TaxonNameGroupKind }
+  | TaxonConfirmation
+  | null;
 
 export function TaxonomyHierarchyPage({
   initialTaxonId,
   onTaxonChange,
   onOpenPhotos,
+  mutationDisabled = false,
 }: TaxonomyHierarchyPageProps) {
   const [navigation, dispatch] = useReducer(
     hierarchyNavigationReducer,
@@ -42,6 +64,11 @@ export function TaxonomyHierarchyPage({
   const [detail, setDetail] = useState<TaxonDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [detailError, setDetailError] = useState("");
+  const [editing, setEditing] = useState<EditingState>(null);
+  const [mutationBusy, setMutationBusy] = useState(false);
+  const [mutationError, setMutationError] = useState("");
+  const [mutationStatus, setMutationStatus] = useState("");
+  const [deletedParent, setDeletedParent] = useState<{ taxonId: number; label: string } | null>(null);
   const detailRequest = useRef(0);
   const onTaxonChangeRef = useRef(onTaxonChange);
   onTaxonChangeRef.current = onTaxonChange;
@@ -57,7 +84,10 @@ export function TaxonomyHierarchyPage({
     const request = ++detailRequest.current;
     setLoading(true);
     setDetailError("");
-    if (!retainDetail) setDetail(null);
+    if (!retainDetail) {
+      setDetail(null);
+      setDeletedParent(null);
+    }
     try {
       const next = await getTaxonDetail(taxonId);
       if (request !== detailRequest.current) return;
@@ -77,20 +107,90 @@ export function TaxonomyHierarchyPage({
   }, [initialTaxonId]);
 
   useEffect(() => {
+    setEditing(null);
+    setMutationError("");
+    setMutationStatus("");
     void loadDetail(currentTaxonId);
     return () => {
       detailRequest.current += 1;
     };
   }, [currentTaxonId, loadDetail]);
 
-  useTaxonomyMutation(() => {
+  useTaxonomyMutation((mutation) => {
+    if (mutation.kind === "update" && mutation.deletedTaxonId === currentTaxonId) {
+      const parent = detail?.breadcrumb[detail.breadcrumb.length - 1];
+      detailRequest.current += 1;
+      setDeletedParent(parent ? { taxonId: parent.taxon_id, label: displayTaxon(parent) } : null);
+      setDetail(null);
+      setDetailError("This taxon was deleted.");
+      setLoading(false);
+      dispatch({ type: "reset", taxonId: currentTaxonId });
+      children.updateItems([]);
+      return;
+    }
     void loadDetail(currentTaxonId, true);
     if (navigation.childrenRequested) void children.reload();
   });
 
   function navigateTo(taxonId: number, label: string) {
+    setEditing(null);
+    setMutationError("");
+    setMutationStatus("");
     dispatch({ type: "navigate", taxonId });
     onTaxonChange?.(taxonId, label);
+  }
+
+  function openEditing(next: Exclude<EditingState, null>) {
+    setMutationError("");
+    setMutationStatus("");
+    setEditing(next);
+  }
+
+  async function applyNameGroupSave(input: SaveTaxonNameGroupInput) {
+    setMutationBusy(true);
+    setMutationError("");
+    try {
+      await yieldToPaint();
+      await saveTaxonNameGroup(input);
+      setEditing(null);
+      setMutationStatus(`Saved ${taxonNameGroupLabels[input.name_type]}.`);
+      emitTaxonomyMutation({ kind: "update", taxonId: input.taxon_id });
+    } catch (nextError) {
+      setMutationError(errorMessage(nextError));
+    } finally {
+      setMutationBusy(false);
+    }
+  }
+
+  async function applyConfirmation() {
+    if (!editing || editing.kind === "name-group" || detail === null) return;
+    setMutationBusy(true);
+    setMutationError("");
+    try {
+      await yieldToPaint();
+      if (editing.kind === "promote-name") {
+        await promoteTaxonName({ taxon_id: detail.taxon_id, name_id: editing.record.name_id });
+        setMutationStatus(`"${editing.record.name}" is now accepted.`);
+        emitTaxonomyMutation({ kind: "update", taxonId: detail.taxon_id });
+      } else if (editing.kind === "delete-name") {
+        await deleteTaxonName({ taxon_id: detail.taxon_id, name_id: editing.record.name_id });
+        setMutationStatus(`Deleted "${editing.record.name}".`);
+        emitTaxonomyMutation({ kind: "update", taxonId: detail.taxon_id });
+      } else {
+        await deleteTaxon(detail.taxon_id);
+        setMutationStatus(`Deleted ${displayTaxonDetail(detail)}.`);
+        emitTaxonomyMutation({
+          kind: "update",
+          taxonId: detail.taxon_id,
+          deletedTaxonId: detail.taxon_id,
+        });
+      }
+      setEditing(null);
+    } catch (nextError) {
+      setMutationError(errorMessage(nextError));
+    } finally {
+      setMutationBusy(false);
+    }
   }
 
   if (loading && detail === null) {
@@ -99,24 +199,41 @@ export function TaxonomyHierarchyPage({
   if (detail === null) {
     return (
       <div className="taxonomy-hierarchy-status">
-        <EmptyState title="Taxon unavailable" detail={detailError || "The taxon could not be loaded."} />
+        <EmptyState
+          title={detailError === "This taxon was deleted." ? "Taxon deleted" : "Taxon unavailable"}
+          detail={detailError || "The taxon could not be loaded."}
+          action={deletedParent ? (
+            <Button onClick={() => navigateTo(deletedParent.taxonId, deletedParent.label)}>
+              Open parent taxon
+            </Button>
+          ) : undefined}
+        />
       </div>
     );
   }
 
   const currentLabel = displayTaxonDetail(detail);
   const nameGroups: NameGroup[] = [
-    { label: "Scientific accepted name", records: detail.names.sci_name ? [detail.names.sci_name] : [] },
-    { label: "Scientific synonyms", records: detail.names.synonyms },
-    { label: "Chinese accepted name", records: detail.names.zh_name ? [detail.names.zh_name] : [] },
-    { label: "Chinese aliases", records: detail.names.zh_aliases },
-    { label: "English accepted name", records: detail.names.en_name ? [detail.names.en_name] : [] },
-    { label: "English aliases", records: detail.names.en_aliases },
+    { kind: "sci_name", records: detail.names.sci_name ? [detail.names.sci_name] : [] },
+    { kind: "synonym", records: detail.names.synonyms },
+    { kind: "zh_name", records: detail.names.zh_name ? [detail.names.zh_name] : [] },
+    { kind: "zh_alias", records: detail.names.zh_aliases },
+    { kind: "en_name", records: detail.names.en_name ? [detail.names.en_name] : [] },
+    { kind: "en_alias", records: detail.names.en_aliases },
   ];
+  const primaryExists: Record<TaxonNameGroupKind, boolean> = {
+    sci_name: detail.names.sci_name !== null,
+    synonym: detail.names.sci_name !== null,
+    zh_name: detail.names.zh_name !== null,
+    zh_alias: detail.names.zh_name !== null,
+    en_name: detail.names.en_name !== null,
+    en_alias: detail.names.en_name !== null,
+  };
 
   return (
-    <main className="taxonomy-hierarchy-page">
-      <div className="taxonomy-hierarchy-scroll">
+    <>
+      <main className="taxonomy-hierarchy-page">
+        <div className="taxonomy-hierarchy-scroll">
         <nav className="taxonomy-hierarchy-breadcrumb" aria-label="Taxonomy breadcrumb">
           {detail.breadcrumb.map((item) => (
             <span key={item.taxon_id}>
@@ -135,10 +252,31 @@ export function TaxonomyHierarchyPage({
             <h2>{currentLabel}</h2>
             <small>Taxon {detail.taxon_id}</small>
           </div>
-          <Button onClick={() => onOpenPhotos(detail.taxon_id, currentLabel)}>
-            <Images size={14} /> Photos
-          </Button>
+          <div className="taxonomy-hierarchy-actions">
+            <Button onClick={() => onOpenPhotos(detail.taxon_id, currentLabel)}>
+              <Images size={14} /> Photos
+            </Button>
+            <Button
+              className="taxonomy-danger-button"
+              disabled={mutationDisabled || mutationBusy || editing !== null}
+              onClick={() => openEditing({ kind: "delete-taxon" })}
+            >
+              <Trash2 size={14} /> Delete taxon
+            </Button>
+          </div>
         </header>
+
+        {mutationStatus ? (
+          <div className="taxonomy-mutation-status" role="status" aria-live="polite">
+            {mutationStatus}
+          </div>
+        ) : null}
+
+        {loading ? (
+          <div className="taxonomy-hierarchy-refreshing" role="status" aria-live="polite">
+            <Busy label="Refreshing taxon..." />
+          </div>
+        ) : null}
 
         <dl className="taxonomy-detail-meta">
           <div><dt>Rank</dt><dd>{detail.rank}</dd></div>
@@ -148,7 +286,22 @@ export function TaxonomyHierarchyPage({
 
         <section className="taxonomy-name-groups" aria-label="Taxon names">
           {nameGroups.map((group) => (
-            <NameGroupView key={group.label} group={group} />
+            <TaxonNameGroupEditor
+              key={group.kind}
+              taxonId={detail.taxon_id}
+              kind={group.kind}
+              records={group.records}
+              primaryExists={primaryExists[acceptedTaxonNameGroup(group.kind)]}
+              active={editing?.kind === "name-group" && editing.group === group.kind}
+              busy={mutationBusy}
+              error={editing?.kind === "name-group" && editing.group === group.kind ? mutationError : ""}
+              disabled={mutationDisabled || mutationBusy || editing !== null}
+              onStartEditing={() => openEditing({ kind: "name-group", group: group.kind })}
+              onCancelEditing={() => setEditing(null)}
+              onSave={(input) => void applyNameGroupSave(input)}
+              onPromote={(record) => openEditing({ kind: "promote-name", group: group.kind, record })}
+              onDelete={(record) => openEditing({ kind: "delete-name", group: group.kind, record })}
+            />
           ))}
         </section>
 
@@ -190,24 +343,22 @@ export function TaxonomyHierarchyPage({
             </div>
           )}
         </section>
-      </div>
-    </main>
+        </div>
+      </main>
+      {editing && editing.kind !== "name-group" ? (
+        <TaxonConfirmationModal
+          confirmation={editing}
+          taxonLabel={currentLabel}
+          busy={mutationBusy}
+          error={mutationError}
+          onClose={() => setEditing(null)}
+          onConfirm={() => void applyConfirmation()}
+        />
+      ) : null}
+    </>
   );
 }
 
-function NameGroupView({ group }: { group: NameGroup }) {
-  return (
-    <section className="taxonomy-name-group">
-      <h3>{group.label}</h3>
-      {group.records.length === 0 ? <span className="taxonomy-name-empty">-</span> : group.records.map((record) => (
-        <article className="taxonomy-name-record" key={record.name_id}>
-          <strong>{record.name}</strong>
-          <dl>
-            <div><dt>Authority</dt><dd>{record.authority_year ?? "-"}</dd></div>
-            <div><dt>Source</dt><dd>{record.source ?? "-"}</dd></div>
-          </dl>
-        </article>
-      ))}
-    </section>
-  );
+function yieldToPaint(): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, 0));
 }

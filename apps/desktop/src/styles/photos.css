@@ -52,6 +52,7 @@
   background: transparent;
 }
 .photo-search-suggestions > button:hover, .photo-search-suggestions > button.active { background: var(--active); }
+.suggestion-loading { display: flex; min-height: 38px; align-items: center; gap: 7px; padding: 8px 10px; color: var(--muted); }
 .photo-search-suggestions strong { font-weight: 500; }
 .photo-search-suggestions span { color: var(--muted); }
 .suggestion-name-line { display: flex; min-width: 0; align-items: baseline; gap: 5px; overflow: hidden; color: var(--text); white-space: nowrap; }

@@ -10,7 +10,8 @@ export type HierarchyNavigationState = {
 
 export type HierarchyNavigationAction =
   | { type: "toggle-children" }
-  | { type: "navigate"; taxonId: number };
+  | { type: "navigate"; taxonId: number }
+  | { type: "reset"; taxonId: number };
 
 export function createHierarchyNavigationState(taxonId: number): HierarchyNavigationState {
   return {
@@ -31,7 +32,7 @@ export function hierarchyNavigationReducer(
       childrenRequested: state.childrenRequested || !state.childrenExpanded,
     };
   }
-  if (action.taxonId === state.currentTaxonId) return state;
+  if (action.type === "navigate" && action.taxonId === state.currentTaxonId) return state;
   return createHierarchyNavigationState(action.taxonId);
 }
 

@@ -16,7 +16,7 @@ import { errorMessage } from "../../api/common";
 import { selectCsvDestination } from "../../api/dialogs";
 import { CodeEditor } from "../../shared/CodeEditor";
 import { ResizablePanels } from "../../shared/ResizablePanels";
-import { Button, EmptyState, SectionHeader, VirtualList } from "../../shared/ui";
+import { Busy, Button, EmptyState, SectionHeader, VirtualList } from "../../shared/ui";
 import { SqlInputList } from "./SqlInputList";
 import { canExportFullQuery } from "./sqlResults";
 import { resolveSqlWorkbenchLoads } from "./sqlWorkbenchLoading";
@@ -34,6 +34,7 @@ export function CustomSqlView({
   const [result, setResult] = useState<CustomSqlExecutionResult | null>(null);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
+  const [loadingWorkbench, setLoadingWorkbench] = useState(true);
 
   useEffect(() => {
     void Promise.allSettled([getCustomTaxonomySql(), listCustomSqlInputs()])
@@ -42,7 +43,8 @@ export function CustomSqlView({
         if (loaded.sql !== undefined) setSql(loaded.sql);
         if (loaded.inputs !== undefined) setInputs(loaded.inputs);
         setError(loaded.error);
-      });
+      })
+      .finally(() => setLoadingWorkbench(false));
   }, []);
 
   async function addInput(kind: "csv" | "sqlite", alias: string, path: string) {
@@ -115,7 +117,7 @@ export function CustomSqlView({
       minSecond={320}
       separatorLabel="Resize Input sources"
       stateKey="custom-sql.inputs"
-      first={<SqlInputList inputs={inputs} busy={Boolean(busy)} onAdd={addInput} onRemove={removeInput} />}
+      first={<SqlInputList inputs={inputs} busy={Boolean(busy) || loadingWorkbench} onAdd={addInput} onRemove={removeInput} />}
       second={(<div className="custom-sql-editor">
         <CodeEditor language="sql" ariaLabel="Custom taxonomy SQL" value={sql} onChange={setSql} />
       </div>)}
@@ -125,7 +127,13 @@ export function CustomSqlView({
   const primary = (
     <div className="sql-workbench-primary">
       {workbench}
-      {(error || busy) && <div className={error ? "inline-error" : "editor-message"} role={error ? "alert" : undefined}>{error || busy}</div>}
+      {error ? (
+        <div className="inline-error" role="alert">{error}</div>
+      ) : busy || loadingWorkbench ? (
+        <div className="editor-message" role="status" aria-live="polite">
+          <Busy label={busy || "Loading custom SQL workspace..."} />
+        </div>
+      ) : null}
     </div>
   );
 
@@ -159,7 +167,7 @@ export function CustomSqlView({
         title="Custom SQL"
         detail="Execute typed SQL against taxonomy and file-path data sources"
         actions={(
-          <Button variant="primary" disabled={Boolean(busy) || !sql.trim() || mutationDisabled} onClick={() => void execute()}>
+          <Button variant="primary" disabled={Boolean(busy) || loadingWorkbench || !sql.trim() || mutationDisabled} onClick={() => void execute()}>
             <Play size={13} />Run
           </Button>
         )}

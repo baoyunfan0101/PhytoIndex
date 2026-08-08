@@ -38,6 +38,11 @@ test("loads children only after expansion and resets them on navigation", () => 
   assert.equal(state.childrenRequested, true);
   state = hierarchyNavigationReducer(state, { type: "navigate", taxonId: 11 });
   assert.deepEqual(state, createHierarchyNavigationState(11));
+  state = hierarchyNavigationReducer(
+    hierarchyNavigationReducer(state, { type: "toggle-children" }),
+    { type: "reset", taxonId: 11 },
+  );
+  assert.deepEqual(state, createHierarchyNavigationState(11));
 });
 
 test("explains alias matches but not accepted-name matches", () => {

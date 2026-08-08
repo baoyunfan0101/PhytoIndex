@@ -74,6 +74,37 @@ export type TaxonInputRow = {
   geological_range?: string | null;
   source?: string | null;
 };
+export type TaxonUpdateInput = {
+  taxon_id: number;
+  authority_year: string | null;
+  synonyms: string[];
+  zh_name: string | null;
+  zh_alias: string[];
+  en_name: string | null;
+  en_alias: string[];
+  geological_range: string | null;
+  source: string | null;
+};
+export type TaxonNameActionInput = {
+  taxon_id: number;
+  name_id: number;
+};
+export type TaxonNameMetadataInput = {
+  name_id: number;
+  authority_year: string | null;
+  source: string | null;
+};
+export type NewTaxonNameInput = {
+  name: string;
+  authority_year: string | null;
+  source: string | null;
+};
+export type SaveTaxonNameGroupInput = {
+  taxon_id: number;
+  name_type: TaxonomyNameType;
+  updates: TaxonNameMetadataInput[];
+  additions: NewTaxonNameInput[];
+};
 export type TaxonRowOutcome = {
   row_number: number;
   operation_types: string[];
@@ -189,6 +220,8 @@ const demoTaxonDetails = new Map<number, TaxonDetail>(demoTaxonomy.map((taxon) =
     },
   },
 ]));
+let nextDemoTaxonNameId = demoTaxonomy.reduce((maximum, taxon) => Math.max(maximum, taxon.taxon_id * 10 + 2), 0) + 1;
+let nextDemoTaxonomyOperationId = 1000;
 
 const demoChildrenByParent = new Map<number, TaxonChild[]>();
 for (const taxon of demoTaxonomy) {
@@ -273,6 +306,16 @@ export const listTaxonPhotos = (taxonId: number, cursor: string | null = null, l
     items: demoPhotos.slice((taxonId % 4) * 8, (taxonId % 4) * 8 + limit),
     next_cursor: null,
   }));
+export const updateTaxon = (input: TaxonUpdateInput) =>
+  call<TaxonomyOperationResult>("update_taxon", { input }, () => demoUpdateTaxon(input));
+export const promoteTaxonName = (input: TaxonNameActionInput) =>
+  call<void>("promote_taxon_name", { input }, () => demoPromoteTaxonName(input));
+export const saveTaxonNameGroup = (input: SaveTaxonNameGroupInput) =>
+  call<void>("save_taxon_name_group", { input }, () => demoSaveTaxonNameGroup(input));
+export const deleteTaxonName = (input: TaxonNameActionInput) =>
+  call<void>("delete_taxon_name", { input }, () => demoDeleteTaxonName(input));
+export const deleteTaxon = (taxonId: number) =>
+  call<void>("delete_taxon", { taxonId }, () => demoDeleteTaxon(taxonId));
 
 function demoSearchResult(taxon: TaxonSearchResult, query: string): TaxonSearchResult | null {
   const normalized = query.trim().toLowerCase();
@@ -294,6 +337,405 @@ function demoSearchResult(taxon: TaxonSearchResult, query: string): TaxonSearchR
       name: name.name,
     }));
   return matches.length > 0 ? { ...taxon, matches } : null;
+}
+
+type DemoTaxonChange = TaxonRowOutcome["changes"][number];
+type DemoNameGroup = {
+  acceptedType: "sci_name" | "zh_name" | "en_name";
+  aliasType: "synonym" | "zh_alias" | "en_alias";
+  accepted: () => TaxonNameDetail | null;
+  setAccepted: (name: TaxonNameDetail | null) => void;
+  aliases: TaxonNameDetail[];
+};
+type DemoNameLocation = {
+  group: DemoNameGroup;
+  name: TaxonNameDetail;
+  nameType: TaxonomyNameType;
+  aliasIndex: number | null;
+};
+
+function demoUpdateTaxon(input: TaxonUpdateInput): TaxonomyOperationResult {
+  const detail = requireDemoTaxonDetail(input.taxon_id);
+  const changes: DemoTaxonChange[] = [];
+  const authorityYear = demoText(input.authority_year);
+  const source = demoText(input.source);
+  const geologicalRange = demoText(input.geological_range);
+
+  if (geologicalRange !== null && detail.geological_range !== geologicalRange) {
+    const oldValue = detail.geological_range;
+    detail.geological_range = geologicalRange;
+    changes.push({
+      kind: oldValue === null ? "supplement" : "overwrite",
+      field: "taxa.geological_range",
+      old_value: oldValue,
+      new_value: geologicalRange,
+    });
+  }
+
+  if (detail.names.sci_name) {
+    demoSupplementName(detail.names.sci_name, "sci_name", authorityYear, source, changes);
+  }
+  for (const synonym of normalizedDemoNames(input.synonyms)) {
+    demoAddOrSupplementAlias(demoNameGroups(detail)[0], synonym, source, changes);
+  }
+  demoApplyLocalizedNames(
+    demoNameGroups(detail)[1],
+    normalizedDemoNames([input.zh_name, ...input.zh_alias]),
+    source,
+    changes,
+  );
+  demoApplyLocalizedNames(
+    demoNameGroups(detail)[2],
+    normalizedDemoNames([input.en_name, ...input.en_alias]),
+    source,
+    changes,
+  );
+  refreshDemoTaxonViews(input.taxon_id);
+
+  const operationTypes = demoOperationTypes(changes);
+  return {
+    delimiter: "|",
+    encoding: "UTF-8",
+    rows: [{
+      row_number: 1,
+      operation_types: operationTypes,
+      message: changes.length === 0 ? "input produces no change" : `applied ${changes.length} taxonomy changes`,
+      target: demoTaxonSummaryById(input.taxon_id),
+      parent: null,
+      candidates: [],
+      changes,
+    }],
+    operation_id: nextDemoTaxonomyOperationId++,
+    total_rows: 1,
+    succeeded_rows: 1,
+    failed_rows: 0,
+  };
+}
+
+function demoPromoteTaxonName(input: TaxonNameActionInput): void {
+  const detail = requireDemoTaxonDetail(input.taxon_id);
+  const location = findDemoName(detail, input.name_id);
+  if (!location) throw new Error(`name ${input.name_id} for taxon ${input.taxon_id} not found`);
+  if (location.aliasIndex === null) throw new Error("the selected name is already accepted");
+  const accepted = location.group.accepted();
+  if (!accepted) throw new Error(`taxon ${input.taxon_id} has no ${location.group.acceptedType} to exchange`);
+
+  if (detail.rank === "species" && location.nameType === "synonym") {
+    const genusName = detail.parent_taxon_id === null
+      ? null
+      : demoTaxonDetails.get(detail.parent_taxon_id)?.names.sci_name?.name ?? null;
+    if (location.name.name.split(/\s+/)[0] !== genusName) {
+      throw new Error(`species scientific name '${location.name.name}' does not start with parent genus '${genusName ?? ""}'`);
+    }
+  }
+
+  location.group.aliases[location.aliasIndex] = accepted;
+  location.group.setAccepted(location.name);
+  refreshDemoTaxonViews(input.taxon_id);
+}
+
+function demoSaveTaxonNameGroup(input: SaveTaxonNameGroupInput): void {
+  const detail = requireDemoTaxonDetail(input.taxon_id);
+  const group = demoNameGroupByType(detail, input.name_type);
+  const seenIds = new Set<number>();
+  for (const update of input.updates) {
+    if (seenIds.has(update.name_id)) throw new Error(`name ${update.name_id} is included more than once`);
+    seenIds.add(update.name_id);
+    const location = findDemoName(detail, update.name_id);
+    if (!location) throw new Error(`name ${update.name_id} for taxon ${input.taxon_id} not found`);
+    if (location.nameType !== input.name_type) {
+      throw new Error(`name ${update.name_id} is ${location.nameType}, not ${input.name_type}`);
+    }
+  }
+
+  if (input.additions.length > 0) {
+    const accepted = group.accepted();
+    if (input.name_type === group.acceptedType && accepted) {
+      throw new Error(`taxon ${input.taxon_id} already has ${input.name_type}`);
+    }
+    if (input.name_type === group.acceptedType && input.additions.length > 1) {
+      throw new Error(`${input.name_type} accepts only one name`);
+    }
+    if (input.name_type === group.aliasType && !accepted) {
+      throw new Error(`add ${group.acceptedType} before adding ${group.aliasType} records`);
+    }
+  }
+
+  const normalizedAdditions = input.additions.map((addition) => ({
+    name: normalizeDemoName(addition.name),
+    authority_year: demoText(addition.authority_year),
+    source: demoText(addition.source),
+  }));
+  const seenNames = new Set<string>();
+  for (const addition of normalizedAdditions) {
+    if (!addition.name) throw new Error("taxonomy name must not be blank");
+    const normalized = addition.name.toLowerCase();
+    if (seenNames.has(normalized)) throw new Error(`taxonomy name '${addition.name}' is included more than once`);
+    seenNames.add(normalized);
+    const allGroupNames = [group.accepted(), ...group.aliases].filter(Boolean) as TaxonNameDetail[];
+    if (allGroupNames.some((name) => name.name.toLowerCase() === normalized)) {
+      throw new Error(`taxonomy name '${addition.name}' already exists in this name group`);
+    }
+    if (detail.rank === "species" && (input.name_type === "sci_name" || input.name_type === "synonym")) {
+      const parentName = detail.parent_taxon_id === null
+        ? null
+        : demoTaxonDetails.get(detail.parent_taxon_id)?.names.sci_name?.name ?? null;
+      if (addition.name.split(/\s+/)[0] !== parentName) {
+        throw new Error(`species scientific name '${addition.name}' does not start with parent genus '${parentName ?? ""}'`);
+      }
+    }
+  }
+
+  for (const update of input.updates) {
+    const location = findDemoName(detail, update.name_id);
+    if (!location) continue;
+    location.name.authority_year = demoText(update.authority_year);
+    location.name.source = demoText(update.source);
+  }
+  for (const addition of normalizedAdditions) {
+    const record: TaxonNameDetail = {
+      name_id: nextDemoTaxonNameId++,
+      name: addition.name,
+      authority_year: addition.authority_year,
+      source: addition.source,
+    };
+    if (input.name_type === group.acceptedType) group.setAccepted(record);
+    else group.aliases.push(record);
+  }
+  refreshDemoTaxonViews(input.taxon_id);
+}
+
+function demoDeleteTaxonName(input: TaxonNameActionInput): void {
+  const detail = requireDemoTaxonDetail(input.taxon_id);
+  const location = findDemoName(detail, input.name_id);
+  if (!location) throw new Error(`name ${input.name_id} for taxon ${input.taxon_id} not found`);
+  if (location.nameType === "sci_name") throw new Error("the unique sci_name cannot be deleted");
+  if (location.aliasIndex === null) {
+    location.group.setAccepted(null);
+  } else {
+    location.group.aliases.splice(location.aliasIndex, 1);
+  }
+  refreshDemoTaxonViews(input.taxon_id);
+}
+
+function demoDeleteTaxon(taxonId: number): void {
+  const detail = requireDemoTaxonDetail(taxonId);
+  if ((demoChildrenByParent.get(taxonId)?.length ?? 0) > 0) {
+    throw new Error(`taxon ${taxonId} cannot be deleted because it has child taxa`);
+  }
+
+  if (detail.parent_taxon_id !== null) {
+    const siblings = demoChildrenByParent.get(detail.parent_taxon_id);
+    const childIndex = siblings?.findIndex((child) => child.taxon_id === taxonId) ?? -1;
+    if (siblings && childIndex >= 0) siblings.splice(childIndex, 1);
+    if (siblings?.length === 0) demoChildrenByParent.delete(detail.parent_taxon_id);
+  }
+  demoChildrenByParent.delete(taxonId);
+  demoTaxonDetails.delete(taxonId);
+  demoTaxonomyById.delete(taxonId);
+  const definitionIndex = demoTaxonomy.findIndex((taxon) => taxon.taxon_id === taxonId);
+  if (definitionIndex >= 0) demoTaxonomy.splice(definitionIndex, 1);
+  const searchIndex = demoTaxa.findIndex((taxon) => taxon.taxon_id === taxonId);
+  if (searchIndex >= 0) demoTaxa.splice(searchIndex, 1);
+}
+
+function requireDemoTaxonDetail(taxonId: number): TaxonDetail {
+  const detail = demoTaxonDetails.get(taxonId);
+  if (!detail) throw new Error(`taxon ${taxonId} not found`);
+  return detail;
+}
+
+function demoNameGroups(detail: TaxonDetail): DemoNameGroup[] {
+  return [
+    {
+      acceptedType: "sci_name",
+      aliasType: "synonym",
+      accepted: () => detail.names.sci_name,
+      setAccepted: (name) => { detail.names.sci_name = name; },
+      aliases: detail.names.synonyms,
+    },
+    {
+      acceptedType: "zh_name",
+      aliasType: "zh_alias",
+      accepted: () => detail.names.zh_name,
+      setAccepted: (name) => { detail.names.zh_name = name; },
+      aliases: detail.names.zh_aliases,
+    },
+    {
+      acceptedType: "en_name",
+      aliasType: "en_alias",
+      accepted: () => detail.names.en_name,
+      setAccepted: (name) => { detail.names.en_name = name; },
+      aliases: detail.names.en_aliases,
+    },
+  ];
+}
+
+function demoNameGroupByType(detail: TaxonDetail, nameType: TaxonomyNameType): DemoNameGroup {
+  const group = demoNameGroups(detail).find((candidate) => (
+    candidate.acceptedType === nameType || candidate.aliasType === nameType
+  ));
+  if (!group) throw new Error(`invalid taxonomy name type: ${nameType}`);
+  return group;
+}
+
+function findDemoName(detail: TaxonDetail, nameId: number): DemoNameLocation | null {
+  for (const group of demoNameGroups(detail)) {
+    const accepted = group.accepted();
+    if (accepted?.name_id === nameId) {
+      return { group, name: accepted, nameType: group.acceptedType, aliasIndex: null };
+    }
+    const aliasIndex = group.aliases.findIndex((name) => name.name_id === nameId);
+    if (aliasIndex >= 0) {
+      return { group, name: group.aliases[aliasIndex], nameType: group.aliasType, aliasIndex };
+    }
+  }
+  return null;
+}
+
+function demoAddOrSupplementAlias(
+  group: DemoNameGroup,
+  name: string,
+  source: string | null,
+  changes: DemoTaxonChange[],
+): void {
+  const accepted = group.accepted();
+  if (accepted?.name === name) {
+    demoSupplementName(accepted, group.acceptedType, null, source, changes);
+    return;
+  }
+  const alias = group.aliases.find((candidate) => candidate.name === name);
+  if (alias) {
+    demoSupplementName(alias, group.aliasType, null, source, changes);
+    return;
+  }
+  group.aliases.push({ name_id: nextDemoTaxonNameId++, name, authority_year: null, source });
+  changes.push({ kind: "append_name", field: group.aliasType, old_value: null, new_value: name });
+}
+
+function demoApplyLocalizedNames(
+  group: DemoNameGroup,
+  names: string[],
+  source: string | null,
+  changes: DemoTaxonChange[],
+): void {
+  for (const name of names) {
+    const accepted = group.accepted();
+    if (accepted?.name === name) {
+      demoSupplementName(accepted, group.acceptedType, null, source, changes);
+      continue;
+    }
+    const alias = group.aliases.find((candidate) => candidate.name === name);
+    if (alias) {
+      demoSupplementName(alias, group.aliasType, null, source, changes);
+      continue;
+    }
+    const detail: TaxonNameDetail = {
+      name_id: nextDemoTaxonNameId++,
+      name,
+      authority_year: null,
+      source,
+    };
+    if (accepted) {
+      group.aliases.push(detail);
+      changes.push({ kind: "append_name", field: group.aliasType, old_value: null, new_value: name });
+    } else {
+      group.setAccepted(detail);
+      changes.push({ kind: "append_name", field: group.acceptedType, old_value: null, new_value: name });
+    }
+  }
+}
+
+function demoSupplementName(
+  name: TaxonNameDetail,
+  nameType: TaxonomyNameType,
+  authorityYear: string | null,
+  source: string | null,
+  changes: DemoTaxonChange[],
+): void {
+  if (authorityYear !== null && name.authority_year !== authorityYear) {
+    const oldValue = name.authority_year;
+    name.authority_year = authorityYear;
+    changes.push({
+      kind: oldValue === null ? "supplement" : "overwrite",
+      field: `${nameType}.authority_year`,
+      old_value: oldValue,
+      new_value: authorityYear,
+    });
+  }
+  if (source !== null && name.source === null) {
+    name.source = source;
+    changes.push({
+      kind: "supplement",
+      field: `${nameType}.source`,
+      old_value: null,
+      new_value: source,
+    });
+  }
+}
+
+function refreshDemoTaxonViews(taxonId: number): void {
+  const detail = requireDemoTaxonDetail(taxonId);
+  const names: TaxonDisplayNames = {
+    sci_name: detail.names.sci_name?.name ?? null,
+    zh_name: detail.names.zh_name?.name ?? null,
+    en_name: detail.names.en_name?.name ?? null,
+  };
+  const result = demoTaxa.find((taxon) => taxon.taxon_id === taxonId);
+  if (result) {
+    result.names = { ...names };
+    result.matches = detail.names.sci_name
+      ? [{ name_id: detail.names.sci_name.name_id, name_type: "sci_name", name: detail.names.sci_name.name }]
+      : [];
+  }
+  for (const children of demoChildrenByParent.values()) {
+    const child = children.find((candidate) => candidate.taxon_id === taxonId);
+    if (child) child.names = { ...names };
+  }
+  for (const candidate of demoTaxonDetails.values()) {
+    const item = candidate.breadcrumb.find((ancestor) => ancestor.taxon_id === taxonId);
+    if (item) item.names = { ...names };
+  }
+}
+
+function demoTaxonSummaryById(taxonId: number): TaxonSummary {
+  const detail = requireDemoTaxonDetail(taxonId);
+  return {
+    taxon_id: detail.taxon_id,
+    rank: detail.rank,
+    breadcrumb: detail.breadcrumb,
+    names: {
+      sci_name: detail.names.sci_name?.name ?? null,
+      zh_name: detail.names.zh_name?.name ?? null,
+      en_name: detail.names.en_name?.name ?? null,
+    },
+  };
+}
+
+function normalizedDemoNames(values: Array<string | null>): string[] {
+  return values.flatMap((value) => {
+    const normalized = demoText(value);
+    return normalized === null ? [] : [normalized];
+  });
+}
+
+function normalizeDemoName(value: string): string {
+  return value.trim().replace(/\s+/g, " ");
+}
+
+function demoText(value: string | null): string | null {
+  const normalized = value?.trim() ?? "";
+  return normalized.length > 0 ? normalized : null;
+}
+
+function demoOperationTypes(changes: DemoTaxonChange[]): string[] {
+  if (changes.length === 0) return ["no_change"];
+  const kinds = new Set(changes.map((change) => change.kind));
+  return [
+    ...(kinds.has("supplement") ? ["supplement"] : []),
+    ...(kinds.has("append_name") ? ["new_name"] : []),
+    ...(kinds.has("overwrite") ? ["overwrite"] : []),
+  ];
 }
 
 export const getTaxonomyTemplate = () =>

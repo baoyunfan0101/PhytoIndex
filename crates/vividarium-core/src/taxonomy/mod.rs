@@ -20,8 +20,9 @@ mod view;
 
 pub use crate::naming::{ScientificNameParts, split_scientific_name_authority};
 pub use actions::{
-    DeleteTaxonNameInput, PromoteTaxonNameInput, TaxonUpdateInput, delete_taxon, delete_taxon_name,
-    promote_taxon_name, update_taxon,
+    DeleteTaxonNameInput, NewTaxonNameInput, PromoteTaxonNameInput, SaveTaxonNameGroupInput,
+    TaxonNameMetadataInput, TaxonUpdateInput, delete_taxon, delete_taxon_name, promote_taxon_name,
+    save_taxon_name_group, update_taxon,
 };
 pub use base::{
     TaxonomyBaseMetadata, TaxonomyBaseReplaceResult, get_taxonomy_base_metadata,

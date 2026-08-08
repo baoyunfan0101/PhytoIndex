@@ -27,6 +27,8 @@
 }
 .taxonomy-columns { min-height: 0; }
 .taxonomy-results { position: relative; height: 100%; min-height: 0; }
+.taxonomy-results .taxon-card { height: 100%; }
+.taxonomy-results .taxon-card-main { padding-block: 4px; }
 .taxonomy-results-loading { position: absolute; right: 8px; bottom: 8px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 3px; background: var(--popover); box-shadow: 0 4px 16px var(--shadow); }
 .taxonomy-records { width: 100%; height: 100%; min-height: 0; }
 .taxonomy-search-loading { display: grid; width: 100%; height: 100%; place-items: center; }
@@ -42,19 +44,45 @@
 .taxonomy-hierarchy-heading > div { display: grid; min-width: 0; grid-template-columns: auto minmax(0, auto); align-items: center; gap: 3px 9px; }
 .taxonomy-hierarchy-heading h2 { margin: 0; overflow: hidden; font-size: 20px; text-overflow: ellipsis; white-space: nowrap; }
 .taxonomy-hierarchy-heading small { grid-column: 2; color: var(--quiet); }
+.taxonomy-hierarchy-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.taxonomy-danger-button { border-color: color-mix(in srgb, var(--danger-text) 45%, var(--line)); color: var(--danger-text); }
+.taxonomy-danger-button:hover:not(:disabled), .taxonomy-danger-action:hover:not(:disabled) { color: var(--danger-text); background: var(--danger-bg); }
+.taxonomy-mutation-status { margin: 10px 0 0; padding: 7px 9px; border-left: 2px solid var(--accent-bright); color: var(--muted); background: var(--panel-2); }
+.taxonomy-hierarchy-refreshing { display: flex; justify-content: flex-end; min-height: 28px; padding-top: 8px; color: var(--muted); }
 .taxonomy-detail-meta { display: grid; margin: 14px 0; grid-template-columns: repeat(3, minmax(120px, 1fr)); gap: 1px; background: var(--line); }
 .taxonomy-detail-meta > div { display: grid; gap: 4px; padding: 10px; background: var(--panel-2); }
 .taxonomy-detail-meta dt, .taxonomy-name-record dt { color: var(--muted); font-size: 10px; text-transform: uppercase; }
 .taxonomy-detail-meta dd, .taxonomy-name-record dd { margin: 0; }
 .taxonomy-name-groups { display: grid; grid-template-columns: repeat(2, minmax(220px, 1fr)); gap: 10px; }
-.taxonomy-name-group { min-width: 0; padding: 10px; border: 1px solid var(--line); border-radius: 3px; background: var(--panel-2); }
-.taxonomy-name-group h3 { margin: 0 0 8px; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+.taxonomy-name-group { position: relative; min-width: 0; padding: 10px; border: 1px solid var(--line); border-radius: 3px; background: var(--panel-2); }
+.taxonomy-name-group-header { display: flex; min-height: 25px; align-items: flex-start; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.taxonomy-name-group h3 { margin: 3px 0 0; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+.taxonomy-name-group-actions { display: flex; min-width: 0; flex: none; gap: 4px; opacity: 0; pointer-events: none; }
+.taxonomy-name-group:hover .taxonomy-name-group-actions,
+.taxonomy-name-group:focus-within .taxonomy-name-group-actions,
+.taxonomy-name-group.editing .taxonomy-name-group-actions { opacity: 1; pointer-events: auto; }
 .taxonomy-name-empty, .taxonomy-children-empty { color: var(--quiet); }
 .taxonomy-name-record + .taxonomy-name-record { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
-.taxonomy-name-record > strong { display: block; overflow-wrap: anywhere; }
+.taxonomy-name-record > header { display: flex; min-width: 0; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.taxonomy-name-record > header > strong { min-width: 0; overflow-wrap: anywhere; }
+.taxonomy-name-actions { display: flex; flex: none; gap: 3px; }
+.taxonomy-danger-action { color: var(--quiet); }
 .taxonomy-name-record dl { display: grid; margin: 7px 0 0; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
 .taxonomy-name-record dl > div { min-width: 0; }
 .taxonomy-name-record dd { overflow: hidden; color: var(--quiet); text-overflow: ellipsis; white-space: nowrap; }
+.taxonomy-name-group-form { display: grid; gap: 8px; }
+.taxonomy-name-record-edit { display: grid; gap: 7px; }
+.taxonomy-name-record-edit > strong { overflow-wrap: anywhere; }
+.taxonomy-name-record-edit.new { padding: 8px; border: 1px dashed var(--line-strong); border-radius: 3px; background: var(--panel); }
+.taxonomy-name-metadata-edit { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
+.taxonomy-name-edit-field { display: grid; min-width: 0; gap: 4px; }
+.taxonomy-name-edit-field > span { color: var(--muted); font-size: 10px; text-transform: uppercase; }
+.taxonomy-name-edit-field input { width: 100%; min-width: 0; height: 30px; padding: 0 7px; border: 1px solid var(--line-strong); border-radius: 3px; background: var(--input); }
+.taxonomy-name-field { margin-bottom: 1px; }
+.taxonomy-name-add-row { justify-self: start; color: var(--accent-bright); }
+.taxonomy-save-button { border-color: var(--button-primary-hover); color: var(--on-accent); background: var(--button-primary); }
+.taxonomy-save-button:hover:not(:disabled) { background: var(--button-primary-hover); }
+.taxonomy-inline-operation { display: flex; min-height: 30px; align-items: center; padding: 6px 8px; border: 1px solid var(--line); border-radius: 3px; color: var(--muted); background: var(--panel); }
 .taxonomy-children { margin-top: 14px; border: 1px solid var(--line); border-radius: 3px; }
 .taxonomy-children-toggle { display: flex; width: 100%; min-height: 38px; align-items: center; gap: 5px; padding: 7px 9px; border: 0; text-align: left; background: var(--panel-2); }
 .taxonomy-child-list { display: grid; gap: 1px; padding: 1px 0 0; border-top: 1px solid var(--line); background: var(--line); }
@@ -64,7 +92,6 @@
 .taxonomy-child-button > :not(svg) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .taxonomy-child-button > svg { grid-column: 2; grid-row: 1 / 4; }
 .taxonomy-child-button > span:last-of-type { color: var(--muted); }
-
 .formatted-view { display: grid; height: 100%; min-height: 0; grid-template-rows: auto minmax(0, 1fr); }
 .formatted-split { min-height: 0; }
 .input-table { position: relative; display: grid; width: 100%; height: 100%; min-width: 0; min-height: 0; grid-template-rows: 34px minmax(0, 1fr) 30px; overflow: auto hidden; }
@@ -84,6 +111,7 @@
 .log-row span { color: var(--muted); }
 .log-row code { overflow: hidden; color: #b6b6b6; text-overflow: ellipsis; white-space: nowrap; }
 .file-button { position: relative; overflow: hidden; }
+.file-button.disabled { opacity: .55; pointer-events: none; }
 .file-button input { position: absolute; inset: 0; opacity: 0; }
 
 .custom-sql-view, .base-import-settings {

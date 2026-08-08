@@ -37,8 +37,10 @@ import {
 
 export function TaxonomySearchView({
   onOpenPhotos,
+  mutationDisabled = false,
 }: {
   onOpenPhotos: (taxonId: number, label: string) => void;
+  mutationDisabled?: boolean;
 }) {
   const [query, setQuery] = useViewState("taxonomy-search.query", "");
   const [submittedQuery, setSubmittedQuery] = useViewState("taxonomy-search.submitted-query", query);
@@ -118,7 +120,7 @@ export function TaxonomySearchView({
       <VirtualList
         stateKey="taxonomy-search.results-list"
         items={taxonomySearch.results}
-        rowHeight={78}
+        rowHeight={60}
         itemKey={(item) => item.taxon_id}
         renderItem={(item) => (
           <TaxonCard
@@ -150,6 +152,7 @@ export function TaxonomySearchView({
             recordHierarchyPosition(current, selectedResult.taxon_id, currentTaxonId)
           ))}
           onOpenPhotos={onOpenPhotos}
+          mutationDisabled={mutationDisabled}
         />
       )}
     </main>
@@ -171,7 +174,9 @@ export function TaxonomySearchView({
                 role="combobox"
                 aria-autocomplete="list"
                 aria-controls="taxonomy-search-suggestions-listbox"
-                aria-expanded={suggestionsOpen && taxonomySuggestions.suggestions.length > 0}
+                aria-expanded={suggestionsOpen && (
+                  taxonomySuggestions.loading || taxonomySuggestions.suggestions.length > 0
+                )}
                 aria-activedescendant={selectedSuggestionIndex >= 0 ? `taxonomy-search-suggestions-option-${selectedSuggestionIndex}` : undefined}
                 autoFocus
                 autoCapitalize="none"
@@ -214,6 +219,7 @@ export function TaxonomySearchView({
             {suggestionsOpen && query.trim() && (
               <SearchSuggestions
                 idPrefix="taxonomy-search-suggestions"
+                loading={taxonomySuggestions.loading}
                 suggestions={taxonomySuggestions.suggestions}
                 selectedIndex={selectedSuggestionIndex}
                 onHover={setSelectedSuggestionIndex}
@@ -241,11 +247,13 @@ const inputFields: Array<keyof TaxonInputRow> = [
   "zh_name", "zh_alias", "en_name", "en_alias", "geological_range", "source",
 ];
 
+type FormattedBusy = "" | "import" | "template" | "preview" | "apply";
+
 export function FormattedUpdateView({ mutationDisabled = false }: { mutationDisabled?: boolean }) {
   const [rows, setRows] = useState<TaxonInputRow[]>([{ species: "" }]);
   const [outcomes, setOutcomes] = useState<TaxonRowOutcome[]>([]);
   const [message, setMessage] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState<FormattedBusy>("");
   const [separator, setSeparator] = useState(";");
 
   useEffect(() => {
@@ -263,8 +271,30 @@ export function FormattedUpdateView({ mutationDisabled = false }: { mutationDisa
   });
 
   async function importFile(file: File) {
-    setRows(await parseTaxonomyCsv(await file.text()));
-    setOutcomes([]);
+    setBusy("import");
+    setMessage("");
+    try {
+      setRows(await parseTaxonomyCsv(await file.text()));
+      setOutcomes([]);
+      setMessage("CSV imported.");
+    } catch (nextError) {
+      setMessage(errorMessage(nextError));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function downloadTemplate() {
+    setBusy("template");
+    setMessage("");
+    try {
+      downloadCsv("taxonomy-template.csv", await getTaxonomyTemplate());
+      setMessage("Template downloaded.");
+    } catch (nextError) {
+      setMessage(errorMessage(nextError));
+    } finally {
+      setBusy("");
+    }
   }
 
   function updateRow(index: number, field: keyof TaxonInputRow, value: string) {
@@ -282,7 +312,7 @@ export function FormattedUpdateView({ mutationDisabled = false }: { mutationDisa
   }
 
   async function run(kind: "preview" | "apply") {
-    setBusy(true);
+    setBusy(kind);
     setMessage("");
     try {
       if (kind === "preview") {
@@ -298,21 +328,23 @@ export function FormattedUpdateView({ mutationDisabled = false }: { mutationDisa
     } catch (nextError) {
       setMessage(errorMessage(nextError));
     } finally {
-      setBusy(false);
+      setBusy("");
     }
   }
 
+  const busyLabel = formattedBusyLabel(busy);
+
   return (
     <div className="formatted-view">
-      <SectionHeader title="Formatted update" detail={`Pipe-delimited UTF-8 input or direct table editing. Multiple names use "${separator}".`} actions={
+      <SectionHeader title="Formatted update" detail={busyLabel || `Pipe-delimited UTF-8 input or direct table editing. Multiple names use "${separator}".`} actions={
         <>
-          <label className="button button-secondary file-button"><FileUp size={13} />Upload CSV<input type="file" accept=".csv,text/csv" onChange={(event) => {
+          <label className={`button button-secondary file-button${busy ? " disabled" : ""}`}><FileUp size={13} />{busy === "import" ? "Importing..." : "Upload CSV"}<input disabled={Boolean(busy)} type="file" accept=".csv,text/csv" onChange={(event) => {
             const file = event.target.files?.[0];
             if (file) void importFile(file);
           }} /></label>
-          <Button onClick={() => void getTaxonomyTemplate().then((csv) => downloadCsv("taxonomy-template.csv", csv))}><Download size={13} />Template</Button>
-          <Button disabled={busy} onClick={() => void run("preview")}>Preview</Button>
-          <Button variant="primary" disabled={busy || mutationDisabled} onClick={() => void run("apply")}><Play size={13} />Apply</Button>
+          <Button disabled={Boolean(busy)} onClick={() => void downloadTemplate()}><Download size={13} />{busy === "template" ? "Loading..." : "Template"}</Button>
+          <Button disabled={Boolean(busy)} onClick={() => void run("preview")}>{busy === "preview" ? "Previewing..." : "Preview"}</Button>
+          <Button variant="primary" disabled={Boolean(busy) || mutationDisabled} onClick={() => void run("apply")}><Play size={13} />{busy === "apply" ? "Applying..." : "Apply"}</Button>
         </>
       } />
       <ResizablePanels
@@ -332,22 +364,22 @@ export function FormattedUpdateView({ mutationDisabled = false }: { mutationDisa
           renderItem={(row, index) => (
             <div className="input-table-row">
               <span>{index + 1}</span>
-              {inputFields.map((field) => <input key={field} value={Array.isArray(row[field]) ? (row[field] as string[]).join(separator) : String(row[field] ?? "")} onChange={(event) => updateRow(index, field, event.target.value)} />)}
+              {inputFields.map((field) => <input disabled={Boolean(busy)} key={field} value={Array.isArray(row[field]) ? (row[field] as string[]).join(separator) : String(row[field] ?? "")} onChange={(event) => updateRow(index, field, event.target.value)} />)}
               <button
                 className="input-row-delete"
                 type="button"
                 aria-label={`Delete row ${index + 1}`}
                 title={index === 0 ? "The first row cannot be deleted" : "Delete row"}
-                disabled={index === 0}
+                disabled={Boolean(busy) || index === 0}
                 onClick={() => deleteRow(index)}
               ><Trash2 size={13} /></button>
             </div>
           )}
         />
-        <Button className="table-add-row" variant="ghost" onClick={() => setRows((current) => [...current, {}])}>+ Add row</Button>
+        <Button className="table-add-row" variant="ghost" disabled={Boolean(busy)} onClick={() => setRows((current) => [...current, {}])}>+ Add row</Button>
         </div>)}
         second={(<div className="formatted-log">
-        <SectionHeader title="Result log" detail={message || "Preview and apply return the same log format"} />
+        <SectionHeader title="Result log" detail={busyLabel || message || "Preview and apply return the same log format"} />
         <VirtualList
           items={outcomes}
           rowHeight={64}
@@ -364,4 +396,12 @@ export function FormattedUpdateView({ mutationDisabled = false }: { mutationDisa
       />
     </div>
   );
+}
+
+function formattedBusyLabel(busy: FormattedBusy): string {
+  if (busy === "import") return "Importing and parsing CSV...";
+  if (busy === "template") return "Loading taxonomy template...";
+  if (busy === "preview") return "Previewing taxonomy changes...";
+  if (busy === "apply") return "Applying taxonomy changes...";
+  return "";
 }
