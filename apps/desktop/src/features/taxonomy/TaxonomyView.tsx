@@ -310,6 +310,7 @@ export function FormattedUpdateView({ mutationDisabled = false }: { mutationDisa
   }
 
   function deleteRow(index: number) {
+    if (index === 0) return;
     setRows((current) => current.filter((_, rowIndex) => rowIndex !== index));
   }
 
@@ -365,7 +366,14 @@ export function FormattedUpdateView({ mutationDisabled = false }: { mutationDisa
             <div className="input-table-row">
               <span>{index + 1}</span>
               {inputFields.map((field) => <input key={field} value={Array.isArray(row[field]) ? (row[field] as string[]).join(separator) : String(row[field] ?? "")} onChange={(event) => updateRow(index, field, event.target.value)} />)}
-              <button className="input-row-delete" type="button" aria-label={`Delete row ${index + 1}`} title="Delete row" onClick={() => deleteRow(index)}><Trash2 size={14} /></button>
+              <button
+                className="input-row-delete"
+                type="button"
+                aria-label={`Delete row ${index + 1}`}
+                title={index === 0 ? "The first row cannot be deleted" : "Delete row"}
+                disabled={index === 0}
+                onClick={() => deleteRow(index)}
+              ><Trash2 size={13} /></button>
             </div>
           )}
         />
