@@ -1,4 +1,4 @@
-import { ChevronDown, Tags, type LucideIcon } from "lucide-react";
+import { ChevronDown, Database, type LucideIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { PhotoTaxonUsage } from "../../api/mapping";
 import { errorMessage } from "../../api/common";
@@ -68,7 +68,7 @@ export function TaxonContextMenu({
         </>
       )}
       <MenuButton
-        icon={Tags}
+        icon={Database}
         label="Go to taxonomy"
         disabled={Boolean(busy)}
         onClick={() => {
