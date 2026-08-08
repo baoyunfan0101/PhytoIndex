@@ -505,27 +505,6 @@ export function DesktopShell({
               </div>
             ))}
           </div>
-          <div className="toolbar-actions" ref={operationsMenuRef}>
-            <IconButton aria-label="Background operations" className={runningOperations.length > 0 ? "running" : ""} title="Background operations" onClick={() => {
-              setOperationsOpen((current) => !current);
-            }}>
-              <Activity size={15} /><span>{runningOperations.length}</span>
-            </IconButton>
-            {operationsOpen && (
-              <div className="toolbar-popover operations-popover">
-                <strong>Background operations</strong>
-                {Object.values(operations).length === 0 && <span>No operations</span>}
-                {Object.values(operations).map((operation) => (
-                  <div key={operation.module}>
-                    <b>{operation.module}</b>
-                    <span>{operation.message}</span>
-                    {operation.running && <progress value={operation.processed} max={operation.total ?? undefined} />}
-                    {operation.error && <small>{operation.error}</small>}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
         </header>
         <main className="tab-content">
           {workspaceReady && tabs.length === 0 && (
@@ -579,7 +558,32 @@ export function DesktopShell({
             );
           })}
         </main>
-        <footer className="status-bar"><span className="status-dot" />{status}<span>{active?.title ?? ""}</span></footer>
+        <footer className="status-bar">
+          <span className="status-dot" />
+          {status}
+          <span className="status-title">{active?.title ?? ""}</span>
+          <div className="status-operations" ref={operationsMenuRef}>
+            <IconButton aria-label="Background operations" className={runningOperations.length > 0 ? "running" : ""} title="Background operations" onClick={() => {
+              setOperationsOpen((current) => !current);
+            }}>
+              <Activity size={12} /><span>{runningOperations.length}</span>
+            </IconButton>
+            {operationsOpen && (
+              <div className="toolbar-popover operations-popover">
+                <strong>Background operations</strong>
+                {Object.values(operations).length === 0 && <span>No operations</span>}
+                {Object.values(operations).map((operation) => (
+                  <div key={operation.module}>
+                    <b>{operation.module}</b>
+                    <span>{operation.message}</span>
+                    {operation.running && <progress value={operation.processed} max={operation.total ?? undefined} />}
+                    {operation.error && <small>{operation.error}</small>}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </footer>
       </div>
       {searchOpen && active !== null && (
         <GlobalSearchOverlay
