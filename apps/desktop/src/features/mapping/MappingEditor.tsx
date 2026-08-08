@@ -1,4 +1,4 @@
-import { Link, Search, Sparkles, Tags, Unlink } from "lucide-react";
+import { Link, Search, Sparkles, Unlink } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import {
   clearPhotoMapping,
@@ -103,6 +103,15 @@ export function MappingEditor({
       <PhotoStage photo={photo} />
     </div>
   );
+  const currentTaxon = mappedTaxon ? {
+    taxon_id: mappedTaxon.taxon_id,
+    rank: mappedTaxon.rank,
+    names: {
+      sci_name: mappedTaxon.names.sci_name?.name ?? null,
+      zh_name: mappedTaxon.names.zh_name?.name ?? null,
+      en_name: mappedTaxon.names.en_name?.name ?? null,
+    },
+  } : null;
   const currentPane = (
     <section className="mapping-current">
       <header>
@@ -111,16 +120,20 @@ export function MappingEditor({
       </header>
       {loading ? (
         <Busy label="Loading mapping" />
-      ) : match?.mapping.status === "matched" ? (
-        <div className="current-mapping-card">
-          <div>
-            <span>{mappedTaxon?.rank ?? "Taxon"}</span>
-            <strong>{mappedTaxon ? displayTaxonDetail(mappedTaxon) : match.mapping.taxon_id}</strong>
-          </div>
-          <Button disabled={Boolean(busy)} onClick={() => void mutate("Clearing", () => clearPhotoMapping(photo.photo_id))}>
-            <Unlink size={13} /> Clear mapping
-          </Button>
-        </div>
+      ) : match?.mapping.status === "matched" && currentTaxon ? (
+        <TaxonCard
+          compact
+          taxon={currentTaxon}
+          actions={(
+            <Button
+              size="small"
+              disabled={Boolean(busy)}
+              onClick={() => void mutate("Unmapping", () => clearPhotoMapping(photo.photo_id))}
+            >
+              <Unlink size={12} /> {busy === "Unmapping" ? "Unmapping..." : "Unmap"}
+            </Button>
+          )}
+        />
       ) : match?.mapping.status === "ambiguous" ? (
         <VirtualList
           stateKey="mapping-editor.candidates"
@@ -133,8 +146,12 @@ export function MappingEditor({
               compact
               taxon={candidate.summary}
               actions={
-                <Button size="small" onClick={() => void mutate("Selecting", () => setPhotoMapping(photo.photo_id, candidate.summary.taxon_id))}>
-                  Select
+                <Button
+                  size="small"
+                  disabled={Boolean(busy)}
+                  onClick={() => void mutate(`Selecting ${candidate.summary.taxon_id}`, () => setPhotoMapping(photo.photo_id, candidate.summary.taxon_id))}
+                >
+                  {busy === `Selecting ${candidate.summary.taxon_id}` ? "Selecting..." : "Select"}
                 </Button>
               }
             />
@@ -161,15 +178,11 @@ export function MappingEditor({
           <TaxonCard
             compact
             taxon={item}
+            onClick={() => onOpenTaxon(item.taxon_id)}
             actions={
-              <>
-                <Button size="small" onClick={() => onOpenTaxon(item.taxon_id)}>
-                  <Tags size={12} /> Go to taxonomy
-                </Button>
-                <Button size="small" disabled={Boolean(busy)} onClick={() => void mutate("Mapping", () => setPhotoMapping(photo.photo_id, item.taxon_id))}>
-                  <Link size={12} /> Map
-                </Button>
-              </>
+              <Button size="small" disabled={Boolean(busy)} onClick={() => void mutate(`Mapping ${item.taxon_id}`, () => setPhotoMapping(photo.photo_id, item.taxon_id))}>
+                <Link size={12} /> {busy === `Mapping ${item.taxon_id}` ? "Mapping..." : "Map"}
+              </Button>
             }
           />
         )}
@@ -189,7 +202,6 @@ export function MappingEditor({
         first={currentPane}
         second={searchPane}
       />
-      {busy && <div className="floating-progress"><Busy label={busy} /></div>}
       {(error || taxonomySearch.error) && <div className="inline-error">{error || taxonomySearch.error}</div>}
     </div>
   );

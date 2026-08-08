@@ -28,5 +28,3 @@
 .mapping-search-results button:hover:not(:disabled) { filter: none; }
 .mapping-search-results button:active:not(:disabled) { filter: none; transform: none; }
 .candidate-stack { height: calc(100% - 30px); }
-.current-mapping-card { display: flex; align-items: center; justify-content: space-between; padding: 10px; border: 1px solid var(--line); background: #222; }
-.current-mapping-card > div { display: flex; flex-direction: column; gap: 3px; }

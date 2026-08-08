@@ -28,8 +28,15 @@ export function TaxonCard({
   onClick?: () => void;
 }) {
   return (
-    <article className={`taxon-card${compact ? " compact" : ""}${active ? " active" : ""}`}>
-      <button className="taxon-card-main" type="button" onClick={onClick}>
+    <article
+      className={`taxon-card${compact ? " compact" : ""}${active ? " active" : ""}${onClick ? " clickable" : ""}`}
+      onClick={onClick ? (event) => {
+        const target = event.target;
+        if (target instanceof Element && target.closest(".taxon-card-actions button")) return;
+        onClick();
+      } : undefined}
+    >
+      <button className="taxon-card-main" type="button">
         <span className="taxon-rank">{taxon.rank}</span>
         <strong>{displayTaxon(taxon)}</strong>
         <span>{taxonCommonNameLine(taxon.names)}</span>
