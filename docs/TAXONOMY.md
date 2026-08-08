@@ -46,21 +46,24 @@ and parent resource. Page limits are clamped to `1..=500`.
 | `TaxonChild` | `taxon_id`, `rank`, `names` | Compact direct child. |
 | `TaxonNameDetail` | `name_id`, `name`, `authority_year`, `source` | One stable name record. |
 | `TaxonNamesDetail` | `sci_name`, `synonyms`, `zh_name`, `zh_aliases`, `en_name`, `en_aliases` | Names grouped by type. |
-| `TaxonDetail` | `taxon_id`, `rank`, `parent_taxon_id`, `geological_range`, `names` | Editable taxon detail. |
-| `TaxonDetailNode` | `summary`, `detail`, `children` | Detail plus one child page. |
+| `TaxonDetail` | `taxon_id`, `rank`, `parent_taxon_id`, `breadcrumb`, `geological_range`, `names` | Complete editable taxon and ancestor lineage. |
 
 | Function | Parameters after `database` | Return |
 | --- | --- | --- |
 | `get_taxon_summary` | `taxon_id: i64` | `Option<TaxonSummary>` |
 | `get_taxon_detail` | `taxon_id: i64` | `Option<TaxonDetail>` |
-| `get_taxon_detail_node` | `taxon_id: i64`, `children_cursor: Option<&str>`, `children_limit: usize` | `Option<TaxonDetailNode>` |
 | `list_taxon_children` | `taxon_id: i64`, `cursor: Option<&str>`, `limit: usize` | `TaxonomyPage<TaxonChild>` |
+
+`TaxonDetail.breadcrumb` lists ancestors from the highest available rank to
+the immediate parent. It does not repeat the current taxon. Children are
+loaded separately with `list_taxon_children`; they are not embedded in the
+detail response.
 
 ## Search
 
-`TaxonSearchResult` contains a `summary`, full `detail`, and the
-`TaxonNameMatch` records responsible for the match. `TaxonSuggestion` omits
-detail and breadcrumb content for autocomplete.
+`TaxonSearchResult` contains `taxon_id`, `rank`, accepted display `names`, and
+the `TaxonNameMatch` records responsible for the match. `TaxonSuggestion` is
+the compact autocomplete type with the same taxon identity fields.
 
 | Function | Parameters after `database` | Return |
 | --- | --- | --- |
@@ -72,7 +75,8 @@ exact, full prefix, word prefix, substring, then fuzzy. Blank input returns
 an empty vector. These taxonomy-only interfaces remain available when the
 active photo library is offline. The desktop `search_taxa` and `suggest_taxa`
 commands execute database lookups on blocking workers and resolve
-asynchronously.
+asynchronously. The desktop `get_taxon_detail` command uses the same execution
+model and reports a missing taxon as an error.
 
 ## Formatted update
 

@@ -3,9 +3,7 @@ use std::collections::{HashMap, HashSet};
 use rusqlite::{Connection, functions::FunctionFlags, params_from_iter, types::Value as SqlValue};
 use serde::{Deserialize, Serialize};
 
-use super::{
-    TaxonomyNameType, page::page_limit, view::load_taxon_details, view::load_taxon_summaries,
-};
+use super::{TaxonomyNameType, page::page_limit};
 use crate::naming::normalize_taxonomy_name;
 use crate::{CoreError, CoreResult, Database};
 
@@ -20,8 +18,9 @@ pub struct TaxonNameMatch {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TaxonSearchResult {
-    pub summary: super::TaxonSummary,
-    pub detail: super::TaxonDetail,
+    pub taxon_id: i64,
+    pub rank: super::TaxonRank,
+    pub names: super::TaxonDisplayNames,
     pub matches: Vec<TaxonNameMatch>,
 }
 
@@ -31,6 +30,13 @@ pub struct TaxonSuggestion {
     pub rank: super::TaxonRank,
     pub names: super::TaxonDisplayNames,
     pub matches: Vec<TaxonNameMatch>,
+}
+
+#[derive(Debug)]
+struct CompactTaxon {
+    taxon_id: i64,
+    rank: super::TaxonRank,
+    names: super::TaxonDisplayNames,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -132,28 +138,27 @@ fn search_taxa_with_filter(
         .iter()
         .map(|matched| matched.key.taxon_id)
         .collect::<Vec<_>>();
-    let summaries = load_taxon_summaries(connection, &ids)?;
-    let details = load_taxon_details(connection, &ids)?;
+    let taxa = load_compact_taxa(connection, &ids)?;
     let fuzzy_taxon_ids = search_matches
         .iter()
         .filter(|matched| matched.key.match_level == FUZZY_MATCH_LEVEL)
         .map(|matched| matched.key.taxon_id)
         .collect::<HashSet<_>>();
     let matches_by_id = load_name_matches_for_taxa(connection, &ids, &search, &fuzzy_taxon_ids)?;
-    if summaries.len() != ids.len() || details.len() != ids.len() {
+    if taxa.len() != ids.len() {
         return Err(CoreError::InvalidArgument(
             "matched taxon no longer exists".into(),
         ));
     }
     search_matches
         .into_iter()
-        .zip(summaries)
-        .zip(details)
-        .map(|((matched, summary), detail)| {
+        .zip(taxa)
+        .map(|(matched, taxon)| {
             Ok(RankedTaxonSearchResult {
                 result: TaxonSearchResult {
-                    summary,
-                    detail,
+                    taxon_id: taxon.taxon_id,
+                    rank: taxon.rank,
+                    names: taxon.names,
                     matches: matches_by_id
                         .get(&matched.key.taxon_id)
                         .cloned()
@@ -180,26 +185,28 @@ fn suggest_taxa_with_filter(
         .iter()
         .map(|matched| matched.key.taxon_id)
         .collect::<Vec<_>>();
-    let mut suggestions = load_suggestions(connection, &ids)?;
+    let taxa = load_compact_taxa(connection, &ids)?;
     let fuzzy_taxon_ids = search_matches
         .iter()
         .filter(|matched| matched.key.match_level == FUZZY_MATCH_LEVEL)
         .map(|matched| matched.key.taxon_id)
         .collect::<HashSet<_>>();
     let matches_by_id = load_name_matches_for_taxa(connection, &ids, &search, &fuzzy_taxon_ids)?;
-    for suggestion in &mut suggestions {
-        suggestion.matches = matches_by_id
-            .get(&suggestion.taxon_id)
-            .cloned()
-            .unwrap_or_default();
-    }
-    Ok(suggestions)
+    Ok(taxa
+        .into_iter()
+        .map(|taxon| TaxonSuggestion {
+            taxon_id: taxon.taxon_id,
+            rank: taxon.rank,
+            names: taxon.names,
+            matches: matches_by_id
+                .get(&taxon.taxon_id)
+                .cloned()
+                .unwrap_or_default(),
+        })
+        .collect())
 }
 
-fn load_suggestions(
-    connection: &Connection,
-    taxon_ids: &[i64],
-) -> CoreResult<Vec<TaxonSuggestion>> {
+fn load_compact_taxa(connection: &Connection, taxon_ids: &[i64]) -> CoreResult<Vec<CompactTaxon>> {
     if taxon_ids.is_empty() {
         return Ok(Vec::new());
     }
@@ -238,7 +245,7 @@ fn load_suggestions(
                 error.to_string().into(),
             )
         })?;
-        Ok(TaxonSuggestion {
+        Ok(CompactTaxon {
             taxon_id: row.get(0)?,
             rank,
             names: super::TaxonDisplayNames {
@@ -246,7 +253,6 @@ fn load_suggestions(
                 zh_name: row.get(3)?,
                 en_name: row.get(4)?,
             },
-            matches: Vec::new(),
         })
     })?;
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -740,7 +746,7 @@ mod tests {
         let search_ids = search_taxa(&database, "Canis", 10)
             .unwrap()
             .into_iter()
-            .map(|result| result.summary.taxon_id)
+            .map(|result| result.taxon_id)
             .collect::<Vec<_>>();
         let suggestions = suggest_taxa(&database, "Canis", 10).unwrap();
         assert_eq!(
@@ -753,6 +759,12 @@ mod tests {
         assert_eq!(suggestions[0].names.sci_name.as_deref(), Some("Canis"));
         assert_eq!(suggestions[0].names.zh_name.as_deref(), Some("Dogs"));
         assert_eq!(suggestions[0].matches[0].name, "Canis");
+        let results = search_taxa(&database, "Canis", 10).unwrap();
+        assert_eq!(results[0].taxon_id, 1);
+        assert_eq!(results[0].rank, super::super::TaxonRank::Genus);
+        assert_eq!(results[0].names.sci_name.as_deref(), Some("Canis"));
+        assert_eq!(results[0].names.zh_name.as_deref(), Some("Dogs"));
+        assert_eq!(results[0].matches[0].name, "Canis");
     }
 
     #[test]
@@ -805,6 +817,34 @@ mod tests {
                 .map(|result| (result.key.taxon_id, result.key.match_level))
                 .collect::<Vec<_>>(),
             vec![(14, FUZZY_MATCH_LEVEL)]
+        );
+
+        let results = search_taxa(&database, "Canis", 10).unwrap();
+        assert_eq!(
+            results
+                .iter()
+                .map(|result| result.taxon_id)
+                .collect::<Vec<_>>(),
+            vec![10, 11, 12, 13, 14]
+        );
+        assert_eq!(results[0].names.sci_name.as_deref(), Some("Canis"));
+        assert_eq!(
+            results[2].names.sci_name.as_deref(),
+            Some("Great Canis wolf")
+        );
+        assert_eq!(results[4].names.sci_name.as_deref(), Some("Canos"));
+        assert_eq!(
+            results
+                .iter()
+                .map(|result| result.matches[0].name.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "Canis",
+                "Canis lupus",
+                "Great Canis wolf",
+                "Toucanis",
+                "Canos",
+            ]
         );
     }
 }

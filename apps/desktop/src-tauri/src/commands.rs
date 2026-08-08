@@ -26,9 +26,9 @@ use vividarium_core::taxonomy::{
     AddSqlInputRequest, AddSqlInputResult, CustomSqlExecutionResult,
     CustomTaxonomySqlExportRequest, CustomTaxonomySqlRequest, DeleteTaxonNameInput,
     PersistentSqlInput, PromoteTaxonNameInput, RemoveSqlInputRequest, RemoveSqlInputResult,
-    SqlExportResult, TaxonChild, TaxonDetailNode, TaxonInputRow, TaxonRowOutcome,
-    TaxonSearchResult, TaxonSuggestion, TaxonUpdateInput, TaxonomyBaseMetadata,
-    TaxonomyOperationResult, TaxonomyPage, TaxonomyPreviewResult, ValidateBaseImportRequest,
+    SqlExportResult, TaxonChild, TaxonDetail, TaxonInputRow, TaxonRowOutcome, TaxonSearchResult,
+    TaxonSuggestion, TaxonUpdateInput, TaxonomyBaseMetadata, TaxonomyOperationResult, TaxonomyPage,
+    TaxonomyPreviewResult, ValidateBaseImportRequest,
 };
 use vividarium_core::{
     map::{self, MapBounds, MapPhoto, MapSettings},
@@ -669,20 +669,18 @@ pub async fn suggest_taxa(
 }
 
 #[tauri::command]
-pub fn get_taxon_detail_node(
+pub async fn get_taxon_detail(
     state: State<'_, AppState>,
     taxon_id: i64,
-    children_cursor: Option<String>,
-    children_limit: Option<usize>,
-) -> CommandResult<TaxonDetailNode> {
-    taxonomy::get_taxon_detail_node(
-        &state.database,
-        taxon_id,
-        children_cursor.as_deref(),
-        children_limit.unwrap_or(50),
-    )
+) -> CommandResult<TaxonDetail> {
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        taxonomy::get_taxon_detail(&database, taxon_id)
+            .map_err(error)?
+            .ok_or_else(|| format!("taxon {taxon_id} not found"))
+    })
+    .await
     .map_err(error)?
-    .ok_or_else(|| format!("taxon {taxon_id} not found"))
 }
 
 #[tauri::command]

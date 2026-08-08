@@ -83,7 +83,7 @@ pub fn run() {
             commands::open_photo_directory_in_file_manager,
             commands::search_taxa,
             commands::suggest_taxa,
-            commands::get_taxon_detail_node,
+            commands::get_taxon_detail,
             commands::list_taxon_children,
             commands::delete_taxon_name,
             commands::update_taxon,

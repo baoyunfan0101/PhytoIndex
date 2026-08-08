@@ -64,7 +64,6 @@ pub use sql_inputs::{
 pub use sync::{TaxonomySyncResult, TaxonomySyncRun, synchronize_pending_photo_libraries};
 pub(crate) use view::load_taxon_summaries;
 pub use view::{
-    TaxonBreadcrumbItem, TaxonChild, TaxonDetail, TaxonDetailNode, TaxonDisplayNames,
-    TaxonNameDetail, TaxonNamesDetail, TaxonSummary, get_taxon_detail, get_taxon_detail_node,
-    get_taxon_summary, list_taxon_children,
+    TaxonBreadcrumbItem, TaxonChild, TaxonDetail, TaxonDisplayNames, TaxonNameDetail,
+    TaxonNamesDetail, TaxonSummary, get_taxon_detail, get_taxon_summary, list_taxon_children,
 };

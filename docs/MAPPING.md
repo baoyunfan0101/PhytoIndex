@@ -69,7 +69,7 @@ states search filename only.
 
 | Function | Parameters after `database` | Return | Description |
 | --- | --- | --- | --- |
-| `search_photo_taxa` | `query: &str`, `cursor: Option<&str>`, `limit: usize` | `PhotoPage<TaxonSearchResult>` | Search taxa that currently have photos with the taxonomy ranked search order. |
+| `search_photo_taxa` | `query: &str`, `cursor: Option<&str>`, `limit: usize` | `PhotoPage<TaxonSearchResult>` | Search taxa that currently have photos and return lightweight taxon identity, display names, and name matches. |
 | `suggest_photo_taxa` | `query: &str`, `limit: usize` | `Vec<TaxonSuggestion>` | Lightweight autocomplete restricted to taxa with photos. |
 | `list_taxon_photos` | `taxon_id: i64`, `cursor: Option<&str>`, `limit: usize` | `PhotoPage<Photo>` | List current matched photos for the taxon and descendants. |
 | `get_photo_taxon_node` | `taxon_id: Option<i64>`, `show_empty: bool` | `PhotoTaxonNode` | Load one photo taxonomy node or the virtual root. |
