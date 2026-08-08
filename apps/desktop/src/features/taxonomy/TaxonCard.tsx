@@ -1,18 +1,30 @@
 import type { ReactNode } from "react";
-import { displayTaxon, type TaxonSummary } from "../../api/taxonomy";
+import {
+  displayTaxon,
+  type TaxonDisplayNames,
+  type TaxonRank,
+} from "../../api/taxonomy";
 import { taxonCommonNameLine } from "./taxonCardNames";
+
+type TaxonCardTaxon = {
+  taxon_id: number;
+  rank: TaxonRank;
+  names: TaxonDisplayNames;
+};
 
 export function TaxonCard({
   taxon,
   compact = false,
   active = false,
   actions,
+  description,
   onClick,
 }: {
-  taxon: TaxonSummary;
+  taxon: TaxonCardTaxon;
   compact?: boolean;
   active?: boolean;
   actions?: ReactNode;
+  description?: string | null;
   onClick?: () => void;
 }) {
   return (
@@ -21,6 +33,7 @@ export function TaxonCard({
         <span className="taxon-rank">{taxon.rank}</span>
         <strong>{displayTaxon(taxon)}</strong>
         <span>{taxonCommonNameLine(taxon.names)}</span>
+        {description ? <small className="taxon-card-description">{description}</small> : null}
       </button>
       {actions && <div className="taxon-card-actions">{actions}</div>}
     </article>

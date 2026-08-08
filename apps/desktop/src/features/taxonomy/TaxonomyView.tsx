@@ -1,9 +1,6 @@
 import {
-  ChevronDown,
-  ChevronRight,
   Download,
   FileUp,
-  Images,
   Play,
   Search,
   Trash2,
@@ -11,26 +8,17 @@ import {
 import { useEffect, useRef, useState } from "react";
 import {
   applyTaxonomyRows,
-  displayTaxon,
-  getTaxonDetailNode,
   getTaxonomyTemplate,
-  listTaxonChildren,
   parseTaxonomyCsv,
   previewTaxonomyRows,
-  type TaxonChild,
-  type TaxonDetail,
-  type TaxonDetailNode,
   type TaxonInputRow,
   type TaxonRowOutcome,
-  type TaxonSearchResult,
-  type TaxonSummary,
 } from "../../api/taxonomy";
 import { downloadCsv, errorMessage } from "../../api/common";
 import { getTaxonomyNameSeparator } from "../../api/settings";
 import { Busy, Button, EmptyState, SectionHeader, VirtualList } from "../../shared/ui";
 import { TaxonCard } from "./TaxonCard";
 import { useMetadataChange } from "../../shared/metadataChanges";
-import { useCursorPage } from "../../shared/useCursorPage";
 import { useTaxonSearch } from "./useTaxonSearch";
 import { useViewState } from "../../shared/viewState";
 import { emitTaxonomyMutation, useTaxonomyMutation } from "./taxonomyMutations";
@@ -38,51 +26,42 @@ import { ResizablePanels } from "../../shared/ResizablePanels";
 import { moveSuggestionSelection } from "../../shared/suggestionNavigation";
 import { SearchSuggestions, suggestionLabel } from "../photos/search/SearchSuggestions";
 import { useTaxonSuggestions } from "./useTaxonSuggestions";
-
-type TaxonomyRecordItem =
-  | { kind: "selected"; result: TaxonSearchResult }
-  | { kind: "child"; child: TaxonChild };
+import { TaxonomyHierarchyPage } from "./TaxonomyHierarchyPage";
+import {
+  currentTaxonForRoot,
+  reconcileSelectedRoot,
+  recordHierarchyPosition,
+  taxonSearchMatchExplanation,
+  type HierarchyPositions,
+} from "./hierarchyNavigation";
 
 export function TaxonomySearchView({
-  taxonId,
-  onTaxonChange,
   onOpenPhotos,
 }: {
-  taxonId?: number;
-  onTaxonChange?: (taxonId: number, label: string) => void;
   onOpenPhotos: (taxonId: number, label: string) => void;
 }) {
   const [query, setQuery] = useViewState("taxonomy-search.query", "");
   const [submittedQuery, setSubmittedQuery] = useViewState("taxonomy-search.submitted-query", query);
-  const [selected, setSelected] = useViewState<TaxonSearchResult | null>("taxonomy-search.selected", null);
-  const [node, setNode] = useViewState<TaxonDetailNode | null>("taxonomy-search.node", null);
-  const [expanded, setExpanded] = useViewState("taxonomy-search.expanded", false);
-  const [error, setError] = useState("");
+  const [selectedRootTaxonId, setSelectedRootTaxonId] = useViewState<number | null>(
+    "taxonomy-search.selected-root",
+    null,
+  );
+  const [hierarchyPositions, setHierarchyPositions] = useViewState<HierarchyPositions>(
+    "taxonomy-search.hierarchy-positions",
+    {},
+  );
   const [refreshKey, setRefreshKey] = useState(0);
   const [selectedSuggestionIndex, setSelectedSuggestionIndex] = useState(-1);
   const [suggestionsOpen, setSuggestionsOpen] = useState(false);
   const taxonomySearchBoxRef = useRef<HTMLDivElement>(null);
-  const loadedTaxonId = useRef<number | null>(null);
-  const selectedTaxonId = useRef(selected?.summary.taxon_id ?? null);
   const taxonomySearch = useTaxonSearch(submittedQuery, {
     debounceMs: 0,
-    enabled: taxonId === undefined,
     stateKey: "taxonomy-search.results",
     refreshKey,
   });
-  const taxonomySuggestions = useTaxonSuggestions(query, taxonId === undefined);
-  const children = useCursorPage<TaxonChild, number | null>({
-    params: selected?.summary.taxon_id ?? null,
-    resetKey: selected?.summary.taxon_id ?? null,
-    stateKey: "taxonomy-search.children",
-    enabled: expanded && selected !== null,
-    loadPage: (selectedTaxonId, cursor) => listTaxonChildren(selectedTaxonId!, cursor),
-  });
+  const taxonomySuggestions = useTaxonSuggestions(query, true);
   useTaxonomyMutation(() => {
-    loadedTaxonId.current = null;
-    setNode(null);
     setRefreshKey((current) => current + 1);
-    if (expanded) void children.reload();
   });
 
   useEffect(() => {
@@ -96,7 +75,6 @@ export function TaxonomySearchView({
   }, [selectedSuggestionIndex, taxonomySuggestions.suggestions.length]);
 
   useEffect(() => {
-    if (taxonId !== undefined) return;
     const closeSuggestions = (event: PointerEvent) => {
       const target = event.target;
       if (target instanceof Node && !taxonomySearchBoxRef.current?.contains(target)) {
@@ -106,126 +84,72 @@ export function TaxonomySearchView({
     };
     document.addEventListener("pointerdown", closeSuggestions);
     return () => document.removeEventListener("pointerdown", closeSuggestions);
-  }, [taxonId]);
+  }, []);
 
   useEffect(() => {
-    if (taxonId === undefined) return;
-    if (loadedTaxonId.current === taxonId) return;
-    getTaxonDetailNode(taxonId).then((next) => {
-      loadedTaxonId.current = next.summary.taxon_id;
-      setNode(next);
-      setSelected({ summary: next.summary, detail: next.detail, matches: [] });
-      onTaxonChange?.(next.summary.taxon_id, displayTaxon(next.summary));
-    }).catch((nextError) => setError(errorMessage(nextError)));
-  }, [taxonId]);
-
-  useEffect(() => {
-    if (taxonId !== undefined) return;
     if (!submittedQuery.trim()) {
-      setSelected(null);
-      setNode(null);
+      setSelectedRootTaxonId(null);
       return;
     }
-    setSelected((current) => current
-      ? taxonomySearch.results.find((item) => item.summary.taxon_id === current.summary.taxon_id)
-        ?? taxonomySearch.results[0]
-        ?? null
-      : taxonomySearch.results[0] ?? null);
-  }, [submittedQuery, taxonId, taxonomySearch.results]);
-
-  useEffect(() => {
-    if (!selected) {
-      loadedTaxonId.current = null;
-      selectedTaxonId.current = null;
-      setNode(null);
-      return;
-    }
-    const selectionChanged = selectedTaxonId.current !== selected.summary.taxon_id;
-    selectedTaxonId.current = selected.summary.taxon_id;
-    if (selectionChanged) setExpanded(false);
-    if (node?.summary.taxon_id === selected.summary.taxon_id) {
-      loadedTaxonId.current = selected.summary.taxon_id;
-      return;
-    }
-    if (loadedTaxonId.current === selected.summary.taxon_id) return;
-    getTaxonDetailNode(selected.summary.taxon_id).then((next) => {
-      loadedTaxonId.current = next.summary.taxon_id;
-      setNode(next);
-    }).catch((nextError) => setError(errorMessage(nextError)));
-  }, [selected]);
-
-  function toggleChildren() {
-    if (node) setExpanded((current) => !current);
-  }
-
-  async function navigateTo(nextTaxonId: number) {
-    try {
-      const next = await getTaxonDetailNode(nextTaxonId);
-      loadedTaxonId.current = next.summary.taxon_id;
-      setNode(next);
-      setSelected({ summary: next.summary, detail: next.detail, matches: [] });
-      setExpanded(false);
-      onTaxonChange?.(next.summary.taxon_id, displayTaxon(next.summary));
-    } catch (nextError) {
-      setError(errorMessage(nextError));
-    }
-  }
+    setSelectedRootTaxonId((current) => reconcileSelectedRoot(
+      current,
+      taxonomySearch.results.map((result) => result.taxon_id),
+    ));
+  }, [submittedQuery, taxonomySearch.results]);
 
   function submitTaxonomySearch(value = query) {
     const normalized = value.trim();
     if (!normalized) return;
     setQuery(normalized);
     setSubmittedQuery(normalized);
-    setSelected(null);
-    setNode(null);
-    setError("");
+    setSelectedRootTaxonId(null);
     setSelectedSuggestionIndex(-1);
     setSuggestionsOpen(false);
   }
 
-  const visible: TaxonomyRecordItem[] = selected ? [
-    { kind: "selected", result: selected },
-    ...(expanded ? children.items.map((child) => ({ kind: "child" as const, child })) : []),
-  ] : [];
+  const selectedResult = selectedRootTaxonId === null
+    ? null
+    : taxonomySearch.results.find((result) => result.taxon_id === selectedRootTaxonId) ?? null;
+  const selectedCurrentTaxonId = selectedRootTaxonId === null
+    ? null
+    : currentTaxonForRoot(selectedRootTaxonId, hierarchyPositions);
   const resultsPane = (
     <aside className="taxonomy-results">
       <VirtualList
         stateKey="taxonomy-search.results-list"
         items={taxonomySearch.results}
-        rowHeight={62}
-        itemKey={(item) => item.summary.taxon_id}
+        rowHeight={78}
+        itemKey={(item) => item.taxon_id}
         renderItem={(item) => (
-          <TaxonCard taxon={item.summary} active={selected?.summary.taxon_id === item.summary.taxon_id} onClick={() => setSelected(item)} />
+          <TaxonCard
+            taxon={item}
+            active={selectedRootTaxonId === item.taxon_id}
+            description={taxonSearchMatchExplanation(item)}
+            onClick={() => setSelectedRootTaxonId(item.taxon_id)}
+          />
         )}
       />
+      {taxonomySearch.loading ? (
+        <div className="taxonomy-results-loading" role="status"><Busy label="Searching..." /></div>
+      ) : null}
     </aside>
   );
   const recordsPane = (
     <main className="taxonomy-records">
-      {(error || taxonomySearch.error || children.error) ? <EmptyState title="Taxonomy unavailable" detail={error || taxonomySearch.error || children.error} /> : taxonomySearch.loading ? (
+      {taxonomySearch.error ? <EmptyState title="Taxonomy unavailable" detail={taxonomySearch.error} /> : taxonomySearch.loading && selectedResult === null ? (
         <div className="taxonomy-search-loading" role="status" aria-live="polite"><Busy label="Searching taxonomy..." /></div>
-      ) : visible.length === 0 ? (
-        <EmptyState icon={Search} title={taxonId === undefined ? "Search taxonomy" : "Loading taxon"} detail="Results include accepted names and aliases." />
+      ) : !submittedQuery.trim() ? (
+        <EmptyState icon={Search} title="Search taxonomy" detail="Results include accepted names and aliases." />
+      ) : selectedResult === null || selectedCurrentTaxonId === null ? (
+        <EmptyState icon={Search} title="No taxonomy results" detail={`No taxa matched "${submittedQuery}".`} />
       ) : (
-        <VirtualList
-          stateKey="taxonomy-search.records-list"
-          items={visible}
-          rowHeight={expanded ? 194 : 250}
-          itemKey={(item) => item.kind === "selected" ? item.result.summary.taxon_id : item.child.taxon_id}
-          onNearEnd={() => void children.loadMore()}
-          renderItem={(item, index) => (
-            <TaxonRecord
-              summary={item.kind === "selected" ? item.result.summary : item.child}
-              detail={item.kind === "selected" ? item.result.detail : null}
-              breadcrumb={item.kind === "selected" ? item.result.summary.breadcrumb : []}
-              loadedChildCount={index === 0 ? node?.children.items.length ?? null : null}
-              child={item.kind === "child"}
-              expanded={expanded}
-              onToggleChildren={() => void toggleChildren()}
-              onOpenTaxon={(nextTaxonId) => void navigateTo(nextTaxonId)}
-              onOpenPhotos={onOpenPhotos}
-            />
-          )}
+        <TaxonomyHierarchyPage
+          key={selectedRootTaxonId}
+          initialTaxonId={selectedCurrentTaxonId}
+          onTaxonChange={(currentTaxonId) => setHierarchyPositions((current) => (
+            recordHierarchyPosition(current, selectedResult.taxon_id, currentTaxonId)
+          ))}
+          onOpenPhotos={onOpenPhotos}
         />
       )}
     </main>
@@ -233,8 +157,7 @@ export function TaxonomySearchView({
 
   return (
     <div className="taxonomy-search-view">
-      {taxonId === undefined && (
-        <header className="workbench-toolbar">
+      <header className="workbench-toolbar">
           <div
             className="taxonomy-search-combobox"
             ref={taxonomySearchBoxRef}
@@ -298,71 +221,18 @@ export function TaxonomySearchView({
               />
             )}
           </div>
-        </header>
-      )}
-      {taxonId === undefined ? (
-        <ResizablePanels
-          className="taxonomy-columns"
-          initialRatio={0.28}
-          minFirst={220}
-          minSecond={360}
-          separatorLabel="Resize taxonomy results and details"
-          stateKey="taxonomy-search.columns"
-          first={resultsPane}
-          second={recordsPane}
-        />
-      ) : <div className="taxonomy-columns taxonomy-columns-single">{recordsPane}</div>}
+      </header>
+      <ResizablePanels
+        className="taxonomy-columns"
+        initialRatio={0.28}
+        minFirst={220}
+        minSecond={360}
+        separatorLabel="Resize taxonomy results and details"
+        stateKey="taxonomy-search.columns"
+        first={resultsPane}
+        second={recordsPane}
+      />
     </div>
-  );
-}
-
-function TaxonRecord({
-  summary,
-  detail,
-  breadcrumb,
-  loadedChildCount,
-  child,
-  expanded,
-  onToggleChildren,
-  onOpenTaxon,
-  onOpenPhotos,
-}: {
-  summary: Pick<TaxonSummary, "taxon_id" | "rank" | "names">;
-  detail: TaxonDetail | null;
-  breadcrumb: TaxonSummary["breadcrumb"];
-  loadedChildCount: number | null;
-  child: boolean;
-  expanded: boolean;
-  onToggleChildren: () => void;
-  onOpenTaxon: (taxonId: number) => void;
-  onOpenPhotos: (taxonId: number, label: string) => void;
-}) {
-  const label = displayTaxon(summary);
-  return (
-    <article className={`taxon-record${child ? " child" : ""}`}>
-      {!child && breadcrumb.length > 0 && (
-        <div className="taxon-breadcrumb">
-          {breadcrumb.map((item) => (
-            <span key={item.taxon_id}><button type="button" onClick={() => onOpenTaxon(item.taxon_id)}>{displayTaxon(item)}</button><ChevronRight size={11} /></span>
-          ))}
-        </div>
-      )}
-      <div className="taxon-record-heading">
-        <div><span className="taxon-rank">{summary.rank}</span><strong>{label}</strong><small>Taxon {summary.taxon_id}</small></div>
-        <div className="record-actions">
-          {!child && <button type="button" onClick={onToggleChildren}>{expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}Children</button>}
-          <button type="button" onClick={() => onOpenPhotos(summary.taxon_id, label)}><Images size={14} />Photos</button>
-        </div>
-      </div>
-      <div className="taxon-name-summary">
-        <span><b>Scientific</b>{detail?.names.sci_name.name ?? summary.names.sci_name ?? "-"}</span>
-        <span><b>Chinese</b>{detail?.names.zh_name?.name ?? summary.names.zh_name ?? "-"}</span>
-        <span><b>English</b>{detail?.names.en_name?.name ?? summary.names.en_name ?? "-"}</span>
-        {detail && <span><b>Synonyms</b>{detail.names.synonyms.map((name) => name.name).join("; ") || "-"}</span>}
-        {detail && <span><b>Range</b>{detail.geological_range ?? "-"}</span>}
-        {loadedChildCount !== null && <span><b>Children loaded</b>{loadedChildCount}</span>}
-      </div>
-    </article>
   );
 }
 

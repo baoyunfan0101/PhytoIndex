@@ -66,6 +66,7 @@ import {
   FormattedUpdateView,
   TaxonomySearchView,
 } from "../features/taxonomy/TaxonomyView";
+import { TaxonomyHierarchyPage } from "../features/taxonomy/TaxonomyHierarchyPage";
 import { CustomSqlView } from "../features/taxonomy/CustomSqlView";
 import { OperationHistoryView } from "../features/operations/OperationHistoryView";
 import { useOperationObserver } from "./useOperationObserver";
@@ -77,7 +78,7 @@ import {
 import { closeAllTabsState, closeTabState } from "./tabState";
 import { nativeMenuActions, useNativeMenu } from "./nativeMenu";
 import { NativeAboutOverlay } from "./NativeAboutOverlay";
-import { getTaxonDetailNode } from "../api/taxonomy";
+import { getTaxonDetail } from "../api/taxonomy";
 import {
   restoreWorkspaceState,
   serializeWorkspaceState,
@@ -205,7 +206,7 @@ export function DesktopShell({
             ),
             taxonExists: async (taxonId) => {
               try {
-                await getTaxonDetailNode(taxonId);
+                await getTaxonDetail(taxonId);
                 return true;
               } catch {
                 return false;
@@ -655,7 +656,7 @@ function TabBody({
   if (tab.kind === "photo-history") return <OperationHistoryView domain="photo" onStatus={onStatus} />;
   if (tab.kind === "mapping") return <MappingView active={active} onStatus={onStatus} handlers={handlers} />;
   if (tab.kind === "taxonomy-search") return <TaxonomySearchView onOpenPhotos={(taxonId, label) => openTab({ id: `taxon-photos:${taxonId}`, kind: "taxon-photos", title: label, taxonId })} />;
-  if (tab.kind === "taxon-detail") return <TaxonomySearchView taxonId={tab.taxonId} onTaxonChange={(taxonId, label) => updateTaxonTab(tab.id, taxonId, label)} onOpenPhotos={(taxonId, label) => openTab({ id: `taxon-photos:${taxonId}`, kind: "taxon-photos", title: label, taxonId })} />;
+  if (tab.kind === "taxon-detail" && tab.taxonId !== undefined) return <TaxonomyHierarchyPage initialTaxonId={tab.taxonId} onTaxonChange={(taxonId, label) => updateTaxonTab(tab.id, taxonId, label)} onOpenPhotos={(taxonId, label) => openTab({ id: `taxon-photos:${taxonId}`, kind: "taxon-photos", title: label, taxonId })} />;
   if (tab.kind === "formatted-update") return <FormattedUpdateView mutationDisabled={taxonomyMutationLocked} />;
   if (tab.kind === "custom-sql") return <CustomSqlView onStatus={onStatus} mutationDisabled={taxonomyMutationLocked} />;
   if (tab.kind === "taxonomy-history") return <OperationHistoryView domain="taxonomy" onStatus={onStatus} />;

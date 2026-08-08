@@ -8,7 +8,11 @@ import {
   type PhotoMappingDetail,
 } from "../../api/mapping";
 import type { Photo } from "../../api/photos";
-import { displayTaxon, getTaxonDetailNode, type TaxonSummary } from "../../api/taxonomy";
+import {
+  displayTaxonDetail,
+  getTaxonDetail,
+  type TaxonDetail,
+} from "../../api/taxonomy";
 import { errorMessage } from "../../api/common";
 import { Busy, Button, EmptyState, VirtualList } from "../../shared/ui";
 import { PhotoStage } from "../photos/PhotoMedia";
@@ -31,7 +35,7 @@ export function MappingEditor({
   refreshKey?: number;
 }) {
   const [match, setMatch] = useViewState<PhotoMappingDetail | null>("mapping-editor.match", null);
-  const [mappedTaxon, setMappedTaxon] = useViewState<TaxonSummary | null>("mapping-editor.taxon", null);
+  const [mappedTaxon, setMappedTaxon] = useViewState<TaxonDetail | null>("mapping-editor.taxon", null);
   const [query, setQuery] = useViewState("mapping-editor.query", "");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState("");
@@ -61,7 +65,7 @@ export function MappingEditor({
       const nextMatch = { mapping, candidates };
       setMatch(nextMatch);
       if (nextMatch.mapping.status === "matched" && nextMatch.mapping.taxon_id !== null) {
-        setMappedTaxon((await getTaxonDetailNode(nextMatch.mapping.taxon_id)).summary);
+        setMappedTaxon(await getTaxonDetail(nextMatch.mapping.taxon_id));
       } else {
         setMappedTaxon(null);
       }
@@ -94,7 +98,7 @@ export function MappingEditor({
     <div className="editor-photo-column">
       <div className="two-line-heading">
         <strong>{photo.filename}</strong>
-        <span>{mappedTaxon ? displayTaxon(mappedTaxon) : match?.mapping.taxon_id ? `Taxon ${match.mapping.taxon_id}` : "No mapped taxon"}</span>
+        <span>{mappedTaxon ? displayTaxonDetail(mappedTaxon) : match?.mapping.taxon_id ? `Taxon ${match.mapping.taxon_id}` : "No mapped taxon"}</span>
       </div>
       <PhotoStage photo={photo} />
     </div>
@@ -111,7 +115,7 @@ export function MappingEditor({
         <div className="current-mapping-card">
           <div>
             <span>{mappedTaxon?.rank ?? "Taxon"}</span>
-            <strong>{mappedTaxon ? displayTaxon(mappedTaxon) : match.mapping.taxon_id}</strong>
+            <strong>{mappedTaxon ? displayTaxonDetail(mappedTaxon) : match.mapping.taxon_id}</strong>
           </div>
           <Button disabled={Boolean(busy)} onClick={() => void mutate("Clearing", () => clearPhotoMapping(photo.photo_id))}>
             <Unlink size={13} /> Clear mapping
@@ -152,17 +156,17 @@ export function MappingEditor({
         className="mapping-search-results"
         items={taxonomySearch.results}
         rowHeight={58}
-        itemKey={(item) => item.summary.taxon_id}
+        itemKey={(item) => item.taxon_id}
         renderItem={(item) => (
           <TaxonCard
             compact
-            taxon={item.summary}
+            taxon={item}
             actions={
               <>
-                <Button size="small" onClick={() => onOpenTaxon(item.summary.taxon_id)}>
+                <Button size="small" onClick={() => onOpenTaxon(item.taxon_id)}>
                   <Tags size={12} /> Go to taxonomy
                 </Button>
-                <Button size="small" disabled={Boolean(busy)} onClick={() => void mutate("Mapping", () => setPhotoMapping(photo.photo_id, item.summary.taxon_id))}>
+                <Button size="small" disabled={Boolean(busy)} onClick={() => void mutate("Mapping", () => setPhotoMapping(photo.photo_id, item.taxon_id))}>
                   <Link size={12} /> Map
                 </Button>
               </>

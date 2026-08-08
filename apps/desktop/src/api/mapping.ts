@@ -1,7 +1,13 @@
 import { call } from "./client";
 import type { Page } from "./common";
 import { demoPhotos, type Photo } from "./photos";
-import { demoTaxa, type TaxonDisplayNames, type TaxonRank, type TaxonSummary } from "./taxonomy";
+import {
+  demoTaxa,
+  demoTaxonSummary,
+  type TaxonDisplayNames,
+  type TaxonRank,
+  type TaxonSummary,
+} from "./taxonomy";
 import { demoOperation, type OperationState } from "./tasks";
 
 export type PhotoTaxonStatus = "matched" | "ambiguous" | "unmatched" | "processing";
@@ -37,7 +43,7 @@ const demoMappings = new Map<number, PhotoMappingSummary>(demoPhotos.map((photo,
   photo.photo_id,
   {
     photo_id: photo.photo_id,
-    taxon_id: index % 5 === 3 ? null : demoTaxa[index % demoTaxa.length].summary.taxon_id,
+    taxon_id: index % 5 === 3 ? null : demoTaxa[index % demoTaxa.length].taxon_id,
     status: index % 11 === 0 ? "processing" : index % 7 === 0 ? "ambiguous" : index % 5 === 3 ? "unmatched" : "matched",
   },
 ]));
@@ -54,9 +60,9 @@ export const getPhotoMappingCandidates = (photoId: number) =>
     const mapping = demoMappings.get(photoId);
     return mapping?.status === "ambiguous"
       ? demoTaxa.slice(0, 3).map((taxon) => ({
-          summary: taxon.summary,
+          summary: demoTaxonSummary(taxon),
           matched_names: taxon.matches,
-          accepted_names: taxon.summary.names,
+          accepted_names: taxon.names,
         }))
       : [];
   });
@@ -105,7 +111,7 @@ export const searchPhotosByMappingStatus = (
 export const getPhotoTaxonNode = (taxonId: number | null, showEmpty = false) =>
   call<PhotoTaxonNode>("get_photo_taxon_node", { taxonId, showEmpty }, () => ({
     taxon: taxonId
-      ? { taxon_id: taxonId, rank: "species", names: demoTaxa[0].summary.names, direct_photo_count: 12, subtree_photo_count: 12 }
+      ? { taxon_id: taxonId, rank: "species", names: demoTaxa[0].names, direct_photo_count: 12, subtree_photo_count: 12 }
       : null,
     subtree_photo_count: demoPhotos.length,
   }));
@@ -119,9 +125,9 @@ export const browsePhotoTaxon = (
     ? demoTaxa.map((taxon) => ({
         kind: "taxon" as const,
         taxon: {
-          taxon_id: taxon.summary.taxon_id,
-          rank: taxon.summary.rank,
-          names: taxon.summary.names,
+          taxon_id: taxon.taxon_id,
+          rank: taxon.rank,
+          names: taxon.names,
           direct_photo_count: 12,
           subtree_photo_count: 24,
         },

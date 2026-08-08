@@ -7,7 +7,7 @@ import {
 } from "../../api/photos";
 import { errorMessage, formatBytes } from "../../api/common";
 import { getPhotoMapping } from "../../api/mapping";
-import { displayTaxon, getTaxonDetailNode } from "../../api/taxonomy";
+import { displayTaxonDetail, getTaxonDetail } from "../../api/taxonomy";
 import { Busy, Button } from "../../shared/ui";
 import { PhotoStage } from "./PhotoMedia";
 import { useViewState } from "../../shared/viewState";
@@ -37,7 +37,7 @@ export function PhotoDetailView({ photo }: { photo: Photo }) {
       getPhotoMetadata(photo.photo_id),
       getPhotoMapping(photo.photo_id).then(async (mapping) => {
         if (mapping.status !== "matched" || mapping.taxon_id === null) return "";
-        return displayTaxon((await getTaxonDetailNode(mapping.taxon_id)).summary);
+        return displayTaxonDetail(await getTaxonDetail(mapping.taxon_id));
       }),
     ]).then(([nextMetadata, nextTaxon]) => {
       if (!active) return;
