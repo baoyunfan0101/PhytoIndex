@@ -11,7 +11,7 @@ import type {
   SaveTaxonNameGroupInput,
   TaxonNameDetail,
 } from "../../api/taxonomy";
-import { Busy, Button, IconButton } from "../../shared/ui";
+import { Button, IconButton } from "../../shared/ui";
 import {
   buildTaxonNameGroupSaveInput,
   canDeleteTaxonName,
@@ -164,11 +164,6 @@ export function TaxonNameGroupEditor({
             <Button className="taxonomy-name-add-row" size="small" disabled={busy} onClick={addRow}>
               <Plus size={13} /> Add
             </Button>
-          ) : null}
-          {busy ? (
-            <div className="taxonomy-inline-operation" role="status" aria-live="polite">
-              <Busy label="Saving name changes..." />
-            </div>
           ) : null}
           {validationError || error ? (
             <div className="inline-error" role="alert">{validationError || error}</div>

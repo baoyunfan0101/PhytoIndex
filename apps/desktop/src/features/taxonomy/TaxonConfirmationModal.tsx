@@ -1,5 +1,5 @@
 import type { TaxonNameDetail } from "../../api/taxonomy";
-import { Busy, Button, Modal } from "../../shared/ui";
+import { Button, Modal } from "../../shared/ui";
 import type { TaxonNameGroupKind } from "./taxonEditing";
 
 export type TaxonConfirmation =
@@ -50,11 +50,6 @@ export function TaxonConfirmationModal({
       )}
     >
       {content.paragraphs.map((paragraph) => <p key={paragraph}>{paragraph}</p>)}
-      {busy ? (
-        <div className="taxonomy-inline-operation" role="status" aria-live="polite">
-          <Busy label={content.busyLabel} />
-        </div>
-      ) : null}
       {error ? <div className="inline-error" role="alert">{error}</div> : null}
     </Modal>
   );

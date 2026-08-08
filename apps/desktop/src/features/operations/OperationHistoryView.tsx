@@ -104,9 +104,9 @@ export function OperationHistoryView({
     <div className="history-view">
       <SectionHeader
         title={domain === "photo" ? "Rename history" : "Taxonomy history"}
-        detail={busy || (summaries.loading
+        detail={summaries.loading
           ? "Loading operations..."
-          : `${summaries.items.length} operations loaded`)}
+          : `${summaries.items.length} operations loaded`}
         actions={(
           <>
             {domain === "taxonomy" && (
@@ -235,9 +235,9 @@ function OperationAuditDetail({
     <div className="history-view">
       <SectionHeader
         title={`${operation.kind} #${operation.operation_id}`}
-        detail={busy || (audit.loading
+        detail={audit.loading
           ? "Loading audit rows..."
-          : `${operation.applied_at} / ${operation.total_items} audit rows`)}
+          : `${operation.applied_at} / ${operation.total_items} audit rows`}
         actions={(
           <>
             <Button onClick={onBack}>

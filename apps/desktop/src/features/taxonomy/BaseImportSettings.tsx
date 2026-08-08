@@ -13,13 +13,12 @@ import {
 } from "../../api/baseImport";
 import type { PersistentSqlInput } from "../../api/customSql";
 import { errorMessage } from "../../api/common";
-import { waitForOperation, type OperationProgress } from "../../api/tasks";
+import { waitForOperation } from "../../api/tasks";
 import { CodeEditor } from "../../shared/CodeEditor";
 import { ResizablePanels } from "../../shared/ResizablePanels";
 import { Button, Modal, SectionHeader, VirtualList } from "../../shared/ui";
 import { SqlInputList } from "./SqlInputList";
 import { emitTaxonomyMutation } from "./taxonomyMutations";
-import { describeBaseImportProgress, formatElapsed } from "./baseImportProgress";
 import { formatBaseImportApplyMessage } from "./baseImportMessages";
 import { resolveSqlWorkbenchLoads } from "./sqlWorkbenchLoading";
 
@@ -31,18 +30,7 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
   const [busy, setBusy] = useState("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
-  const [validationProgress, setValidationProgress] = useState<OperationProgress | null>(null);
-  const [validationStartedAt, setValidationStartedAt] = useState<number | null>(null);
-  const [validationElapsed, setValidationElapsed] = useState(0);
   const [loadingWorkbench, setLoadingWorkbench] = useState(true);
-
-  useEffect(() => {
-    if (validationStartedAt === null) return;
-    const updateElapsed = () => setValidationElapsed(Date.now() - validationStartedAt);
-    updateElapsed();
-    const timer = window.setInterval(updateElapsed, 250);
-    return () => window.clearInterval(timer);
-  }, [validationStartedAt]);
 
   useEffect(() => {
     void Promise.allSettled([getBaseImportSql(), listBaseImportInputs()])
@@ -72,23 +60,15 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
   }
 
   async function validate() {
-    const startedAt = Date.now();
     setBusy("Validating base import");
     setMessage("");
     setError("");
     setValidation(null);
-    setValidationProgress(null);
-    setValidationStartedAt(startedAt);
-    setValidationElapsed(0);
     try {
       const started = await startBaseImportValidation(sql);
       const completed = started.task_id
-        ? await waitForOperation("base_import", started.task_id, (operation) => {
-            setValidationProgress(operation.progress);
-            setValidationElapsed(Date.now() - startedAt);
-          })
+        ? await waitForOperation("base_import", started.task_id)
         : started;
-      setValidationProgress(completed.progress);
       if (completed.error) throw new Error(completed.error);
       const result = completed.result as ValidateBaseImportResult | null;
       if (!result) throw new Error("Base import validation completed without a result");
@@ -105,19 +85,17 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
     } catch (nextError) {
       setError(errorMessage(nextError));
     } finally {
-      setValidationElapsed(Date.now() - startedAt);
-      setValidationStartedAt(null);
       setBusy("");
     }
   }
 
   async function apply() {
     setBusy("Applying base import");
-    setMessage("Replacing taxonomy database");
+    setMessage("");
     setError("");
     try {
       const operation = await applyBaseImport();
-      const completed = await waitForOperation(operation.module, operation.task_id, (next) => setMessage(next.message));
+      const completed = await waitForOperation(operation.module, operation.task_id);
       if (completed.error) throw new Error(completed.error);
       const result = completed.result as TaxonomyBaseReplaceResult | null;
       if (!result) throw new Error("Base import completed without a replacement result");
@@ -165,7 +143,7 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
         minSecond={320}
         separatorLabel="Resize Input sources"
         stateKey="base-import.inputs"
-        first={<SqlInputList inputs={inputs} busy={Boolean(busy) || loadingWorkbench} onAdd={addInput} onRemove={removeInput} />}
+        first={<SqlInputList inputs={inputs} busy={Boolean(busy) || loadingWorkbench} operation={busy} onAdd={addInput} onRemove={removeInput} />}
         second={(<div className="base-import-editor">
           <CodeEditor language="sql" ariaLabel="Base import SQL" value={sql} onChange={(value) => {
             setSql(value);
@@ -179,17 +157,6 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
         <div className="base-import-progress" role="status" aria-live="polite">
           <LoaderCircle className="spin" size={15} />
           <strong>Loading taxonomy database workspace...</strong>
-        </div>
-      ) : busy && validationStartedAt !== null ? (
-        <div className="base-import-progress" role="status" aria-live="polite">
-          <LoaderCircle className="spin" size={15} />
-          <strong>{describeBaseImportProgress(validationProgress)}</strong>
-          <span>Elapsed {formatElapsed(validationElapsed)}</span>
-        </div>
-      ) : busy ? (
-        <div className="base-import-progress" role="status" aria-live="polite">
-          <LoaderCircle className="spin" size={15} />
-          <strong>{busy}...</strong>
         </div>
       ) : message ? (
         <div className="editor-message base-import-status">{message}</div>
@@ -231,7 +198,7 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
         actions={(
           <>
             <Button disabled={Boolean(busy) || loadingWorkbench || !sql.trim()} onClick={() => void validate()}>
-              <ShieldCheck size={13} />Validate
+              <ShieldCheck size={13} />{busy === "Validating base import" ? "Validating..." : "Validate"}
             </Button>
             <Button variant="primary" disabled={Boolean(busy) || loadingWorkbench || !validation?.can_apply} onClick={() => setConfirming(true)}>
               <Send size={13} />Apply
@@ -260,7 +227,7 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
             <>
               <Button disabled={Boolean(busy)} onClick={() => setConfirming(false)}>Cancel</Button>
               <Button variant="primary" disabled={Boolean(busy)} onClick={() => void apply()}>
-                Replace taxonomy
+                {busy === "Applying base import" ? "Applying..." : "Replace taxonomy"}
               </Button>
             </>
           )}

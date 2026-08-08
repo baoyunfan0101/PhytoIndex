@@ -1,4 +1,4 @@
-import { DatabasePlus, FilePlusCorner, Table2, Trash2 } from "lucide-react";
+import { DatabasePlus, FilePlusCorner, LoaderCircle, Table2, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { selectCsvFile, selectSqliteDatabase } from "../../api/dialogs";
 import type { PersistentSqlInput } from "../../api/customSql";
@@ -14,11 +14,13 @@ type PendingSqlInput = {
 export function SqlInputList({
   inputs,
   busy,
+  operation = "",
   onAdd,
   onRemove,
 }: {
   inputs: PersistentSqlInput[];
   busy: boolean;
+  operation?: string;
   onAdd: (kind: "csv" | "sqlite", alias: string, path: string) => Promise<void>;
   onRemove: (input: PersistentSqlInput) => Promise<void>;
 }) {
@@ -62,34 +64,37 @@ export function SqlInputList({
         </IconButton>
       </header>
       {inputs.length === 0 && <span>No data sources</span>}
-      {inputs.map((input) => (
-        <section className="base-source" key={input.alias}>
-          <header>
-            <span><b>{input.alias}</b><i>{input.kind.toUpperCase()}</i></span>
-            <IconButton
-              aria-label={`Remove ${input.alias}`}
-              size="small"
-              title={`Remove ${input.alias}`}
-              disabled={busy}
-              onClick={() => void onRemove(input)}
-            >
-              <Trash2 size={12} />
-            </IconButton>
-          </header>
-          <code title={input.original_path}>{input.original_path}</code>
-          <small className={input.available ? "available" : "unavailable"}>
-            {input.available ? "Stored copy available" : "Stored copy unavailable"}
-          </small>
-          {input.schema.objects.map((object) => (
-            <details key={`${input.alias}:${object.name}`}>
-              <summary><Table2 size={12} />{object.name}</summary>
-              {object.columns.map((column) => (
-                <span key={column.name}>{column.name}<i>{column.declared_type ?? "untyped"}</i></span>
-              ))}
-            </details>
-          ))}
-        </section>
-      ))}
+      {inputs.map((input) => {
+        const removing = operation === `Removing ${input.alias}`;
+        return (
+          <section className="base-source" key={input.alias} aria-busy={removing}>
+            <header>
+              <span><b>{input.alias}</b><i>{input.kind.toUpperCase()}</i></span>
+              <IconButton
+                aria-label={removing ? `Removing ${input.alias}` : `Remove ${input.alias}`}
+                size="small"
+                title={removing ? "Removing..." : `Remove ${input.alias}`}
+                disabled={busy}
+                onClick={() => void onRemove(input)}
+              >
+                {removing ? <LoaderCircle className="spin" size={12} /> : <Trash2 size={12} />}
+              </IconButton>
+            </header>
+            <code title={input.original_path}>{input.original_path}</code>
+            <small className={input.available ? "available" : "unavailable"}>
+              {input.available ? "Stored copy available" : "Stored copy unavailable"}
+            </small>
+            {input.schema.objects.map((object) => (
+              <details key={`${input.alias}:${object.name}`}>
+                <summary><Table2 size={12} />{object.name}</summary>
+                {object.columns.map((column) => (
+                  <span key={column.name}>{column.name}<i>{column.declared_type ?? "untyped"}</i></span>
+                ))}
+              </details>
+            ))}
+          </section>
+        );
+      })}
       {pending && (
         <Modal
           title={`Add ${pending.kind === "sqlite" ? "SQLite" : "CSV"} input`}

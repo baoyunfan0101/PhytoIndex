@@ -82,7 +82,6 @@
 .taxonomy-name-add-row { justify-self: start; color: var(--accent-bright); }
 .taxonomy-save-button { border-color: var(--button-primary-hover); color: var(--on-accent); background: var(--button-primary); }
 .taxonomy-save-button:hover:not(:disabled) { background: var(--button-primary-hover); }
-.taxonomy-inline-operation { display: flex; min-height: 30px; align-items: center; padding: 6px 8px; border: 1px solid var(--line); border-radius: 3px; color: var(--muted); background: var(--panel); }
 .taxonomy-children { margin-top: 14px; border: 1px solid var(--line); border-radius: 3px; }
 .taxonomy-children-toggle { display: flex; width: 100%; min-height: 38px; align-items: center; gap: 5px; padding: 7px 9px; border: 0; text-align: left; background: var(--panel-2); }
 .taxonomy-child-list { display: grid; gap: 1px; padding: 1px 0 0; border-top: 1px solid var(--line); background: var(--line); }

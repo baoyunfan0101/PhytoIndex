@@ -332,11 +332,9 @@ export function FormattedUpdateView({ mutationDisabled = false }: { mutationDisa
     }
   }
 
-  const busyLabel = formattedBusyLabel(busy);
-
   return (
     <div className="formatted-view">
-      <SectionHeader title="Formatted update" detail={busyLabel || `Pipe-delimited UTF-8 input or direct table editing. Multiple names use "${separator}".`} actions={
+      <SectionHeader title="Formatted update" detail={`Pipe-delimited UTF-8 input or direct table editing. Multiple names use "${separator}".`} actions={
         <>
           <label className={`button button-secondary file-button${busy ? " disabled" : ""}`}><FileUp size={13} />{busy === "import" ? "Importing..." : "Upload CSV"}<input disabled={Boolean(busy)} type="file" accept=".csv,text/csv" onChange={(event) => {
             const file = event.target.files?.[0];
@@ -379,7 +377,7 @@ export function FormattedUpdateView({ mutationDisabled = false }: { mutationDisa
         <Button className="table-add-row" variant="ghost" disabled={Boolean(busy)} onClick={() => setRows((current) => [...current, {}])}>+ Add row</Button>
         </div>)}
         second={(<div className="formatted-log">
-        <SectionHeader title="Result log" detail={busyLabel || message || "Preview and apply return the same log format"} />
+        <SectionHeader title="Result log" detail={message || "Preview and apply return the same log format"} />
         <VirtualList
           items={outcomes}
           rowHeight={64}
@@ -396,12 +394,4 @@ export function FormattedUpdateView({ mutationDisabled = false }: { mutationDisa
       />
     </div>
   );
-}
-
-function formattedBusyLabel(busy: FormattedBusy): string {
-  if (busy === "import") return "Importing and parsing CSV...";
-  if (busy === "template") return "Loading taxonomy template...";
-  if (busy === "preview") return "Previewing taxonomy changes...";
-  if (busy === "apply") return "Applying taxonomy changes...";
-  return "";
 }

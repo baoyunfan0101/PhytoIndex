@@ -117,7 +117,7 @@ export function CustomSqlView({
       minSecond={320}
       separatorLabel="Resize Input sources"
       stateKey="custom-sql.inputs"
-      first={<SqlInputList inputs={inputs} busy={Boolean(busy) || loadingWorkbench} onAdd={addInput} onRemove={removeInput} />}
+      first={<SqlInputList inputs={inputs} busy={Boolean(busy) || loadingWorkbench} operation={busy} onAdd={addInput} onRemove={removeInput} />}
       second={(<div className="custom-sql-editor">
         <CodeEditor language="sql" ariaLabel="Custom taxonomy SQL" value={sql} onChange={setSql} />
       </div>)}
@@ -129,9 +129,9 @@ export function CustomSqlView({
       {workbench}
       {error ? (
         <div className="inline-error" role="alert">{error}</div>
-      ) : busy || loadingWorkbench ? (
+      ) : loadingWorkbench ? (
         <div className="editor-message" role="status" aria-live="polite">
-          <Busy label={busy || "Loading custom SQL workspace..."} />
+          <Busy label="Loading custom SQL workspace..." />
         </div>
       ) : null}
     </div>
@@ -145,7 +145,7 @@ export function CustomSqlView({
         <span>{result.script_saved ? "Script saved" : "Script not saved"}</span>
         {canExportFullQuery(result) && (
           <Button disabled={Boolean(busy)} onClick={() => void exportQuery()}>
-            <Download size={13} />Export full query
+            <Download size={13} />{busy === "Exporting full query" ? "Exporting..." : "Export full query"}
           </Button>
         )}
       </div>
@@ -168,7 +168,7 @@ export function CustomSqlView({
         detail="Execute typed SQL against taxonomy and file-path data sources"
         actions={(
           <Button variant="primary" disabled={Boolean(busy) || loadingWorkbench || !sql.trim() || mutationDisabled} onClick={() => void execute()}>
-            <Play size={13} />Run
+            <Play size={13} />{busy === "Executing SQL" ? "Running..." : "Run"}
           </Button>
         )}
       />
