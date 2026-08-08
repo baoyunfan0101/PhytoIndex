@@ -75,6 +75,9 @@ states search filename only.
 | `get_photo_taxon_node` | `taxon_id: Option<i64>`, `show_empty: bool` | `PhotoTaxonNode` | Load one photo taxonomy node or the virtual root. |
 | `browse_photo_taxon` | `taxon_id: Option<i64>`, `show_empty: bool`, `cursor: Option<&str>`, `limit: usize` | `PhotoPage<PhotoTaxonItem>` | Browse direct child taxa followed by directly mapped photos. |
 
+The desktop `suggest_photo_taxa` command executes the database lookup on a
+blocking worker and resolves asynchronously.
+
 `PhotoTaxonUsage` contains `taxon_id`, `rank`, accepted `names`,
 `direct_photo_count`, and `subtree_photo_count`.
 `PhotoTaxonNode` contains the optional selected `taxon` and its

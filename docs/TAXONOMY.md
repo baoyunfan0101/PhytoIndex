@@ -70,7 +70,8 @@ detail and breadcrumb content for autocomplete.
 Both interfaces use the same canonical normalization and ranked order:
 exact, full prefix, word prefix, substring, then fuzzy. Blank input returns
 an empty vector. These taxonomy-only interfaces remain available when the
-active photo library is offline.
+active photo library is offline. The desktop `suggest_taxa` command executes
+the database lookup on a blocking worker and resolves asynchronously.
 
 ## Formatted update
 

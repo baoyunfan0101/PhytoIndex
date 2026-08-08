@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { startTransition, useEffect, useRef, useState } from "react";
 import { suggestPhotoTaxa, type TaxonSuggestion } from "../../../api/taxonomy";
+import { SUGGESTION_DEBOUNCE_MS } from "../../../shared/suggestionNavigation";
 import { normalizeSearchQuery } from "./recentSearchStorage";
 
 export function useSearchSuggestions(query: string, enabled = true) {
@@ -16,22 +17,28 @@ export function useSearchSuggestions(query: string, enabled = true) {
       return;
     }
 
-    setSuggestions([]);
+    startTransition(() => {
+      if (requestGeneration.current === generation) setSuggestions([]);
+    });
     const timer = window.setTimeout(() => {
       setLoading(true);
       void suggestPhotoTaxa(value)
         .then((next) => {
           if (requestGeneration.current !== generation) return;
-          setSuggestions(next);
+          startTransition(() => {
+            if (requestGeneration.current === generation) setSuggestions(next);
+          });
         })
         .catch(() => {
           if (requestGeneration.current !== generation) return;
-          setSuggestions([]);
+          startTransition(() => {
+            if (requestGeneration.current === generation) setSuggestions([]);
+          });
         })
         .finally(() => {
           if (requestGeneration.current === generation) setLoading(false);
         });
-    }, 160);
+    }, SUGGESTION_DEBOUNCE_MS);
 
     return () => window.clearTimeout(timer);
   }, [enabled, query]);

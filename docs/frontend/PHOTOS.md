@@ -82,8 +82,9 @@ Enter submits the selected suggestion or normalized input.
 
 ### Search state helpers
 
-`useSearchSuggestions(query, enabled)` returns debounced suggestions and a
-loading flag. Only the latest request may update its result.
+`useSearchSuggestions(query, enabled)` waits for a 260 ms input pause, then
+returns photo-backed taxon suggestions and a loading flag. Suggestion results
+render as a low-priority update, and only the latest request may update them.
 
 `usePhotoSearch(onSubmit)` returns the controlled query, submission error,
 query setter, and asynchronous submit function.

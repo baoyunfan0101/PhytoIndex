@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { startTransition, useEffect, useRef, useState } from "react";
 import { suggestTaxa, type TaxonSuggestion } from "../../api/taxonomy";
+import { SUGGESTION_DEBOUNCE_MS } from "../../shared/suggestionNavigation";
 
 export function useTaxonSuggestions(query: string, enabled = true) {
   const [suggestions, setSuggestions] = useState<TaxonSuggestion[]>([]);
@@ -15,20 +16,30 @@ export function useTaxonSuggestions(query: string, enabled = true) {
       return;
     }
 
-    setSuggestions([]);
+    startTransition(() => {
+      if (requestGeneration.current === generation) setSuggestions([]);
+    });
     const timer = window.setTimeout(() => {
       setLoading(true);
       void suggestTaxa(value)
         .then((next) => {
-          if (requestGeneration.current === generation) setSuggestions(next);
+          if (requestGeneration.current === generation) {
+            startTransition(() => {
+              if (requestGeneration.current === generation) setSuggestions(next);
+            });
+          }
         })
         .catch(() => {
-          if (requestGeneration.current === generation) setSuggestions([]);
+          if (requestGeneration.current === generation) {
+            startTransition(() => {
+              if (requestGeneration.current === generation) setSuggestions([]);
+            });
+          }
         })
         .finally(() => {
           if (requestGeneration.current === generation) setLoading(false);
         });
-    }, 160);
+    }, SUGGESTION_DEBOUNCE_MS);
 
     return () => window.clearTimeout(timer);
   }, [enabled, query]);

@@ -1,3 +1,5 @@
+export const SUGGESTION_DEBOUNCE_MS = 260;
+
 export function moveSuggestionSelection(
   currentIndex: number,
   suggestionCount: number,

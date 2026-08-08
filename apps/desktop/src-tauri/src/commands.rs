@@ -650,12 +650,17 @@ pub fn search_taxa(
 }
 
 #[tauri::command]
-pub fn suggest_taxa(
+pub async fn suggest_taxa(
     state: State<'_, AppState>,
     query: String,
     limit: Option<usize>,
 ) -> CommandResult<Vec<TaxonSuggestion>> {
-    taxonomy::suggest_taxa(&state.database, &query, limit.unwrap_or(10)).map_err(error)
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        taxonomy::suggest_taxa(&database, &query, limit.unwrap_or(10)).map_err(error)
+    })
+    .await
+    .map_err(error)?
 }
 
 #[tauri::command]
@@ -1116,12 +1121,17 @@ pub fn search_photo_taxa(
 }
 
 #[tauri::command]
-pub fn suggest_photo_taxa(
+pub async fn suggest_photo_taxa(
     state: State<'_, AppState>,
     query: String,
     limit: Option<usize>,
 ) -> CommandResult<Vec<TaxonSuggestion>> {
-    mapping::suggest_photo_taxa(&state.database, &query, limit.unwrap_or(10)).map_err(error)
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        mapping::suggest_photo_taxa(&database, &query, limit.unwrap_or(10)).map_err(error)
+    })
+    .await
+    .map_err(error)?
 }
 
 #[tauri::command]

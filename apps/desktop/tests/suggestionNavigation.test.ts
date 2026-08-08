@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { moveSuggestionSelection } from "../src/shared/suggestionNavigation.ts";
+import {
+  SUGGESTION_DEBOUNCE_MS,
+  moveSuggestionSelection,
+} from "../src/shared/suggestionNavigation.ts";
+
+test("waits for a short typing pause before loading suggestions", () => {
+  assert.equal(SUGGESTION_DEBOUNCE_MS, 260);
+});
 
 test("moves down from the input into suggestions without wrapping", () => {
   assert.equal(moveSuggestionSelection(-1, 3, 1), 0);

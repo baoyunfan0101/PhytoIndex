@@ -14,7 +14,9 @@ Parameters include an optional selected taxon, a callback for the currently
 displayed taxon, and a callback for opening taxon photos.
 
 Returns: taxon search results or a single-taxon page with breadcrumb and child
-navigation. Search and mapping reuse `useTaxonSearch`.
+navigation. Typing requests lightweight suggestions after a 260 ms input
+pause. Arrow keys select a suggestion, and Enter or a pointer selection
+submits the full search.
 
 ### `FormattedUpdateView({ mutationDisabled })`
 
@@ -45,6 +47,8 @@ with minimum sizes appropriate to their controls.
 ## Reusable interfaces
 
 `TaxonCard` renders a `TaxonSummary` with optional selection and actions.
-`useTaxonSearch(query, options)` returns debounced results, loading state, and
-an error message. `emitTaxonomyMutation` and `useTaxonomyMutation` coordinate
-refresh after committed taxonomy changes.
+`useTaxonSuggestions(query, enabled)` returns lightweight suggestions after a
+260 ms input pause; only the latest request may publish its low-priority
+result. `useTaxonSearch(query, options)` returns submitted search results,
+loading state, and an error message. `emitTaxonomyMutation` and
+`useTaxonomyMutation` coordinate refresh after committed taxonomy changes.
