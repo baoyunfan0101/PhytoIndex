@@ -50,6 +50,8 @@ import {
   type PhotoLibraryWorkspace,
 } from "../../api/storage";
 import { getMapSettings, setMapSettings, type MapSettings } from "../../api/map";
+import { startPhotoMapping } from "../../api/mapping";
+import { waitForOperation } from "../../api/tasks";
 import { getTaxonomyBaseMetadata, type TaxonomyBaseMetadata } from "../../api/baseImport";
 import {
   getNamingHookSettings,
@@ -75,11 +77,14 @@ import { Button, IconButton, SectionHeader } from "../../shared/ui";
 import { CodeEditor } from "../../shared/CodeEditor";
 import { ResizablePanels } from "../../shared/ResizablePanels";
 import { BaseImportSettings } from "../taxonomy/BaseImportSettings";
+import { emitPhotoMutation } from "../photos/photoMutations";
 import { emitMetadataChange } from "../../shared/metadataChanges";
 import {
   defaultPhotoFilenameFormatSettings,
   normalizePhotoFilenameFormatSettings,
+  photoFilenameFormatChanged,
   photoFilenameFormatFields,
+  photoNamePriorityChanged,
   photoNamePriorityFields,
   photoNamePriorityLabels,
 } from "./namingSettings";
@@ -573,6 +578,10 @@ function NamingSettings() {
   const [separator, setSeparator] = useState(";");
   const [loadError, setLoadError] = useState("");
   const [message, setMessage] = useState("");
+  const [saving, setSaving] = useState(false);
+  const savedPriority = useRef<PhotoNameField[]>([...photoNamePriorityFields]);
+  const savedFormat = useRef<PhotoFilenameFormatSettings>(defaultPhotoFilenameFormatSettings());
+  const savedSeparator = useRef(";");
   useEffect(() => {
     let active = true;
     void Promise.allSettled([
@@ -582,14 +591,22 @@ function NamingSettings() {
     ]).then(([matchResult, formatResult, separatorResult]) => {
       if (!active) return;
       const errors: string[] = [];
-      if (matchResult.status === "fulfilled") setPriority(matchResult.value.priority);
+      if (matchResult.status === "fulfilled") {
+        setPriority(matchResult.value.priority);
+        savedPriority.current = [...matchResult.value.priority];
+      }
       else errors.push(`Mapping priority: ${errorMessage(matchResult.reason)}`);
       if (formatResult.status === "fulfilled") {
-        setFormat(normalizePhotoFilenameFormatSettings(formatResult.value));
+        const loadedFormat = normalizePhotoFilenameFormatSettings(formatResult.value);
+        setFormat(loadedFormat);
+        savedFormat.current = loadedFormat;
       } else {
         errors.push(`Photo filename format: ${errorMessage(formatResult.reason)}. Showing defaults.`);
       }
-      if (separatorResult.status === "fulfilled") setSeparator(separatorResult.value);
+      if (separatorResult.status === "fulfilled") {
+        setSeparator(separatorResult.value);
+        savedSeparator.current = separatorResult.value;
+      }
       else errors.push(`Multiple-name separator: ${errorMessage(separatorResult.reason)}`);
       setLoadError(errors.join(" "));
     });
@@ -605,22 +622,48 @@ function NamingSettings() {
   }
 
   async function save() {
+    const priorityChanged = photoNamePriorityChanged(savedPriority.current, priority);
+    const formatChanged = photoFilenameFormatChanged(savedFormat.current, format);
+    const separatorChanged = savedSeparator.current !== separator;
+    if (!priorityChanged && !formatChanged && !separatorChanged) {
+      setMessage("No naming changes to save.");
+      return;
+    }
+    setSaving(true);
     try {
-      await Promise.all([
-        setPhotoNameMatchSettings({ priority }),
-        setPhotoFilenameFormatSettings(format),
-        setTaxonomyNameSeparator(separator),
-      ]);
-      emitMetadataChange({ key: "taxonomy_name_separator", value: separator });
-      setMessage("Naming metadata saved. Photos have been queued for remapping.");
+      const updates: Promise<void>[] = [];
+      if (priorityChanged) updates.push(setPhotoNameMatchSettings({ priority }));
+      if (formatChanged) updates.push(setPhotoFilenameFormatSettings(format));
+      if (separatorChanged) updates.push(setTaxonomyNameSeparator(separator));
+      await Promise.all(updates);
+
+      if (formatChanged) savedFormat.current = { ...format };
+      if (separatorChanged) {
+        savedSeparator.current = separator;
+        emitMetadataChange({ key: "taxonomy_name_separator", value: separator });
+      }
+
+      if (priorityChanged) {
+        setMessage("Naming settings saved. Remapping photos...");
+        const started = await startPhotoMapping();
+        const operation = await waitForOperation("mapping", started.operation.task_id);
+        if (operation.error) throw new Error(operation.error);
+        savedPriority.current = [...priority];
+        emitPhotoMutation({ photoId: null, kind: "mapping" });
+        setMessage("Naming settings saved. Photo mapping complete.");
+      } else {
+        setMessage("Naming settings saved.");
+      }
     } catch (nextError) {
       setMessage(errorMessage(nextError));
+    } finally {
+      setSaving(false);
     }
   }
 
   return (
     <div className="settings-section">
-      <SectionHeader title="Naming" detail="Configure taxonomy matching and mapped-photo filename generation." actions={<Button variant="primary" onClick={() => void save()}><Save size={13} />Save</Button>} />
+      <SectionHeader title="Naming" detail="Configure taxonomy matching and mapped-photo filename generation." actions={<Button variant="primary" disabled={saving} onClick={() => void save()}><Save size={13} />Save</Button>} />
       <div className="field-stack">
         <span><strong>Mapping name priority</strong></span>
         <div className="priority-list">

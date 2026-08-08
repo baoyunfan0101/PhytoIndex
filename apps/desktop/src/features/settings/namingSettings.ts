@@ -48,3 +48,17 @@ export function normalizePhotoFilenameFormatSettings(
   }
   return settings;
 }
+
+export function photoNamePriorityChanged(
+  saved: readonly string[],
+  current: readonly string[],
+): boolean {
+  return saved.length !== current.length || saved.some((field, index) => field !== current[index]);
+}
+
+export function photoFilenameFormatChanged(
+  saved: PhotoFilenameFormatValue,
+  current: PhotoFilenameFormatValue,
+): boolean {
+  return photoFilenameFormatFields.some(({ field }) => saved[field] !== current[field]);
+}
