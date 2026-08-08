@@ -4,6 +4,7 @@ import { SearchInput } from "./SearchInput";
 import { SearchSuggestions, suggestionLabel } from "./SearchSuggestions";
 import type { PhotoSearchController } from "./usePhotoSearch";
 import { useSearchSuggestions } from "./useSearchSuggestions";
+import { moveSuggestionSelection } from "../../../shared/suggestionNavigation";
 
 export function PhotoSearch({
   autoFocus = false,
@@ -57,12 +58,12 @@ export function PhotoSearch({
           if (event.nativeEvent.isComposing) return;
           if (suggestions.length > 0 && event.key === "ArrowDown") {
             event.preventDefault();
-            setSelectedIndex((current) => current < suggestions.length - 1 ? current + 1 : 0);
+            setSelectedIndex((current) => moveSuggestionSelection(current, suggestions.length, 1));
             return;
           }
           if (suggestions.length > 0 && event.key === "ArrowUp") {
             event.preventDefault();
-            setSelectedIndex((current) => current > 0 ? current - 1 : suggestions.length - 1);
+            setSelectedIndex((current) => moveSuggestionSelection(current, suggestions.length, -1));
             return;
           }
           if (event.key === "ArrowRight" && selectedIndex >= 0) {

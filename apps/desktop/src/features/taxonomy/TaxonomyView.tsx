@@ -35,6 +35,9 @@ import { useTaxonSearch } from "./useTaxonSearch";
 import { useViewState } from "../../shared/viewState";
 import { emitTaxonomyMutation, useTaxonomyMutation } from "./taxonomyMutations";
 import { ResizablePanels } from "../../shared/ResizablePanels";
+import { moveSuggestionSelection } from "../../shared/suggestionNavigation";
+import { SearchSuggestions, suggestionLabel } from "../photos/search/SearchSuggestions";
+import { useTaxonSuggestions } from "./useTaxonSuggestions";
 
 type TaxonomyRecordItem =
   | { kind: "selected"; result: TaxonSearchResult }
@@ -50,18 +53,22 @@ export function TaxonomySearchView({
   onOpenPhotos: (taxonId: number, label: string) => void;
 }) {
   const [query, setQuery] = useViewState("taxonomy-search.query", "");
+  const [submittedQuery, setSubmittedQuery] = useViewState("taxonomy-search.submitted-query", query);
   const [selected, setSelected] = useViewState<TaxonSearchResult | null>("taxonomy-search.selected", null);
   const [node, setNode] = useViewState<TaxonDetailNode | null>("taxonomy-search.node", null);
   const [expanded, setExpanded] = useViewState("taxonomy-search.expanded", false);
   const [error, setError] = useState("");
   const [refreshKey, setRefreshKey] = useState(0);
+  const [selectedSuggestionIndex, setSelectedSuggestionIndex] = useState(-1);
+  const [suggestionsOpen, setSuggestionsOpen] = useState(false);
   const loadedTaxonId = useRef<number | null>(null);
   const selectedTaxonId = useRef(selected?.summary.taxon_id ?? null);
-  const taxonomySearch = useTaxonSearch(query, {
+  const taxonomySearch = useTaxonSearch(submittedQuery, {
     enabled: taxonId === undefined,
     stateKey: "taxonomy-search.results",
     refreshKey,
   });
+  const taxonomySuggestions = useTaxonSuggestions(query, taxonId === undefined);
   const children = useCursorPage<TaxonChild, number | null>({
     params: selected?.summary.taxon_id ?? null,
     resetKey: selected?.summary.taxon_id ?? null,
@@ -77,6 +84,16 @@ export function TaxonomySearchView({
   });
 
   useEffect(() => {
+    setSelectedSuggestionIndex(-1);
+  }, [query]);
+
+  useEffect(() => {
+    if (selectedSuggestionIndex >= taxonomySuggestions.suggestions.length) {
+      setSelectedSuggestionIndex(-1);
+    }
+  }, [selectedSuggestionIndex, taxonomySuggestions.suggestions.length]);
+
+  useEffect(() => {
     if (taxonId === undefined) return;
     if (loadedTaxonId.current === taxonId) return;
     getTaxonDetailNode(taxonId).then((next) => {
@@ -89,7 +106,7 @@ export function TaxonomySearchView({
 
   useEffect(() => {
     if (taxonId !== undefined) return;
-    if (!query.trim()) {
+    if (!submittedQuery.trim()) {
       setSelected(null);
       setNode(null);
       return;
@@ -99,7 +116,7 @@ export function TaxonomySearchView({
         ?? taxonomySearch.results[0]
         ?? null
       : taxonomySearch.results[0] ?? null);
-  }, [query, taxonId, taxonomySearch.results]);
+  }, [submittedQuery, taxonId, taxonomySearch.results]);
 
   useEffect(() => {
     if (!selected) {
@@ -137,6 +154,18 @@ export function TaxonomySearchView({
     } catch (nextError) {
       setError(errorMessage(nextError));
     }
+  }
+
+  function submitTaxonomySearch(value = query) {
+    const normalized = value.trim();
+    if (!normalized) return;
+    setQuery(normalized);
+    setSubmittedQuery(normalized);
+    setSelected(null);
+    setNode(null);
+    setError("");
+    setSelectedSuggestionIndex(-1);
+    setSuggestionsOpen(false);
   }
 
   const visible: TaxonomyRecordItem[] = selected ? [
@@ -189,18 +218,58 @@ export function TaxonomySearchView({
     <div className="taxonomy-search-view">
       {taxonId === undefined && (
         <header className="workbench-toolbar">
-          <label className="search-field taxonomy-search-field">
-            <Search size={14} />
-            <input
-              autoFocus
-              autoCapitalize="none"
-              autoCorrect="off"
-              spellCheck={false}
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search scientific, Chinese, or English names"
-            />
-          </label>
+          <div className="taxonomy-search-combobox">
+            <label className="search-field taxonomy-search-field">
+              <Search size={14} />
+              <input
+                role="combobox"
+                aria-autocomplete="list"
+                aria-controls="taxonomy-search-suggestions-listbox"
+                aria-expanded={suggestionsOpen && taxonomySuggestions.suggestions.length > 0}
+                aria-activedescendant={selectedSuggestionIndex >= 0 ? `taxonomy-search-suggestions-option-${selectedSuggestionIndex}` : undefined}
+                autoFocus
+                autoCapitalize="none"
+                autoComplete="off"
+                autoCorrect="off"
+                spellCheck={false}
+                value={query}
+                onChange={(event) => {
+                  setQuery(event.target.value);
+                  setSuggestionsOpen(true);
+                }}
+                onKeyDown={(event) => {
+                  if (event.nativeEvent.isComposing) return;
+                  const suggestions = taxonomySuggestions.suggestions;
+                  if (suggestions.length > 0 && event.key === "ArrowDown") {
+                    event.preventDefault();
+                    setSuggestionsOpen(true);
+                    setSelectedSuggestionIndex((current) => moveSuggestionSelection(current, suggestions.length, 1));
+                    return;
+                  }
+                  if (suggestions.length > 0 && event.key === "ArrowUp") {
+                    event.preventDefault();
+                    setSelectedSuggestionIndex((current) => moveSuggestionSelection(current, suggestions.length, -1));
+                    return;
+                  }
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    const suggestion = suggestions[selectedSuggestionIndex];
+                    submitTaxonomySearch(suggestion ? suggestionLabel(suggestion, query) : query);
+                  }
+                }}
+                placeholder="Search scientific, Chinese, or English names"
+              />
+            </label>
+            {suggestionsOpen && query.trim() && (
+              <SearchSuggestions
+                idPrefix="taxonomy-search-suggestions"
+                suggestions={taxonomySuggestions.suggestions}
+                selectedIndex={selectedSuggestionIndex}
+                onHover={setSelectedSuggestionIndex}
+                onSelect={(suggestion) => submitTaxonomySearch(suggestionLabel(suggestion, query))}
+              />
+            )}
+          </div>
         </header>
       )}
       {taxonId === undefined ? (

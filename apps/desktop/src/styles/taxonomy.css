@@ -11,7 +11,19 @@
 .two-line-heading span { color: var(--muted); }
 
 .taxonomy-search-view { display: grid; height: 100%; min-height: 0; grid-template-rows: auto minmax(0, 1fr); }
-.taxonomy-search-field { width: min(680px, 78vw); }
+.taxonomy-search-combobox { position: relative; width: min(680px, 78vw); }
+.taxonomy-search-field { width: 100%; }
+.taxonomy-search-combobox .photo-search-suggestions {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 3px);
+  right: 0;
+  left: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
+  background: var(--popover);
+  box-shadow: 0 10px 30px var(--shadow);
+}
 .taxonomy-columns { min-height: 0; }
 .taxonomy-columns-single { display: block; }
 .taxonomy-results { height: 100%; min-height: 0; }
