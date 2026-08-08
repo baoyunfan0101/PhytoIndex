@@ -49,7 +49,9 @@ with minimum sizes appropriate to their controls.
 
 ## Reusable interfaces
 
-`TaxonCard` renders a `TaxonSummary` with optional selection and actions.
+`TaxonCard` renders a `TaxonSummary` with optional selection and actions. Its
+third line displays available Chinese and English names separated by a middle
+dot, or a dash when both names are absent.
 `useTaxonSuggestions(query, enabled)` returns lightweight suggestions after a
 260 ms input pause; only the latest request may publish its low-priority
 result. `useTaxonSearch(query, options)` returns submitted search results,

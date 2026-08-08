@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { displayTaxon, type TaxonSummary } from "../../api/taxonomy";
+import { taxonCommonNameLine } from "./taxonCardNames";
 
 export function TaxonCard({
   taxon,
@@ -19,7 +20,7 @@ export function TaxonCard({
       <button className="taxon-card-main" type="button" onClick={onClick}>
         <span className="taxon-rank">{taxon.rank}</span>
         <strong>{displayTaxon(taxon)}</strong>
-        <span>{taxon.names.zh_name ?? taxon.names.en_name ?? "No common name"}</span>
+        <span>{taxonCommonNameLine(taxon.names)}</span>
       </button>
       {actions && <div className="taxon-card-actions">{actions}</div>}
     </article>
