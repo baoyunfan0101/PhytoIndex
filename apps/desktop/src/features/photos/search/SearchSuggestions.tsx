@@ -34,10 +34,26 @@ export function SearchSuggestions({
           onMouseEnter={() => onHover(index)}
           onClick={() => onSelect(suggestion)}
         >
-          <strong>{suggestion.names.sci_name ?? `Taxon ${suggestion.taxon_id}`}</strong>
-          <span>{suggestion.rank} / {suggestion.names.zh_name ?? suggestion.names.en_name ?? ""}</span>
+          <SuggestionNames suggestion={suggestion} />
+          <span className="suggestion-rank">{suggestion.rank}</span>
         </button>
       ))}
+    </div>
+  );
+}
+
+function SuggestionNames({ suggestion }: { suggestion: TaxonSuggestion }) {
+  const { sci_name: scientific, zh_name: chinese, en_name: english } = suggestion.names;
+  if (!scientific && !chinese && !english) {
+    return <div className="suggestion-name-line"><span>Taxon {suggestion.taxon_id}</span></div>;
+  }
+  return (
+    <div className="suggestion-name-line">
+      {scientific && <strong>{scientific}</strong>}
+      {scientific && chinese && <span className="suggestion-separator">{"\u00b7"}</span>}
+      {chinese && <span>{chinese}</span>}
+      {(scientific || chinese) && english && <span className="suggestion-separator">{"\u00b7"}</span>}
+      {english && <span>{english}</span>}
     </div>
   );
 }

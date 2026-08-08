@@ -54,6 +54,11 @@
 .photo-search-suggestions > button:hover, .photo-search-suggestions > button.active { background: var(--active); }
 .photo-search-suggestions strong { font-weight: 500; }
 .photo-search-suggestions span { color: var(--muted); }
+.suggestion-name-line { display: flex; min-width: 0; align-items: baseline; gap: 5px; overflow: hidden; color: var(--text); white-space: nowrap; }
+.photo-search-suggestions .suggestion-name-line > span:not(.suggestion-separator) { overflow: hidden; color: inherit; text-overflow: ellipsis; }
+.suggestion-name-line strong { overflow: hidden; flex: 0 1 auto; text-overflow: ellipsis; }
+.photo-search-suggestions .suggestion-separator { flex: 0 0 auto; color: var(--quiet); }
+.suggestion-rank { font-size: 10px; text-transform: capitalize; }
 .photo-search-error { padding: 8px 12px; border-top: 1px solid var(--red); color: var(--danger-text); background: var(--danger-bg); }
 .recent-searches { margin-top: 16px; }
 .recent-searches > header {
@@ -80,6 +85,7 @@
 
 .photo-browser { width: 100%; height: 100%; min-height: 0; }
 .photo-browser-list, .photo-browser-main { display: grid; width: 100%; height: 100%; min-width: 0; min-height: 0; grid-template-rows: 46px minmax(0, 1fr); }
+.photo-browser-loading { display: grid; place-items: center; }
 .photo-browser-list { background: var(--panel); }
 .photo-list-row, .finder-row, .mapping-photo-row {
   display: flex;

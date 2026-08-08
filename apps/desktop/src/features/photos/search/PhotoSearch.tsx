@@ -20,8 +20,10 @@ export function PhotoSearch({
   inputRef?: RefObject<HTMLInputElement>;
 }) {
   const localInputRef = useRef<HTMLInputElement>(null);
+  const searchRootRef = useRef<HTMLDivElement>(null);
   const resolvedInputRef = inputRef ?? localInputRef;
   const [selectedIndex, setSelectedIndex] = useState(-1);
+  const [suggestionsOpen, setSuggestionsOpen] = useState(false);
   const { suggestions } = useSearchSuggestions(controller.query, enabled);
   const hasQuery = Boolean(normalizeSearchQuery(controller.query));
 
@@ -37,27 +39,50 @@ export function PhotoSearch({
     if (autoFocus) resolvedInputRef.current?.focus();
   }, [autoFocus, resolvedInputRef]);
 
+  useEffect(() => {
+    const closeSuggestions = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Node && !searchRootRef.current?.contains(target)) {
+        setSuggestionsOpen(false);
+        setSelectedIndex(-1);
+      }
+    };
+    document.addEventListener("pointerdown", closeSuggestions);
+    return () => document.removeEventListener("pointerdown", closeSuggestions);
+  }, []);
+
   function submitSuggestion(index: number) {
     const suggestion = suggestions[index];
     if (!suggestion) return;
     const value = suggestionLabel(suggestion, controller.query);
     controller.setQuery(value);
+    setSuggestionsOpen(false);
     void controller.submit(value);
   }
 
   return (
-    <div className="photo-search">
+    <div
+      className="photo-search"
+      ref={searchRootRef}
+      onFocusCapture={() => {
+        if (hasQuery) setSuggestionsOpen(true);
+      }}
+    >
       <SearchInput
         activeDescendant={selectedIndex >= 0 ? `${idPrefix}-option-${selectedIndex}` : undefined}
-        expanded={hasQuery && suggestions.length > 0}
+        expanded={suggestionsOpen && hasQuery && suggestions.length > 0}
         inputRef={resolvedInputRef}
         listboxId={`${idPrefix}-listbox`}
         value={controller.query}
-        onChange={controller.setQuery}
+        onChange={(value) => {
+          controller.setQuery(value);
+          setSuggestionsOpen(true);
+        }}
         onKeyDown={(event) => {
           if (event.nativeEvent.isComposing) return;
           if (suggestions.length > 0 && event.key === "ArrowDown") {
             event.preventDefault();
+            setSuggestionsOpen(true);
             setSelectedIndex((current) => moveSuggestionSelection(current, suggestions.length, 1));
             return;
           }
@@ -75,11 +100,19 @@ export function PhotoSearch({
           if (event.key === "Enter") {
             event.preventDefault();
             if (selectedIndex >= 0) submitSuggestion(selectedIndex);
-            else void controller.submit();
+            else {
+              setSuggestionsOpen(false);
+              void controller.submit();
+            }
+            return;
+          }
+          if (event.key === "Escape") {
+            setSuggestionsOpen(false);
+            setSelectedIndex(-1);
           }
         }}
       />
-      {hasQuery && (
+      {suggestionsOpen && hasQuery && (
         <SearchSuggestions
           idPrefix={idPrefix}
           suggestions={suggestions}
@@ -88,6 +121,7 @@ export function PhotoSearch({
           onSelect={(suggestion) => {
             const value = suggestionLabel(suggestion, controller.query);
             controller.setQuery(value);
+            setSuggestionsOpen(false);
             void controller.submit(value);
           }}
         />

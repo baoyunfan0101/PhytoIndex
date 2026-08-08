@@ -2,6 +2,7 @@ import { Image as ImageIcon, Rows3 } from "lucide-react";
 import { useMemo } from "react";
 import type { Photo } from "../../api/photos";
 import {
+  Busy,
   Segmented,
   VirtualGrid,
   VirtualList,
@@ -19,11 +20,13 @@ type DisplayMode = "Thumbnails" | "Image";
 export function PhotoBrowser({
   title,
   detail,
+  loadingLabel = "Loading photos...",
   page,
   handlers,
 }: {
   title: string;
   detail?: string;
+  loadingLabel?: string;
   page: CursorPageController<Photo>;
   handlers: PhotoOpenHandlers;
 }) {
@@ -102,7 +105,9 @@ export function PhotoBrowser({
             <div><strong>{interaction.selected?.filename ?? "Photos"}</strong><span>{interaction.selected?.relative_path ?? status}</span></div>
             <Segmented value={mode} items={["Thumbnails", "Image"] as const} onChange={setMode} />
           </header>
-          {mode === "Thumbnails" ? (
+          {page.loading && photos.length === 0 ? (
+            <div className="photo-browser-loading" role="status" aria-live="polite"><Busy label={loadingLabel} /></div>
+          ) : mode === "Thumbnails" ? (
             <VirtualGrid
               stateKey="photo-browser.grid"
               items={photos}

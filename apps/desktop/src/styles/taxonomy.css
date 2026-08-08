@@ -28,6 +28,7 @@
 .taxonomy-columns-single { display: block; }
 .taxonomy-results { height: 100%; min-height: 0; }
 .taxonomy-records { width: 100%; height: 100%; min-height: 0; }
+.taxonomy-search-loading { display: grid; width: 100%; height: 100%; place-items: center; }
 .taxon-record { height: calc(100% - 8px); margin: 4px 8px; padding: 12px; overflow: hidden; border: 1px solid var(--line); border-radius: 3px; background: var(--panel); }
 .taxon-record.child { margin-left: 28px; border-left: 2px solid #4b765b; }
 .taxon-breadcrumb { display: flex; align-items: center; gap: 2px; margin-bottom: 9px; overflow: hidden; }

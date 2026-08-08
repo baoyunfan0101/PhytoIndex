@@ -16,7 +16,10 @@ displayed taxon, and a callback for opening taxon photos.
 Returns: taxon search results or a single-taxon page with breadcrumb and child
 navigation. Typing requests lightweight suggestions after a 260 ms input
 pause. Arrow keys select a suggestion, and Enter or a pointer selection
-submits the full search.
+submits the full search. A pointer action outside the search closes
+suggestions. Suggestion rows show available scientific, Chinese, and English
+names followed by rank. Submitted searches show a centered searching status
+until results resolve.
 
 ### `FormattedUpdateView({ mutationDisabled })`
 

@@ -575,19 +575,19 @@ pub fn get_photo(state: State<'_, AppState>, photo_id: i64) -> CommandResult<Pho
 }
 
 #[tauri::command]
-pub fn search_photos(
+pub async fn search_photos(
     state: State<'_, AppState>,
     query: String,
     cursor: Option<String>,
     limit: Option<usize>,
 ) -> CommandResult<PhotoPage<Photo>> {
-    photos::search_photos(
-        &state.database,
-        &query,
-        cursor.as_deref(),
-        limit.unwrap_or(50),
-    )
-    .map_err(error)
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        photos::search_photos(&database, &query, cursor.as_deref(), limit.unwrap_or(50))
+            .map_err(error)
+    })
+    .await
+    .map_err(error)?
 }
 
 #[tauri::command]
@@ -641,12 +641,17 @@ pub fn get_photo_metadata(
 }
 
 #[tauri::command]
-pub fn search_taxa(
+pub async fn search_taxa(
     state: State<'_, AppState>,
     query: String,
     limit: Option<usize>,
 ) -> CommandResult<Vec<TaxonSearchResult>> {
-    taxonomy::search_taxa(&state.database, &query, limit.unwrap_or(50)).map_err(error)
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        taxonomy::search_taxa(&database, &query, limit.unwrap_or(50)).map_err(error)
+    })
+    .await
+    .map_err(error)?
 }
 
 #[tauri::command]

@@ -27,7 +27,7 @@ import {
 } from "../../api/taxonomy";
 import { downloadCsv, errorMessage } from "../../api/common";
 import { getTaxonomyNameSeparator } from "../../api/settings";
-import { Button, EmptyState, SectionHeader, VirtualList } from "../../shared/ui";
+import { Busy, Button, EmptyState, SectionHeader, VirtualList } from "../../shared/ui";
 import { TaxonCard } from "./TaxonCard";
 import { useMetadataChange } from "../../shared/metadataChanges";
 import { useCursorPage } from "../../shared/useCursorPage";
@@ -61,9 +61,11 @@ export function TaxonomySearchView({
   const [refreshKey, setRefreshKey] = useState(0);
   const [selectedSuggestionIndex, setSelectedSuggestionIndex] = useState(-1);
   const [suggestionsOpen, setSuggestionsOpen] = useState(false);
+  const taxonomySearchBoxRef = useRef<HTMLDivElement>(null);
   const loadedTaxonId = useRef<number | null>(null);
   const selectedTaxonId = useRef(selected?.summary.taxon_id ?? null);
   const taxonomySearch = useTaxonSearch(submittedQuery, {
+    debounceMs: 0,
     enabled: taxonId === undefined,
     stateKey: "taxonomy-search.results",
     refreshKey,
@@ -92,6 +94,19 @@ export function TaxonomySearchView({
       setSelectedSuggestionIndex(-1);
     }
   }, [selectedSuggestionIndex, taxonomySuggestions.suggestions.length]);
+
+  useEffect(() => {
+    if (taxonId !== undefined) return;
+    const closeSuggestions = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Node && !taxonomySearchBoxRef.current?.contains(target)) {
+        setSuggestionsOpen(false);
+        setSelectedSuggestionIndex(-1);
+      }
+    };
+    document.addEventListener("pointerdown", closeSuggestions);
+    return () => document.removeEventListener("pointerdown", closeSuggestions);
+  }, [taxonId]);
 
   useEffect(() => {
     if (taxonId === undefined) return;
@@ -187,7 +202,9 @@ export function TaxonomySearchView({
   );
   const recordsPane = (
     <main className="taxonomy-records">
-      {(error || taxonomySearch.error || children.error) ? <EmptyState title="Taxonomy unavailable" detail={error || taxonomySearch.error || children.error} /> : visible.length === 0 ? (
+      {(error || taxonomySearch.error || children.error) ? <EmptyState title="Taxonomy unavailable" detail={error || taxonomySearch.error || children.error} /> : taxonomySearch.loading ? (
+        <div className="taxonomy-search-loading" role="status" aria-live="polite"><Busy label="Searching taxonomy..." /></div>
+      ) : visible.length === 0 ? (
         <EmptyState icon={Search} title={taxonId === undefined ? "Search taxonomy" : "Loading taxon"} detail="Results include accepted names and aliases." />
       ) : (
         <VirtualList
@@ -218,7 +235,13 @@ export function TaxonomySearchView({
     <div className="taxonomy-search-view">
       {taxonId === undefined && (
         <header className="workbench-toolbar">
-          <div className="taxonomy-search-combobox">
+          <div
+            className="taxonomy-search-combobox"
+            ref={taxonomySearchBoxRef}
+            onFocusCapture={() => {
+              if (query.trim()) setSuggestionsOpen(true);
+            }}
+          >
             <label className="search-field taxonomy-search-field">
               <Search size={14} />
               <input
@@ -255,6 +278,11 @@ export function TaxonomySearchView({
                     event.preventDefault();
                     const suggestion = suggestions[selectedSuggestionIndex];
                     submitTaxonomySearch(suggestion ? suggestionLabel(suggestion, query) : query);
+                    return;
+                  }
+                  if (event.key === "Escape") {
+                    setSuggestionsOpen(false);
+                    setSelectedSuggestionIndex(-1);
                   }
                 }}
                 placeholder="Search scientific, Chinese, or English names"

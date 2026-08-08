@@ -29,6 +29,7 @@ export function PhotoSet({
     <PhotoBrowser
       title={query !== undefined ? `Search: ${query}` : `Taxon ${taxonId}`}
       detail={page.loading ? "Loading" : page.error || undefined}
+      loadingLabel={query !== undefined ? "Searching photos..." : "Loading photos..."}
       page={page}
       handlers={handlers}
     />

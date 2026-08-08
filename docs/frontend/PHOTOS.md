@@ -78,7 +78,10 @@ and optional focus configuration.
 
 Returns: the shared keyboard-accessible search input and suggestion list used
 by `EmptyWorkspace` and `GlobalSearchOverlay`. Arrow keys select suggestions;
-Enter submits the selected suggestion or normalized input.
+Enter submits the selected suggestion or normalized input. A pointer action
+outside the search closes suggestions. Each suggestion shows available
+scientific, Chinese, and English names on the first line and rank on the
+second line.
 
 ### Search state helpers
 
@@ -88,6 +91,9 @@ render as a low-priority update, and only the latest request may update them.
 
 `usePhotoSearch(onSubmit)` returns the controlled query, submission error,
 query setter, and asynchronous submit function.
+
+Submitted photo searches show a centered searching status until the first
+result page resolves.
 
 `loadRecentSearches()`, `saveRecentSearches(searches)`,
 `addRecentSearch(searches, query)`, and `removeRecentSearch(searches, query)`
