@@ -10,7 +10,7 @@ import { usePhotoMutation } from "./photoMutations";
 import { findTypeSelectIndex, nextListIndex } from "./photoListNavigation";
 import type { CursorPageController } from "../../shared/useCursorPage";
 import { ResizablePanels } from "../../shared/ResizablePanels";
-import { PhotoDisplay, PhotoDisplayToggle, usePhotoDisplayMode } from "./PhotoDisplay";
+import { PhotoDisplay, PhotoDisplayToggle, usePhotoActivation, usePhotoDisplayMode } from "./PhotoDisplay";
 import { formatPhotoSummary } from "./photoFormatting";
 
 export function PhotoBrowser({
@@ -32,6 +32,11 @@ export function PhotoBrowser({
     photos,
     handlers,
     stateKey: "photo-browser.interaction",
+  });
+  const activation = usePhotoActivation({
+    onSelect: interaction.selectPhoto,
+    onOpenImage: () => setMode("image"),
+    onOpenDetails: handlers.openDetails,
   });
   usePhotoMutation(() => {
     void page.reload();
@@ -90,8 +95,8 @@ export function PhotoBrowser({
               <button
                 className={`photo-list-row${interaction.selectedId === photo.photo_id ? " active" : ""}`}
                 type="button"
-                onClick={() => interaction.selectPhoto(photo)}
-                onDoubleClick={() => handlers.openDetails(photo)}
+                onClick={() => activation.clickPhoto(photo)}
+                onDoubleClick={() => activation.doubleClickPhoto(photo)}
                 onContextMenu={(event) => interaction.openContextMenu(event, photo)}
               >
                 <ImageIcon size={14} />
@@ -115,6 +120,8 @@ export function PhotoBrowser({
               stateKey="photo-browser.grid"
               onModeChange={setMode}
               onSelect={interaction.selectPhoto}
+              onClickPhoto={activation.clickPhoto}
+              onDoubleClickPhoto={activation.doubleClickPhoto}
               onNearEnd={() => void page.loadMore()}
               onContextMenu={interaction.openContextMenu}
             />

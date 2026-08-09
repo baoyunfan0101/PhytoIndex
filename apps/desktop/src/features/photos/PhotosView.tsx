@@ -21,7 +21,7 @@ import { waitForOperation } from "../../api/tasks";
 import { EmptyState, IconButton, SectionHeader, VirtualList } from "../../shared/ui";
 import { DirectoryContextMenu } from "./DirectoryContextMenu";
 import { PhotoStage } from "./PhotoMedia";
-import { PhotoDisplay, PhotoDisplayToggle, usePhotoDisplayMode } from "./PhotoDisplay";
+import { PhotoDisplay, PhotoDisplayToggle, usePhotoActivation, usePhotoDisplayMode } from "./PhotoDisplay";
 import { usePhotoInteraction, type PhotoOpenHandlers } from "./PhotoInteraction";
 import { TaxonContextMenu } from "./TaxonContextMenu";
 import { emitPhotoMutation, useDeferredPhotoMutation, usePhotoMutation } from "./photoMutations";
@@ -173,6 +173,11 @@ export function FolderPhotosView({
     stateKey: "folders.interaction",
   });
   const [displayMode, setDisplayMode] = usePhotoDisplayMode();
+  const activation = usePhotoActivation({
+    onSelect: selectDirectoryPhoto,
+    onOpenImage: () => setDisplayMode("image"),
+    onOpenDetails: handlers.openDetails,
+  });
   const resolvedActiveRowKey = activeRowKey ?? (interaction.selectedId === null ? null : `p:${interaction.selectedId}`);
   const activeRowIndex = rows.findIndex((row) => directoryTreeRowKey(row) === resolvedActiveRowKey);
   usePhotoMutation(() => {
@@ -309,10 +314,6 @@ export function FolderPhotosView({
             rowHeight={28}
             itemKey={directoryTreeRowKey}
             onActivateActive={activateDirectoryRow}
-            onClearActive={displayMode === "thumbnails" ? () => {
-              setActiveRowKey(null);
-              interaction.clearSelection();
-            } : undefined}
             onMoveActive={moveDirectoryRow}
             onNearEnd={() => void page.loadMore()}
             onTypeSelect={typeSelectDirectoryRow}
@@ -341,7 +342,8 @@ export function FolderPhotosView({
                   className={`finder-row${directoryTreeRowKey(item) === resolvedActiveRowKey ? " active" : ""}`}
                   style={{ paddingLeft: 4 + item.depth * 14 }}
                   type="button"
-                  onClick={() => selectDirectoryRow(item)}
+                  onClick={() => activation.clickPhoto(item.photo)}
+                  onDoubleClick={() => activation.doubleClickPhoto(item.photo)}
                   onContextMenu={(event) => openDirectoryPhotoContextMenu(event, item)}
                 >
                   <Images size={14} /><span>{item.photo.filename}</span>
@@ -370,6 +372,8 @@ export function FolderPhotosView({
             stateKey="folders.photo-grid"
             onModeChange={setDisplayMode}
             onSelect={selectDirectoryPhoto}
+            onClickPhoto={activation.clickPhoto}
+            onDoubleClickPhoto={activation.doubleClickPhoto}
             onNearEnd={() => void page.loadMore()}
             onContextMenu={interaction.openContextMenu}
           />
@@ -441,6 +445,11 @@ export function TaxonPhotosView({
     stateKey: "photo-taxonomy.interaction",
   });
   const [displayMode, setDisplayMode] = usePhotoDisplayMode();
+  const activation = usePhotoActivation({
+    onSelect: selectTaxonPhoto,
+    onOpenImage: () => setDisplayMode("image"),
+    onOpenDetails: handlers.openDetails,
+  });
   const resolvedActiveRowKey = activeRowKey ?? (interaction.selectedId === null ? null : `p:${interaction.selectedId}`);
   const activeRowIndex = rows.findIndex((row) => taxonTreeRowKey(row) === resolvedActiveRowKey);
   usePhotoMutation(() => {
@@ -557,10 +566,6 @@ export function TaxonPhotosView({
             rowHeight={28}
             itemKey={taxonTreeRowKey}
             onActivateActive={activateTaxonRow}
-            onClearActive={displayMode === "thumbnails" ? () => {
-              setActiveRowKey(null);
-              interaction.clearSelection();
-            } : undefined}
             onMoveActive={moveTaxonRow}
             onNearEnd={() => void page.loadMore()}
             onContextMenu={openCurrentTaxonContextMenu}
@@ -582,7 +587,7 @@ export function TaxonPhotosView({
                   </button>
                 </div>
               ) : item.kind === "photo" ? (
-                <button className={`finder-row${taxonTreeRowKey(item) === resolvedActiveRowKey ? " active" : ""}`} style={{ paddingLeft: 4 + item.depth * 14 }} type="button" onClick={() => selectTaxonRow(item)} onContextMenu={(event) => openTaxonPhotoContextMenu(event, item)}>
+                <button className={`finder-row${taxonTreeRowKey(item) === resolvedActiveRowKey ? " active" : ""}`} style={{ paddingLeft: 4 + item.depth * 14 }} type="button" onClick={() => activation.clickPhoto(item.photo)} onDoubleClick={() => activation.doubleClickPhoto(item.photo)} onContextMenu={(event) => openTaxonPhotoContextMenu(event, item)}>
                   <Images size={14} /><span>{item.photo.filename}</span>
                 </button>
               ) : (
@@ -609,6 +614,8 @@ export function TaxonPhotosView({
             stateKey="photo-taxonomy.photo-grid"
             onModeChange={setDisplayMode}
             onSelect={selectTaxonPhoto}
+            onClickPhoto={activation.clickPhoto}
+            onDoubleClickPhoto={activation.doubleClickPhoto}
             onNearEnd={() => void page.loadMore()}
             onContextMenu={interaction.openContextMenu}
           />

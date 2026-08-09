@@ -231,11 +231,13 @@ export function PhotoThumb({
   photo,
   selected,
   onClick,
+  onDoubleClick,
   onContextMenu,
 }: {
   photo: Photo;
   selected: boolean;
   onClick: () => void;
+  onDoubleClick?: () => void;
   onContextMenu?: (event: MouseEvent) => void;
 }) {
   return (
@@ -244,6 +246,7 @@ export function PhotoThumb({
       type="button"
       aria-label={photo.filename}
       onClick={onClick}
+      onDoubleClick={onDoubleClick}
       onContextMenu={(event) => {
         event.preventDefault();
         onContextMenu?.(event);

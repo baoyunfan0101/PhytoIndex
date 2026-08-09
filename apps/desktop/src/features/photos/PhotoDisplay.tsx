@@ -1,10 +1,47 @@
 import { Image as ImageIcon, LayoutGrid } from "lucide-react";
-import { useEffect, useRef, useState, type MouseEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
 import type { Photo } from "../../api/photos";
 import { IconButton, VirtualGrid } from "../../shared/ui";
 import { PhotoStage, PhotoThumb } from "./PhotoMedia";
 
 export type PhotoDisplayMode = "thumbnails" | "image";
+const photoDoubleClickDelayMs = 250;
+
+export function usePhotoActivation({
+  onSelect,
+  onOpenImage,
+  onOpenDetails,
+}: {
+  onSelect: (photo: Photo) => void;
+  onOpenImage: (photo: Photo) => void;
+  onOpenDetails: (photo: Photo) => void;
+}) {
+  const singleClickTimer = useRef<number | null>(null);
+
+  useEffect(() => () => {
+    if (singleClickTimer.current !== null) window.clearTimeout(singleClickTimer.current);
+  }, []);
+
+  const clickPhoto = useCallback((photo: Photo) => {
+    onSelect(photo);
+    if (singleClickTimer.current !== null) window.clearTimeout(singleClickTimer.current);
+    singleClickTimer.current = window.setTimeout(() => {
+      singleClickTimer.current = null;
+      onOpenImage(photo);
+    }, photoDoubleClickDelayMs);
+  }, [onOpenImage, onSelect]);
+
+  const doubleClickPhoto = useCallback((photo: Photo) => {
+    if (singleClickTimer.current !== null) {
+      window.clearTimeout(singleClickTimer.current);
+      singleClickTimer.current = null;
+    }
+    onSelect(photo);
+    onOpenDetails(photo);
+  }, [onOpenDetails, onSelect]);
+
+  return { clickPhoto, doubleClickPhoto };
+}
 
 export function usePhotoDisplayMode() {
   const [mode, setMode] = useState<PhotoDisplayMode>("thumbnails");
@@ -62,6 +99,8 @@ export function PhotoDisplay({
   stateKey,
   onModeChange,
   onSelect,
+  onClickPhoto,
+  onDoubleClickPhoto,
   onNearEnd,
   onContextMenu,
 }: {
@@ -71,6 +110,8 @@ export function PhotoDisplay({
   stateKey: string;
   onModeChange: (mode: PhotoDisplayMode) => void;
   onSelect: (photo: Photo) => void;
+  onClickPhoto: (photo: Photo) => void;
+  onDoubleClickPhoto: (photo: Photo) => void;
   onNearEnd?: () => void;
   onContextMenu?: (event: MouseEvent, photo: Photo) => void;
 }) {
@@ -97,10 +138,8 @@ export function PhotoDisplay({
         <PhotoThumb
           photo={photo}
           selected={selected?.photo_id === photo.photo_id}
-          onClick={() => {
-            onSelect(photo);
-            onModeChange("image");
-          }}
+          onClick={() => onClickPhoto(photo)}
+          onDoubleClick={() => onDoubleClickPhoto(photo)}
           onContextMenu={(event) => onContextMenu?.(event, photo)}
         />
       )}
