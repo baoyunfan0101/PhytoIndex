@@ -46,6 +46,12 @@ tab returns an empty list and `activeId: null`.
 `closeAllTabsState()` returns an empty tab list and `activeId: null` for the
 native Close All Tabs action.
 
+Status-bar messages are stored by tab ID. `updateTabStatus` changes only the
+reporting tab, `getCurrentTabStatus` returns the active tab's latest message or
+`Ready`, and `pruneTabStatuses` removes messages for closed tabs. Switching
+tabs therefore never carries folder counts, SQL results, or update results into
+another tab.
+
 ### Navigation history
 
 `createNavigationHistory(tabId)` creates history for the initial tab.

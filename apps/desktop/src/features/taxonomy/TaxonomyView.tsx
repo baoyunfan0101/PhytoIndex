@@ -250,7 +250,13 @@ const inputFields: Array<keyof TaxonInputRow> = [
 
 type FormattedBusy = "" | "import" | "template" | "preview" | "apply";
 
-export function FormattedUpdateView({ mutationDisabled = false }: { mutationDisabled?: boolean }) {
+export function FormattedUpdateView({
+  onStatus,
+  mutationDisabled = false,
+}: {
+  onStatus: (message: string) => void;
+  mutationDisabled?: boolean;
+}) {
   const [rows, setRows] = useState<TaxonInputRow[]>([{ species: "" }]);
   const [outcomes, setOutcomes] = useState<TaxonRowOutcome[]>([]);
   const [message, setMessage] = useState("");
@@ -260,7 +266,7 @@ export function FormattedUpdateView({ mutationDisabled = false }: { mutationDisa
   useEffect(() => {
     getTaxonomyNameSeparator()
       .then(setSeparator)
-      .catch((nextError) => setMessage(errorMessage(nextError)));
+      .catch((nextError) => report(errorMessage(nextError)));
   }, []);
   useMetadataChange((change) => {
     if (change.key === "taxonomy_name_separator") setSeparator(change.value);
@@ -268,8 +274,13 @@ export function FormattedUpdateView({ mutationDisabled = false }: { mutationDisa
   useTaxonomyMutation((mutation) => {
     if (mutation.kind !== "replacement") return;
     setOutcomes([]);
-    setMessage("Previous preview cleared because the taxonomy database was replaced.");
+    report("Previous preview cleared because the taxonomy database was replaced.");
   });
+
+  function report(nextMessage: string) {
+    setMessage(nextMessage);
+    onStatus(nextMessage);
+  }
 
   async function importFile(file: File) {
     setBusy("import");
@@ -277,9 +288,9 @@ export function FormattedUpdateView({ mutationDisabled = false }: { mutationDisa
     try {
       setRows(await parseTaxonomyCsv(await file.text()));
       setOutcomes([]);
-      setMessage("CSV imported.");
+      report("CSV imported.");
     } catch (nextError) {
-      setMessage(errorMessage(nextError));
+      report(errorMessage(nextError));
     } finally {
       setBusy("");
     }
@@ -290,9 +301,9 @@ export function FormattedUpdateView({ mutationDisabled = false }: { mutationDisa
     setMessage("");
     try {
       downloadCsv("taxonomy-template.csv", await getTaxonomyTemplate());
-      setMessage("Template downloaded.");
+      report("Template downloaded.");
     } catch (nextError) {
-      setMessage(errorMessage(nextError));
+      report(errorMessage(nextError));
     } finally {
       setBusy("");
     }
@@ -319,15 +330,15 @@ export function FormattedUpdateView({ mutationDisabled = false }: { mutationDisa
       if (kind === "preview") {
         const result = await previewTaxonomyRows(rows);
         setOutcomes(result.rows);
-        setMessage(`${result.rows.length} rows previewed`);
+        report(`${result.rows.length} rows previewed`);
       } else {
         const result = await applyTaxonomyRows(rows);
         setOutcomes(result.rows);
-        setMessage(`${result.succeeded_rows} succeeded, ${result.failed_rows} failed`);
+        report(`${result.succeeded_rows} succeeded, ${result.failed_rows} failed`);
         emitTaxonomyMutation();
       }
     } catch (nextError) {
-      setMessage(errorMessage(nextError));
+      report(errorMessage(nextError));
     } finally {
       setBusy("");
     }

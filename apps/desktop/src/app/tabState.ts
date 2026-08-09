@@ -21,3 +21,30 @@ export function closeTabState<T extends { id: string }>(
 export function closeAllTabsState<T>(): { tabs: T[]; activeId: null } {
   return { tabs: [], activeId: null };
 }
+
+export type TabStatusMap = Record<string, string>;
+
+export function updateTabStatus(
+  statuses: TabStatusMap,
+  tabId: string,
+  message: string,
+): TabStatusMap {
+  if (statuses[tabId] === message) return statuses;
+  return { ...statuses, [tabId]: message };
+}
+
+export function getCurrentTabStatus(
+  statuses: TabStatusMap,
+  activeId: string | null,
+): string {
+  return activeId === null ? "Ready" : statuses[activeId] ?? "Ready";
+}
+
+export function pruneTabStatuses(
+  statuses: TabStatusMap,
+  existingTabIds: ReadonlySet<string>,
+): TabStatusMap {
+  const entries = Object.entries(statuses).filter(([tabId]) => existingTabIds.has(tabId));
+  if (entries.length === Object.keys(statuses).length) return statuses;
+  return Object.fromEntries(entries);
+}

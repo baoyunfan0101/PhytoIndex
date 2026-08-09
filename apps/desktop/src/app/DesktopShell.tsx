@@ -16,7 +16,7 @@ import {
   TableProperties,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   getWorkspaceState,
   saveWorkspaceState,
@@ -75,7 +75,14 @@ import {
   dependsOnReplacedTaxonomy,
   retainTabsAfterTaxonomyReplacement,
 } from "./taxonomyReplacement";
-import { closeAllTabsState, closeTabState } from "./tabState";
+import {
+  closeAllTabsState,
+  closeTabState,
+  getCurrentTabStatus,
+  pruneTabStatuses,
+  updateTabStatus,
+  type TabStatusMap,
+} from "./tabState";
 import { nativeMenuActions, useNativeMenu } from "./nativeMenu";
 import { NativeAboutOverlay } from "./NativeAboutOverlay";
 import { getTaxonDetail } from "../api/taxonomy";
@@ -140,9 +147,10 @@ export function DesktopShell({
   const [recentSearches, setRecentSearches] = useState(() => (
     loadRecentSearches(undefined, generalSettings.recent_searches_limit)
   ));
-  const [status, setStatus] = useState("Ready");
+  const [tabStatuses, setTabStatuses] = useState<TabStatusMap>({});
   const emptySearchInputRef = useRef<HTMLInputElement>(null);
   const operationsMenuRef = useRef<HTMLDivElement>(null);
+  const activeIdRef = useRef<string | null>(null);
   const viewStateStores = useRef(new globalThis.Map<string, ViewStateStore>());
   const [navigationHistory, setNavigationHistory] = useState(
     createNavigationHistory(null),
@@ -163,6 +171,16 @@ export function DesktopShell({
   );
   const backTarget = findNavigationTarget(navigationHistory, existingTabIds, -1);
   const forwardTarget = findNavigationTarget(navigationHistory, existingTabIds, 1);
+  const status = getCurrentTabStatus(tabStatuses, activeId);
+
+  const reportTabStatus = useCallback((tabId: string, message: string) => {
+    setTabStatuses((current) => updateTabStatus(current, tabId, message));
+  }, []);
+
+  const reportActiveStatus = useCallback((message: string) => {
+    const tabId = activeIdRef.current;
+    if (tabId !== null) reportTabStatus(tabId, message);
+  }, [reportTabStatus]);
 
   usePhotoMutation((mutation) => {
     if (mutation.kind !== "photo") return;
@@ -192,7 +210,7 @@ export function DesktopShell({
       try {
         nextLibraries = await listPhotoLibraries();
       } catch (nextError) {
-        if (!cancelled) setStatus(String(nextError));
+        if (!cancelled) reportActiveStatus(String(nextError));
       }
       if (cancelled) return;
       setLibraries(nextLibraries);
@@ -218,7 +236,7 @@ export function DesktopShell({
           setActiveId(restored.activeId);
           setNavigationHistory(createNavigationHistory(restored.activeId));
         } catch (nextError) {
-          if (!cancelled) setStatus(`Workspace state could not be restored: ${String(nextError)}`);
+          if (!cancelled) reportActiveStatus(`Workspace state could not be restored: ${String(nextError)}`);
         }
       }
       if (!cancelled) setWorkspaceReady(true);
@@ -241,10 +259,18 @@ export function DesktopShell({
     if (!workspaceReady || !generalSettings.restore_tabs) return;
     const timer = window.setTimeout(() => {
       void saveWorkspaceState(serializeWorkspaceState(tabs, activeId))
-        .catch((nextError) => setStatus(`Workspace state could not be saved: ${String(nextError)}`));
+        .catch((nextError) => reportActiveStatus(`Workspace state could not be saved: ${String(nextError)}`));
     }, 250);
     return () => window.clearTimeout(timer);
   }, [activeId, generalSettings.restore_tabs, tabs, workspaceReady]);
+
+  useEffect(() => {
+    activeIdRef.current = activeId;
+  }, [activeId]);
+
+  useEffect(() => {
+    setTabStatuses((current) => pruneTabStatuses(current, existingTabIds));
+  }, [existingTabIds]);
 
   useEffect(() => {
     setNavigationHistory((current) => pruneNavigationHistory(
@@ -372,6 +398,9 @@ export function DesktopShell({
   }
 
   function resetPhotoWorkspace(message: string) {
+    const statusTargetId = active !== null && !photoTabKinds.has(active.kind)
+      ? active.id
+      : initialTab.id;
     setTabs((current) => {
       const remaining = current.filter((tab) => !photoTabKinds.has(tab.kind));
       current.filter((tab) => photoTabKinds.has(tab.kind)).forEach((tab) => viewStateStores.current.delete(tab.id));
@@ -383,14 +412,14 @@ export function DesktopShell({
       return remaining;
     });
     setSearchOpen(false);
-    setStatus(message);
+    reportTabStatus(statusTargetId, message);
   }
 
   async function reloadLibraries() {
     try {
       setLibraries(await listPhotoLibraries());
     } catch (nextError) {
-      setStatus(String(nextError));
+      reportActiveStatus(String(nextError));
     }
   }
 
@@ -402,7 +431,7 @@ export function DesktopShell({
       await reloadLibraries();
       resetPhotoWorkspace("Photo Library opened");
     } catch (nextError) {
-      setStatus(String(nextError));
+      reportActiveStatus(String(nextError));
     }
   }
 
@@ -413,13 +442,14 @@ export function DesktopShell({
       await openTaxonomyDatabase(selected);
       resetTaxonomyResources("Taxonomy Database opened. Photo mappings are being rebuilt in the background.");
     } catch (nextError) {
-      setStatus(String(nextError));
+      reportActiveStatus(String(nextError));
     }
   }
 
   function closeAllTabs() {
     const next = closeAllTabsState<AppTab>();
     viewStateStores.current.clear();
+    setTabStatuses({});
     setTabs(next.tabs);
     focusTab(next.activeId);
     setOperationsOpen(false);
@@ -428,16 +458,17 @@ export function DesktopShell({
   }
 
   function resetTaxonomyResources(message = "Taxonomy database replaced successfully. Photo mappings are being rebuilt in the background.") {
-    setTabs((current) => {
-      current.filter((tab) => dependsOnReplacedTaxonomy(tab.kind)).forEach((tab) => viewStateStores.current.delete(tab.id));
-      const remaining = retainTabsAfterTaxonomyReplacement(current);
-      if (remaining.every((tab) => tab.id !== activeId)) {
-        setActiveId(remaining[0]?.id ?? initialTab.id);
-      }
-      return remaining.length > 0 ? remaining : [{ ...initialTab }];
-    });
+    tabs.filter((tab) => dependsOnReplacedTaxonomy(tab.kind))
+      .forEach((tab) => viewStateStores.current.delete(tab.id));
+    const remaining = retainTabsAfterTaxonomyReplacement(tabs);
+    const nextTabs = remaining.length > 0 ? remaining : [{ ...initialTab }];
+    const nextActiveId = nextTabs.some((tab) => tab.id === activeId)
+      ? activeId
+      : nextTabs[0]?.id ?? null;
+    setTabs(nextTabs);
+    if (nextActiveId !== activeId) setActiveId(nextActiveId);
     emitPhotoMutation({ photoId: null, kind: "mapping" });
-    setStatus(message);
+    if (nextActiveId !== null) reportTabStatus(nextActiveId, message);
   }
 
   useNativeMenu((action) => {
@@ -537,7 +568,7 @@ export function DesktopShell({
                     active={isActive}
                     tab={tab}
                     handlers={handlers}
-                    onStatus={setStatus}
+                    onTabStatus={reportTabStatus}
                     openTab={openTab}
                     updateTaxonTab={updateTaxonTab}
                     updateSettingsTab={updateSettingsTab}
@@ -602,7 +633,7 @@ function TabBody({
   active,
   tab,
   handlers,
-  onStatus,
+  onTabStatus,
   openTab,
   updateTaxonTab,
   updateSettingsTab,
@@ -619,7 +650,7 @@ function TabBody({
   active: boolean;
   tab: AppTab;
   handlers: PhotoOpenHandlers;
-  onStatus: (message: string, busy?: boolean) => void;
+  onTabStatus: (tabId: string, message: string, busy?: boolean) => void;
   openTab: (tab: AppTab, singleton?: boolean) => void;
   updateTaxonTab: (id: string, taxonId: number, title: string) => void;
   updateSettingsTab: (id: string, section: SettingsSection) => void;
@@ -633,6 +664,10 @@ function TabBody({
   generalSettingsLoadError?: string;
   onGeneralSettingsChange: (settings: GeneralSettings) => void;
 }) {
+  const onStatus = useCallback(
+    (message: string, busy?: boolean) => onTabStatus(tab.id, message, busy),
+    [onTabStatus, tab.id],
+  );
   if (photoTabKinds.has(tab.kind) && !workspaceAvailable) {
     return (
       <EmptyState
@@ -657,7 +692,7 @@ function TabBody({
   if (tab.kind === "mapping") return <MappingView active={active} onStatus={onStatus} handlers={handlers} />;
   if (tab.kind === "taxonomy-search") return <TaxonomySearchView mutationDisabled={taxonomyMutationLocked} onOpenPhotos={(taxonId, label) => openTab({ id: `taxon-photos:${taxonId}`, kind: "taxon-photos", title: label, taxonId })} />;
   if (tab.kind === "taxon-detail" && tab.taxonId !== undefined) return <TaxonomyHierarchyPage initialTaxonId={tab.taxonId} mutationDisabled={taxonomyMutationLocked} onTaxonChange={(taxonId, label) => updateTaxonTab(tab.id, taxonId, label)} onOpenPhotos={(taxonId, label) => openTab({ id: `taxon-photos:${taxonId}`, kind: "taxon-photos", title: label, taxonId })} />;
-  if (tab.kind === "formatted-update") return <FormattedUpdateView mutationDisabled={taxonomyMutationLocked} />;
+  if (tab.kind === "formatted-update") return <FormattedUpdateView onStatus={onStatus} mutationDisabled={taxonomyMutationLocked} />;
   if (tab.kind === "custom-sql") return <CustomSqlView onStatus={onStatus} mutationDisabled={taxonomyMutationLocked} />;
   if (tab.kind === "taxonomy-history") return <OperationHistoryView domain="taxonomy" onStatus={onStatus} />;
   if (tab.kind === "settings") return <SettingsView section={tab.settingsSection ?? "General"} onSectionChange={(section) => updateSettingsTab(tab.id, section)} onBaseReplaced={onBaseReplaced} onWorkspaceChanged={onWorkspaceChanged} generalSettings={generalSettings} generalSettingsLoadError={generalSettingsLoadError} onGeneralSettingsChange={onGeneralSettingsChange} />;
