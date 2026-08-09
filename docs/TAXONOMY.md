@@ -378,4 +378,6 @@ it never silently skips unsupported operations. Successful rollback applies
 the reverse changeset, records pending photo-library synchronization, and
 deletes the original operation. Desktop history pagination, rollback, audit
 export, and formatted-input export execute database and file work on blocking
-workers and resolve asynchronously.
+workers and resolve asynchronously. Desktop audit and formatted-input export
+commands accept an absolute destination path and write the CSV after the caller
+selects that path.

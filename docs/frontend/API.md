@@ -12,7 +12,7 @@ owns one backend domain, its request types, and response types.
 | `photos` | Photo records, directories, refresh, search, rename, metadata, media URLs, and file-manager reveal or open actions. |
 | `mapping` | Mapping states, candidates, assignment, remapping, mapping queues, and photographed-taxonomy browsing. |
 | `taxonomy` | Taxon views, search, suggestions, children, taxon photos, formatted input, preview, and apply. |
-| `operations` | Photo and taxonomy operation summaries, audit pages, rollback, and exports. |
+| `operations` | Photo and taxonomy operation summaries, audit pages, rollback, and single or selected-operation CSV exports to an absolute destination path. |
 | `customSql` | Custom SQL execution, result sets, managed SQL inputs, and full-query export. |
 | `baseImport` | Base-import workspace, validation, apply, metadata, and managed inputs. |
 | `storage` | Database locations, Taxonomy Database selection, and Photo Library registration. |

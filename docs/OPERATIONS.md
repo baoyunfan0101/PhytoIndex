@@ -91,4 +91,5 @@ The taxonomy module additionally exposes:
 
 Delete and custom SQL operations have audit rows but no formatted input.
 Selected input export returns an error if any selected operation is not
-replayable.
+replayable. Desktop audit and formatted-input export commands take an absolute
+destination path selected by the caller and write the resulting CSV there.

@@ -133,4 +133,15 @@
 .spin { animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-.inline-error { padding: 7px; color: var(--danger-text); background: var(--danger-bg); }
+.inline-error {
+  box-sizing: border-box;
+  width: 100%;
+  max-height: min(160px, 35vh);
+  align-self: start;
+  padding: 7px;
+  overflow: auto;
+  color: var(--danger-text);
+  background: var(--danger-bg);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}

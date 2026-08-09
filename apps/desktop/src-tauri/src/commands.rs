@@ -503,68 +503,98 @@ pub fn rename_photos_in_directory_from_taxa(
 }
 
 #[tauri::command]
-pub fn list_photo_operations(
+pub async fn list_photo_operations(
     state: State<'_, AppState>,
     cursor: Option<String>,
     limit: Option<usize>,
 ) -> CommandResult<OperationPage<OperationSummary>> {
-    photos::list_operations(&state.database, cursor.as_deref(), limit.unwrap_or(50)).map_err(error)
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        photos::list_operations(&database, cursor.as_deref(), limit.unwrap_or(50)).map_err(error)
+    })
+    .await
+    .map_err(error)?
 }
 
 #[tauri::command]
-pub fn list_photo_operation_audit(
+pub async fn list_photo_operation_audit(
     state: State<'_, AppState>,
     operation_id: i64,
     cursor: Option<String>,
     limit: Option<usize>,
 ) -> CommandResult<OperationPage<OperationAuditRow>> {
-    photos::list_operation_audit(
-        &state.database,
-        operation_id,
-        cursor.as_deref(),
-        limit.unwrap_or(50),
-    )
-    .map_err(error)
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        photos::list_operation_audit(
+            &database,
+            operation_id,
+            cursor.as_deref(),
+            limit.unwrap_or(50),
+        )
+        .map_err(error)
+    })
+    .await
+    .map_err(error)?
 }
 
 #[tauri::command]
-pub fn rollback_photo_operation(
+pub async fn rollback_photo_operation(
     state: State<'_, AppState>,
     operation_id: i64,
 ) -> CommandResult<()> {
-    photos::rollback_operation(&state.database, operation_id).map_err(error)
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        photos::rollback_operation(&database, operation_id).map_err(error)
+    })
+    .await
+    .map_err(error)?
 }
 
 #[tauri::command]
-pub fn export_photo_operation_audit(
+pub async fn export_photo_operation_audit(
     state: State<'_, AppState>,
     operation_id: i64,
     destination_path: String,
 ) -> CommandResult<()> {
-    let mut writer = audit_writer(&destination_path)?;
-    photos::write_operation_audit(&state.database, operation_id, &mut writer).map_err(error)?;
-    writer.flush().map_err(error)
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut writer = audit_writer(&destination_path)?;
+        photos::write_operation_audit(&database, operation_id, &mut writer).map_err(error)?;
+        writer.flush().map_err(error)
+    })
+    .await
+    .map_err(error)?
 }
 
 #[tauri::command]
-pub fn export_photo_operations_audit(
+pub async fn export_photo_operations_audit(
     state: State<'_, AppState>,
     operation_ids: Vec<i64>,
     destination_path: String,
 ) -> CommandResult<()> {
-    let mut writer = audit_writer(&destination_path)?;
-    photos::write_operations_audit(&state.database, &operation_ids, &mut writer).map_err(error)?;
-    writer.flush().map_err(error)
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut writer = audit_writer(&destination_path)?;
+        photos::write_operations_audit(&database, &operation_ids, &mut writer).map_err(error)?;
+        writer.flush().map_err(error)
+    })
+    .await
+    .map_err(error)?
 }
 
 #[tauri::command]
-pub fn export_all_photo_operation_audit(
+pub async fn export_all_photo_operation_audit(
     state: State<'_, AppState>,
     destination_path: String,
 ) -> CommandResult<()> {
-    let mut writer = audit_writer(&destination_path)?;
-    photos::write_all_operation_audit(&state.database, &mut writer).map_err(error)?;
-    writer.flush().map_err(error)
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut writer = audit_writer(&destination_path)?;
+        photos::write_all_operation_audit(&database, &mut writer).map_err(error)?;
+        writer.flush().map_err(error)
+    })
+    .await
+    .map_err(error)?
 }
 
 #[tauri::command]
@@ -1015,10 +1045,12 @@ pub async fn export_all_taxonomy_operation_audit(
 pub async fn export_taxonomy_operation_input(
     state: State<'_, AppState>,
     operation_id: i64,
-) -> CommandResult<String> {
+    destination_path: String,
+) -> CommandResult<()> {
     let database = state.database.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        taxonomy::export_operation_input(&database, operation_id).map_err(error)
+        let csv = taxonomy::export_operation_input(&database, operation_id).map_err(error)?;
+        write_csv_export(&destination_path, &csv)
     })
     .await
     .map_err(error)?
@@ -1028,10 +1060,12 @@ pub async fn export_taxonomy_operation_input(
 pub async fn export_taxonomy_operations_input(
     state: State<'_, AppState>,
     operation_ids: Vec<i64>,
-) -> CommandResult<String> {
+    destination_path: String,
+) -> CommandResult<()> {
     let database = state.database.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        taxonomy::export_operations_input(&database, &operation_ids).map_err(error)
+        let csv = taxonomy::export_operations_input(&database, &operation_ids).map_err(error)?;
+        write_csv_export(&destination_path, &csv)
     })
     .await
     .map_err(error)?
@@ -1195,9 +1229,15 @@ fn schedule_taxonomy_sync(app: AppHandle, state: &AppState) {
 fn audit_writer(destination_path: &str) -> CommandResult<BufWriter<File>> {
     let destination = Path::new(destination_path);
     if !destination.is_absolute() {
-        return Err("audit export destination must be an absolute path".into());
+        return Err("CSV export destination must be an absolute path".into());
     }
     File::create(destination).map(BufWriter::new).map_err(error)
+}
+
+fn write_csv_export(destination_path: &str, contents: &str) -> CommandResult<()> {
+    let mut writer = audit_writer(destination_path)?;
+    writer.write_all(contents.as_bytes()).map_err(error)?;
+    writer.flush().map_err(error)
 }
 
 fn ensure_database_relocation_allowed(state: &AppState) -> CommandResult<()> {
