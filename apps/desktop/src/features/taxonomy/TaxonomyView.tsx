@@ -379,7 +379,7 @@ export function FormattedUpdateView({
 
   return (
     <div className="formatted-view">
-      <SectionHeader title="Formatted update" detail={`Pipe-delimited UTF-8 input or direct table editing. Multiple names use "${separator}".`} actions={
+      <SectionHeader title="Formatted update" detail="Pipe-delimited UTF-8 input or direct table editing." actions={
         <>
           <label className={`button button-secondary file-button${busy ? " disabled" : ""}`}><FileUp size={13} />{busy === "import" ? "Importing..." : "Upload CSV"}<input disabled={Boolean(busy)} type="file" accept=".csv,text/csv" onChange={(event) => {
             const file = event.target.files?.[0];
