@@ -83,6 +83,7 @@ export function VirtualList<T>({
   renderItem,
   onActivateActive,
   onClearActive,
+  onMoveHorizontal,
   onMoveActive,
   onNearEnd,
   onContextMenu,
@@ -99,6 +100,7 @@ export function VirtualList<T>({
   renderItem: (item: T, index: number) => ReactNode;
   onActivateActive?: () => void;
   onClearActive?: () => void;
+  onMoveHorizontal?: (direction: -1 | 1) => boolean;
   onMoveActive?: (direction: -1 | 1) => void;
   onNearEnd?: () => void;
   onContextMenu?: (event: MouseEvent<HTMLDivElement>) => void;
@@ -170,6 +172,12 @@ export function VirtualList<T>({
       if (!onMoveActive) return;
       event.preventDefault();
       onMoveActive(event.key === "ArrowDown" ? 1 : -1);
+      return;
+    }
+    if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+      if (!onMoveHorizontal) return;
+      const handled = onMoveHorizontal(event.key === "ArrowRight" ? 1 : -1);
+      if (handled) event.preventDefault();
       return;
     }
     if (event.key === "Enter" || event.key === " ") {

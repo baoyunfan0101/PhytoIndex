@@ -4,6 +4,15 @@ export function nextListIndex(length: number, activeIndex: number, direction: -1
   return Math.min(Math.max(activeIndex + direction, 0), length - 1);
 }
 
+export function treeArrowAction(
+  expanded: boolean,
+  direction: -1 | 1,
+): "expand" | "collapse" | null {
+  if (direction === 1 && !expanded) return "expand";
+  if (direction === -1 && expanded) return "collapse";
+  return null;
+}
+
 export function findTypeSelectIndex<T>(
   items: T[],
   query: string,

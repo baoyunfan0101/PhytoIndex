@@ -25,7 +25,7 @@ import { PhotoDisplay, PhotoDisplayToggle, usePhotoActivation, usePhotoDisplayMo
 import { usePhotoInteraction, type PhotoOpenHandlers } from "./PhotoInteraction";
 import { TaxonContextMenu } from "./TaxonContextMenu";
 import { emitPhotoMutation, useDeferredPhotoMutation, usePhotoMutation } from "./photoMutations";
-import { findTypeSelectIndex, nextListIndex } from "./photoListNavigation";
+import { findTypeSelectIndex, nextListIndex, treeArrowAction } from "./photoListNavigation";
 import { useCursorPage } from "../../shared/useCursorPage";
 import { useCursorTree, type CursorTreeNode } from "../../shared/useCursorTree";
 import { useViewState } from "../../shared/viewState";
@@ -267,6 +267,15 @@ export function FolderPhotosView({
     if (nextIndex >= 0) selectDirectoryRow(rows[nextIndex]);
   }
 
+  function moveDirectoryBranch(direction: -1 | 1) {
+    const item = rows[activeRowIndex];
+    if (item?.kind !== "directory") return false;
+    const node = tree.nodes.get(item.directory.directory_id);
+    if (!treeArrowAction(node?.expanded ?? false, direction)) return false;
+    tree.toggle(item.directory.directory_id);
+    return true;
+  }
+
   function typeSelectDirectoryRow(query: string, shouldCycle: boolean) {
     const matchIndex = findTypeSelectIndex(
       rows,
@@ -314,6 +323,7 @@ export function FolderPhotosView({
             rowHeight={28}
             itemKey={directoryTreeRowKey}
             onActivateActive={activateDirectoryRow}
+            onMoveHorizontal={moveDirectoryBranch}
             onMoveActive={moveDirectoryRow}
             onNearEnd={() => void page.loadMore()}
             onTypeSelect={typeSelectDirectoryRow}
@@ -519,6 +529,15 @@ export function TaxonPhotosView({
     if (nextIndex >= 0) selectTaxonRow(rows[nextIndex]);
   }
 
+  function moveTaxonBranch(direction: -1 | 1) {
+    const item = rows[activeRowIndex];
+    if (item?.kind !== "taxon") return false;
+    const node = tree.nodes.get(item.taxon.taxon_id);
+    if (!treeArrowAction(node?.expanded ?? false, direction)) return false;
+    tree.toggle(item.taxon.taxon_id);
+    return true;
+  }
+
   function typeSelectTaxonRow(query: string, shouldCycle: boolean) {
     const matchIndex = findTypeSelectIndex(
       rows,
@@ -566,6 +585,7 @@ export function TaxonPhotosView({
             rowHeight={28}
             itemKey={taxonTreeRowKey}
             onActivateActive={activateTaxonRow}
+            onMoveHorizontal={moveTaxonBranch}
             onMoveActive={moveTaxonRow}
             onNearEnd={() => void page.loadMore()}
             onContextMenu={openCurrentTaxonContextMenu}
