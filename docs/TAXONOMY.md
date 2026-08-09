@@ -118,10 +118,29 @@ omitted or reordered, but every row must have the same field count as the
 header. Multi-name cells use the separate configured one-character name
 separator.
 
-The lowest supplied scientific lineage name and then each supplied synonym
-are matched in input order. Each input name searches both existing
-`sci_name` and `synonym` records. Once one input name matches, remaining names
-are applied as synonyms according to the formatted-update rules.
+When `species` is present and `genus` is blank, normalization copies the first
+word of the species scientific name into `genus`. Every later step therefore
+treats that row exactly like a row that supplied both fields.
+
+Matching starts at the lowest supplied rank. The rank name and then each input
+synonym are considered in input order, and each name is matched against one
+combined set of existing `sci_name` and `synonym` records. Zero candidates
+means the target is new; one candidate selects it immediately without checking
+any supplied ancestor. Multiple candidates are narrowed using supplied
+ancestor names from the nearest rank upward, stopping as soon as one remains.
+Ancestor matching uses the same combined scientific-name and synonym rule.
+After a target is selected or created, the other supplied scientific names are
+appended or supplemented as target synonyms.
+
+Updating a selected target keeps the existing supplement, append, and
+overwrite behavior. Creating a target requires its strict parent-rank name.
+That parent is resolved with the same zero, one, or multiple-candidate rules:
+one candidate is reused without consulting higher ranks, zero candidates
+creates that parent, and multiple candidates are narrowed by the nearest
+supplied ancestor. Creating a missing parent recursively requires and resolves
+its own strict parent, so one formatted row can create every missing rank in a
+complete supplied lineage. Missing strict-parent input and unresolved
+ambiguity fail the row without applying a partial lineage.
 
 ### Preview and apply types
 
@@ -172,6 +191,10 @@ normal `TaxonomyOperationResult`.
 
 `PromoteTaxonNameInput` and `DeleteTaxonNameInput` both identify a name by
 `taxon_id` plus stable `name_id`.
+
+Promotion exchanges the selected alias or synonym with its accepted-name
+record. A species synonym does not need to begin with the accepted scientific
+name of the parent genus.
 
 `SaveTaxonNameGroupInput` saves one of the six `TaxonomyNameType` groups. Its
 `updates` entries identify existing records by `name_id` and replace their

@@ -102,21 +102,15 @@ pub fn promote_taxon_name(database: &Database, input: PromoteTaxonNameInput) -> 
     let _guard = database.try_taxonomy_mutation()?;
     let mut connection = database.connect_taxonomy_metadata_context()?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let (rank, current_type, name) = transaction
+    let (current_type, name) = transaction
         .query_row(
             r#"
-            SELECT taxa.rank, taxon_names.name_type, taxon_names.name
+            SELECT taxon_names.name_type, taxon_names.name
             FROM taxa JOIN taxon_names USING (taxon_id)
             WHERE taxa.taxon_id = ? AND taxon_names.name_id = ?
             "#,
             params![input.taxon_id, input.name_id],
-            |row| {
-                Ok((
-                    row.get::<_, i64>(0)?,
-                    row.get::<_, i64>(1)?,
-                    row.get::<_, String>(2)?,
-                ))
-            },
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
         )
         .optional()?
         .ok_or_else(|| {
@@ -146,32 +140,6 @@ pub fn promote_taxon_name(database: &Database, input: PromoteTaxonNameInput) -> 
                 accepted_type.as_str()
             ))
         })?;
-    if current_type == TaxonomyNameType::Synonym
-        && TaxonRank::from_code(rank)? == TaxonRank::Species
-    {
-        let genus_name: Option<String> = transaction
-            .query_row(
-                r#"
-                SELECT name
-                FROM taxa AS species
-                JOIN taxon_names
-                  ON taxon_names.taxon_id = species.parent_taxon_id
-                 AND taxon_names.name_type = 1
-                WHERE species.taxon_id = ?
-                "#,
-                [input.taxon_id],
-                |row| row.get(0),
-            )
-            .optional()?;
-        let first_word = name.split_whitespace().next();
-        if genus_name.as_deref() != first_word {
-            return Err(CoreError::InvalidArgument(format!(
-                "species scientific name '{}' does not start with parent genus '{}'",
-                name,
-                genus_name.unwrap_or_default()
-            )));
-        }
-    }
     let mut session = start_taxonomy_session(&transaction)?;
     transaction.execute(
         "UPDATE taxon_names SET name_type = ? WHERE taxon_id = ? AND name_id = ?",
@@ -935,7 +903,7 @@ mod tests {
     }
 
     #[test]
-    fn promoting_a_species_synonym_exchanges_name_types() {
+    fn promoting_a_species_synonym_does_not_require_the_parent_genus_prefix() {
         let (_directory, database) = database();
         apply_rows(
             &database,
@@ -1028,22 +996,20 @@ mod tests {
         assert!(operation.rollbackable);
         assert!(!operation.has_formatted_input);
 
-        let error = promote_taxon_name(
+        crate::taxonomy::rollback_operation(&database, operation.operation_id).unwrap();
+        promote_taxon_name(
             &database,
             PromoteTaxonNameInput {
                 taxon_id,
                 name_id: invalid_name_id,
             },
         )
-        .unwrap_err();
-        assert!(error.to_string().contains("parent genus"));
-
-        crate::taxonomy::rollback_operation(&database, operation.operation_id).unwrap();
+        .unwrap();
         let connection = database.connect_taxonomy_metadata_context().unwrap();
         assert_eq!(
             connection
                 .query_row(
-                    "SELECT name_type FROM taxon_names WHERE name = 'Canis lupus'",
+                    "SELECT name_type FROM taxon_names WHERE name = 'Felis lupus'",
                     [],
                     |row| row.get::<_, i64>(0),
                 )
@@ -1053,7 +1019,7 @@ mod tests {
         assert_eq!(
             connection
                 .query_row(
-                    "SELECT name_type FROM taxon_names WHERE name = 'Canis lycaon'",
+                    "SELECT name_type FROM taxon_names WHERE name = 'Canis lupus'",
                     [],
                     |row| row.get::<_, i64>(0),
                 )

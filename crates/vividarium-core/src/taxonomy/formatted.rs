@@ -616,109 +616,66 @@ fn create_taxon(
     row_number: usize,
     input: &NormalizedInput,
 ) -> CoreResult<TaxonRowOutcome> {
-    let parent = match input.target_rank.parent() {
-        None => None,
-        Some(parent_rank) => {
-            let parent_name = input.parent_name().ok_or_else(|| {
-                CoreError::InvalidArgument(format!(
-                    "new {} taxon requires a {} scientific name",
-                    input.target_rank.as_str(),
-                    parent_rank.as_str()
-                ))
-            });
-            let parent_name = match parent_name {
-                Ok(value) => value,
-                Err(error) => {
-                    return Ok(failed_outcome(
-                        row_number,
-                        TaxonRowStatus::NotMatched,
-                        error.to_string(),
-                    ));
-                }
-            };
-            let candidates = find_scientific_candidates(
-                transaction,
+    let mut changes = Vec::new();
+    let parent = if let Some(parent_rank) = input.target_rank.parent() {
+        match resolve_or_create_lineage(
+            transaction,
+            input,
+            parent_rank,
+            input.target_rank,
+            &mut changes,
+        )? {
+            Ok(parent) => Some(parent),
+            Err(LineageFailure::MissingParent {
+                child_rank,
                 parent_rank,
-                parent_name,
-                input,
-                parent_rank,
-            )?;
-            match candidates.as_slice() {
-                [] => {
-                    return Ok(failed_outcome(
-                        row_number,
-                        TaxonRowStatus::NotMatched,
-                        format!(
-                            "parent {} '{}' was not found",
-                            parent_rank.as_str(),
-                            parent_name
-                        ),
-                    ));
-                }
-                [parent] => Some(parent.clone()),
-                _ => {
-                    return Ok(TaxonRowOutcome {
-                        row_number,
-                        operation_types: vec![TaxonRowStatus::MultipleCandidates],
-                        message: candidate_message(&candidates),
-                        target: None,
-                        parent: None,
-                        candidates,
-                        changes: Vec::new(),
-                    });
-                }
+            }) => {
+                return Ok(failed_outcome(
+                    row_number,
+                    TaxonRowStatus::NotMatched,
+                    format!(
+                        "new {} taxon requires a {} scientific name",
+                        child_rank.as_str(),
+                        parent_rank.as_str()
+                    ),
+                ));
+            }
+            Err(LineageFailure::MultipleCandidates(candidates)) => {
+                return Ok(TaxonRowOutcome {
+                    row_number,
+                    operation_types: vec![TaxonRowStatus::MultipleCandidates],
+                    message: candidate_message(&candidates),
+                    target: None,
+                    parent: None,
+                    candidates,
+                    changes: Vec::new(),
+                });
             }
         }
+    } else {
+        None
     };
 
-    transaction.execute(
-        "INSERT INTO taxa (parent_taxon_id, rank, geological_range) VALUES (?, ?, ?)",
-        params![
-            parent.as_ref().map(|value| value.taxon_id),
-            input.target_rank.code(),
-            input.geological_range
-        ],
+    let target = insert_taxon_with_scientific_name(
+        transaction,
+        input.target_rank,
+        &input.target_name,
+        parent.as_ref(),
+        input.geological_range.as_deref(),
+        input.authority_year.as_deref(),
+        input.source.as_deref(),
+        &mut changes,
     )?;
-    let taxon_id = transaction.last_insert_rowid();
-    transaction.execute(
-        r#"
-        INSERT INTO taxon_names (taxon_id, name_type, name, authority_year, source)
-        VALUES (?, ?, ?, ?, ?)
-        "#,
-        params![
-            taxon_id,
-            TaxonomyNameType::SciName.code(),
-            input.target_name,
-            input.authority_year,
-            input.source
-        ],
-    )?;
-    let mut changes = vec![
-        TaxonChange {
-            kind: TaxonChangeKind::CreateTaxon,
-            field: "taxon".into(),
-            old_value: None,
-            new_value: Some(input.target_name.clone()),
-        },
-        TaxonChange {
-            kind: TaxonChangeKind::AppendName,
-            field: "sci_name".into(),
-            old_value: None,
-            new_value: Some(input.target_name.clone()),
-        },
-    ];
+    let taxon_id = target.taxon_id;
     apply_additional_names(transaction, taxon_id, input, &mut changes)?;
-    let target = load_taxon_summary(transaction, taxon_id)?;
-    if let Some(target) = target.as_ref() {
-        supplement_path_sources(transaction, input, target, &mut changes)?;
-    }
+    supplement_path_sources(transaction, input, &target, &mut changes)?;
     let mut operation_types = classify_changes(&changes);
     operation_types.insert(0, TaxonRowStatus::NewTaxon);
     Ok(TaxonRowOutcome {
         row_number,
         operation_types,
         message: describe_changes(&changes),
-        target,
+        target: Some(target),
         parent,
         candidates: Vec::new(),
         changes,
@@ -792,24 +749,22 @@ fn supplement_path_sources(
     let Some(source) = input.source.as_deref() else {
         return Ok(());
     };
-    for (taxon_id, rank, names) in target
+    for (taxon_id, rank) in target
         .breadcrumb
         .iter()
-        .map(|item| (item.taxon_id, item.rank, &item.names))
-        .chain(std::iter::once((
-            target.taxon_id,
-            target.rank,
-            &target.names,
-        )))
+        .map(|item| (item.taxon_id, item.rank))
+        .chain(std::iter::once((target.taxon_id, target.rank)))
     {
         let Some(expected_name) = input.path[rank.index()].as_deref() else {
             continue;
         };
-        if names.sci_name.as_deref() == Some(expected_name) {
+        if let Some(existing_type) =
+            existing_scientific_name_type(transaction, taxon_id, expected_name)?
+        {
             update_name_fields(
                 transaction,
                 taxon_id,
-                TaxonomyNameType::SciName,
+                existing_type,
                 expected_name,
                 None,
                 Some(source),
@@ -1128,29 +1083,30 @@ fn existing_scientific_name_type(
 
 fn find_target(transaction: &Transaction<'_>, input: &NormalizedInput) -> CoreResult<MatchResult> {
     for (input_index, input_name) in input.scientific_names().into_iter().enumerate() {
-        for existing_type in [TaxonomyNameType::SciName, TaxonomyNameType::Synonym] {
-            let candidates = find_candidates_by_type(
-                transaction,
-                input.target_rank,
-                &input_name.name,
-                existing_type,
-                input,
-                input.target_rank,
-            )?;
-            if !candidates.is_empty() {
-                return Ok(match candidates.as_slice() {
-                    [one] => MatchResult::One(
-                        one.clone(),
-                        MatchedName {
-                            input_index,
-                            name: input_name.name,
-                            authority_year: input_name.authority_year,
-                            existing_type,
-                        },
-                    ),
-                    _ => MatchResult::Many(candidates),
-                });
-            }
+        let mut candidates =
+            find_scientific_candidates(transaction, input.target_rank, &input_name.name)?;
+        if candidates.len() > 1 {
+            candidates =
+                disambiguate_candidates(transaction, candidates, input, input.target_rank)?;
+        }
+        if let [candidate] = candidates.as_slice() {
+            return Ok(MatchResult::One(
+                candidate.summary.clone(),
+                MatchedName {
+                    input_index,
+                    name: input_name.name,
+                    authority_year: input_name.authority_year,
+                    existing_type: candidate.existing_type,
+                },
+            ));
+        }
+        if candidates.len() > 1 {
+            return Ok(MatchResult::Many(
+                candidates
+                    .into_iter()
+                    .map(|candidate| candidate.summary)
+                    .collect(),
+            ));
         }
     }
     Ok(MatchResult::None)
@@ -1160,57 +1116,65 @@ fn find_scientific_candidates(
     transaction: &Transaction<'_>,
     rank: TaxonRank,
     name: &str,
-    input: &NormalizedInput,
-    lineage_limit: TaxonRank,
-) -> CoreResult<Vec<TaxonSummary>> {
-    find_candidates_by_type(
-        transaction,
-        rank,
-        name,
-        TaxonomyNameType::SciName,
-        input,
-        lineage_limit,
-    )
-}
-
-fn find_candidates_by_type(
-    transaction: &Transaction<'_>,
-    rank: TaxonRank,
-    name: &str,
-    name_type: TaxonomyNameType,
-    input: &NormalizedInput,
-    lineage_limit: TaxonRank,
-) -> CoreResult<Vec<TaxonSummary>> {
+) -> CoreResult<Vec<ScientificCandidate>> {
     let mut statement = transaction.prepare(
         r#"
-        SELECT DISTINCT taxa.taxon_id
+        SELECT taxa.taxon_id, MIN(taxon_names.name_type)
         FROM taxa JOIN taxon_names USING (taxon_id)
         WHERE taxa.rank = ? AND taxon_names.name = ? COLLATE BINARY
-          AND taxon_names.name_type = ?
+          AND taxon_names.name_type IN (1, 2)
+        GROUP BY taxa.taxon_id
         ORDER BY taxa.taxon_id
         "#,
     )?;
-    let ids = statement
-        .query_map(params![rank.code(), name, name_type.code()], |row| {
-            row.get::<_, i64>(0)
+    let rows = statement
+        .query_map(params![rank.code(), name], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
         })?
         .collect::<Result<Vec<_>, _>>()?;
-    let mut filtered = Vec::new();
-    for taxon_id in ids {
-        let mut matches = true;
-        for ancestor_rank in TaxonRank::ALL.into_iter().take(lineage_limit.index()) {
-            if let Some(expected) = input.path[ancestor_rank.index()].as_deref()
-                && !lineage_has_scientific_name(transaction, taxon_id, ancestor_rank, expected)?
-            {
-                matches = false;
-                break;
+    let ids = rows
+        .iter()
+        .map(|(taxon_id, _)| *taxon_id)
+        .collect::<Vec<_>>();
+    let summaries = load_taxon_summaries(transaction, &ids)?;
+    rows.into_iter()
+        .zip(summaries)
+        .map(|((_, name_type), summary)| {
+            Ok(ScientificCandidate {
+                summary,
+                existing_type: TaxonomyNameType::from_code(name_type)?,
+            })
+        })
+        .collect()
+}
+
+fn disambiguate_candidates(
+    transaction: &Transaction<'_>,
+    mut candidates: Vec<ScientificCandidate>,
+    input: &NormalizedInput,
+    rank: TaxonRank,
+) -> CoreResult<Vec<ScientificCandidate>> {
+    for ancestor_rank in TaxonRank::ALL[..rank.index()].iter().rev().copied() {
+        let Some(expected) = input.path[ancestor_rank.index()].as_deref() else {
+            continue;
+        };
+        let mut filtered = Vec::new();
+        for candidate in candidates {
+            if lineage_has_scientific_name(
+                transaction,
+                candidate.summary.taxon_id,
+                ancestor_rank,
+                expected,
+            )? {
+                filtered.push(candidate);
             }
         }
-        if matches {
-            filtered.push(taxon_id);
+        candidates = filtered;
+        if candidates.len() <= 1 {
+            break;
         }
     }
-    load_taxon_summaries(transaction, &filtered)
+    Ok(candidates)
 }
 
 fn lineage_has_scientific_name(
@@ -1230,7 +1194,7 @@ fn lineage_has_scientific_name(
         )
         SELECT EXISTS(
             SELECT 1 FROM lineage JOIN taxon_names USING (taxon_id)
-            WHERE lineage.rank = ? AND taxon_names.name_type = 1
+            WHERE lineage.rank = ? AND taxon_names.name_type IN (1, 2)
               AND taxon_names.name = ? COLLATE BINARY
         )
         "#,
@@ -1239,10 +1203,132 @@ fn lineage_has_scientific_name(
     )?)
 }
 
+fn resolve_or_create_lineage(
+    transaction: &Transaction<'_>,
+    input: &NormalizedInput,
+    rank: TaxonRank,
+    child_rank: TaxonRank,
+    changes: &mut Vec<TaxonChange>,
+) -> CoreResult<Result<TaxonSummary, LineageFailure>> {
+    let Some(name) = input.path[rank.index()].as_deref() else {
+        return Ok(Err(LineageFailure::MissingParent {
+            child_rank,
+            parent_rank: rank,
+        }));
+    };
+    let mut candidates = find_scientific_candidates(transaction, rank, name)?;
+    if candidates.len() > 1 {
+        candidates = disambiguate_candidates(transaction, candidates, input, rank)?;
+    }
+    match candidates.as_slice() {
+        [candidate] => return Ok(Ok(candidate.summary.clone())),
+        [_, _, ..] => {
+            return Ok(Err(LineageFailure::MultipleCandidates(
+                candidates
+                    .into_iter()
+                    .map(|candidate| candidate.summary)
+                    .collect(),
+            )));
+        }
+        [] => {}
+    }
+
+    let parent = if let Some(parent_rank) = rank.parent() {
+        if input.path[parent_rank.index()].is_none() {
+            return Ok(Err(LineageFailure::MissingParent {
+                child_rank: rank,
+                parent_rank,
+            }));
+        }
+        match resolve_or_create_lineage(transaction, input, parent_rank, rank, changes)? {
+            Ok(parent) => Some(parent),
+            Err(failure) => return Ok(Err(failure)),
+        }
+    } else {
+        None
+    };
+    insert_taxon_with_scientific_name(
+        transaction,
+        rank,
+        name,
+        parent.as_ref(),
+        None,
+        None,
+        input.source.as_deref(),
+        changes,
+    )
+    .map(Ok)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn insert_taxon_with_scientific_name(
+    transaction: &Transaction<'_>,
+    rank: TaxonRank,
+    name: &str,
+    parent: Option<&TaxonSummary>,
+    geological_range: Option<&str>,
+    authority_year: Option<&str>,
+    source: Option<&str>,
+    changes: &mut Vec<TaxonChange>,
+) -> CoreResult<TaxonSummary> {
+    transaction.execute(
+        "INSERT INTO taxa (parent_taxon_id, rank, geological_range) VALUES (?, ?, ?)",
+        params![
+            parent.map(|value| value.taxon_id),
+            rank.code(),
+            geological_range
+        ],
+    )?;
+    let taxon_id = transaction.last_insert_rowid();
+    transaction.execute(
+        r#"
+        INSERT INTO taxon_names (taxon_id, name_type, name, authority_year, source)
+        VALUES (?, ?, ?, ?, ?)
+        "#,
+        params![
+            taxon_id,
+            TaxonomyNameType::SciName.code(),
+            name,
+            authority_year,
+            source
+        ],
+    )?;
+    changes.extend([
+        TaxonChange {
+            kind: TaxonChangeKind::CreateTaxon,
+            field: "taxon".into(),
+            old_value: None,
+            new_value: Some(name.into()),
+        },
+        TaxonChange {
+            kind: TaxonChangeKind::AppendName,
+            field: "sci_name".into(),
+            old_value: None,
+            new_value: Some(name.into()),
+        },
+    ]);
+    load_taxon_summary(transaction, taxon_id)?
+        .ok_or_else(|| CoreError::NotFound(format!("new {} taxon {taxon_id}", rank.as_str())))
+}
+
 enum MatchResult {
     None,
     One(TaxonSummary, MatchedName),
     Many(Vec<TaxonSummary>),
+}
+
+#[derive(Debug)]
+struct ScientificCandidate {
+    summary: TaxonSummary,
+    existing_type: TaxonomyNameType,
+}
+
+enum LineageFailure {
+    MissingParent {
+        child_rank: TaxonRank,
+        parent_rank: TaxonRank,
+    },
+    MultipleCandidates(Vec<TaxonSummary>),
 }
 
 #[derive(Debug, Clone)]
@@ -1322,12 +1408,6 @@ impl NormalizedInput {
             geological_range: normalize_text(row.geological_range.as_deref()),
             source: normalize_text(row.source.as_deref()),
         })
-    }
-
-    fn parent_name(&self) -> Option<&str> {
-        self.target_rank
-            .parent()
-            .and_then(|rank| self.path[rank.index()].as_deref())
     }
 
     fn scientific_names(&self) -> Vec<ParsedSynonym> {

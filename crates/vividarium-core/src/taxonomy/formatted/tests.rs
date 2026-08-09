@@ -651,7 +651,7 @@ fn input_priority_precedes_database_name_type_priority() {
 }
 
 #[test]
-fn existing_sci_name_precedes_existing_synonym_for_one_input_name() {
+fn sci_name_and_synonym_matches_are_one_candidate_set() {
     let (_directory, database) = database();
     apply_rows(
         &database,
@@ -686,22 +686,16 @@ fn existing_sci_name_precedes_existing_synonym_for_one_input_name() {
         }],
     )
     .unwrap();
+    assert_eq!(preview.rows[0].target, None);
+    assert_eq!(preview.rows[0].candidates.len(), 2);
     assert_eq!(
-        preview.rows[0]
-            .target
-            .as_ref()
-            .and_then(|target| target.names.sci_name.as_deref()),
-        Some("Shared")
-    );
-    assert!(
-        !preview.rows[0]
-            .operation_types
-            .contains(&TaxonRowStatus::MultipleCandidates)
+        preview.rows[0].operation_types,
+        vec![TaxonRowStatus::MultipleCandidates]
     );
 }
 
 #[test]
-fn sparse_lineage_fields_are_valid_filters_and_direct_parent_input() {
+fn sparse_lineage_fields_allow_unique_matches_and_direct_parent_creation() {
     let (_directory, database) = database();
     apply_rows(
         &database,
@@ -781,5 +775,283 @@ fn sparse_lineage_fields_are_valid_filters_and_direct_parent_input() {
             .as_ref()
             .and_then(|parent| parent.names.sci_name.as_deref()),
         Some("Carnivora")
+    );
+}
+
+#[test]
+fn one_species_row_derives_genus_and_creates_the_strict_lineage() {
+    let (_directory, database) = database();
+    let result = apply_rows(
+        &database,
+        &[TaxonInputRow {
+            kingdom: Some("Animalia".into()),
+            order: Some("Carnivora".into()),
+            family: Some("Canidae".into()),
+            species: Some("Canis lupus".into()),
+            ..TaxonInputRow::default()
+        }],
+    )
+    .unwrap();
+
+    assert!(
+        result.rows[0]
+            .operation_types
+            .contains(&TaxonRowStatus::NewTaxon)
+    );
+    assert_eq!(
+        result.rows[0]
+            .parent
+            .as_ref()
+            .and_then(|parent| parent.names.sci_name.as_deref()),
+        Some("Canis")
+    );
+    let connection = database.connect_taxonomy_metadata_context().unwrap();
+    assert_eq!(
+        connection
+            .query_row("SELECT COUNT(*) FROM taxa", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        5
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                r#"
+                SELECT parent_name.name
+                FROM taxon_names AS species_name
+                JOIN taxa AS species USING (taxon_id)
+                JOIN taxon_names AS parent_name
+                  ON parent_name.taxon_id = species.parent_taxon_id
+                 AND parent_name.name_type = 1
+                WHERE species_name.name = 'Canis lupus'
+                "#,
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+        "Canis"
+    );
+}
+
+#[test]
+fn a_unique_lowest_rank_match_ignores_supplied_ancestors() {
+    let (_directory, database) = database();
+    apply_rows(
+        &database,
+        &[TaxonInputRow {
+            kingdom: Some("Animalia".into()),
+            order: Some("Carnivora".into()),
+            family: Some("Canidae".into()),
+            genus: Some("Canis".into()),
+            species: Some("Canis lupus".into()),
+            ..TaxonInputRow::default()
+        }],
+    )
+    .unwrap();
+
+    let result = apply_rows(
+        &database,
+        &[TaxonInputRow {
+            genus: Some("Felis".into()),
+            species: Some("Canis lupus".into()),
+            geological_range: Some("updated".into()),
+            ..TaxonInputRow::default()
+        }],
+    )
+    .unwrap();
+
+    assert_eq!(
+        result.rows[0]
+            .target
+            .as_ref()
+            .and_then(|target| target.names.sci_name.as_deref()),
+        Some("Canis lupus")
+    );
+    let connection = database.connect_taxonomy_metadata_context().unwrap();
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM taxon_names WHERE name = 'Felis'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn ambiguous_lowest_rank_matches_use_each_nearest_supplied_ancestor() {
+    let (_directory, database) = database();
+    let connection = database.connect_taxonomy_metadata_context().unwrap();
+    connection
+        .execute_batch(
+            r#"
+            INSERT INTO taxa (taxon_id, parent_taxon_id, rank) VALUES
+                (1, NULL, 1),
+                (2, 1, 2),
+                (3, 2, 3),
+                (4, 3, 4),
+                (5, 4, 5),
+                (6, NULL, 1),
+                (7, 6, 2),
+                (8, 7, 3),
+                (9, 8, 4),
+                (10, 9, 5);
+            INSERT INTO taxon_names (taxon_id, name_type, name) VALUES
+                (1, 1, 'Animalia'),
+                (2, 1, 'Carnivora'),
+                (3, 1, 'Canidae'),
+                (4, 1, 'Canis alpha'),
+                (4, 2, 'Canis'),
+                (5, 1, 'Shared species'),
+                (6, 1, 'Other kingdom'),
+                (7, 1, 'Other order'),
+                (8, 1, 'Other family'),
+                (9, 1, 'Canis'),
+                (10, 1, 'Shared species');
+            "#,
+        )
+        .unwrap();
+    drop(connection);
+
+    let result = preview_rows(
+        &database,
+        &[TaxonInputRow {
+            family: Some("Canidae".into()),
+            genus: Some("Canis".into()),
+            species: Some("Shared species".into()),
+            ..TaxonInputRow::default()
+        }],
+    )
+    .unwrap();
+
+    assert_eq!(result.rows[0].candidates.len(), 0);
+    assert_eq!(
+        result.rows[0].target.as_ref().map(|target| target.taxon_id),
+        Some(5)
+    );
+}
+
+#[test]
+fn a_missing_strict_parent_is_reported_before_creating_a_lineage() {
+    let (_directory, database) = database();
+    let result = preview_rows(
+        &database,
+        &[TaxonInputRow {
+            species: Some("Canis lupus".into()),
+            ..TaxonInputRow::default()
+        }],
+    )
+    .unwrap();
+
+    assert_eq!(
+        result.rows[0].operation_types,
+        vec![TaxonRowStatus::NotMatched]
+    );
+    assert!(
+        result.rows[0]
+            .message
+            .contains("new genus taxon requires a family")
+    );
+}
+
+#[test]
+fn a_new_taxon_reuses_a_unique_parent_synonym_without_checking_higher_ranks() {
+    let (_directory, database) = database();
+    apply_rows(
+        &database,
+        &[TaxonInputRow {
+            kingdom: Some("Animalia".into()),
+            order: Some("Carnivora".into()),
+            family: Some("Canidae".into()),
+            genus: Some("Canis".into()),
+            synonyms: vec!["Canini".into()],
+            ..TaxonInputRow::default()
+        }],
+    )
+    .unwrap();
+
+    let result = apply_rows(
+        &database,
+        &[TaxonInputRow {
+            family: Some("Wrong family".into()),
+            genus: Some("Canini".into()),
+            species: Some("Canis familiaris".into()),
+            ..TaxonInputRow::default()
+        }],
+    )
+    .unwrap();
+
+    assert_eq!(
+        result.rows[0]
+            .parent
+            .as_ref()
+            .and_then(|parent| parent.names.sci_name.as_deref()),
+        Some("Canis")
+    );
+    let connection = database.connect_taxonomy_metadata_context().unwrap();
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM taxon_names WHERE name = 'Wrong family'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn ancestor_disambiguation_with_no_remaining_target_creates_the_target() {
+    let (_directory, database) = database();
+    let connection = database.connect_taxonomy_metadata_context().unwrap();
+    connection
+        .execute_batch(
+            r#"
+            INSERT INTO taxa (taxon_id, parent_taxon_id, rank) VALUES
+                (1, NULL, 1),
+                (2, 1, 2),
+                (3, 2, 3),
+                (4, 3, 4),
+                (5, 3, 4),
+                (6, 3, 4),
+                (7, 4, 5),
+                (8, 5, 5);
+            INSERT INTO taxon_names (taxon_id, name_type, name) VALUES
+                (1, 1, 'Animalia'),
+                (2, 1, 'Carnivora'),
+                (3, 1, 'Canidae'),
+                (4, 1, 'Canis'),
+                (5, 1, 'Lycaon'),
+                (6, 1, 'Cuon'),
+                (7, 1, 'Shared species'),
+                (8, 1, 'Shared species');
+            "#,
+        )
+        .unwrap();
+    drop(connection);
+
+    let result = apply_rows(
+        &database,
+        &[TaxonInputRow {
+            genus: Some("Cuon".into()),
+            species: Some("Shared species".into()),
+            ..TaxonInputRow::default()
+        }],
+    )
+    .unwrap();
+
+    assert!(
+        result.rows[0]
+            .operation_types
+            .contains(&TaxonRowStatus::NewTaxon)
+    );
+    assert_eq!(
+        result.rows[0]
+            .parent
+            .as_ref()
+            .and_then(|parent| parent.names.sci_name.as_deref()),
+        Some("Cuon")
     );
 }

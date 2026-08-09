@@ -422,15 +422,6 @@ function demoPromoteTaxonName(input: TaxonNameActionInput): void {
   const accepted = location.group.accepted();
   if (!accepted) throw new Error(`taxon ${input.taxon_id} has no ${location.group.acceptedType} to exchange`);
 
-  if (detail.rank === "species" && location.nameType === "synonym") {
-    const genusName = detail.parent_taxon_id === null
-      ? null
-      : demoTaxonDetails.get(detail.parent_taxon_id)?.names.sci_name?.name ?? null;
-    if (location.name.name.split(/\s+/)[0] !== genusName) {
-      throw new Error(`species scientific name '${location.name.name}' does not start with parent genus '${genusName ?? ""}'`);
-    }
-  }
-
   location.group.aliases[location.aliasIndex] = accepted;
   location.group.setAccepted(location.name);
   refreshDemoTaxonViews(input.taxon_id);
