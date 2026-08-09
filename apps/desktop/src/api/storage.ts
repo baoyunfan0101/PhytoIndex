@@ -66,6 +66,8 @@ export const relocatePhotoLibraryDatabase = (libraryUuid: string, databasePath: 
   }));
 export const removePhotoLibrary = (libraryUuid: string) =>
   call<void>("remove_photo_library", { libraryUuid }, () => undefined);
+export const openPathInFileManager = (path: string) =>
+  call<void>("open_path_in_file_manager", { path }, () => undefined);
 export const openTaxonomyDatabase = (databasePath: string) =>
   call<DatabaseLocations>("open_taxonomy_database", { databasePath }, () => ({
     ...getDemoDatabaseLocations(), taxonomy_database: databasePath,

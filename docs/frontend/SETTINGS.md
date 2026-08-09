@@ -39,13 +39,18 @@ Recent-search contents remain in browser-local storage.
 
 Shows the metadata database, current taxonomy database, default Photo Library
 database directory, default taxonomy database directory, and current taxonomy
-source metadata. Long paths remain on one line and expose the complete value
-through a tooltip.
+source metadata. Paths wrap as needed so the complete value remains visible.
+Every database and directory path has an Open action that reveals a file or
+opens a directory in the system file manager. Taxonomy database Move starts in
+the configured default taxonomy directory. Both directory Change actions
+reopen at their current value.
 
 ### Photo Libraries
 
 Registers, opens, renames, rebinds, relocates, and removes Photo Library
-resources. It does not own photo browsing or mapping behavior.
+resources. Creating or registering a library starts its database destination
+dialog in the configured default Photo Library database directory. It does not
+own photo browsing or mapping behavior.
 
 ### Taxonomy Databases
 

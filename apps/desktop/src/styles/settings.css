@@ -81,9 +81,9 @@
 .hook-test-actual .code-editor { border: 1px solid var(--line); background: var(--input); }
 .hook-test-actual p { margin: 0; color: var(--red); }
 
-.storage-path { display: grid; grid-template-columns: 210px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 10px; border-bottom: 1px solid var(--line); }
-.storage-path > span { color: var(--muted); }
-.storage-path code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.storage-path { display: grid; grid-template-columns: 210px minmax(0, 1fr) auto; align-items: start; gap: 10px; padding: 10px; border-bottom: 1px solid var(--line); }
+.storage-path > span { padding-top: 6px; color: var(--muted); }
+.storage-path code { min-width: 0; padding-top: 6px; overflow-wrap: anywhere; white-space: normal; }
 .storage-path button, .library-actions button {
   display: inline-flex;
   height: 26px;
@@ -93,7 +93,7 @@
   border: 1px solid var(--line);
   background: var(--button-bg);
 }
-.storage-actions { display: flex; gap: 5px; }
+.storage-actions { display: flex; flex-wrap: wrap; gap: 5px; }
 .library-settings-list { display: grid; gap: 8px; padding: 10px; overflow: auto; }
 .library-settings-row { display: grid; gap: 6px; padding: 9px; border: 1px solid var(--line); background: var(--panel); }
 .library-settings-row.active { border-color: #4c7158; }

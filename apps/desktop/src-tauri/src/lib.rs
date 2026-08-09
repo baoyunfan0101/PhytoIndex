@@ -42,6 +42,7 @@ pub fn run() {
             commands::relocate_photo_library_database,
             commands::remove_photo_library,
             commands::rename_photo_library,
+            commands::open_path_in_file_manager,
             commands::open_taxonomy_database,
             commands::relocate_taxonomy_database,
             commands::set_default_taxonomy_database_directory,

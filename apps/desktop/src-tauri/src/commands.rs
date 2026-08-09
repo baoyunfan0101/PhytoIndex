@@ -273,6 +273,21 @@ pub fn rename_photo_library(
 }
 
 #[tauri::command]
+pub fn open_path_in_file_manager(path: String) -> CommandResult<()> {
+    let path = Path::new(&path);
+    if !path.is_absolute() {
+        return Err("storage path must be absolute".into());
+    }
+    if path.is_dir() {
+        crate::file_manager::open_directory(path)
+    } else if path.is_file() {
+        crate::file_manager::reveal(path)
+    } else {
+        Err(format!("storage path is unavailable: {}", path.display()))
+    }
+}
+
+#[tauri::command]
 pub fn relocate_taxonomy_database(
     state: State<'_, AppState>,
     database_path: String,

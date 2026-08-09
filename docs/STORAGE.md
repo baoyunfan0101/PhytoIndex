@@ -71,3 +71,10 @@ interfaces do not attach the photo library. Photo interfaces and cross-module
 taxonomy/photo interfaces require the active library DB and return
 `CoreError::NotFound` when it is unavailable. The registration is retained,
 and no interface silently creates an empty replacement DB.
+
+The desktop `open_path_in_file_manager` command accepts one absolute path. It
+opens directories directly and reveals files in the system file manager;
+missing or relative paths are rejected. Desktop destination dialogs use
+`default_taxonomy_directory` for taxonomy selection and relocation, and
+`default_photo_library_directory` when creating or registering a Photo Library
+database.

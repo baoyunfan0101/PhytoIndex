@@ -27,6 +27,7 @@ import {
   type Photo,
 } from "../api/photos";
 import {
+  getDatabaseLocations,
   listPhotoLibraries,
   openTaxonomyDatabase,
   openPhotoLibrary,
@@ -436,9 +437,10 @@ export function DesktopShell({
   }
 
   async function openExistingTaxonomyDatabase() {
-    const selected = await selectSqliteDatabase();
-    if (!selected) return;
     try {
+      const locations = await getDatabaseLocations();
+      const selected = await selectSqliteDatabase(locations.default_taxonomy_directory);
+      if (!selected) return;
       await openTaxonomyDatabase(selected);
       resetTaxonomyResources("Taxonomy Database opened. Photo mappings are being rebuilt in the background.");
     } catch (nextError) {

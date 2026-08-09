@@ -7,6 +7,8 @@ import {
   ChevronRight,
   Database,
   FolderCog,
+  FolderInput,
+  FolderOpen,
   Info,
   Library,
   Map,
@@ -35,6 +37,7 @@ import { errorMessage } from "../../api/common";
 import {
   getDatabaseLocations,
   listPhotoLibraries,
+  openPathInFileManager,
   photoLibraryAvailabilityLabel,
   rebindPhotoLibraryDatabase,
   rebindPhotoLibraryRoot,
@@ -359,7 +362,7 @@ function StorageSettings() {
   }, []);
 
   async function changeDefaultPhotoLibraryDirectory() {
-    const directory = await selectPhotoDirectory();
+    const directory = await selectPhotoDirectory(locations?.default_photo_library_directory);
     if (!directory) return;
     try {
       setLocations(await setDefaultPhotoLibraryDatabaseDirectory(directory));
@@ -370,7 +373,7 @@ function StorageSettings() {
   }
 
   async function relocate() {
-    const destination = await selectDatabaseDestination(locations?.taxonomy_database);
+    const destination = await selectDatabaseDestination(locations?.default_taxonomy_directory);
     if (!destination) return;
     try {
       setLocations(await relocateTaxonomyDatabase(destination));
@@ -381,7 +384,7 @@ function StorageSettings() {
   }
 
   async function changeDefaultDirectory() {
-    const directory = await selectPhotoDirectory();
+    const directory = await selectPhotoDirectory(locations?.default_taxonomy_directory);
     if (!directory) return;
     try {
       setLocations(await setDefaultTaxonomyDatabaseDirectory(directory));
@@ -391,23 +394,39 @@ function StorageSettings() {
     }
   }
 
+  async function openStoragePath(path: string) {
+    setMessage("");
+    try {
+      await openPathInFileManager(path);
+    } catch (nextError) {
+      setMessage(errorMessage(nextError));
+    }
+  }
+
   return (
     <div className="settings-section">
       <SectionHeader title="Storage" detail="View database locations, default directories, and taxonomy metadata." />
-      <StoragePath label="Metadata database" value={locations?.metadata_database ?? "Loading"} />
+      <StoragePath
+        label="Metadata database"
+        value={locations?.metadata_database ?? "Loading"}
+        onOpen={locations ? () => void openStoragePath(locations.metadata_database) : undefined}
+      />
       <StoragePath
         label="Taxonomy database"
         value={locations?.taxonomy_database ?? "Loading"}
-        action={<Button onClick={() => void relocate()}><Move size={13} />Relocate</Button>}
+        onOpen={locations ? () => void openStoragePath(locations.taxonomy_database) : undefined}
+        action={<Button onClick={() => void relocate()}><FolderInput size={13} />Move</Button>}
       />
       <StoragePath
         label="Photo Library database default directory"
         value={locations?.default_photo_library_directory ?? "Loading"}
+        onOpen={locations ? () => void openStoragePath(locations.default_photo_library_directory) : undefined}
         action={<Button onClick={() => void changeDefaultPhotoLibraryDirectory()}><FolderCog size={13} />Change</Button>}
       />
       <StoragePath
         label="Taxonomy database default directory"
         value={locations?.default_taxonomy_directory ?? "Loading"}
+        onOpen={locations ? () => void openStoragePath(locations.default_taxonomy_directory) : undefined}
         action={<Button onClick={() => void changeDefaultDirectory()}><FolderCog size={13} />Change</Button>}
       />
       <h3>Taxonomy metadata</h3>
@@ -438,15 +457,20 @@ function PhotoLibrariesSettings({ onChanged }: { onChanged?: (resetPhotoTabs: bo
   async function createLibrary() {
     const rootPath = await selectPhotoDirectory();
     if (!rootPath) return;
-    const databasePath = await selectDatabaseDestination();
-    if (!databasePath) return;
-    const displayName = window.prompt("Photo Library name", rootPath.split(/[\\/]/).pop() ?? "Photo Library");
-    if (displayName === null) return;
-    await mutate(
-      "Creating library",
-      () => registerPhotoLibrary(rootPath, databasePath, displayName),
-      true,
-    );
+    try {
+      const locations = await getDatabaseLocations();
+      const databasePath = await selectDatabaseDestination(locations.default_photo_library_directory);
+      if (!databasePath) return;
+      const displayName = window.prompt("Photo Library name", rootPath.split(/[\\/]/).pop() ?? "Photo Library");
+      if (displayName === null) return;
+      await mutate(
+        "Creating library",
+        () => registerPhotoLibrary(rootPath, databasePath, displayName),
+        true,
+      );
+    } catch (nextError) {
+      setMessage(errorMessage(nextError));
+    }
   }
 
   async function mutate(
@@ -498,10 +522,10 @@ function PhotoLibrariesSettings({ onChanged }: { onChanged?: (resetPhotoTabs: bo
                 const name = window.prompt("Photo Library name", library.display_name)?.trim();
                 if (name) void mutate("Renaming library", () => renamePhotoLibrary(library.library_uuid, name));
               }}><Pencil size={12} />Rename</Button>
-              <Button size="small" onClick={() => void selectPhotoDirectory().then((path) => {
+              <Button size="small" onClick={() => void selectPhotoDirectory(library.root_path).then((path) => {
                 if (path) return mutate("Rebinding root", () => rebindPhotoLibraryRoot(library.library_uuid, path), library.active);
               })}>Rebind root</Button>
-              <Button size="small" onClick={() => void selectSqliteDatabase().then((path) => {
+              <Button size="small" onClick={() => void selectSqliteDatabase(library.db_path).then((path) => {
                 if (path) return mutate("Rebinding database", () => rebindPhotoLibraryDatabase(library.library_uuid, path), library.active);
               })}>Rebind DB</Button>
               <Button size="small" disabled={!library.database_available} onClick={() => void selectDatabaseDestination(library.db_path).then((path) => {
@@ -520,13 +544,15 @@ function PhotoLibrariesSettings({ onChanged }: { onChanged?: (resetPhotoTabs: bo
 function StoragePath({
   label,
   value,
+  onOpen,
   action,
 }: {
   label: string;
   value: string;
+  onOpen?: () => void;
   action?: ReactNode;
 }) {
-  return <div className="storage-path"><span>{label}</span><code title={value}>{value}</code>{action}</div>;
+  return <div className="storage-path"><span>{label}</span><code>{value}</code>{onOpen || action ? <div className="storage-actions">{onOpen ? <Button onClick={onOpen}><FolderOpen size={13} />Open</Button> : null}{action}</div> : null}</div>;
 }
 
 function AboutSettings() {
