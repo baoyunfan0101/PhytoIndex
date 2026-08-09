@@ -387,7 +387,7 @@ export function FormattedUpdateView({
             const file = event.target.files?.[0];
             if (file) void importFile(file);
           }} /></label>
-          <Button disabled={Boolean(busy)} onClick={() => void downloadTemplate()}><Download size={13} />{busy === "template" ? "Loading..." : "Template"}</Button>
+          <Button disabled={Boolean(busy)} onClick={() => void downloadTemplate()}><Download size={13} />{busy === "template" ? "Loading..." : "Download Template"}</Button>
           <Button disabled={Boolean(busy)} onClick={() => void preview()}><Eye size={13} />{busy === "preview" ? "Previewing..." : "Preview"}</Button>
           <Button variant="primary" disabled={Boolean(busy) || mutationDisabled || previewId === null} onClick={() => void apply()}><Play size={13} />{busy === "apply" ? "Applying..." : "Apply"}</Button>
         </>
