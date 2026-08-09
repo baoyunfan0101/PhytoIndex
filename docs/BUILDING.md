@@ -22,7 +22,7 @@ Tauri merges the matching file into `tauri.conf.json` automatically.
 
 - Git
 - Rust 1.85 or newer
-- Node.js 20 or newer and npm
+- Node.js 24 or newer and npm
 - Tauri CLI 2
 
 Install the Tauri CLI:
