@@ -27,8 +27,9 @@ dialog.
 
 Opening an operation replaces the list with its detail. The detail toolbar has
 a back button and actions scoped to that operation. Audit before and after
-values are displayed as syntax-highlighted, indented JSON in equal-height
-scrollable editors. A successful
+values are displayed as syntax-highlighted, indented JSON in content-sized
+editors without internal scrollbars. Each Before/After pair stretches to the
+taller value so the two panels remain aligned. A successful
 rollback removes the operation and refreshes the appropriate domain through
 its mutation notification. Batch rollback runs selected operations from newest
 to oldest.

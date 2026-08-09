@@ -479,9 +479,10 @@ function AuditRow({ row }: { row: OperationAuditRow }) {
           <b>Before</b>
           <CodeEditor
             ariaLabel={`Operation ${row.operation_id} audit ${row.sequence} before JSON`}
+            autoGrow
             className="audit-json-editor"
-            height={180}
             language="json"
+            minHeight={72}
             onChange={() => undefined}
             readOnly
             value={formatAuditJson(row.before_json)}
@@ -491,9 +492,10 @@ function AuditRow({ row }: { row: OperationAuditRow }) {
           <b>After</b>
           <CodeEditor
             ariaLabel={`Operation ${row.operation_id} audit ${row.sequence} after JSON`}
+            autoGrow
             className="audit-json-editor"
-            height={180}
             language="json"
+            minHeight={72}
             onChange={() => undefined}
             readOnly
             value={formatAuditJson(row.after_json)}

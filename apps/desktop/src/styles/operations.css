@@ -82,6 +82,8 @@
 }
 
 .operation-summary-row {
+  position: relative;
+  isolation: isolate;
   display: flex;
   width: 100%;
   height: 100%;
@@ -91,16 +93,25 @@
   background: var(--panel);
 }
 
-.operation-summary-row:hover,
-.operation-summary-row.selected {
+.operation-summary-row::before {
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  content: "";
+  background: transparent;
+  pointer-events: none;
+}
+
+.operation-summary-row:hover::before,
+.operation-summary-row.selected::before {
   background: var(--hover);
 }
 
-.operation-summary-row:hover > .operation-select,
-.operation-summary-row:hover > .operation-summary-main,
-.operation-summary-row.selected > .operation-select,
-.operation-summary-row.selected > .operation-summary-main {
-  background: var(--hover);
+.operation-summary-row > .operation-select,
+.operation-summary-row > .operation-summary-main {
+  position: relative;
+  z-index: 1;
+  background: transparent;
 }
 
 .operation-summary-main {
@@ -186,10 +197,10 @@
 }
 
 .audit-json-grid section {
-  display: grid;
+  display: flex;
   min-width: 0;
   align-self: stretch;
-  grid-template-rows: auto 180px;
+  flex-direction: column;
   gap: 5px;
 }
 
@@ -201,10 +212,13 @@
 }
 
 .audit-json-editor {
-  height: 180px;
+  min-height: 72px;
+  flex: 1;
   border: 1px solid var(--line);
   border-radius: 3px;
 }
+
+.audit-json-editor .cm-scroller { overflow: visible; }
 
 .history-load-status,
 .history-load-more {
