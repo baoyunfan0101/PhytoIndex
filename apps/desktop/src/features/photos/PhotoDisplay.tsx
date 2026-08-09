@@ -1,5 +1,5 @@
 import { Image as ImageIcon, LayoutGrid } from "lucide-react";
-import { useEffect, useState, type MouseEvent } from "react";
+import { useEffect, useRef, useState, type MouseEvent } from "react";
 import type { Photo } from "../../api/photos";
 import { IconButton, VirtualGrid } from "../../shared/ui";
 import { PhotoStage, PhotoThumb } from "./PhotoMedia";
@@ -8,17 +8,18 @@ export type PhotoDisplayMode = "thumbnails" | "image";
 
 export function usePhotoDisplayMode() {
   const [mode, setMode] = useState<PhotoDisplayMode>("thumbnails");
+  const modeRef = useRef(mode);
+  modeRef.current = mode;
 
   useEffect(() => {
-    if (mode !== "image") return;
     const returnToThumbnails = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || event.defaultPrevented) return;
+      if (modeRef.current !== "image" || event.key !== "Escape" || event.defaultPrevented) return;
       event.preventDefault();
       setMode("thumbnails");
     };
-    window.addEventListener("keydown", returnToThumbnails);
-    return () => window.removeEventListener("keydown", returnToThumbnails);
-  }, [mode, setMode]);
+    window.addEventListener("keydown", returnToThumbnails, true);
+    return () => window.removeEventListener("keydown", returnToThumbnails, true);
+  }, []);
 
   return [mode, setMode] as const;
 }

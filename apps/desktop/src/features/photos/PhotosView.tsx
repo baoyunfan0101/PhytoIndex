@@ -309,10 +309,10 @@ export function FolderPhotosView({
             rowHeight={28}
             itemKey={directoryTreeRowKey}
             onActivateActive={activateDirectoryRow}
-            onClearActive={() => {
+            onClearActive={displayMode === "thumbnails" ? () => {
               setActiveRowKey(null);
               interaction.clearSelection();
-            }}
+            } : undefined}
             onMoveActive={moveDirectoryRow}
             onNearEnd={() => void page.loadMore()}
             onTypeSelect={typeSelectDirectoryRow}
@@ -557,10 +557,10 @@ export function TaxonPhotosView({
             rowHeight={28}
             itemKey={taxonTreeRowKey}
             onActivateActive={activateTaxonRow}
-            onClearActive={() => {
+            onClearActive={displayMode === "thumbnails" ? () => {
               setActiveRowKey(null);
               interaction.clearSelection();
-            }}
+            } : undefined}
             onMoveActive={moveTaxonRow}
             onNearEnd={() => void page.loadMore()}
             onContextMenu={openCurrentTaxonContextMenu}
