@@ -41,10 +41,9 @@ Parameters include a status callback and optional mutation guard.
 Returns: a SQL editor, execution messages, typed result sets, warnings, and
 full export for truncated read-only queries. Its source sidebar has two
 mutually exclusive VS Code-style groups: Input sources is expanded by default,
-and All accessible tables combines uploaded source schemas with the complete
-readable `main` taxonomy schema. Sources whose stored copies are unavailable
-remain visible in Input sources but are omitted from All accessible tables.
-The expanded group body scrolls independently.
+and All accessible tables shows only the complete readable internal `main`
+taxonomy schema. Uploaded sources remain exclusively in Input sources. The
+expanded group body scrolls independently.
 CSV sources and exports use the application-wide CSV delimiter.
 
 ### `SqlImportSettings({ onApplied })`
@@ -54,10 +53,10 @@ Parameters: optional callback invoked after an SQL Import is applied.
 Returns: the SQL Import source registry, SQL workspace, validation issues,
 metadata, and apply controls. Its source sidebar uses the same mutually
 exclusive groups and scrolling behavior as Custom SQL. All accessible tables
-combines uploaded source schemas with the current internal taxonomy schema,
-which SQL Import can read through the `taxonomy` alias. The `sql_import`
-staging schema appears only in Input sources when staging exists, so it is not
-duplicated in All accessible tables.
+shows only the current internal taxonomy schema, which SQL Import can read
+through the `taxonomy` alias. Uploaded sources and the `sql_import` staging
+schema appear only in Input sources, so neither is duplicated in All
+accessible tables.
 
 ### `DirectImportSettings({ onApplied })`
 

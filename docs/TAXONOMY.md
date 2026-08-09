@@ -307,12 +307,11 @@ removing an input, validating new SQL, or recreating staging
 invalidates the prior staging-dependent candidate and validation state.
 Removal is rejected while another operation holds the workspace lock.
 `list_sql_import_database_schemas` exposes the current taxonomy catalog through
-the read-only `taxonomy` alias. Managed input schemas remain available from
-`list_sql_import_inputs`; clients combine them when presenting every table the
-SQL Import script can read. `list_sql_import_staging_schemas` separately
-exposes the `sql_import` staging catalog when staging exists so clients can
-present it with input sources without duplicating it in the readable database
-catalog.
+the read-only `taxonomy` alias for the internal-database catalog. Managed input
+schemas remain available from `list_sql_import_inputs` and are presented only
+with input sources. `list_sql_import_staging_schemas` separately exposes the
+`sql_import` staging catalog when staging exists so clients can present it with
+input sources without duplicating it in the internal-database catalog.
 
 Validate first executes SQL Import SQL, which can read the current taxonomy
 through the read-only `taxonomy` alias and every managed input through its

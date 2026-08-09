@@ -4,7 +4,7 @@ import { selectCsvFile, selectSqliteDatabase } from "../../api/dialogs";
 import type { PersistentSqlInput, SqlSourceSchema } from "../../api/customSql";
 import { Button, IconButton, Modal } from "../../shared/ui";
 import { sqlInputAliasError, suggestedSqlInputAlias } from "./sqlInputAlias";
-import { accessibleSqlSchemas, toggleSqlSourceGroup, type SqlSourceGroup } from "./sqlSourceSidebar";
+import { internalDatabaseSchemas, toggleSqlSourceGroup, type SqlSourceGroup } from "./sqlSourceSidebar";
 
 type PendingSqlInput = {
   kind: "csv" | "sqlite";
@@ -34,9 +34,9 @@ export function SqlInputList({
   const [expandedGroup, setExpandedGroup] = useState<SqlSourceGroup | null>("inputs");
   const aliasInputRef = useRef<HTMLInputElement>(null);
   const aliasError = pending ? sqlInputAliasError(pending.alias, inputs) : "";
-  const accessibleSchemas = useMemo(
-    () => accessibleSqlSchemas(inputs, databaseSchemas),
-    [databaseSchemas, inputs],
+  const internalSchemas = useMemo(
+    () => internalDatabaseSchemas(databaseSchemas),
+    [databaseSchemas],
   );
 
   useEffect(() => {
@@ -135,8 +135,8 @@ export function SqlInputList({
         </header>
         {expandedGroup === "tables" && (
           <div className="sql-source-group-body">
-            {accessibleSchemas.length === 0 && <span className="sql-source-empty">No accessible tables</span>}
-            {accessibleSchemas.map((schema) => (
+            {internalSchemas.length === 0 && <span className="sql-source-empty">No accessible tables</span>}
+            {internalSchemas.map((schema) => (
               <section className="sql-source-card sql-schema-card" key={schema.alias}>
                 <header>
                   <span><Database size={12} /><b>{schema.alias}</b></span>
