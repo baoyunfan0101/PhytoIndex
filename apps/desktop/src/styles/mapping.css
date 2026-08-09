@@ -24,7 +24,4 @@
 .mapping-current > header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
 .mapping-search { display: grid; grid-template-rows: 36px minmax(0, 1fr); gap: 8px; }
 .mapping-search > .search-field { height: 36px; }
-.mapping-search-results button { transition: none; }
-.mapping-search-results button:hover:not(:disabled) { filter: none; }
-.mapping-search-results button:active:not(:disabled) { filter: none; transform: none; }
 .candidate-stack { height: calc(100% - 30px); }
