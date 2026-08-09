@@ -142,8 +142,8 @@ export function SettingsView({
   return (
     <ResizablePanels
       className="settings-workbench"
-      initialSize={180}
-      minFirst={150}
+      initialSize={220}
+      minFirst={210}
       minSecond={420}
       separatorLabel="Resize Settings navigation"
       stateKey="settings.navigation"
