@@ -6,46 +6,28 @@ import {
   type PhotoMetadata,
 } from "../../api/photos";
 import { errorMessage, formatBytes } from "../../api/common";
-import { getPhotoMapping } from "../../api/mapping";
-import { displayTaxonDetail, getTaxonDetail } from "../../api/taxonomy";
 import { Busy, Button } from "../../shared/ui";
 import { PhotoStage } from "./PhotoMedia";
 import { useViewState } from "../../shared/viewState";
-import { usePhotoMutation } from "./photoMutations";
 import { ResizablePanels } from "../../shared/ResizablePanels";
 
 export function PhotoDetailView({ photo }: { photo: Photo }) {
   const [metadata, setMetadata] = useViewState<PhotoMetadata | null>("photo-detail.metadata", null);
-  const [taxon, setTaxon] = useViewState("photo-detail.taxon", "");
   const [detailScrollTop, setDetailScrollTop] = useViewState("photo-detail.scroll-top", 0);
   const [error, setError] = useState("");
   const [copied, setCopied] = useState("");
-  const [mappingRefresh, setMappingRefresh] = useState(0);
   const detailRef = useRef<HTMLDListElement>(null);
-  usePhotoMutation((mutation) => {
-    if (
-      mutation.kind === "mapping"
-      && (mutation.photoId === null || mutation.photoId === photo.photo_id)
-    ) {
-      setMappingRefresh((current) => current + 1);
-    }
-  });
 
   useEffect(() => {
     let active = true;
-    Promise.all([
-      getPhotoMetadata(photo.photo_id),
-      getPhotoMapping(photo.photo_id).then(async (mapping) => {
-        if (mapping.status !== "matched" || mapping.taxon_id === null) return "";
-        return displayTaxonDetail(await getTaxonDetail(mapping.taxon_id));
-      }),
-    ]).then(([nextMetadata, nextTaxon]) => {
+    setMetadata(null);
+    setError("");
+    getPhotoMetadata(photo.photo_id).then((nextMetadata) => {
       if (!active) return;
       setMetadata(nextMetadata);
-      setTaxon(nextTaxon);
     }).catch((nextError) => setError(errorMessage(nextError)));
     return () => { active = false; };
-  }, [photo, mappingRefresh]);
+  }, [photo.photo_id]);
 
   useEffect(() => {
     if (detailRef.current) detailRef.current.scrollTop = detailScrollTop;
@@ -58,20 +40,11 @@ export function PhotoDetailView({ photo }: { photo: Photo }) {
     }).catch((nextError) => setError(errorMessage(nextError)));
   }
 
-  const hasLocation = metadata?.longitude !== null
-    && metadata?.longitude !== undefined
-    && metadata.latitude !== null
-    && metadata.latitude !== undefined;
-  const hasDimensions = metadata?.width !== null
-    && metadata?.width !== undefined
-    && metadata.height !== null
-    && metadata.height !== undefined;
-
   return (
     <div className="photo-detail-view">
       <header className="two-line-heading">
         <strong>{photo.filename}</strong>
-        <span>{taxon || "No matched taxon"}</span>
+        <span>{formatBytes(photo.file_size)} {"\u00b7"} {formatModifiedAt(photo.modified_at_ns)}</span>
       </header>
       <ResizablePanels
         className="photo-detail-content"
@@ -92,8 +65,10 @@ export function PhotoDetailView({ photo }: { photo: Photo }) {
             <DetailValue label="Size" value={formatBytes(photo.file_size)} copied={copied} onCopy={copy} />
             <DetailValue label="Captured" value={metadata?.captured_at ?? "-"} copied={copied} onCopy={copy} />
             <DetailValue label="Camera" value={metadata?.camera ?? "-"} copied={copied} onCopy={copy} />
-            <DetailValue label="Dimensions" value={hasDimensions ? `${metadata.width} x ${metadata.height}` : "-"} copied={copied} onCopy={copy} />
-            <DetailValue label="Location" value={hasLocation ? `${metadata.latitude}, ${metadata.longitude}` : "-"} copied={copied} onCopy={copy} />
+            <DetailValue label="Width" value={formatOptionalNumber(metadata?.width)} copied={copied} onCopy={copy} />
+            <DetailValue label="Height" value={formatOptionalNumber(metadata?.height)} copied={copied} onCopy={copy} />
+            <DetailValue label="Longitude" value={formatOptionalNumber(metadata?.longitude)} copied={copied} onCopy={copy} />
+            <DetailValue label="Latitude" value={formatOptionalNumber(metadata?.latitude)} copied={copied} onCopy={copy} />
             <DetailValue label="EXIF" value={metadata?.exif_json ?? "-"} copied={copied} onCopy={copy} multiline />
           </dl>
         )}
@@ -102,6 +77,15 @@ export function PhotoDetailView({ photo }: { photo: Photo }) {
       />
     </div>
   );
+}
+
+function formatModifiedAt(modifiedAtNs: number): string {
+  const date = new Date(modifiedAtNs / 1_000_000);
+  return Number.isNaN(date.getTime()) ? String(modifiedAtNs) : date.toLocaleString();
+}
+
+function formatOptionalNumber(value: number | null | undefined): string {
+  return value === null || value === undefined ? "-" : String(value);
 }
 
 function DetailValue({

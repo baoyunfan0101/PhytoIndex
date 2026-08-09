@@ -49,7 +49,10 @@ and backend cursor; only returned markers are mounted.
 
 Parameters: one `Photo`.
 
-Returns: a photo stage and copyable photo, metadata, and taxon fields.
+Returns: a photo stage and copyable file and EXIF metadata. The heading shows
+the filename followed by file size, a middle dot, and the modified time from
+the supplied `Photo`; the page does not request mapping data. Width, height,
+longitude, and latitude are separate detail rows.
 
 ### `PhotoStage` and `PhotoThumb`
 

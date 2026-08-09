@@ -50,6 +50,8 @@ export type PhotoDirectoryItem =
   | { kind: "photo"; photo: Photo };
 export type DirectoryEntryCounts = { directory_count: number; file_count: number };
 
+const demoModifiedAtStart = Date.UTC(2026, 6, 25, 8, 14, 22) * 1_000_000;
+
 export const demoPhotos: Photo[] = Array.from({ length: 96 }, (_, index) => {
   const species = ["Canis lupus", "Panthera leo", "Vulpes vulpes", "Ursus arctos"][index % 4];
   const filename = `${species.split(" ").join("_")}_${String(index + 1).padStart(3, "0")}.jpg`;
@@ -59,7 +61,7 @@ export const demoPhotos: Photo[] = Array.from({ length: 96 }, (_, index) => {
     relative_path: `Mammalia/Field ${Math.floor(index / 24) + 1}/${filename}`,
     filename,
     file_size: 1_200_000 + index * 14_311,
-    modified_at_ns: index + 1,
+    modified_at_ns: demoModifiedAtStart + index * 60_000_000_000,
     thumbnail_path: null,
   };
 });
