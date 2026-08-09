@@ -10,7 +10,46 @@ permissions:
   contents: write
 
 jobs:
+  verify:
+    name: Verify release
+    runs-on: macos-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build output
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - name: Install frontend dependencies
+        working-directory: apps/desktop
+        run: npm ci
+
+      - name: Test desktop frontend
+        working-directory: apps/desktop
+        run: npm run test:desktop
+
+      - name: Build desktop frontend
+        working-directory: apps/desktop
+        run: npm run build
+
+      - name: Test Rust workspace
+        run: cargo test --workspace --locked
+
   release:
+    needs: verify
     strategy:
       fail-fast: false
       matrix:
