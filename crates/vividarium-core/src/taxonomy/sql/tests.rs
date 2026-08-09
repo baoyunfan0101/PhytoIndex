@@ -318,6 +318,24 @@ fn csv_load_uses_one_atomic_transaction() {
 }
 
 #[test]
+fn custom_sql_database_schemas_include_main_taxonomy_tables() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = Database::open(directory.path().join("metadata.db")).unwrap();
+
+    let schemas = list_custom_sql_database_schemas(&database).unwrap();
+
+    assert_eq!(schemas.len(), 1);
+    assert_eq!(schemas[0].alias, "main");
+    assert!(schemas[0].objects.iter().any(|object| object.name == "taxa"));
+    assert!(
+        schemas[0]
+            .objects
+            .iter()
+            .any(|object| object.name == "taxon_names")
+    );
+}
+
+#[test]
 fn rejects_control_and_internal_write_statements() {
     let (_directory, database) = database();
     for sql in [

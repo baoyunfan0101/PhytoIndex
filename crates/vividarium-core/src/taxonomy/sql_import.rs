@@ -17,7 +17,9 @@ use super::direct_import::{TaxonomyImportMetadata, TaxonomyImportResult};
 use super::formatted::{
     TaxonomyNameType, TaxonomyValidationIssue, validate_taxonomy, visit_taxonomy_validation_issues,
 };
-use super::sql::{SqlStatementMessage, detach_sources, prepare_sources, quote_identifier};
+use super::sql::{
+    SqlSourceSchema, SqlStatementMessage, detach_sources, prepare_sources, quote_identifier,
+};
 use super::sql_inputs::{
     self, AddSqlInputRequest, AddSqlInputResult, PersistentSqlInput, RemoveSqlInputRequest,
     RemoveSqlInputResult, SqlInputScope,
@@ -108,6 +110,19 @@ struct ValidatedSqlImportCandidate {
 
 pub fn list_sql_import_inputs(database: &Database) -> CoreResult<Vec<PersistentSqlInput>> {
     sql_inputs::list_inputs(database, SqlInputScope::SqlImport)
+}
+
+pub fn list_sql_import_database_schemas(
+    database: &Database,
+) -> CoreResult<Vec<SqlSourceSchema>> {
+    let staging = workspace(database)?.join(STAGING_DATABASE);
+    if !staging.is_file() {
+        return Ok(Vec::new());
+    }
+    Ok(vec![super::sql::inspect_sqlite_source(
+        "sql_import",
+        &staging,
+    )?])
 }
 
 pub fn add_sql_import_input(

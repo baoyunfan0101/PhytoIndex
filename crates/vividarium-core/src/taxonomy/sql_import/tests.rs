@@ -93,6 +93,27 @@ fn validate_executes_sql_and_builds_the_candidate_in_one_request() {
 }
 
 #[test]
+fn sql_import_database_schemas_follow_the_staging_database() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = Database::open(directory.path().join("metadata.db")).unwrap();
+    assert!(list_sql_import_database_schemas(&database).unwrap().is_empty());
+    add_simple_input(&directory, &database);
+
+    execute_simple(&database);
+    let schemas = list_sql_import_database_schemas(&database).unwrap();
+
+    assert_eq!(schemas.len(), 1);
+    assert_eq!(schemas[0].alias, "sql_import");
+    assert!(schemas[0].objects.iter().any(|object| object.name == "taxa"));
+    assert!(
+        schemas[0]
+            .objects
+            .iter()
+            .any(|object| object.name == "taxon_names")
+    );
+}
+
+#[test]
 fn sql_import_uses_the_configured_csv_delimiter() {
     let directory = tempfile::tempdir().unwrap();
     let database = Database::open(directory.path().join("metadata.db")).unwrap();

@@ -26,8 +26,8 @@ use vividarium_core::taxonomy::{
     AddSqlInputRequest, AddSqlInputResult, CustomSqlExecutionResult,
     CustomTaxonomySqlExportRequest, CustomTaxonomySqlRequest, DeleteTaxonNameInput,
     DirectImportDatabase, PersistentSqlInput, PromoteTaxonNameInput, RemoveSqlInputRequest,
-    RemoveSqlInputResult, SaveTaxonNameGroupInput, SqlExportResult, TaxonChild, TaxonDetail,
-    TaxonInputRow, TaxonRowOutcome, TaxonSearchResult, TaxonSuggestion, TaxonUpdateInput,
+    RemoveSqlInputResult, SaveTaxonNameGroupInput, SqlExportResult, SqlSourceSchema, TaxonChild,
+    TaxonDetail, TaxonInputRow, TaxonRowOutcome, TaxonSearchResult, TaxonSuggestion, TaxonUpdateInput,
     TaxonomyImportMetadata, TaxonomyOperationResult, TaxonomyPage, TaxonomyPreviewResult,
     ValidateSqlImportRequest,
 };
@@ -875,6 +875,13 @@ pub fn list_custom_sql_inputs(
 }
 
 #[tauri::command]
+pub fn list_custom_sql_database_schemas(
+    state: State<'_, AppState>,
+) -> CommandResult<Vec<SqlSourceSchema>> {
+    taxonomy::list_custom_sql_database_schemas(&state.database).map_err(error)
+}
+
+#[tauri::command]
 pub async fn add_custom_sql_input(
     state: State<'_, AppState>,
     request: AddSqlInputRequest,
@@ -1159,6 +1166,13 @@ pub fn list_sql_import_inputs(
     state: State<'_, AppState>,
 ) -> CommandResult<Vec<PersistentSqlInput>> {
     taxonomy::list_sql_import_inputs(&state.database).map_err(error)
+}
+
+#[tauri::command]
+pub fn list_sql_import_database_schemas(
+    state: State<'_, AppState>,
+) -> CommandResult<Vec<SqlSourceSchema>> {
+    taxonomy::list_sql_import_database_schemas(&state.database).map_err(error)
 }
 
 #[tauri::command]

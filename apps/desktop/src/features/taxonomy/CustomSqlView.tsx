@@ -5,11 +5,13 @@ import {
   executeCustomSql,
   exportCustomSqlQuery,
   getCustomTaxonomySql,
+  listCustomSqlDatabaseSchemas,
   listCustomSqlInputs,
   removeCustomSqlInput,
   type CustomSqlExecutionResult,
   type PersistentSqlInput,
   type SqlResultSet,
+  type SqlSourceSchema,
   type SqlValue,
 } from "../../api/customSql";
 import { errorMessage } from "../../api/common";
@@ -31,18 +33,25 @@ export function CustomSqlView({
 }) {
   const [sql, setSql] = useState("");
   const [inputs, setInputs] = useState<PersistentSqlInput[]>([]);
+  const [databaseSchemas, setDatabaseSchemas] = useState<SqlSourceSchema[]>([]);
   const [result, setResult] = useState<CustomSqlExecutionResult | null>(null);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [loadingWorkbench, setLoadingWorkbench] = useState(true);
 
   useEffect(() => {
-    void Promise.allSettled([getCustomTaxonomySql(), listCustomSqlInputs()])
-      .then(([sqlResult, inputsResult]) => {
+    void Promise.allSettled([
+      getCustomTaxonomySql(),
+      listCustomSqlInputs(),
+      listCustomSqlDatabaseSchemas(),
+    ])
+      .then(([sqlResult, inputsResult, schemasResult]) => {
         const loaded = resolveSqlWorkbenchLoads(sqlResult, inputsResult);
         if (loaded.sql !== undefined) setSql(loaded.sql);
         if (loaded.inputs !== undefined) setInputs(loaded.inputs);
-        setError(loaded.error);
+        if (schemasResult.status === "fulfilled") setDatabaseSchemas(schemasResult.value);
+        const schemasError = schemasResult.status === "rejected" ? errorMessage(schemasResult.reason) : "";
+        setError([loaded.error, schemasError].filter(Boolean).join(" "));
       })
       .finally(() => setLoadingWorkbench(false));
   }, []);
@@ -117,7 +126,7 @@ export function CustomSqlView({
       minSecond={320}
       separatorLabel="Resize Input sources"
       stateKey="custom-sql.inputs"
-      first={<SqlInputList inputs={inputs} busy={Boolean(busy) || loadingWorkbench} operation={busy} onAdd={addInput} onRemove={removeInput} />}
+      first={<SqlInputList inputs={inputs} databaseSchemas={databaseSchemas} busy={Boolean(busy) || loadingWorkbench} operation={busy} onAdd={addInput} onRemove={removeInput} />}
       second={(<div className="custom-sql-editor">
         <CodeEditor language="sql" ariaLabel="Custom taxonomy SQL" value={sql} onChange={setSql} />
       </div>)}

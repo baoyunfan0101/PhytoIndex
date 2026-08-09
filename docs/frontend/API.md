@@ -13,8 +13,8 @@ owns one backend domain, its request types, and response types.
 | `mapping` | Mapping states, candidates, assignment, remapping, mapping queues, and photographed-taxonomy browsing. |
 | `taxonomy` | Taxon views, search, suggestions, children, taxon photos, formatted input, staged preview tokens, and prepared apply. |
 | `operations` | Photo and taxonomy operation summaries, audit pages, rollback, and single or selected-operation CSV exports to an absolute destination path. |
-| `customSql` | Custom SQL execution, result sets, managed SQL inputs, and full-query export. |
-| `sqlImport` | SQL Import workspace, validation, apply, and managed inputs. |
+| `customSql` | Custom SQL execution, result sets, managed SQL inputs, readable database schemas, and full-query export. |
+| `sqlImport` | SQL Import workspace, validation, apply, managed inputs, and staging schemas. |
 | `directImport` | Direct Import database inspection and confirmed replacement. |
 | `taxonomyImport` | Shared taxonomy import metadata and result types. |
 | `general` | Application-wide theme, workspace, search, taxon-tree display, and CSV delimiter settings. |

@@ -138,13 +138,18 @@
   display: flex;
   min-height: 0;
   flex-direction: column;
-  gap: 5px;
-  padding: 9px;
-  overflow: auto;
+  overflow: hidden;
   border-right: 1px solid var(--line);
   background: var(--panel);
 }
-.sql-sources > span { color: var(--quiet); }
+.sql-source-group { display: flex; min-height: 0; flex: 0 0 auto; flex-direction: column; border-bottom: 1px solid var(--line); }
+.sql-source-group.expanded { flex: 1 1 0; }
+.sql-source-group-header { display: flex; min-height: 31px; align-items: center; background: var(--panel-2); }
+.sql-source-group-header > button { display: flex; min-width: 0; flex: 1; align-items: center; gap: 4px; align-self: stretch; padding: 0 7px; border: 0; text-align: left; background: transparent; }
+.sql-source-group-header strong { overflow: hidden; font-size: 11px; letter-spacing: .035em; text-overflow: ellipsis; text-transform: uppercase; white-space: nowrap; }
+.sql-source-group-actions { display: flex; align-items: center; gap: 2px; padding-right: 4px; }
+.sql-source-group-body { display: flex; min-height: 0; flex: 1; flex-direction: column; gap: 5px; padding: 6px; overflow: auto; }
+.sql-source-empty { padding: 3px 2px; color: var(--quiet); }
 .sql-input-actions { display: flex; align-items: center; gap: 4px; }
 .sql-input-actions strong { margin-right: auto; }
 .sql-sources section { border: 1px solid var(--line); }
@@ -160,6 +165,7 @@
 .sql-input-selected-path { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 8px; padding: 8px; }
 .sql-input-selected-path code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sql-sources i { color: var(--quiet); font-style: normal; }
+.sql-schema-card > header > i { padding-right: 2px; font-size: 10px; }
 .sql-source-card > code, .sql-source-card > small { display: block; padding: 4px 7px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sql-source-card > code { color: var(--muted); }
 .sql-source-card > small.available { color: var(--accent-bright); }

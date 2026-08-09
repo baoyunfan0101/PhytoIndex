@@ -38,16 +38,24 @@ templates use the application-wide CSV delimiter.
 
 Parameters include a status callback and optional mutation guard.
 
-Returns: managed input sources, SQL editor, execution messages, typed result
-sets, warnings, and full export for truncated read-only queries. CSV sources
-and exports use the application-wide CSV delimiter.
+Returns: a SQL editor, execution messages, typed result sets, warnings, and
+full export for truncated read-only queries. Its source sidebar has two
+mutually exclusive VS Code-style groups: Input sources is expanded by default,
+and All accessible tables combines uploaded source schemas with the complete
+readable `main` taxonomy schema. Sources whose stored copies are unavailable
+remain visible in Input sources but are omitted from All accessible tables.
+The expanded group body scrolls independently.
+CSV sources and exports use the application-wide CSV delimiter.
 
 ### `SqlImportSettings({ onApplied })`
 
 Parameters: optional callback invoked after an SQL Import is applied.
 
 Returns: the SQL Import source registry, SQL workspace, validation issues,
-metadata, and apply controls.
+metadata, and apply controls. Its source sidebar uses the same mutually
+exclusive groups and scrolling behavior as Custom SQL. All accessible tables
+combines uploaded source schemas with the `sql_import` staging schema when a
+staging database exists.
 
 ### `DirectImportSettings({ onApplied })`
 
@@ -62,6 +70,11 @@ confirmation.
 Search results and taxon details, formatted input and result logs, SQL input
 sources and editors, and execution or validation outputs use adjustable panes
 with minimum sizes appropriate to their controls.
+
+`SqlInputList` owns the shared SQL source sidebar. Only one top-level group is
+expanded at a time; selecting the expanded group collapses it. Table rows may
+still be expanded independently to inspect their ordered columns and declared
+types.
 
 ## Reusable interfaces
 

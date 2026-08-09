@@ -50,14 +50,14 @@ pub use sql::{
     CustomSqlExecutionResult, CustomTaxonomySqlExportRequest, CustomTaxonomySqlRequest, SqlColumn,
     SqlExportResult, SqlObjectType, SqlResultSet, SqlSourceObject, SqlSourceSchema,
     SqlStatementMessage, SqlValue, add_custom_sql_input, execute_custom_taxonomy_sql,
-    export_custom_taxonomy_query, get_custom_taxonomy_sql, list_custom_sql_inputs,
-    remove_custom_sql_input,
+    export_custom_taxonomy_query, get_custom_taxonomy_sql, list_custom_sql_database_schemas,
+    list_custom_sql_inputs, remove_custom_sql_input,
 };
 pub use sql_import::{
     NameTypeCount, SqlImportExecutionResult, SqlImportIssue, SqlImportValidationResult,
     ValidateSqlImportRequest, ValidateSqlImportResult, add_sql_import_input, apply_sql_import,
-    get_sql_import_sql, list_sql_import_inputs, remove_sql_import_input, validate_sql_import,
-    validate_sql_import_with_progress,
+    get_sql_import_sql, list_sql_import_database_schemas, list_sql_import_inputs,
+    remove_sql_import_input, validate_sql_import, validate_sql_import_with_progress,
 };
 pub use sql_inputs::{
     AddSqlInputRequest, AddSqlInputResult, PersistentSqlInput, RemoveSqlInputRequest,

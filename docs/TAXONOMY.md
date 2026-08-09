@@ -238,6 +238,7 @@ are `table`, `view`, and `virtual_table`.
 | --- | --- | --- |
 | `get_custom_taxonomy_sql` | none | Last successful SQL, or the initial built-in script `String` |
 | `list_custom_sql_inputs` | none | `Vec<PersistentSqlInput>` |
+| `list_custom_sql_database_schemas` | none | `Vec<SqlSourceSchema>` for the readable taxonomy database |
 | `add_custom_sql_input` | `request: &AddSqlInputRequest` | `AddSqlInputResult` |
 | `remove_custom_sql_input` | `request: &RemoveSqlInputRequest` | `RemoveSqlInputResult` |
 | `execute_custom_taxonomy_sql` | `request: &CustomTaxonomySqlRequest` | `CustomSqlExecutionResult` |
@@ -260,6 +261,10 @@ read-only query and streams its rows to the destination CSV using the
 application-wide delimiter.
 Desktop source removal, SQL execution, and query export commands execute file
 and database work on blocking workers and resolve asynchronously.
+`list_custom_sql_database_schemas` returns the complete non-SQLite-internal
+table and view catalog exposed through the `main` alias. Managed input schemas
+remain available from `list_custom_sql_inputs`; clients combine both sources
+when presenting every table accessible to Custom SQL.
 
 ## Taxonomy imports
 
@@ -288,6 +293,7 @@ fields remain authoritative.
 | --- | --- | --- |
 | `get_sql_import_sql` | none | Last successful SQL, or the initial built-in script `String` |
 | `list_sql_import_inputs` | none | `Vec<PersistentSqlInput>` |
+| `list_sql_import_database_schemas` | none | `Vec<SqlSourceSchema>` for the current staging database, or an empty vector |
 | `add_sql_import_input` | `request: &AddSqlInputRequest` | `AddSqlInputResult` |
 | `remove_sql_import_input` | `request: &RemoveSqlInputRequest` | `RemoveSqlInputResult` |
 | `validate_sql_import` | `request: &ValidateSqlImportRequest` | `ValidateSqlImportResult` |
@@ -299,6 +305,10 @@ SQL outlive tabs, application restarts, and successful Apply. Adding or
 removing an input, validating new SQL, or recreating staging
 invalidates the prior staging-dependent candidate and validation state.
 Removal is rejected while another operation holds the workspace lock.
+`list_sql_import_database_schemas` exposes the `sql_import` staging catalog
+when staging exists. Managed input schemas remain available from
+`list_sql_import_inputs`; clients combine both sources when presenting every
+table accessible to the SQL Import workspace.
 
 Validate first executes SQL Import SQL, which can read the isolated source
 and can attach only the
