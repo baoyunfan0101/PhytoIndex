@@ -12,6 +12,7 @@ import { photoUrl, type Photo } from "../../api/photos";
 
 type Size = { width: number; height: number };
 type Pan = { x: number; y: number };
+type LoadedImage = { photoId: number; size: Size };
 
 export function PhotoStage({
   photo,
@@ -30,16 +31,13 @@ export function PhotoStage({
     baseDisplaySize: { width: 0, height: 0 },
     containerSize: { width: 0, height: 0 },
   });
-  const [loaded, setLoaded] = useState(false);
-  const [imageSize, setImageSize] = useState<Size>({ width: 0, height: 0 });
+  const [loadedImage, setLoadedImage] = useState<LoadedImage | null>(null);
   const [containerSize, setContainerSize] = useState<Size>({ width: 0, height: 0 });
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState<Pan>({ x: 0, y: 0 });
   const [dragging, setDragging] = useState(false);
 
   useEffect(() => {
-    setLoaded(false);
-    setImageSize({ width: 0, height: 0 });
     setZoom(1);
     setPan({ x: 0, y: 0 });
     setDragging(false);
@@ -73,6 +71,11 @@ export function PhotoStage({
     );
   }
 
+  const photoId = photo.photo_id;
+  const imageSize = loadedImage?.photoId === photo.photo_id
+    ? loadedImage.size
+    : { width: 0, height: 0 };
+  const loaded = loadedImage?.photoId === photo.photo_id;
   const baseScale = fitScale(imageSize, containerSize);
   const baseDisplaySize = {
     width: Math.max(0, Math.round(imageSize.width * baseScale)),
@@ -85,8 +88,10 @@ export function PhotoStage({
 
   function handleImageLoad(event: SyntheticEvent<HTMLImageElement>) {
     const image = event.currentTarget;
-    setImageSize({ width: image.naturalWidth, height: image.naturalHeight });
-    setLoaded(true);
+    setLoadedImage({
+      photoId,
+      size: { width: image.naturalWidth, height: image.naturalHeight },
+    });
   }
 
   function handleWheel(event: WheelEvent<HTMLDivElement>) {
@@ -237,6 +242,7 @@ export function PhotoThumb({
     <button
       className={`photo-thumb${selected ? " selected" : ""}`}
       type="button"
+      aria-label={photo.filename}
       onClick={onClick}
       onContextMenu={(event) => {
         event.preventDefault();
@@ -244,7 +250,6 @@ export function PhotoThumb({
       }}
     >
       <img src={photoUrl(photo, true)} alt="" loading="lazy" draggable={false} />
-      <span>{photo.filename}</span>
     </button>
   );
 }

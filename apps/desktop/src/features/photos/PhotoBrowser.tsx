@@ -3,19 +3,15 @@ import { useMemo } from "react";
 import type { Photo } from "../../api/photos";
 import {
   Busy,
-  Segmented,
-  VirtualGrid,
   VirtualList,
 } from "../../shared/ui";
-import { PhotoStage, PhotoThumb } from "./PhotoMedia";
 import { usePhotoInteraction, type PhotoOpenHandlers } from "./PhotoInteraction";
 import { usePhotoMutation } from "./photoMutations";
 import { findTypeSelectIndex, nextListIndex } from "./photoListNavigation";
 import type { CursorPageController } from "../../shared/useCursorPage";
-import { useViewState } from "../../shared/viewState";
 import { ResizablePanels } from "../../shared/ResizablePanels";
-
-type DisplayMode = "Thumbnails" | "Image";
+import { PhotoDisplay, PhotoDisplayToggle, usePhotoDisplayMode } from "./PhotoDisplay";
+import { formatPhotoSummary } from "./photoFormatting";
 
 export function PhotoBrowser({
   title,
@@ -31,7 +27,7 @@ export function PhotoBrowser({
   handlers: PhotoOpenHandlers;
 }) {
   const photos = page.items;
-  const [mode, setMode] = useViewState<DisplayMode>("photo-browser.mode", "Thumbnails");
+  const [mode, setMode] = usePhotoDisplayMode("photo-browser.display-mode");
   const interaction = usePhotoInteraction({
     photos,
     handlers,
@@ -84,6 +80,9 @@ export function PhotoBrowser({
             rowHeight={28}
             itemKey={(photo) => photo.photo_id}
             onNearEnd={() => void page.loadMore()}
+            onActivateActive={() => {
+              if (activeIndex >= 0) setMode("image");
+            }}
             onMoveActive={moveSelection}
             onTypeSelect={typeSelect}
             renderItem={(photo) => (
@@ -102,28 +101,22 @@ export function PhotoBrowser({
         </aside>)}
         second={(<main className="photo-browser-main">
           <header className="pane-header">
-            <div><strong>{interaction.selected?.filename ?? "Photos"}</strong><span>{interaction.selected?.relative_path ?? status}</span></div>
-            <Segmented value={mode} items={["Thumbnails", "Image"] as const} onChange={setMode} />
+            <div><strong>{interaction.selected?.filename ?? "Photos"}</strong><span>{interaction.selected ? formatPhotoSummary(interaction.selected) : status}</span></div>
+            <PhotoDisplayToggle mode={mode} onChange={setMode} />
           </header>
           {page.loading && photos.length === 0 ? (
             <div className="photo-browser-loading" role="status" aria-live="polite"><Busy label={loadingLabel} /></div>
-          ) : mode === "Thumbnails" ? (
-            <VirtualGrid
-              stateKey="photo-browser.grid"
-              items={photos}
-              itemKey={(photo) => photo.photo_id}
-              onNearEnd={() => void page.loadMore()}
-              renderItem={(photo) => (
-                <PhotoThumb
-                  photo={photo}
-                  selected={interaction.selectedId === photo.photo_id}
-                  onClick={() => interaction.selectPhoto(photo)}
-                  onContextMenu={(event) => interaction.openContextMenu(event, photo)}
-                />
-              )}
-            />
           ) : (
-            <PhotoStage photo={interaction.selected} onContextMenu={interaction.openContextMenu} />
+            <PhotoDisplay
+              photos={photos}
+              selected={interaction.selected}
+              mode={mode}
+              stateKey="photo-browser.grid"
+              onModeChange={setMode}
+              onSelect={interaction.selectPhoto}
+              onNearEnd={() => void page.loadMore()}
+              onContextMenu={interaction.openContextMenu}
+            />
           )}
         </main>)}
       />

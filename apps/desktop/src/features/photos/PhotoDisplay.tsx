@@ -1,0 +1,109 @@
+import { Image as ImageIcon, LayoutGrid } from "lucide-react";
+import { useEffect, type MouseEvent } from "react";
+import type { Photo } from "../../api/photos";
+import { IconButton, VirtualGrid } from "../../shared/ui";
+import { useViewState } from "../../shared/viewState";
+import { PhotoStage, PhotoThumb } from "./PhotoMedia";
+
+export type PhotoDisplayMode = "thumbnails" | "image";
+
+export function usePhotoDisplayMode(stateKey: string) {
+  const [mode, setMode] = useViewState<PhotoDisplayMode>(stateKey, "thumbnails");
+
+  useEffect(() => {
+    if (mode !== "image") return;
+    const returnToThumbnails = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      event.preventDefault();
+      setMode("thumbnails");
+    };
+    window.addEventListener("keydown", returnToThumbnails);
+    return () => window.removeEventListener("keydown", returnToThumbnails);
+  }, [mode, setMode]);
+
+  return [mode, setMode] as const;
+}
+
+export function PhotoDisplayToggle({
+  mode,
+  onChange,
+}: {
+  mode: PhotoDisplayMode;
+  onChange: (mode: PhotoDisplayMode) => void;
+}) {
+  return (
+    <div className="photo-display-toggle" role="group" aria-label="Photo display">
+      <IconButton
+        aria-label="Thumbnails"
+        className={mode === "thumbnails" ? "active" : ""}
+        size="small"
+        title="Thumbnails"
+        onClick={() => onChange("thumbnails")}
+      >
+        <LayoutGrid size={14} />
+      </IconButton>
+      <IconButton
+        aria-label="Image"
+        className={mode === "image" ? "active" : ""}
+        size="small"
+        title="Image"
+        onClick={() => onChange("image")}
+      >
+        <ImageIcon size={14} />
+      </IconButton>
+    </div>
+  );
+}
+
+export function PhotoDisplay({
+  photos,
+  selected,
+  mode,
+  stateKey,
+  onModeChange,
+  onSelect,
+  onNearEnd,
+  onContextMenu,
+}: {
+  photos: Photo[];
+  selected: Photo | null;
+  mode: PhotoDisplayMode;
+  stateKey: string;
+  onModeChange: (mode: PhotoDisplayMode) => void;
+  onSelect: (photo: Photo) => void;
+  onNearEnd?: () => void;
+  onContextMenu?: (event: MouseEvent, photo: Photo) => void;
+}) {
+  const activeIndex = selected
+    ? photos.findIndex((photo) => photo.photo_id === selected.photo_id)
+    : -1;
+
+  if (mode === "image") {
+    return <PhotoStage photo={selected} onContextMenu={onContextMenu} />;
+  }
+
+  return (
+    <VirtualGrid
+      stateKey={stateKey}
+      items={photos}
+      activeIndex={activeIndex}
+      itemKey={(photo) => photo.photo_id}
+      onActivateActive={() => {
+        if (activeIndex >= 0) onModeChange("image");
+      }}
+      onMoveActive={(index) => onSelect(photos[index])}
+      onNearEnd={onNearEnd}
+      renderItem={(photo) => (
+        <PhotoThumb
+          photo={photo}
+          selected={selected?.photo_id === photo.photo_id}
+          onClick={() => {
+            onSelect(photo);
+            onModeChange("image");
+          }}
+          onContextMenu={(event) => onContextMenu?.(event, photo)}
+        />
+      )}
+    />
+  );
+}

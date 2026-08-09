@@ -21,6 +21,7 @@ import { waitForOperation } from "../../api/tasks";
 import { EmptyState, IconButton, SectionHeader, VirtualList } from "../../shared/ui";
 import { DirectoryContextMenu } from "./DirectoryContextMenu";
 import { PhotoStage } from "./PhotoMedia";
+import { PhotoDisplay, PhotoDisplayToggle, usePhotoDisplayMode } from "./PhotoDisplay";
 import { usePhotoInteraction, type PhotoOpenHandlers } from "./PhotoInteraction";
 import { TaxonContextMenu } from "./TaxonContextMenu";
 import { emitPhotoMutation, useDeferredPhotoMutation, usePhotoMutation } from "./photoMutations";
@@ -171,6 +172,7 @@ export function FolderPhotosView({
     selectFirst: false,
     stateKey: "folders.interaction",
   });
+  const [displayMode, setDisplayMode] = usePhotoDisplayMode("folders.photo-display-mode");
   const resolvedActiveRowKey = activeRowKey ?? (interaction.selectedId === null ? null : `p:${interaction.selectedId}`);
   const activeRowIndex = rows.findIndex((row) => directoryTreeRowKey(row) === resolvedActiveRowKey);
   usePhotoMutation(() => {
@@ -219,6 +221,11 @@ export function FolderPhotosView({
     else interaction.clearSelection();
   }
 
+  function selectDirectoryPhoto(photo: Photo) {
+    setActiveRowKey(`p:${photo.photo_id}`);
+    interaction.selectPhoto(photo);
+  }
+
   function openDirectoryContextMenu(event: MouseEvent, item: Extract<DirectoryTreeRow, { kind: "directory" }>) {
     event.preventDefault();
     event.stopPropagation();
@@ -243,7 +250,10 @@ export function FolderPhotosView({
     const item = rows[activeRowIndex];
     if (!item) return;
     if (item.kind === "directory") enter(item.directory);
-    else if (item.kind === "photo") interaction.selectPhoto(item.photo);
+    else if (item.kind === "photo") {
+      interaction.selectPhoto(item.photo);
+      setDisplayMode("image");
+    }
     else void tree.loadMore(item.parentId);
   }
 
@@ -281,6 +291,7 @@ export function FolderPhotosView({
             }}>{item.name}</button></span>
           ))}
         </div>
+        <PhotoDisplayToggle mode={displayMode} onChange={setDisplayMode} />
       </header>
       <ResizablePanels
         className="explorer-columns"
@@ -350,7 +361,18 @@ export function FolderPhotosView({
           {(libraryLoading || page.loading) && <div className="pane-overlay">Loading</div>}
           {(libraryError || page.error) && <div className="inline-error">{libraryError || page.error}</div>}
         </aside>)}
-        second={<PhotoStage photo={interaction.selected} onContextMenu={interaction.openContextMenu} />}
+        second={(
+          <PhotoDisplay
+            photos={photos}
+            selected={interaction.selected}
+            mode={displayMode}
+            stateKey="folders.photo-grid"
+            onModeChange={setDisplayMode}
+            onSelect={selectDirectoryPhoto}
+            onNearEnd={() => void page.loadMore()}
+            onContextMenu={interaction.openContextMenu}
+          />
+        )}
       />
       {directoryContext && (
         <DirectoryContextMenu
@@ -417,6 +439,7 @@ export function TaxonPhotosView({
     selectFirst: false,
     stateKey: "photo-taxonomy.interaction",
   });
+  const [displayMode, setDisplayMode] = usePhotoDisplayMode("photo-taxonomy.photo-display-mode");
   const resolvedActiveRowKey = activeRowKey ?? (interaction.selectedId === null ? null : `p:${interaction.selectedId}`);
   const activeRowIndex = rows.findIndex((row) => taxonTreeRowKey(row) === resolvedActiveRowKey);
   usePhotoMutation(() => {
@@ -433,6 +456,11 @@ export function TaxonPhotosView({
     setActiveRowKey(taxonTreeRowKey(item));
     if (item.kind === "photo") interaction.selectPhoto(item.photo);
     else interaction.clearSelection();
+  }
+
+  function selectTaxonPhoto(photo: Photo) {
+    setActiveRowKey(`p:${photo.photo_id}`);
+    interaction.selectPhoto(photo);
   }
 
   async function expandTaxonSubtree(taxon: PhotoTaxonUsage) {
@@ -469,7 +497,10 @@ export function TaxonPhotosView({
     const item = rows[activeRowIndex];
     if (!item) return;
     if (item.kind === "taxon") enterTaxon(item.taxon);
-    else if (item.kind === "photo") interaction.selectPhoto(item.photo);
+    else if (item.kind === "photo") {
+      interaction.selectPhoto(item.photo);
+      setDisplayMode("image");
+    }
     else void tree.loadMore(item.parentId);
   }
 
@@ -507,6 +538,7 @@ export function TaxonPhotosView({
             }}>{item.names.sci_name ?? `Taxon ${item.taxon_id}`}</button></span>
           ))}
         </div>
+        <PhotoDisplayToggle mode={displayMode} onChange={setDisplayMode} />
       </header>
       <ResizablePanels
         className="explorer-columns"
@@ -567,7 +599,18 @@ export function TaxonPhotosView({
           {page.loading && <div className="pane-overlay">Loading</div>}
           {page.error && <div className="inline-error">{page.error}</div>}
         </aside>)}
-        second={<PhotoStage photo={interaction.selected} onContextMenu={interaction.openContextMenu} />}
+        second={(
+          <PhotoDisplay
+            photos={photos}
+            selected={interaction.selected}
+            mode={displayMode}
+            stateKey="photo-taxonomy.photo-grid"
+            onModeChange={setDisplayMode}
+            onSelect={selectTaxonPhoto}
+            onNearEnd={() => void page.loadMore()}
+            onContextMenu={interaction.openContextMenu}
+          />
+        )}
       />
       {taxonContext && (
         <TaxonContextMenu

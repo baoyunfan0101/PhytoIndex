@@ -8,6 +8,7 @@ import {
 import { errorMessage, formatBytes } from "../../api/common";
 import { Busy, Button } from "../../shared/ui";
 import { PhotoStage } from "./PhotoMedia";
+import { formatPhotoModifiedAt } from "./photoFormatting";
 import { useViewState } from "../../shared/viewState";
 import { ResizablePanels } from "../../shared/ResizablePanels";
 
@@ -44,7 +45,7 @@ export function PhotoDetailView({ photo }: { photo: Photo }) {
     <div className="photo-detail-view">
       <header className="two-line-heading">
         <strong>{photo.filename}</strong>
-        <span>{formatBytes(photo.file_size)} {"\u00b7"} {formatModifiedAt(photo.modified_at_ns)}</span>
+        <span>{formatBytes(photo.file_size)} {"\u00b7"} {formatPhotoModifiedAt(photo.modified_at_ns)}</span>
       </header>
       <ResizablePanels
         className="photo-detail-content"
@@ -77,11 +78,6 @@ export function PhotoDetailView({ photo }: { photo: Photo }) {
       />
     </div>
   );
-}
-
-function formatModifiedAt(modifiedAtNs: number): string {
-  const date = new Date(modifiedAtNs / 1_000_000);
-  return Number.isNaN(date.getTime()) ? String(modifiedAtNs) : date.toLocaleString();
 }
 
 function formatOptionalNumber(value: number | null | undefined): string {

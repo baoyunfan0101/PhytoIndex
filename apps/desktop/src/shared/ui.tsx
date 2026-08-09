@@ -19,6 +19,7 @@ import {
   type UIEvent,
 } from "react";
 import { useViewState } from "./viewState";
+import { nextGridIndex } from "./virtualGridNavigation";
 
 export type IconComponent = LucideIcon;
 
@@ -216,18 +217,24 @@ export function VirtualList<T>({
 
 export function VirtualGrid<T>({
   items,
+  activeIndex = null,
   minColumnWidth = 156,
   rowHeight = 146,
   itemKey,
   renderItem,
+  onActivateActive,
+  onMoveActive,
   onNearEnd,
   stateKey,
 }: {
   items: T[];
+  activeIndex?: number | null;
   minColumnWidth?: number;
   rowHeight?: number;
   itemKey: (item: T) => string | number;
   renderItem: (item: T, index: number) => ReactNode;
+  onActivateActive?: () => void;
+  onMoveActive?: (index: number) => void;
   onNearEnd?: () => void;
   stateKey?: string;
 }) {
@@ -261,15 +268,53 @@ export function VirtualGrid<T>({
     }
   }
 
+  useEffect(() => {
+    const element = viewportRef.current;
+    if (!element || activeIndex === null || activeIndex < 0) return;
+    const itemTop = Math.floor(activeIndex / columns) * rowHeight;
+    const itemBottom = itemTop + rowHeight;
+    const viewportTop = element.scrollTop;
+    const viewportBottom = viewportTop + element.clientHeight;
+    let nextScrollTop = viewportTop;
+    if (itemTop < viewportTop) nextScrollTop = itemTop;
+    else if (itemBottom > viewportBottom) nextScrollTop = itemBottom - element.clientHeight;
+    nextScrollTop = Math.max(0, Math.min(nextScrollTop, element.scrollHeight - element.clientHeight));
+    if (nextScrollTop === viewportTop) return;
+    element.scrollTop = nextScrollTop;
+    setScrollTop(nextScrollTop);
+  }, [activeIndex, columns, rowHeight, setScrollTop]);
+
+  function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    const directions = {
+      ArrowLeft: "left",
+      ArrowRight: "right",
+      ArrowUp: "up",
+      ArrowDown: "down",
+    } as const;
+    const direction = directions[event.key as keyof typeof directions];
+    if (direction && onMoveActive) {
+      event.preventDefault();
+      const nextIndex = nextGridIndex(items.length, activeIndex ?? -1, columns, direction);
+      if (nextIndex >= 0 && nextIndex !== activeIndex) onMoveActive(nextIndex);
+      return;
+    }
+    if (event.key === "Enter" && onActivateActive) {
+      event.preventDefault();
+      onActivateActive();
+    }
+  }
+
   return (
     <div
       className="virtual-grid-viewport"
       ref={viewportRef}
+      onKeyDown={handleKeyDown}
       onScroll={(event) => {
         const element = event.currentTarget;
         setScrollTop(element.scrollTop);
         if (element.scrollHeight - element.scrollTop - element.clientHeight < rowHeight * 3) onNearEnd?.();
       }}
+      tabIndex={0}
     >
       <div className="virtual-grid-spacer" style={{ height: rows * rowHeight }}>
         <div
