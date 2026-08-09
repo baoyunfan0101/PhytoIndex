@@ -103,10 +103,10 @@
 .formatted-view { display: grid; height: 100%; min-height: 0; grid-template-rows: auto minmax(0, 1fr); }
 .formatted-split { min-height: 0; }
 .input-table { position: relative; display: grid; width: 100%; height: 100%; min-width: 0; min-height: 0; grid-template-rows: 34px minmax(0, 1fr) 30px; overflow: auto hidden; }
-.input-table-head, .input-table-row { display: grid; width: 1768px; grid-template-columns: 40px repeat(13, 130px) 38px; }
+.input-table-head, .input-table-row { display: grid; width: 1756px; grid-template-columns: 28px repeat(13, 130px) 38px; }
 .input-table-head { position: sticky; z-index: 2; top: 0; background: var(--panel-2); }
 .input-table-head span { padding: 9px 6px; overflow: hidden; border-right: 1px solid var(--line); color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
-.input-table-row > span { padding: 10px; color: var(--quiet); }
+.input-table-row > span { padding: 10px 4px; color: var(--quiet); text-align: center; }
 .input-table-row input { min-width: 0; border: 0; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); padding: 0 6px; background: var(--input); }
 .input-table-row input:focus { background: var(--active); }
 .input-row-delete { display: grid; width: 38px; height: 38px; place-items: center; border: 0; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); color: var(--quiet); background: var(--input); }
