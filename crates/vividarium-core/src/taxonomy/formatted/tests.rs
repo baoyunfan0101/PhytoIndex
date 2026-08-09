@@ -8,6 +8,191 @@ fn database() -> (TempDir, Database) {
     (directory, database)
 }
 
+fn validate_parentage(rows: &[(i64, Option<i64>, i64)]) -> CoreResult<()> {
+    let (_directory, database) = database();
+    let connection = database.connect_taxonomy_metadata_context()?;
+    connection.execute_batch("PRAGMA foreign_keys = OFF")?;
+    for (taxon_id, parent_taxon_id, rank) in rows {
+        connection.execute(
+            "INSERT INTO taxa (taxon_id, parent_taxon_id, rank) VALUES (?, ?, ?)",
+            params![taxon_id, parent_taxon_id, rank],
+        )?;
+        connection.execute(
+            "INSERT INTO taxon_names (taxon_id, name_type, name) VALUES (?, 1, ?)",
+            params![taxon_id, format!("Taxon {taxon_id}")],
+        )?;
+    }
+    validate_taxonomy(&connection)
+}
+
+#[test]
+fn parentage_validation_accepts_the_complete_five_rank_tree() {
+    validate_parentage(&[
+        (1, None, 1),
+        (2, Some(1), 2),
+        (3, Some(2), 3),
+        (4, Some(3), 4),
+        (5, Some(4), 5),
+    ])
+    .unwrap();
+}
+
+#[test]
+fn parentage_validation_accepts_skipped_ranks() {
+    validate_parentage(&[
+        (1, None, 1),
+        (2, Some(1), 2),
+        (3, Some(1), 3),
+        (4, Some(1), 4),
+        (5, Some(2), 5),
+        (6, Some(3), 5),
+    ])
+    .unwrap();
+}
+
+#[test]
+fn parentage_validation_rejects_equal_parent_and_child_ranks() {
+    let error = validate_parentage(&[(1, None, 1), (2, Some(1), 2), (3, Some(2), 2)]).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "invalid argument: Taxon 3 must have a parent with a higher rank."
+    );
+}
+
+#[test]
+fn parentage_validation_rejects_a_lower_rank_parent() {
+    let error = validate_parentage(&[(1, None, 1), (2, Some(1), 5), (3, Some(2), 3)]).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("Taxon 3 must have a parent with a higher rank.")
+    );
+}
+
+#[test]
+fn parentage_validation_rejects_a_missing_parent() {
+    let error = validate_parentage(&[(1, None, 1), (2, Some(99), 2)]).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("Taxon 2 references missing parent taxon 99.")
+    );
+}
+
+#[test]
+fn parentage_validation_rejects_a_cycle() {
+    let error = validate_parentage(&[(1, Some(2), 2), (2, Some(1), 3)]).unwrap_err();
+    assert!(error.to_string().contains("cyclic parent relationship"));
+}
+
+#[test]
+fn parentage_validation_rejects_a_parentless_non_kingdom() {
+    let error = validate_parentage(&[(1, None, 1), (2, None, 3)]).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("Taxon 2 must have a parent taxon.")
+    );
+}
+
+#[test]
+fn parentage_validation_rejects_a_kingdom_with_a_parent() {
+    let error = validate_parentage(&[(1, Some(2), 1), (2, None, 1)]).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("Kingdom taxon 1 must be a root taxon.")
+    );
+}
+
+fn accepted_name_count_issues(name_type: TaxonomyNameType) -> Vec<TaxonomyValidationIssue> {
+    let (_directory, database) = database();
+    let connection = database.connect_taxonomy_metadata_context().unwrap();
+    connection
+        .execute_batch(&format!(
+            "DROP INDEX idx_taxon_names_one_{}_name",
+            match name_type {
+                TaxonomyNameType::ZhName => "zh",
+                TaxonomyNameType::EnName => "en",
+                _ => unreachable!(),
+            }
+        ))
+        .unwrap();
+    connection
+        .execute("INSERT INTO taxa (taxon_id, rank) VALUES (1, 1)", [])
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO taxon_names (taxon_id, name_type, name) VALUES (1, 1, 'Animalia')",
+            [],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO taxon_names (taxon_id, name_type, name) VALUES (1, ?, 'Accepted one'), (1, ?, 'Accepted two')",
+            params![name_type.code(), name_type.code()],
+        )
+        .unwrap();
+    let mut issues = Vec::new();
+    visit_taxonomy_validation_issues(&connection, true, |issue| {
+        issues.push(issue);
+        true
+    })
+    .unwrap();
+    issues
+}
+
+#[test]
+fn taxonomy_validation_rejects_multiple_chinese_accepted_names() {
+    let issues = accepted_name_count_issues(TaxonomyNameType::ZhName);
+
+    assert_eq!(issues.len(), 1);
+    assert_eq!(issues[0].code, "invalid_zh_name_count");
+    assert_eq!(issues[0].taxon_id, Some(1));
+    assert_eq!(
+        issues[0].message,
+        "Taxon 1 must have at most one Chinese accepted name."
+    );
+}
+
+#[test]
+fn taxonomy_validation_rejects_multiple_english_accepted_names() {
+    let issues = accepted_name_count_issues(TaxonomyNameType::EnName);
+
+    assert_eq!(issues.len(), 1);
+    assert_eq!(issues[0].code, "invalid_en_name_count");
+    assert_eq!(issues[0].taxon_id, Some(1));
+    assert_eq!(
+        issues[0].message,
+        "Taxon 1 must have at most one English accepted name."
+    );
+}
+
+#[test]
+fn taxonomy_validation_allows_multiple_alias_names() {
+    let (_directory, database) = database();
+    let connection = database.connect_taxonomy_metadata_context().unwrap();
+    connection
+        .execute("INSERT INTO taxa (taxon_id, rank) VALUES (1, 1)", [])
+        .unwrap();
+    connection
+        .execute_batch(
+            r#"
+            INSERT INTO taxon_names (taxon_id, name_type, name) VALUES
+                (1, 1, 'Animalia'),
+                (1, 2, 'Scientific alias one'),
+                (1, 2, 'Scientific alias two'),
+                (1, 4, 'Chinese alias one'),
+                (1, 4, 'Chinese alias two'),
+                (1, 6, 'English alias one'),
+                (1, 6, 'English alias two');
+            "#,
+        )
+        .unwrap();
+
+    validate_taxonomy(&connection).unwrap();
+}
+
 #[test]
 fn name_type_codes_follow_public_name_order() {
     for (index, name_type) in TaxonomyNameType::ALL.into_iter().enumerate() {
@@ -42,7 +227,7 @@ fn formatted_update_uses_the_configured_synonym_hook() {
     .unwrap();
     let rows = parse_taxonomy_input_csv(
         &database,
-        "kingdom|synonyms\nAnimalia|  Raw_synonym  ;   \n",
+        "kingdom,synonyms\nAnimalia,\"  Raw_synonym  ;   \"\n",
     )
     .unwrap();
     assert_eq!(rows[0].synonyms, vec!["  Raw_synonym  ", "   "]);
@@ -70,7 +255,7 @@ fn formatted_update_uses_the_configured_synonym_hook() {
 #[test]
 fn empty_synonym_cell_is_an_empty_list() {
     let (_directory, database) = database();
-    let rows = parse_taxonomy_input_csv(&database, "kingdom|synonyms\nAnimalia|\n").unwrap();
+    let rows = parse_taxonomy_input_csv(&database, "kingdom,synonyms\nAnimalia,\n").unwrap();
 
     assert!(rows[0].synonyms.is_empty());
 }
@@ -80,7 +265,7 @@ fn csv_accepts_subset_and_reordered_headers() {
     let (_directory, database) = database();
     let rows = parse_taxonomy_input_csv(
         &database,
-        "synonyms|species|zh_alias\nCanis lycaon Linnaeus, 1758|Canis lupus|wolf;dog\n",
+        "synonyms,species,zh_alias\n\"Canis lycaon Linnaeus, 1758\",Canis lupus,wolf;dog\n",
     )
     .unwrap();
     assert_eq!(rows[0].species.as_deref(), Some("Canis lupus"));
@@ -91,8 +276,42 @@ fn csv_accepts_subset_and_reordered_headers() {
 #[test]
 fn csv_rejects_rows_with_a_different_column_count() {
     let (_directory, database) = database();
-    let error = parse_taxonomy_input_csv(&database, "kingdom|order\nAnimalia\n").unwrap_err();
+    let error = parse_taxonomy_input_csv(&database, "kingdom,order\nAnimalia\n").unwrap_err();
     assert!(error.to_string().contains("fields"));
+}
+
+#[test]
+fn configured_csv_delimiter_controls_formatted_io() {
+    let (_directory, database) = database();
+    crate::general::update_general_settings(
+        &database,
+        &crate::general::GeneralSettings {
+            csv_delimiter: "\t".into(),
+            ..crate::general::GeneralSettings::default()
+        },
+    )
+    .unwrap();
+
+    let template = taxonomy_formatted_update_template(&database).unwrap();
+    assert_eq!(
+        template.lines().next().unwrap(),
+        TAXONOMY_INPUT_COLUMNS.join("\t")
+    );
+    let rows = parse_taxonomy_input_csv(
+        &database,
+        "kingdom\tsynonyms\nAnimalia\tMetazoa;Metazoa sensu lato\n",
+    )
+    .unwrap();
+    assert_eq!(rows[0].synonyms.len(), 2);
+    let preview = preview_rows(&database, &rows).unwrap();
+    assert_eq!(preview.delimiter, "\t");
+    let applied = apply_rows(&database, &rows).unwrap();
+    assert_eq!(applied.delimiter, "\t");
+    assert!(
+        taxonomy_log_csv(&database, &applied.rows)
+            .unwrap()
+            .starts_with("row_number\toperation_types\t")
+    );
 }
 
 #[test]
@@ -126,6 +345,79 @@ fn preview_rolls_back_and_apply_is_revertible() {
         )
         .unwrap()
         .is_none()
+    );
+}
+
+#[test]
+fn prepared_preview_applies_the_cached_changeset() {
+    let (_directory, database) = database();
+    let input = TaxonInputRow {
+        kingdom: Some("Animalia".into()),
+        synonyms: vec!["Metazoa".into()],
+        ..TaxonInputRow::default()
+    };
+    let prepared = prepare_rows(&database, std::slice::from_ref(&input)).unwrap();
+    let preview = prepared.preview_result().clone();
+    assert_eq!(
+        preview.rows[0].operation_types,
+        vec![TaxonRowStatus::NewTaxon, TaxonRowStatus::NewName]
+    );
+    assert!(
+        database
+            .connect_taxonomy_metadata_context()
+            .unwrap()
+            .query_row("SELECT NOT EXISTS(SELECT 1 FROM taxa)", [], |row| row
+                .get::<_, bool>(0))
+            .unwrap()
+    );
+
+    let applied = apply_prepared_rows(&database, prepared).unwrap();
+    assert_eq!(applied.rows, preview.rows);
+    assert_eq!(applied.succeeded_rows, 1);
+    assert_eq!(
+        database
+            .connect_taxonomy_metadata_context()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM taxon_names", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        2
+    );
+}
+
+#[test]
+fn prepared_preview_rejects_a_changed_taxonomy_revision() {
+    let (_directory, database) = database();
+    let prepared = prepare_rows(
+        &database,
+        &[TaxonInputRow {
+            kingdom: Some("Animalia".into()),
+            ..TaxonInputRow::default()
+        }],
+    )
+    .unwrap();
+    apply_rows(
+        &database,
+        &[TaxonInputRow {
+            kingdom: Some("Plantae".into()),
+            ..TaxonInputRow::default()
+        }],
+    )
+    .unwrap();
+
+    let error = apply_prepared_rows(&database, prepared).unwrap_err();
+    assert!(error.to_string().contains("preview is stale"));
+    assert_eq!(
+        database
+            .connect_taxonomy_metadata_context()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM taxon_names WHERE name = 'Animalia'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        0
     );
 }
 
@@ -369,7 +661,7 @@ fn input_priority_precedes_database_name_type_priority() {
 }
 
 #[test]
-fn existing_sci_name_precedes_existing_synonym_for_one_input_name() {
+fn sci_name_and_synonym_matches_are_one_candidate_set() {
     let (_directory, database) = database();
     apply_rows(
         &database,
@@ -404,22 +696,16 @@ fn existing_sci_name_precedes_existing_synonym_for_one_input_name() {
         }],
     )
     .unwrap();
+    assert_eq!(preview.rows[0].target, None);
+    assert_eq!(preview.rows[0].candidates.len(), 2);
     assert_eq!(
-        preview.rows[0]
-            .target
-            .as_ref()
-            .and_then(|target| target.names.sci_name.as_deref()),
-        Some("Shared")
-    );
-    assert!(
-        !preview.rows[0]
-            .operation_types
-            .contains(&TaxonRowStatus::MultipleCandidates)
+        preview.rows[0].operation_types,
+        vec![TaxonRowStatus::MultipleCandidates]
     );
 }
 
 #[test]
-fn sparse_lineage_fields_are_valid_filters_and_direct_parent_input() {
+fn sparse_lineage_fields_allow_unique_matches_and_direct_parent_creation() {
     let (_directory, database) = database();
     apply_rows(
         &database,
@@ -499,5 +785,283 @@ fn sparse_lineage_fields_are_valid_filters_and_direct_parent_input() {
             .as_ref()
             .and_then(|parent| parent.names.sci_name.as_deref()),
         Some("Carnivora")
+    );
+}
+
+#[test]
+fn one_species_row_derives_genus_and_creates_the_strict_lineage() {
+    let (_directory, database) = database();
+    let result = apply_rows(
+        &database,
+        &[TaxonInputRow {
+            kingdom: Some("Animalia".into()),
+            order: Some("Carnivora".into()),
+            family: Some("Canidae".into()),
+            species: Some("Canis lupus".into()),
+            ..TaxonInputRow::default()
+        }],
+    )
+    .unwrap();
+
+    assert!(
+        result.rows[0]
+            .operation_types
+            .contains(&TaxonRowStatus::NewTaxon)
+    );
+    assert_eq!(
+        result.rows[0]
+            .parent
+            .as_ref()
+            .and_then(|parent| parent.names.sci_name.as_deref()),
+        Some("Canis")
+    );
+    let connection = database.connect_taxonomy_metadata_context().unwrap();
+    assert_eq!(
+        connection
+            .query_row("SELECT COUNT(*) FROM taxa", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        5
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                r#"
+                SELECT parent_name.name
+                FROM taxon_names AS species_name
+                JOIN taxa AS species USING (taxon_id)
+                JOIN taxon_names AS parent_name
+                  ON parent_name.taxon_id = species.parent_taxon_id
+                 AND parent_name.name_type = 1
+                WHERE species_name.name = 'Canis lupus'
+                "#,
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+        "Canis"
+    );
+}
+
+#[test]
+fn a_unique_lowest_rank_match_ignores_supplied_ancestors() {
+    let (_directory, database) = database();
+    apply_rows(
+        &database,
+        &[TaxonInputRow {
+            kingdom: Some("Animalia".into()),
+            order: Some("Carnivora".into()),
+            family: Some("Canidae".into()),
+            genus: Some("Canis".into()),
+            species: Some("Canis lupus".into()),
+            ..TaxonInputRow::default()
+        }],
+    )
+    .unwrap();
+
+    let result = apply_rows(
+        &database,
+        &[TaxonInputRow {
+            genus: Some("Felis".into()),
+            species: Some("Canis lupus".into()),
+            geological_range: Some("updated".into()),
+            ..TaxonInputRow::default()
+        }],
+    )
+    .unwrap();
+
+    assert_eq!(
+        result.rows[0]
+            .target
+            .as_ref()
+            .and_then(|target| target.names.sci_name.as_deref()),
+        Some("Canis lupus")
+    );
+    let connection = database.connect_taxonomy_metadata_context().unwrap();
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM taxon_names WHERE name = 'Felis'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn ambiguous_lowest_rank_matches_use_each_nearest_supplied_ancestor() {
+    let (_directory, database) = database();
+    let connection = database.connect_taxonomy_metadata_context().unwrap();
+    connection
+        .execute_batch(
+            r#"
+            INSERT INTO taxa (taxon_id, parent_taxon_id, rank) VALUES
+                (1, NULL, 1),
+                (2, 1, 2),
+                (3, 2, 3),
+                (4, 3, 4),
+                (5, 4, 5),
+                (6, NULL, 1),
+                (7, 6, 2),
+                (8, 7, 3),
+                (9, 8, 4),
+                (10, 9, 5);
+            INSERT INTO taxon_names (taxon_id, name_type, name) VALUES
+                (1, 1, 'Animalia'),
+                (2, 1, 'Carnivora'),
+                (3, 1, 'Canidae'),
+                (4, 1, 'Canis alpha'),
+                (4, 2, 'Canis'),
+                (5, 1, 'Shared species'),
+                (6, 1, 'Other kingdom'),
+                (7, 1, 'Other order'),
+                (8, 1, 'Other family'),
+                (9, 1, 'Canis'),
+                (10, 1, 'Shared species');
+            "#,
+        )
+        .unwrap();
+    drop(connection);
+
+    let result = preview_rows(
+        &database,
+        &[TaxonInputRow {
+            family: Some("Canidae".into()),
+            genus: Some("Canis".into()),
+            species: Some("Shared species".into()),
+            ..TaxonInputRow::default()
+        }],
+    )
+    .unwrap();
+
+    assert_eq!(result.rows[0].candidates.len(), 0);
+    assert_eq!(
+        result.rows[0].target.as_ref().map(|target| target.taxon_id),
+        Some(5)
+    );
+}
+
+#[test]
+fn a_missing_strict_parent_is_reported_before_creating_a_lineage() {
+    let (_directory, database) = database();
+    let result = preview_rows(
+        &database,
+        &[TaxonInputRow {
+            species: Some("Canis lupus".into()),
+            ..TaxonInputRow::default()
+        }],
+    )
+    .unwrap();
+
+    assert_eq!(
+        result.rows[0].operation_types,
+        vec![TaxonRowStatus::NotMatched]
+    );
+    assert!(
+        result.rows[0]
+            .message
+            .contains("new genus taxon requires a family")
+    );
+}
+
+#[test]
+fn a_new_taxon_reuses_a_unique_parent_synonym_without_checking_higher_ranks() {
+    let (_directory, database) = database();
+    apply_rows(
+        &database,
+        &[TaxonInputRow {
+            kingdom: Some("Animalia".into()),
+            order: Some("Carnivora".into()),
+            family: Some("Canidae".into()),
+            genus: Some("Canis".into()),
+            synonyms: vec!["Canini".into()],
+            ..TaxonInputRow::default()
+        }],
+    )
+    .unwrap();
+
+    let result = apply_rows(
+        &database,
+        &[TaxonInputRow {
+            family: Some("Wrong family".into()),
+            genus: Some("Canini".into()),
+            species: Some("Canis familiaris".into()),
+            ..TaxonInputRow::default()
+        }],
+    )
+    .unwrap();
+
+    assert_eq!(
+        result.rows[0]
+            .parent
+            .as_ref()
+            .and_then(|parent| parent.names.sci_name.as_deref()),
+        Some("Canis")
+    );
+    let connection = database.connect_taxonomy_metadata_context().unwrap();
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM taxon_names WHERE name = 'Wrong family'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn ancestor_disambiguation_with_no_remaining_target_creates_the_target() {
+    let (_directory, database) = database();
+    let connection = database.connect_taxonomy_metadata_context().unwrap();
+    connection
+        .execute_batch(
+            r#"
+            INSERT INTO taxa (taxon_id, parent_taxon_id, rank) VALUES
+                (1, NULL, 1),
+                (2, 1, 2),
+                (3, 2, 3),
+                (4, 3, 4),
+                (5, 3, 4),
+                (6, 3, 4),
+                (7, 4, 5),
+                (8, 5, 5);
+            INSERT INTO taxon_names (taxon_id, name_type, name) VALUES
+                (1, 1, 'Animalia'),
+                (2, 1, 'Carnivora'),
+                (3, 1, 'Canidae'),
+                (4, 1, 'Canis'),
+                (5, 1, 'Lycaon'),
+                (6, 1, 'Cuon'),
+                (7, 1, 'Shared species'),
+                (8, 1, 'Shared species');
+            "#,
+        )
+        .unwrap();
+    drop(connection);
+
+    let result = apply_rows(
+        &database,
+        &[TaxonInputRow {
+            genus: Some("Cuon".into()),
+            species: Some("Shared species".into()),
+            ..TaxonInputRow::default()
+        }],
+    )
+    .unwrap();
+
+    assert!(
+        result.rows[0]
+            .operation_types
+            .contains(&TaxonRowStatus::NewTaxon)
+    );
+    assert_eq!(
+        result.rows[0]
+            .parent
+            .as_ref()
+            .and_then(|parent| parent.names.sci_name.as_deref()),
+        Some("Cuon")
     );
 }

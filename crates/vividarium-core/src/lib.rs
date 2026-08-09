@@ -6,6 +6,7 @@
 
 mod db;
 pub mod error;
+pub mod general;
 pub mod map;
 pub mod mapping;
 mod metadata;

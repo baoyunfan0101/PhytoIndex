@@ -207,15 +207,19 @@ mod tests {
     fn taxonomy_search_filters_empty_taxa_and_pages_results() {
         let (_directory, database) = database();
         let first = search_photo_taxa(&database, "idae", None, 1).unwrap();
-        assert_eq!(first.items[0].summary.taxon_id, 11);
+        assert_eq!(first.items[0].taxon_id, 11);
         let second = search_photo_taxa(&database, "idae", first.next_cursor.as_deref(), 1).unwrap();
-        assert_eq!(second.items[0].summary.taxon_id, 12);
+        assert_eq!(second.items[0].taxon_id, 12);
         assert!(second.next_cursor.is_none());
         assert!(search_photo_taxa(&database, "Animalia", first.next_cursor.as_deref(), 1).is_err());
 
         let ancestor = search_photo_taxa(&database, "Animalia", None, 50).unwrap();
         assert_eq!(ancestor.items.len(), 1);
-        assert_eq!(ancestor.items[0].summary.taxon_id, 10);
+        assert_eq!(ancestor.items[0].taxon_id, 10);
+        assert_eq!(
+            ancestor.items[0].names.sci_name.as_deref(),
+            Some("Animalia")
+        );
 
         let suggestions = suggest_photo_taxa(&database, "idae", 10).unwrap();
         assert_eq!(
@@ -227,6 +231,80 @@ mod tests {
         );
         assert_eq!(suggestions[0].names.sci_name.as_deref(), Some("Canidae"));
         assert_eq!(suggestions[0].matches[0].name, "Canidae");
+    }
+
+    #[test]
+    fn photo_taxonomy_search_preserves_all_match_levels_and_compact_fields() {
+        let (_directory, database) = database();
+        database
+            .connect()
+            .unwrap()
+            .execute_batch(
+                r#"
+                INSERT INTO photos (
+                    photo_id, directory_id, filename, file_size, modified_at_ns
+                ) VALUES
+                    (4, 1, 'Exact.jpg', 1, 1),
+                    (5, 1, 'Prefix.jpg', 1, 1),
+                    (6, 1, 'Word.jpg', 1, 1),
+                    (7, 1, 'Substring.jpg', 1, 1),
+                    (8, 1, 'Fuzzy.jpg', 1, 1);
+                INSERT INTO taxa (taxon_id, parent_taxon_id, rank) VALUES
+                    (20, NULL, 5),
+                    (21, NULL, 5),
+                    (22, NULL, 5),
+                    (23, NULL, 5),
+                    (24, NULL, 5),
+                    (25, NULL, 5);
+                INSERT INTO taxon_names (taxon_id, name_type, name) VALUES
+                    (20, 1, 'Canis'),
+                    (21, 1, 'Canis lupus'),
+                    (22, 1, 'Great Canis wolf'),
+                    (23, 1, 'Toucanis'),
+                    (24, 1, 'Canos'),
+                    (25, 1, 'Canis absent');
+                INSERT INTO photo_taxon_mapping (photo_id, taxon_id, status) VALUES
+                    (4, 20, 'matched'),
+                    (5, 21, 'matched'),
+                    (6, 22, 'matched'),
+                    (7, 23, 'matched'),
+                    (8, 24, 'matched');
+                INSERT INTO photo_taxon_usage (
+                    taxon_id, direct_photo_count, subtree_photo_count
+                ) VALUES
+                    (20, 1, 1),
+                    (21, 1, 1),
+                    (22, 1, 1),
+                    (23, 1, 1),
+                    (24, 1, 1);
+                "#,
+            )
+            .unwrap();
+
+        let results = search_photo_taxa(&database, "Canis", None, 10).unwrap();
+        assert_eq!(
+            results
+                .items
+                .iter()
+                .map(|result| result.taxon_id)
+                .collect::<Vec<_>>(),
+            vec![20, 21, 22, 23, 24]
+        );
+        assert_eq!(results.items[0].names.sci_name.as_deref(), Some("Canis"));
+        assert_eq!(
+            results
+                .items
+                .iter()
+                .map(|result| result.matches[0].name.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "Canis",
+                "Canis lupus",
+                "Great Canis wolf",
+                "Toucanis",
+                "Canos",
+            ]
+        );
     }
 
     #[test]

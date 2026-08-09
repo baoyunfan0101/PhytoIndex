@@ -1,6 +1,7 @@
 mod commands;
 mod file_manager;
 mod media;
+mod native_menu;
 mod paths;
 mod state;
 mod updater;
@@ -11,7 +12,10 @@ use tauri::Manager;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .menu(native_menu::build)
+        .on_menu_event(native_menu::handle)
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let state = AppState::new(paths::data_dir(app.handle())?)?;
@@ -23,6 +27,10 @@ pub fn run() {
         })
         .register_uri_scheme_protocol("vividarium", |_context, request| media::handle(request))
         .invoke_handler(tauri::generate_handler![
+            commands::get_general_settings,
+            commands::update_general_settings,
+            commands::get_workspace_state,
+            commands::save_workspace_state,
             commands::get_photo_library,
             commands::get_photo_library_count,
             commands::open_photo_library,
@@ -35,6 +43,8 @@ pub fn run() {
             commands::relocate_photo_library_database,
             commands::remove_photo_library,
             commands::rename_photo_library,
+            commands::open_path_in_file_manager,
+            commands::open_taxonomy_database,
             commands::relocate_taxonomy_database,
             commands::set_default_taxonomy_database_directory,
             commands::set_default_photo_library_database_directory,
@@ -49,13 +59,14 @@ pub fn run() {
             commands::test_naming_hook,
             commands::get_naming_hook_test_cases,
             commands::run_naming_hook_tests,
-            commands::test_and_save_naming_hook,
+            commands::save_naming_hook,
             commands::get_photo_name_match_settings,
             commands::set_photo_name_match_settings,
             commands::get_photo_filename_format_settings,
             commands::set_photo_filename_format_settings,
             commands::format_photo_filename,
             commands::rename_photo,
+            commands::rename_photo_directory,
             commands::rename_photo_from_taxon,
             commands::rename_photos_from_taxa,
             commands::rename_photos_in_directory_from_taxa,
@@ -71,17 +82,20 @@ pub fn run() {
             commands::get_photo_metadata,
             commands::get_photo_availability,
             commands::reveal_photo_in_file_manager,
+            commands::open_photo_directory_in_file_manager,
             commands::search_taxa,
             commands::suggest_taxa,
-            commands::get_taxon_detail_node,
+            commands::get_taxon_detail,
             commands::list_taxon_children,
             commands::delete_taxon_name,
             commands::update_taxon,
             commands::promote_taxon_name,
+            commands::save_taxon_name_group,
             commands::delete_taxon,
             commands::execute_custom_taxonomy_sql,
             commands::get_custom_taxonomy_sql,
             commands::list_custom_sql_inputs,
+            commands::list_custom_sql_database_schemas,
             commands::add_custom_sql_input,
             commands::remove_custom_sql_input,
             commands::export_custom_taxonomy_query,
@@ -101,14 +115,17 @@ pub fn run() {
             commands::export_taxonomy_operation_input,
             commands::export_taxonomy_operations_input,
             commands::export_all_replayable_taxonomy_inputs,
-            commands::get_taxonomy_base_metadata,
-            commands::get_base_import_sql,
-            commands::list_base_import_inputs,
-            commands::add_base_import_input,
-            commands::remove_base_import_input,
-            commands::execute_base_import_sql,
-            commands::validate_base_import,
-            commands::apply_base_import,
+            commands::get_taxonomy_import_metadata,
+            commands::inspect_direct_import_database,
+            commands::get_sql_import_sql,
+            commands::list_sql_import_inputs,
+            commands::list_sql_import_database_schemas,
+            commands::list_sql_import_staging_schemas,
+            commands::add_sql_import_input,
+            commands::remove_sql_import_input,
+            commands::start_sql_import_validation,
+            commands::apply_sql_import,
+            commands::apply_direct_import,
             commands::get_mapping_metadata,
             commands::search_photo_taxa,
             commands::suggest_photo_taxa,
@@ -122,9 +139,10 @@ pub fn run() {
             commands::browse_photo_taxon,
             commands::list_photos_by_mapping_status,
             commands::search_photos_by_mapping_status,
-            commands::get_map_settings,
-            commands::set_map_settings,
-            commands::list_map_photos,
+            commands::map::get_map_settings,
+            commands::map::set_map_settings,
+            commands::map::get_map_photo_bounds,
+            commands::map::list_map_photos,
             commands::get_app_version,
             commands::check_app_update,
             commands::install_app_update,

@@ -1,8 +1,12 @@
 import { useEffect, useRef } from "react";
 
-export type TaxonomyMutation = {
-  kind: "update" | "replacement";
-};
+export type TaxonomyMutation =
+  | {
+      kind: "update";
+      taxonId?: number;
+      deletedTaxonId?: number;
+    }
+  | { kind: "replacement" };
 
 type TaxonomyMutationListener = (mutation: TaxonomyMutation) => void;
 

@@ -63,15 +63,9 @@ pub struct TaxonDetail {
     pub taxon_id: i64,
     pub rank: TaxonRank,
     pub parent_taxon_id: Option<i64>,
+    pub breadcrumb: Vec<TaxonBreadcrumbItem>,
     pub geological_range: Option<String>,
     pub names: TaxonNamesDetail,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct TaxonDetailNode {
-    pub summary: TaxonSummary,
-    pub detail: TaxonDetail,
-    pub children: TaxonomyPage<TaxonChild>,
 }
 
 pub fn get_taxon_summary(database: &Database, taxon_id: i64) -> CoreResult<Option<TaxonSummary>> {
@@ -80,27 +74,6 @@ pub fn get_taxon_summary(database: &Database, taxon_id: i64) -> CoreResult<Optio
 
 pub fn get_taxon_detail(database: &Database, taxon_id: i64) -> CoreResult<Option<TaxonDetail>> {
     load_taxon_detail(&database.connect_taxonomy_metadata_context()?, taxon_id)
-}
-
-pub fn get_taxon_detail_node(
-    database: &Database,
-    taxon_id: i64,
-    children_cursor: Option<&str>,
-    children_limit: usize,
-) -> CoreResult<Option<TaxonDetailNode>> {
-    let connection = database.connect_taxonomy_metadata_context()?;
-    let Some(summary) = load_taxon_summary(&connection, taxon_id)? else {
-        return Ok(None);
-    };
-    let detail = load_taxon_detail(&connection, taxon_id)?.ok_or_else(|| {
-        CoreError::InvalidArgument(format!("taxon {taxon_id} disappeared while loading"))
-    })?;
-    let children = load_taxon_children(&connection, taxon_id, children_cursor, children_limit)?;
-    Ok(Some(TaxonDetailNode {
-        summary,
-        detail,
-        children,
-    }))
 }
 
 pub fn list_taxon_children(
@@ -125,6 +98,20 @@ pub(super) fn load_taxon_summary(
         return Ok(None);
     };
     let names = load_display_names(connection, taxon_id)?;
+    let breadcrumb = load_breadcrumb(connection, taxon_id, parent_taxon_id)?;
+    Ok(Some(TaxonSummary {
+        taxon_id,
+        rank,
+        breadcrumb,
+        names,
+    }))
+}
+
+fn load_breadcrumb(
+    connection: &Connection,
+    taxon_id: i64,
+    parent_taxon_id: Option<i64>,
+) -> CoreResult<Vec<TaxonBreadcrumbItem>> {
     let mut breadcrumb = Vec::new();
     let mut current = parent_taxon_id;
     let mut seen = HashSet::from([taxon_id]);
@@ -147,12 +134,7 @@ pub(super) fn load_taxon_summary(
         current = next_parent;
     }
     breadcrumb.reverse();
-    Ok(Some(TaxonSummary {
-        taxon_id,
-        rank,
-        breadcrumb,
-        names,
-    }))
+    Ok(breadcrumb)
 }
 
 pub(crate) fn load_taxon_summaries(
@@ -163,20 +145,6 @@ pub(crate) fn load_taxon_summaries(
         .iter()
         .map(|taxon_id| {
             load_taxon_summary(connection, *taxon_id)?.ok_or_else(|| {
-                CoreError::InvalidArgument(format!("taxon {taxon_id} no longer exists"))
-            })
-        })
-        .collect()
-}
-
-pub(super) fn load_taxon_details(
-    connection: &Connection,
-    taxon_ids: &[i64],
-) -> CoreResult<Vec<TaxonDetail>> {
-    taxon_ids
-        .iter()
-        .map(|taxon_id| {
-            load_taxon_detail(connection, *taxon_id)?.ok_or_else(|| {
                 CoreError::InvalidArgument(format!("taxon {taxon_id} no longer exists"))
             })
         })
@@ -204,6 +172,7 @@ fn load_taxon_detail(connection: &Connection, taxon_id: i64) -> CoreResult<Optio
         taxon_id,
         rank: TaxonRank::from_code(rank)?,
         parent_taxon_id,
+        breadcrumb: load_breadcrumb(connection, taxon_id, parent_taxon_id)?,
         geological_range,
         names: load_name_details(connection, taxon_id)?,
     }))
@@ -367,4 +336,103 @@ fn load_name_details(connection: &Connection, taxon_id: i64) -> CoreResult<Taxon
         }
     }
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn database() -> (tempfile::TempDir, Database) {
+        let directory = tempfile::tempdir().unwrap();
+        let database = Database::open_test(directory.path().join("test.db")).unwrap();
+        database
+            .connect_taxonomy_metadata_context()
+            .unwrap()
+            .execute_batch(
+                r#"
+                INSERT INTO taxa (
+                    taxon_id, parent_taxon_id, rank, geological_range
+                ) VALUES
+                    (1, NULL, 1, NULL),
+                    (2, 1, 3, NULL),
+                    (3, 2, 4, NULL),
+                    (4, 3, 5, 'Pleistocene-present'),
+                    (5, 3, 5, NULL);
+                INSERT INTO taxon_names (
+                    name_id, taxon_id, name_type, name, authority_year, source
+                ) VALUES
+                    (1, 1, 1, 'Animalia', NULL, 'Catalogue A'),
+                    (2, 2, 1, 'Canidae', NULL, 'Catalogue A'),
+                    (3, 3, 1, 'Canis', NULL, 'Catalogue A'),
+                    (4, 4, 1, 'Canis lupus', 'Linnaeus, 1758', 'Catalogue A'),
+                    (5, 4, 2, 'Canis lycaon', 'Schreber, 1775', 'Catalogue B'),
+                    (6, 4, 3, 'Gray wolf', NULL, 'Catalogue C'),
+                    (7, 4, 4, 'Wolf alias', NULL, 'Catalogue D'),
+                    (8, 4, 5, 'Wolf', NULL, 'Catalogue E'),
+                    (9, 4, 6, 'Grey wolf', NULL, 'Catalogue F'),
+                    (10, 5, 1, 'Canis latrans', 'Say, 1823', 'Catalogue A');
+                "#,
+            )
+            .unwrap();
+        (directory, database)
+    }
+
+    #[test]
+    fn detail_contains_ancestor_breadcrumb_and_all_name_groups() {
+        let (_directory, database) = database();
+
+        let detail = get_taxon_detail(&database, 4).unwrap().unwrap();
+
+        assert_eq!(detail.taxon_id, 4);
+        assert_eq!(detail.rank, TaxonRank::Species);
+        assert_eq!(detail.parent_taxon_id, Some(3));
+        assert_eq!(
+            detail.geological_range.as_deref(),
+            Some("Pleistocene-present")
+        );
+        assert_eq!(
+            detail
+                .breadcrumb
+                .iter()
+                .map(|item| (item.taxon_id, item.names.sci_name.as_deref()))
+                .collect::<Vec<_>>(),
+            vec![
+                (1, Some("Animalia")),
+                (2, Some("Canidae")),
+                (3, Some("Canis")),
+            ]
+        );
+
+        let scientific_name = detail.names.sci_name.unwrap();
+        assert_eq!(scientific_name.name_id, 4);
+        assert_eq!(scientific_name.name, "Canis lupus");
+        assert_eq!(
+            scientific_name.authority_year.as_deref(),
+            Some("Linnaeus, 1758")
+        );
+        assert_eq!(scientific_name.source.as_deref(), Some("Catalogue A"));
+        assert_eq!(detail.names.synonyms[0].name_id, 5);
+        assert_eq!(detail.names.zh_name.unwrap().name_id, 6);
+        assert_eq!(detail.names.zh_aliases[0].name_id, 7);
+        assert_eq!(detail.names.en_name.unwrap().name_id, 8);
+        assert_eq!(detail.names.en_aliases[0].name_id, 9);
+    }
+
+    #[test]
+    fn children_are_loaded_with_an_independent_cursor_page() {
+        let (_directory, database) = database();
+
+        let first = list_taxon_children(&database, 3, None, 1).unwrap();
+        assert_eq!(first.items.len(), 1);
+        assert_eq!(first.items[0].taxon_id, 4);
+        assert_eq!(first.items[0].rank, TaxonRank::Species);
+        assert!(first.next_cursor.is_some());
+
+        let second = list_taxon_children(&database, 3, first.next_cursor.as_deref(), 1).unwrap();
+        assert_eq!(second.items.len(), 1);
+        assert_eq!(second.items[0].taxon_id, 5);
+        assert!(second.next_cursor.is_none());
+
+        assert!(list_taxon_children(&database, 2, first.next_cursor.as_deref(), 1).is_err());
+    }
 }

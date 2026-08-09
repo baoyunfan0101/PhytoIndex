@@ -182,12 +182,16 @@ Tauri reads its application version from `apps/desktop/package.json`.
 Run the release checks:
 
 ```bash
-cargo test --workspace
+cargo test --workspace --locked
 
 cd apps/desktop
 npm ci
+npm run test:desktop
 npm run build
 ```
+
+The GitHub release workflow runs these checks in its `verify` job before either
+platform package job may start.
 
 Create and push the release tag:
 

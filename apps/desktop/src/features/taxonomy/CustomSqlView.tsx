@@ -1,23 +1,28 @@
-import { Download, Play } from "lucide-react";
+import { CircleQuestionMark, Download, Play } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import {
   addCustomSqlInput,
   executeCustomSql,
   exportCustomSqlQuery,
   getCustomTaxonomySql,
+  listCustomSqlDatabaseSchemas,
   listCustomSqlInputs,
   removeCustomSqlInput,
   type CustomSqlExecutionResult,
   type PersistentSqlInput,
   type SqlResultSet,
+  type SqlSourceSchema,
   type SqlValue,
 } from "../../api/customSql";
 import { errorMessage } from "../../api/common";
 import { selectCsvDestination } from "../../api/dialogs";
 import { CodeEditor } from "../../shared/CodeEditor";
-import { EmptyState, SectionHeader, VirtualList } from "../../shared/ui";
+import { ResizablePanels } from "../../shared/ResizablePanels";
+import { Busy, Button, EmptyState, SectionHeader, VirtualList } from "../../shared/ui";
 import { SqlInputList } from "./SqlInputList";
+import { SqlEnumHelpModal } from "./TaxonomyHelpModal";
 import { canExportFullQuery } from "./sqlResults";
+import { resolveSqlWorkbenchLoads } from "./sqlWorkbenchLoading";
 import { emitTaxonomyMutation } from "./taxonomyMutations";
 
 export function CustomSqlView({
@@ -29,17 +34,28 @@ export function CustomSqlView({
 }) {
   const [sql, setSql] = useState("");
   const [inputs, setInputs] = useState<PersistentSqlInput[]>([]);
+  const [databaseSchemas, setDatabaseSchemas] = useState<SqlSourceSchema[]>([]);
   const [result, setResult] = useState<CustomSqlExecutionResult | null>(null);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
+  const [loadingWorkbench, setLoadingWorkbench] = useState(true);
+  const [helpOpen, setHelpOpen] = useState(false);
 
   useEffect(() => {
-    Promise.all([getCustomTaxonomySql(), listCustomSqlInputs()])
-      .then(([savedSql, savedInputs]) => {
-        setSql(savedSql);
-        setInputs(savedInputs);
+    void Promise.allSettled([
+      getCustomTaxonomySql(),
+      listCustomSqlInputs(),
+      listCustomSqlDatabaseSchemas(),
+    ])
+      .then(([sqlResult, inputsResult, schemasResult]) => {
+        const loaded = resolveSqlWorkbenchLoads(sqlResult, inputsResult);
+        if (loaded.sql !== undefined) setSql(loaded.sql);
+        if (loaded.inputs !== undefined) setInputs(loaded.inputs);
+        if (schemasResult.status === "fulfilled") setDatabaseSchemas(schemasResult.value);
+        const schemasError = schemasResult.status === "rejected" ? errorMessage(schemasResult.reason) : "";
+        setError([loaded.error, schemasError].filter(Boolean).join(" "));
       })
-      .catch((nextError) => setError(errorMessage(nextError)));
+      .finally(() => setLoadingWorkbench(false));
   }, []);
 
   async function addInput(kind: "csv" | "sqlite", alias: string, path: string) {
@@ -104,47 +120,86 @@ export function CustomSqlView({
     }
   }
 
+  const workbench = (
+    <ResizablePanels
+      className="custom-sql-workbench"
+      initialSize={250}
+      minFirst={180}
+      minSecond={320}
+      separatorLabel="Resize Input sources"
+      stateKey="custom-sql.inputs"
+      first={<SqlInputList inputs={inputs} workspaceSchemas={[]} databaseSchemas={databaseSchemas} busy={Boolean(busy) || loadingWorkbench} operation={busy} onAdd={addInput} onRemove={removeInput} />}
+      second={(<div className="custom-sql-editor">
+        <CodeEditor language="sql" ariaLabel="Custom taxonomy SQL" value={sql} onChange={setSql} />
+      </div>)}
+    />
+  );
+
+  const primary = (
+    <div className="sql-workbench-primary">
+      {workbench}
+      {error ? (
+        <div className="inline-error" role="alert">{error}</div>
+      ) : loadingWorkbench ? (
+        <div className="editor-message" role="status" aria-live="polite">
+          <Busy label="Loading custom SQL workspace..." />
+        </div>
+      ) : null}
+    </div>
+  );
+
+  const output = result ? (
+    <div className="sql-results">
+      <div className="sql-result-summary">
+        <span>{result.changeset_size} bytes changed</span>
+        <span>{result.operation_id === null ? "No operation created" : `Operation ${result.operation_id}`}</span>
+        <span>{result.script_saved ? "Script saved" : "Script not saved"}</span>
+        {canExportFullQuery(result) && (
+          <Button disabled={Boolean(busy)} onClick={() => void exportQuery()}>
+            <Download size={13} />{busy === "Exporting full query" ? "Exporting..." : "Export full query"}
+          </Button>
+        )}
+      </div>
+      {result.messages.map((message) => (
+        <p className="sql-message" key={`${message.statement_index}:${message.message}`}>
+          Statement {message.statement_index}: {message.message}
+          {message.affected_rows !== null ? ` (${message.affected_rows} rows)` : ""}
+        </p>
+      ))}
+      {result.result_sets.length === 0 ? (
+        <EmptyState title="No result sets" detail="Mutation messages are shown above." />
+      ) : result.result_sets.map((set) => <SqlResultTable key={set.statement_index} result={set} />)}
+    </div>
+  ) : null;
+
   return (
     <div className="custom-sql-view">
       <SectionHeader
         title="Custom SQL"
         detail="Execute typed SQL against taxonomy and file-path data sources"
         actions={(
-          <button className="primary-button" type="button" disabled={Boolean(busy) || !sql.trim() || mutationDisabled} onClick={() => void execute()}>
-            <Play size={13} />Run
-          </button>
+          <>
+            <Button onClick={() => setHelpOpen(true)}><CircleQuestionMark size={13} />Help</Button>
+            <Button variant="primary" disabled={Boolean(busy) || loadingWorkbench || !sql.trim() || mutationDisabled} onClick={() => void execute()}>
+              <Play size={13} />{busy === "Executing SQL" ? "Running..." : "Run"}
+            </Button>
+          </>
         )}
       />
-      <div className="custom-sql-workbench">
-        <SqlInputList inputs={inputs} busy={Boolean(busy)} onAdd={addInput} onRemove={removeInput} />
-        <div className="custom-sql-editor">
-          <CodeEditor language="sql" ariaLabel="Custom taxonomy SQL" value={sql} onChange={setSql} />
-        </div>
-      </div>
-      {(error || busy) && <div className={error ? "inline-error" : "editor-message"}>{error || busy}</div>}
-      {result && (
-        <div className="sql-results">
-          <div className="sql-result-summary">
-            <span>{result.changeset_size} bytes changed</span>
-            <span>{result.operation_id === null ? "No operation created" : `Operation ${result.operation_id}`}</span>
-            <span>{result.script_saved ? "Script saved" : "Script not saved"}</span>
-            {canExportFullQuery(result) && (
-              <button className="secondary-button" type="button" disabled={Boolean(busy)} onClick={() => void exportQuery()}>
-                <Download size={13} />Export full query
-              </button>
-            )}
-          </div>
-          {result.messages.map((message) => (
-            <p className="sql-message" key={`${message.statement_index}:${message.message}`}>
-              Statement {message.statement_index}: {message.message}
-              {message.affected_rows !== null ? ` (${message.affected_rows} rows)` : ""}
-            </p>
-          ))}
-          {result.result_sets.length === 0 ? (
-            <EmptyState title="No result sets" detail="Mutation messages are shown above." />
-          ) : result.result_sets.map((set) => <SqlResultTable key={set.statement_index} result={set} />)}
-        </div>
-      )}
+      {output ? (
+        <ResizablePanels
+          className="sql-output-split"
+          direction="vertical"
+          initialRatio={0.55}
+          minFirst={230}
+          minSecond={130}
+          separatorLabel="Resize SQL output"
+          stateKey="custom-sql.output"
+          first={primary}
+          second={output}
+        />
+      ) : primary}
+      {helpOpen && <SqlEnumHelpModal onClose={() => setHelpOpen(false)} />}
     </div>
   );
 }

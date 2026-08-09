@@ -1,29 +1,27 @@
-.mapping-workbench { display: grid; height: 100%; min-height: 0; grid-template-rows: 44px 30px minmax(0, 1fr); }
-.mapping-filter { width: min(420px, 40vw); }
-.mapping-summary { display: flex; align-items: center; gap: 16px; padding: 0 10px; border-bottom: 1px solid var(--line); background: #1b1b1b; }
-.mapping-summary > span { display: flex; align-items: center; gap: 6px; color: var(--muted); }
-.mapping-three-columns { display: grid; min-height: 0; grid-template-columns: 240px minmax(280px, 1fr) minmax(330px, 38%); }
-.mapping-photo-list, .mapping-photo-stage { min-height: 0; border-right: 1px solid var(--line); }
+.mapping-workbench { display: grid; height: 100%; min-height: 0; grid-template-rows: 44px minmax(0, 1fr); }
+.mapping-filter { width: min(360px, 34vw); margin-left: auto; }
+.mapping-summary { display: flex; min-width: 0; align-items: center; gap: 4px; }
+.mapping-summary-button { display: flex; height: 32px; align-items: center; gap: 6px; padding: 0 9px; border: 0; border-radius: 4px; color: var(--muted); background: transparent; }
+.mapping-summary-button:hover:not(:disabled) { background: var(--hover); filter: none; }
+.mapping-summary-button:active:not(:disabled) { background: var(--active); filter: none; transform: none; }
+.mapping-summary-button.active { color: var(--text); background: var(--selected); }
+.mapping-summary-button > span:last-child { min-width: 1.5em; text-align: right; }
+.mapping-three-columns, .mapping-content-columns { min-height: 0; }
+.mapping-photo-list, .mapping-photo-stage { height: 100%; min-height: 0; }
 .mapping-photo-list { position: relative; }
-.mapping-editor-pane { min-width: 0; min-height: 0; overflow: hidden; }
+.mapping-editor-pane { width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden; }
 .mapping-badge { display: inline-flex; align-items: center; padding: 2px 6px; border: 1px solid currentColor; border-radius: 999px; font-size: 10px; line-height: 1.2; text-transform: capitalize; }
 .mapping-badge.matched { color: var(--accent-bright); }
 .mapping-badge.ambiguous { color: var(--amber); }
 .mapping-badge.unmatched { color: var(--blue); }
 .mapping-badge.processing { color: var(--purple); }
-.mapping-photo-row .mapping-badge { flex: 0 0 auto; }
-.mapping-editor { display: grid; width: 100%; height: 100%; min-height: 0; grid-template-columns: minmax(300px, 1fr) minmax(330px, 42%); }
-.mapping-editor.embedded { display: block; overflow: auto; }
-.mapping-editor.embedded .editor-photo-column { display: none; }
-.editor-photo-column { display: grid; min-height: 0; grid-template-rows: 52px minmax(0, 1fr); border-right: 1px solid var(--line); }
-.editor-mapping-column { position: relative; display: grid; min-height: 0; grid-template-rows: minmax(180px, 42%) minmax(0, 1fr); }
-.mapping-current, .mapping-search { min-height: 0; padding: 10px; border-bottom: 1px solid var(--line); }
+.mapping-editor { width: 100%; height: 100%; min-height: 0; }
+.mapping-editor.embedded { display: block; overflow: hidden; }
+.editor-photo-column { display: grid; height: 100%; min-height: 0; grid-template-rows: 52px minmax(0, 1fr); }
+.editor-mapping-column { position: relative; width: 100%; height: 100%; min-height: 0; }
+.editor-mapping-split { width: 100%; height: 100%; min-height: 0; }
+.mapping-current, .mapping-search { height: 100%; min-height: 0; padding: 10px; }
 .mapping-current > header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
-.mapping-search { display: grid; grid-template-rows: 34px minmax(0, 1fr); gap: 8px; }
+.mapping-search { display: grid; grid-template-rows: 36px minmax(0, 1fr); gap: 8px; }
+.mapping-search > .search-field { height: 36px; }
 .candidate-stack { height: calc(100% - 30px); }
-.current-mapping-card { display: flex; align-items: center; justify-content: space-between; padding: 10px; border: 1px solid var(--line); background: #222; }
-.current-mapping-card > div { display: flex; flex-direction: column; gap: 3px; }
-
-@media (max-width: 1050px) {
-  .mapping-three-columns { grid-template-columns: 200px minmax(250px, 1fr) 340px; }
-}

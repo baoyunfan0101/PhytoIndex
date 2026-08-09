@@ -1,249 +1,250 @@
 import {
-  ChevronDown,
-  ChevronRight,
+  CircleQuestionMark,
   Download,
+  Eye,
   FileUp,
-  Images,
   Play,
   Search,
+  Trash2,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import {
   applyTaxonomyRows,
-  displayTaxon,
-  getTaxonDetailNode,
   getTaxonomyTemplate,
-  listTaxonChildren,
   parseTaxonomyCsv,
   previewTaxonomyRows,
-  type TaxonChild,
-  type TaxonDetail,
-  type TaxonDetailNode,
   type TaxonInputRow,
   type TaxonRowOutcome,
-  type TaxonSearchResult,
-  type TaxonSummary,
 } from "../../api/taxonomy";
 import { downloadCsv, errorMessage } from "../../api/common";
 import { getTaxonomyNameSeparator } from "../../api/settings";
-import { EmptyState, SectionHeader, VirtualList } from "../../shared/ui";
+import { Busy, Button, EmptyState, SectionHeader, VirtualList } from "../../shared/ui";
 import { TaxonCard } from "./TaxonCard";
 import { useMetadataChange } from "../../shared/metadataChanges";
-import { useCursorPage } from "../../shared/useCursorPage";
 import { useTaxonSearch } from "./useTaxonSearch";
 import { useViewState } from "../../shared/viewState";
 import { emitTaxonomyMutation, useTaxonomyMutation } from "./taxonomyMutations";
-
-type TaxonomyRecordItem =
-  | { kind: "selected"; result: TaxonSearchResult }
-  | { kind: "child"; child: TaxonChild };
+import { ResizablePanels } from "../../shared/ResizablePanels";
+import { moveSuggestionSelection } from "../../shared/suggestionNavigation";
+import { SearchSuggestions, suggestionLabel } from "../photos/search/SearchSuggestions";
+import { useTaxonSuggestions } from "./useTaxonSuggestions";
+import { TaxonomyHierarchyPage } from "./TaxonomyHierarchyPage";
+import { FormattedUpdateHelpModal } from "./TaxonomyHelpModal";
+import {
+  currentTaxonForRoot,
+  reconcileSelectedRoot,
+  recordHierarchyPosition,
+  taxonSearchMatchExplanation,
+  type HierarchyPositions,
+} from "./hierarchyNavigation";
 
 export function TaxonomySearchView({
-  taxonId,
-  onTaxonChange,
   onOpenPhotos,
+  mutationDisabled = false,
 }: {
-  taxonId?: number;
-  onTaxonChange?: (taxonId: number, label: string) => void;
   onOpenPhotos: (taxonId: number, label: string) => void;
+  mutationDisabled?: boolean;
 }) {
   const [query, setQuery] = useViewState("taxonomy-search.query", "");
-  const [selected, setSelected] = useViewState<TaxonSearchResult | null>("taxonomy-search.selected", null);
-  const [node, setNode] = useViewState<TaxonDetailNode | null>("taxonomy-search.node", null);
-  const [expanded, setExpanded] = useViewState("taxonomy-search.expanded", false);
-  const [error, setError] = useState("");
+  const [submittedQuery, setSubmittedQuery] = useViewState("taxonomy-search.submitted-query", query);
+  const [selectedRootTaxonId, setSelectedRootTaxonId] = useViewState<number | null>(
+    "taxonomy-search.selected-root",
+    null,
+  );
+  const [hierarchyPositions, setHierarchyPositions] = useViewState<HierarchyPositions>(
+    "taxonomy-search.hierarchy-positions",
+    {},
+  );
   const [refreshKey, setRefreshKey] = useState(0);
-  const loadedTaxonId = useRef<number | null>(null);
-  const selectedTaxonId = useRef(selected?.summary.taxon_id ?? null);
-  const taxonomySearch = useTaxonSearch(query, {
-    enabled: taxonId === undefined,
+  const [selectedSuggestionIndex, setSelectedSuggestionIndex] = useState(-1);
+  const [suggestionsOpen, setSuggestionsOpen] = useState(false);
+  const taxonomySearchBoxRef = useRef<HTMLDivElement>(null);
+  const taxonomySearch = useTaxonSearch(submittedQuery, {
+    debounceMs: 0,
     stateKey: "taxonomy-search.results",
     refreshKey,
   });
-  const children = useCursorPage<TaxonChild, number | null>({
-    params: selected?.summary.taxon_id ?? null,
-    resetKey: selected?.summary.taxon_id ?? null,
-    stateKey: "taxonomy-search.children",
-    enabled: expanded && selected !== null,
-    loadPage: (selectedTaxonId, cursor) => listTaxonChildren(selectedTaxonId!, cursor),
-  });
+  const taxonomySuggestions = useTaxonSuggestions(query, true);
   useTaxonomyMutation(() => {
-    loadedTaxonId.current = null;
-    setNode(null);
     setRefreshKey((current) => current + 1);
-    if (expanded) void children.reload();
   });
 
   useEffect(() => {
-    if (taxonId === undefined) return;
-    if (loadedTaxonId.current === taxonId) return;
-    getTaxonDetailNode(taxonId).then((next) => {
-      loadedTaxonId.current = next.summary.taxon_id;
-      setNode(next);
-      setSelected({ summary: next.summary, detail: next.detail, matches: [] });
-      onTaxonChange?.(next.summary.taxon_id, displayTaxon(next.summary));
-    }).catch((nextError) => setError(errorMessage(nextError)));
-  }, [taxonId]);
+    setSelectedSuggestionIndex(-1);
+  }, [query]);
 
   useEffect(() => {
-    if (taxonId !== undefined) return;
-    if (!query.trim()) {
-      setSelected(null);
-      setNode(null);
-      return;
+    if (selectedSuggestionIndex >= taxonomySuggestions.suggestions.length) {
+      setSelectedSuggestionIndex(-1);
     }
-    setSelected((current) => current
-      ? taxonomySearch.results.find((item) => item.summary.taxon_id === current.summary.taxon_id)
-        ?? taxonomySearch.results[0]
-        ?? null
-      : taxonomySearch.results[0] ?? null);
-  }, [query, taxonId, taxonomySearch.results]);
+  }, [selectedSuggestionIndex, taxonomySuggestions.suggestions.length]);
 
   useEffect(() => {
-    if (!selected) {
-      loadedTaxonId.current = null;
-      selectedTaxonId.current = null;
-      setNode(null);
+    const closeSuggestions = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Node && !taxonomySearchBoxRef.current?.contains(target)) {
+        setSuggestionsOpen(false);
+        setSelectedSuggestionIndex(-1);
+      }
+    };
+    document.addEventListener("pointerdown", closeSuggestions);
+    return () => document.removeEventListener("pointerdown", closeSuggestions);
+  }, []);
+
+  useEffect(() => {
+    if (!submittedQuery.trim()) {
+      setSelectedRootTaxonId(null);
       return;
     }
-    const selectionChanged = selectedTaxonId.current !== selected.summary.taxon_id;
-    selectedTaxonId.current = selected.summary.taxon_id;
-    if (selectionChanged) setExpanded(false);
-    if (node?.summary.taxon_id === selected.summary.taxon_id) {
-      loadedTaxonId.current = selected.summary.taxon_id;
-      return;
-    }
-    if (loadedTaxonId.current === selected.summary.taxon_id) return;
-    getTaxonDetailNode(selected.summary.taxon_id).then((next) => {
-      loadedTaxonId.current = next.summary.taxon_id;
-      setNode(next);
-    }).catch((nextError) => setError(errorMessage(nextError)));
-  }, [selected]);
+    setSelectedRootTaxonId((current) => reconcileSelectedRoot(
+      current,
+      taxonomySearch.results.map((result) => result.taxon_id),
+    ));
+  }, [submittedQuery, taxonomySearch.results]);
 
-  function toggleChildren() {
-    if (node) setExpanded((current) => !current);
+  function submitTaxonomySearch(value = query) {
+    const normalized = value.trim();
+    if (!normalized) return;
+    setQuery(normalized);
+    setSubmittedQuery(normalized);
+    setRefreshKey((current) => current + 1);
+    setSelectedRootTaxonId(null);
+    setHierarchyPositions({});
+    setSelectedSuggestionIndex(-1);
+    setSuggestionsOpen(false);
   }
 
-  async function navigateTo(nextTaxonId: number) {
-    try {
-      const next = await getTaxonDetailNode(nextTaxonId);
-      loadedTaxonId.current = next.summary.taxon_id;
-      setNode(next);
-      setSelected({ summary: next.summary, detail: next.detail, matches: [] });
-      setExpanded(false);
-      onTaxonChange?.(next.summary.taxon_id, displayTaxon(next.summary));
-    } catch (nextError) {
-      setError(errorMessage(nextError));
-    }
-  }
-
-  const visible: TaxonomyRecordItem[] = selected ? [
-    { kind: "selected", result: selected },
-    ...(expanded ? children.items.map((child) => ({ kind: "child" as const, child })) : []),
-  ] : [];
+  const selectedResult = selectedRootTaxonId === null
+    ? null
+    : taxonomySearch.results.find((result) => result.taxon_id === selectedRootTaxonId) ?? null;
+  const selectedCurrentTaxonId = selectedRootTaxonId === null
+    ? null
+    : currentTaxonForRoot(selectedRootTaxonId, hierarchyPositions);
+  const resultsPane = (
+    <aside className="taxonomy-results">
+      <VirtualList
+        stateKey="taxonomy-search.results-list"
+        resetKey={`${submittedQuery}:${refreshKey}`}
+        items={taxonomySearch.results}
+        rowHeight={60}
+        itemKey={(item) => item.taxon_id}
+        renderItem={(item) => (
+          <TaxonCard
+            taxon={item}
+            active={selectedRootTaxonId === item.taxon_id}
+            description={taxonSearchMatchExplanation(item)}
+            onClick={() => setSelectedRootTaxonId(item.taxon_id)}
+          />
+        )}
+      />
+      {taxonomySearch.loading ? (
+        <div className="taxonomy-results-loading" role="status"><Busy label="Searching..." /></div>
+      ) : null}
+    </aside>
+  );
+  const recordsPane = (
+    <main className="taxonomy-records">
+      {taxonomySearch.error ? <EmptyState title="Taxonomy unavailable" detail={taxonomySearch.error} /> : taxonomySearch.loading && selectedResult === null ? (
+        <div className="taxonomy-search-loading" role="status" aria-live="polite"><Busy label="Searching taxonomy..." /></div>
+      ) : !submittedQuery.trim() ? (
+        <EmptyState icon={Search} title="Search taxonomy" detail="Results include accepted names and aliases." />
+      ) : selectedResult === null || selectedCurrentTaxonId === null ? (
+        <EmptyState icon={Search} title="No taxonomy results" detail={`No taxa matched "${submittedQuery}".`} />
+      ) : (
+        <TaxonomyHierarchyPage
+          key={selectedRootTaxonId}
+          initialTaxonId={selectedCurrentTaxonId}
+          onTaxonChange={(currentTaxonId) => setHierarchyPositions((current) => (
+            recordHierarchyPosition(current, selectedResult.taxon_id, currentTaxonId)
+          ))}
+          onOpenPhotos={onOpenPhotos}
+          mutationDisabled={mutationDisabled}
+        />
+      )}
+    </main>
+  );
 
   return (
     <div className="taxonomy-search-view">
-      {taxonId === undefined && (
-        <header className="workbench-toolbar">
-          <label className="search-field taxonomy-search-field">
-            <Search size={14} />
-            <input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search scientific, Chinese, or English names" />
-          </label>
-        </header>
-      )}
-      <div className="taxonomy-columns">
-        {taxonId === undefined && (
-          <aside className="taxonomy-results">
-            <VirtualList
-              stateKey="taxonomy-search.results-list"
-              items={taxonomySearch.results}
-              rowHeight={62}
-              itemKey={(item) => item.summary.taxon_id}
-              renderItem={(item) => (
-                <TaxonCard taxon={item.summary} active={selected?.summary.taxon_id === item.summary.taxon_id} onClick={() => setSelected(item)} />
-              )}
-            />
-          </aside>
-        )}
-        <main className="taxonomy-records">
-          {(error || taxonomySearch.error || children.error) ? <EmptyState title="Taxonomy unavailable" detail={error || taxonomySearch.error || children.error} /> : visible.length === 0 ? (
-            <EmptyState icon={Search} title={taxonId === undefined ? "Search taxonomy" : "Loading taxon"} detail="Results include accepted names and aliases." />
-          ) : (
-            <VirtualList
-              stateKey="taxonomy-search.records-list"
-              items={visible}
-              rowHeight={expanded ? 194 : 250}
-              itemKey={(item) => item.kind === "selected" ? item.result.summary.taxon_id : item.child.taxon_id}
-              onNearEnd={() => void children.loadMore()}
-              renderItem={(item, index) => (
-                <TaxonRecord
-                  summary={item.kind === "selected" ? item.result.summary : item.child}
-                  detail={item.kind === "selected" ? item.result.detail : null}
-                  breadcrumb={item.kind === "selected" ? item.result.summary.breadcrumb : []}
-                  loadedChildCount={index === 0 ? node?.children.items.length ?? null : null}
-                  child={item.kind === "child"}
-                  expanded={expanded}
-                  onToggleChildren={() => void toggleChildren()}
-                  onOpenTaxon={(nextTaxonId) => void navigateTo(nextTaxonId)}
-                  onOpenPhotos={onOpenPhotos}
-                />
-              )}
-            />
-          )}
-        </main>
-      </div>
+      <header className="workbench-toolbar">
+          <div
+            className="taxonomy-search-combobox"
+            ref={taxonomySearchBoxRef}
+            onFocusCapture={() => {
+              if (query.trim()) setSuggestionsOpen(true);
+            }}
+          >
+            <label className="search-field taxonomy-search-field">
+              <Search size={14} />
+              <input
+                role="combobox"
+                aria-autocomplete="list"
+                aria-controls="taxonomy-search-suggestions-listbox"
+                aria-expanded={suggestionsOpen && (
+                  taxonomySuggestions.loading || taxonomySuggestions.suggestions.length > 0
+                )}
+                aria-activedescendant={selectedSuggestionIndex >= 0 ? `taxonomy-search-suggestions-option-${selectedSuggestionIndex}` : undefined}
+                autoFocus
+                autoCapitalize="none"
+                autoComplete="off"
+                autoCorrect="off"
+                spellCheck={false}
+                value={query}
+                onChange={(event) => {
+                  setQuery(event.target.value);
+                  setSuggestionsOpen(true);
+                }}
+                onKeyDown={(event) => {
+                  if (event.nativeEvent.isComposing) return;
+                  const suggestions = taxonomySuggestions.suggestions;
+                  if (suggestions.length > 0 && event.key === "ArrowDown") {
+                    event.preventDefault();
+                    setSuggestionsOpen(true);
+                    setSelectedSuggestionIndex((current) => moveSuggestionSelection(current, suggestions.length, 1));
+                    return;
+                  }
+                  if (suggestions.length > 0 && event.key === "ArrowUp") {
+                    event.preventDefault();
+                    setSelectedSuggestionIndex((current) => moveSuggestionSelection(current, suggestions.length, -1));
+                    return;
+                  }
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    const suggestion = suggestions[selectedSuggestionIndex];
+                    submitTaxonomySearch(suggestion ? suggestionLabel(suggestion, query) : query);
+                    return;
+                  }
+                  if (event.key === "Escape") {
+                    setSuggestionsOpen(false);
+                    setSelectedSuggestionIndex(-1);
+                  }
+                }}
+                placeholder="Search scientific, Chinese, or English names"
+              />
+            </label>
+            {suggestionsOpen && query.trim() && (
+              <SearchSuggestions
+                idPrefix="taxonomy-search-suggestions"
+                loading={taxonomySuggestions.loading}
+                suggestions={taxonomySuggestions.suggestions}
+                selectedIndex={selectedSuggestionIndex}
+                onHover={setSelectedSuggestionIndex}
+                onSelect={(suggestion) => submitTaxonomySearch(suggestionLabel(suggestion, query))}
+              />
+            )}
+          </div>
+      </header>
+      <ResizablePanels
+        className="taxonomy-columns"
+        initialRatio={0.28}
+        minFirst={220}
+        minSecond={360}
+        separatorLabel="Resize taxonomy results and details"
+        stateKey="taxonomy-search.columns"
+        first={resultsPane}
+        second={recordsPane}
+      />
     </div>
-  );
-}
-
-function TaxonRecord({
-  summary,
-  detail,
-  breadcrumb,
-  loadedChildCount,
-  child,
-  expanded,
-  onToggleChildren,
-  onOpenTaxon,
-  onOpenPhotos,
-}: {
-  summary: Pick<TaxonSummary, "taxon_id" | "rank" | "names">;
-  detail: TaxonDetail | null;
-  breadcrumb: TaxonSummary["breadcrumb"];
-  loadedChildCount: number | null;
-  child: boolean;
-  expanded: boolean;
-  onToggleChildren: () => void;
-  onOpenTaxon: (taxonId: number) => void;
-  onOpenPhotos: (taxonId: number, label: string) => void;
-}) {
-  const label = displayTaxon(summary);
-  return (
-    <article className={`taxon-record${child ? " child" : ""}`}>
-      {!child && breadcrumb.length > 0 && (
-        <div className="taxon-breadcrumb">
-          {breadcrumb.map((item) => (
-            <span key={item.taxon_id}><button type="button" onClick={() => onOpenTaxon(item.taxon_id)}>{displayTaxon(item)}</button><ChevronRight size={11} /></span>
-          ))}
-        </div>
-      )}
-      <div className="taxon-record-heading">
-        <div><span className="taxon-rank">{summary.rank}</span><strong>{label}</strong><small>Taxon {summary.taxon_id}</small></div>
-        <div className="record-actions">
-          {!child && <button type="button" onClick={onToggleChildren}>{expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}Children</button>}
-          <button type="button" onClick={() => onOpenPhotos(summary.taxon_id, label)}><Images size={14} />Photos</button>
-        </div>
-      </div>
-      <div className="taxon-name-summary">
-        <span><b>Scientific</b>{detail?.names.sci_name.name ?? summary.names.sci_name ?? "-"}</span>
-        <span><b>Chinese</b>{detail?.names.zh_name?.name ?? summary.names.zh_name ?? "-"}</span>
-        <span><b>English</b>{detail?.names.en_name?.name ?? summary.names.en_name ?? "-"}</span>
-        {detail && <span><b>Synonyms</b>{detail.names.synonyms.map((name) => name.name).join("; ") || "-"}</span>}
-        {detail && <span><b>Range</b>{detail.geological_range ?? "-"}</span>}
-        {loadedChildCount !== null && <span><b>Children loaded</b>{loadedChildCount}</span>}
-      </div>
-    </article>
   );
 }
 
@@ -252,33 +253,89 @@ const inputFields: Array<keyof TaxonInputRow> = [
   "zh_name", "zh_alias", "en_name", "en_alias", "geological_range", "source",
 ];
 
-export function FormattedUpdateView({ mutationDisabled = false }: { mutationDisabled?: boolean }) {
+type FormattedBusy = "" | "import" | "template" | "preview" | "apply";
+
+export function FormattedUpdateView({
+  onStatus,
+  mutationDisabled = false,
+}: {
+  onStatus: (message: string) => void;
+  mutationDisabled?: boolean;
+}) {
   const [rows, setRows] = useState<TaxonInputRow[]>([{ species: "" }]);
   const [outcomes, setOutcomes] = useState<TaxonRowOutcome[]>([]);
   const [message, setMessage] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState<FormattedBusy>("");
   const [separator, setSeparator] = useState(";");
+  const [previewId, setPreviewId] = useState<string | null>(null);
+  const [helpOpen, setHelpOpen] = useState(false);
+  const previewIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     getTaxonomyNameSeparator()
       .then(setSeparator)
-      .catch((nextError) => setMessage(errorMessage(nextError)));
+      .catch((nextError) => report(errorMessage(nextError)));
   }, []);
   useMetadataChange((change) => {
     if (change.key === "taxonomy_name_separator") setSeparator(change.value);
+    invalidatePreview();
+    if (change.key === "csv_delimiter") {
+      report("Previous preview cleared because the CSV delimiter changed.");
+    }
   });
   useTaxonomyMutation((mutation) => {
-    if (mutation.kind !== "replacement") return;
-    setOutcomes([]);
-    setMessage("Previous preview cleared because the taxonomy database was replaced.");
+    if (mutation.kind !== "replacement" && previewIdRef.current === null) return;
+    invalidatePreview();
+    report(mutation.kind === "replacement"
+      ? "Previous preview cleared because the taxonomy database was replaced."
+      : "Previous preview cleared because the taxonomy changed.");
   });
 
-  async function importFile(file: File) {
-    setRows(await parseTaxonomyCsv(await file.text()));
+  function report(nextMessage: string) {
+    setMessage(nextMessage);
+    onStatus(nextMessage);
+  }
+
+  function setCurrentPreview(nextPreviewId: string | null) {
+    previewIdRef.current = nextPreviewId;
+    setPreviewId(nextPreviewId);
+  }
+
+  function invalidatePreview() {
+    setCurrentPreview(null);
     setOutcomes([]);
+    setMessage("");
+  }
+
+  async function importFile(file: File) {
+    setBusy("import");
+    invalidatePreview();
+    try {
+      setRows(await parseTaxonomyCsv(await file.text()));
+      setOutcomes([]);
+      report("CSV imported.");
+    } catch (nextError) {
+      report(errorMessage(nextError));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function downloadTemplate() {
+    setBusy("template");
+    setMessage("");
+    try {
+      downloadCsv("taxonomy-template.csv", await getTaxonomyTemplate());
+      report("Template downloaded.");
+    } catch (nextError) {
+      report(errorMessage(nextError));
+    } finally {
+      setBusy("");
+    }
   }
 
   function updateRow(index: number, field: keyof TaxonInputRow, value: string) {
+    invalidatePreview();
     setRows((current) => current.map((row, rowIndex) => rowIndex === index ? {
       ...row,
       [field]: ["synonyms", "zh_alias", "en_alias"].includes(field)
@@ -287,42 +344,71 @@ export function FormattedUpdateView({ mutationDisabled = false }: { mutationDisa
     } : row));
   }
 
-  async function run(kind: "preview" | "apply") {
-    setBusy(true);
+  function deleteRow(index: number) {
+    if (index === 0) return;
+    invalidatePreview();
+    setRows((current) => current.filter((_, rowIndex) => rowIndex !== index));
+  }
+
+  async function preview() {
+    setBusy("preview");
     setMessage("");
+    setCurrentPreview(null);
     try {
-      if (kind === "preview") {
-        const result = await previewTaxonomyRows(rows);
-        setOutcomes(result.rows);
-        setMessage(`${result.rows.length} rows previewed`);
-      } else {
-        const result = await applyTaxonomyRows(rows);
-        setOutcomes(result.rows);
-        setMessage(`${result.succeeded_rows} succeeded, ${result.failed_rows} failed`);
-        emitTaxonomyMutation();
-      }
+      const result = await previewTaxonomyRows(rows);
+      setOutcomes(result.rows);
+      setCurrentPreview(result.preview_id);
+      report(`${result.rows.length} rows previewed`);
     } catch (nextError) {
-      setMessage(errorMessage(nextError));
+      report(errorMessage(nextError));
     } finally {
-      setBusy(false);
+      setBusy("");
+    }
+  }
+
+  async function apply() {
+    if (previewId === null) return;
+    const currentPreviewId = previewId;
+    setBusy("apply");
+    setMessage("");
+    setCurrentPreview(null);
+    try {
+      const result = await applyTaxonomyRows(currentPreviewId);
+      setOutcomes(result.rows);
+      report(`${result.succeeded_rows} succeeded, ${result.failed_rows} failed`);
+      emitTaxonomyMutation();
+    } catch (nextError) {
+      report(errorMessage(nextError));
+    } finally {
+      setBusy("");
     }
   }
 
   return (
     <div className="formatted-view">
-      <SectionHeader title="Formatted update" detail={`Pipe-delimited UTF-8 input or direct table editing. Multiple names use "${separator}".`} actions={
+      <SectionHeader title="Formatted update" detail="UTF-8 CSV input or direct table editing." actions={
         <>
-          <label className="secondary-button file-button"><FileUp size={13} />Upload CSV<input type="file" accept=".csv,text/csv" onChange={(event) => {
+          <Button onClick={() => setHelpOpen(true)}><CircleQuestionMark size={13} />Help</Button>
+          <label className={`button button-secondary file-button${busy ? " disabled" : ""}`}><FileUp size={13} />{busy === "import" ? "Importing..." : "Upload CSV"}<input disabled={Boolean(busy)} type="file" accept=".csv,text/csv" onChange={(event) => {
             const file = event.target.files?.[0];
             if (file) void importFile(file);
           }} /></label>
-          <button className="secondary-button" type="button" onClick={() => void getTaxonomyTemplate().then((csv) => downloadCsv("taxonomy-template.csv", csv))}><Download size={13} />Template</button>
-          <button className="secondary-button" type="button" disabled={busy} onClick={() => void run("preview")}>Preview</button>
-          <button className="primary-button" type="button" disabled={busy || mutationDisabled} onClick={() => void run("apply")}><Play size={13} />Apply</button>
+          <Button disabled={Boolean(busy)} onClick={() => void downloadTemplate()}><Download size={13} />{busy === "template" ? "Loading..." : "Download Template"}</Button>
+          <Button disabled={Boolean(busy)} onClick={() => void preview()}><Eye size={13} />{busy === "preview" ? "Previewing..." : "Preview"}</Button>
+          <Button variant="primary" disabled={Boolean(busy) || mutationDisabled || previewId === null} onClick={() => void apply()}><Play size={13} />{busy === "apply" ? "Applying..." : "Apply"}</Button>
         </>
       } />
-      <div className="input-table">
-        <div className="input-table-head"><span>#</span>{inputFields.map((field) => <span key={field}>{field}</span>)}</div>
+      {helpOpen && <FormattedUpdateHelpModal onClose={() => setHelpOpen(false)} />}
+      <ResizablePanels
+        className="formatted-split"
+        direction="vertical"
+        initialRatio={0.52}
+        minFirst={190}
+        minSecond={150}
+        separatorLabel="Resize formatted input and result log"
+        stateKey="formatted-update.rows"
+        first={(<div className="input-table">
+        <div className="input-table-head"><span>#</span>{inputFields.map((field) => <span key={field}>{field}</span>)}<span /></div>
         <VirtualList
           items={rows}
           rowHeight={38}
@@ -330,14 +416,25 @@ export function FormattedUpdateView({ mutationDisabled = false }: { mutationDisa
           renderItem={(row, index) => (
             <div className="input-table-row">
               <span>{index + 1}</span>
-              {inputFields.map((field) => <input key={field} value={Array.isArray(row[field]) ? (row[field] as string[]).join(separator) : String(row[field] ?? "")} onChange={(event) => updateRow(index, field, event.target.value)} />)}
+              {inputFields.map((field) => <input disabled={Boolean(busy)} key={field} value={Array.isArray(row[field]) ? (row[field] as string[]).join(separator) : String(row[field] ?? "")} onChange={(event) => updateRow(index, field, event.target.value)} />)}
+              <button
+                className="input-row-delete"
+                type="button"
+                aria-label={`Delete row ${index + 1}`}
+                title={index === 0 ? "The first row cannot be deleted" : "Delete row"}
+                disabled={Boolean(busy) || index === 0}
+                onClick={() => deleteRow(index)}
+              ><Trash2 size={13} /></button>
             </div>
           )}
         />
-        <button className="table-add-row" type="button" onClick={() => setRows((current) => [...current, {}])}>+ Add row</button>
-      </div>
-      <div className="formatted-log">
-        <SectionHeader title="Result log" detail={message || "Preview and apply return the same log format"} />
+        <Button className="table-add-row" variant="ghost" disabled={Boolean(busy)} onClick={() => {
+          invalidatePreview();
+          setRows((current) => [...current, {}]);
+        }}>+ Add row</Button>
+        </div>)}
+        second={(<div className="formatted-log">
+        <SectionHeader title="Result log" detail={message || "Preview is required before apply"} />
         <VirtualList
           items={outcomes}
           rowHeight={64}
@@ -350,7 +447,8 @@ export function FormattedUpdateView({ mutationDisabled = false }: { mutationDisa
             </div>
           )}
         />
-      </div>
+        </div>)}
+      />
     </div>
   );
 }

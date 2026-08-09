@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn opens_and_refreshes_only_the_requested_directory() {
+fn opens_and_refreshes_the_requested_directory_subtree() {
     let data = tempfile::tempdir().unwrap();
     let root = tempfile::tempdir().unwrap();
     fs::create_dir(root.path().join("nested")).unwrap();
@@ -10,13 +10,13 @@ fn opens_and_refreshes_only_the_requested_directory() {
     let database = Database::open(data.path().join("vividarium.db")).unwrap();
     let library = open_library(&database, root.path().to_str().unwrap()).unwrap();
     let result = refresh_directory(&database, library.root_directory_id).unwrap();
-    assert_eq!(result.inserted, 1);
+    assert_eq!(result.inserted, 2);
     assert_eq!(result.directories_inserted, 1);
-    assert_eq!(list_photos(&database).unwrap().len(), 1);
+    assert_eq!(list_photos(&database).unwrap().len(), 2);
     let listing = browse_directory(&database, library.root_directory_id, None, 20).unwrap();
     assert_eq!(listing.items.len(), 2);
-    let nested_directory_id = match &listing.items[0] {
-        PhotoDirectoryItem::Directory { directory } => directory.directory_id,
+    match &listing.items[0] {
+        PhotoDirectoryItem::Directory { .. } => {}
         PhotoDirectoryItem::Photo { .. } => panic!("expected a directory first"),
     };
     assert!(matches!(listing.items[1], PhotoDirectoryItem::Photo { .. }));
@@ -27,9 +27,116 @@ fn opens_and_refreshes_only_the_requested_directory() {
             file_count: 1,
         }
     );
-    refresh_directory(&database, nested_directory_id).unwrap();
-    assert_eq!(list_photos(&database).unwrap().len(), 2);
     assert_eq!(get_photo_count(&database).unwrap(), 2);
+}
+
+#[test]
+fn refresh_removes_missing_directory_subtrees() {
+    let data = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    fs::create_dir(root.path().join("nested")).unwrap();
+    fs::create_dir(root.path().join("nested").join("deep")).unwrap();
+    fs::write(root.path().join("root.jpg"), b"root").unwrap();
+    fs::write(root.path().join("nested").join("nested.jpg"), b"nested").unwrap();
+    fs::write(
+        root.path().join("nested").join("deep").join("deep.jpg"),
+        b"deep",
+    )
+    .unwrap();
+    let database = Database::open(data.path().join("vividarium.db")).unwrap();
+    let library = open_library(&database, root.path().to_str().unwrap()).unwrap();
+    let initial = refresh_directory(&database, library.root_directory_id).unwrap();
+    assert_eq!(initial.inserted, 3);
+    assert_eq!(initial.directories_inserted, 2);
+
+    fs::remove_dir_all(root.path().join("nested")).unwrap();
+    let result = refresh_directory(&database, library.root_directory_id).unwrap();
+
+    assert_eq!(result.unchanged, 1);
+    assert_eq!(result.deleted, 2);
+    assert_eq!(result.directories_deleted, 2);
+    assert_eq!(list_photos(&database).unwrap().len(), 1);
+    assert_eq!(get_photo_count(&database).unwrap(), 1);
+}
+
+#[test]
+fn resolves_photo_directory_path_inside_the_library_root() {
+    let data = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    fs::create_dir(root.path().join("nested")).unwrap();
+    let database = Database::open(data.path().join("vividarium.db")).unwrap();
+    let library = open_library(&database, root.path().to_str().unwrap()).unwrap();
+    refresh_directory(&database, library.root_directory_id).unwrap();
+    let listing = browse_directory(&database, library.root_directory_id, None, 20).unwrap();
+    let nested_directory_id = match &listing.items[0] {
+        PhotoDirectoryItem::Directory { directory } => directory.directory_id,
+        PhotoDirectoryItem::Photo { .. } => panic!("expected a directory first"),
+    };
+
+    assert_eq!(
+        photo_directory_path(&database, nested_directory_id).unwrap(),
+        root.path().join("nested").canonicalize().unwrap(),
+    );
+}
+
+#[test]
+fn renames_photo_directory_and_updates_descendant_paths() {
+    let data = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    fs::create_dir(root.path().join("nested")).unwrap();
+    fs::create_dir(root.path().join("nested").join("deep")).unwrap();
+    fs::write(root.path().join("nested").join("nested.jpg"), b"nested").unwrap();
+    fs::write(
+        root.path().join("nested").join("deep").join("deep.jpg"),
+        b"deep",
+    )
+    .unwrap();
+    let database = Database::open(data.path().join("vividarium.db")).unwrap();
+    let library = open_library(&database, root.path().to_str().unwrap()).unwrap();
+    refresh_directory(&database, library.root_directory_id).unwrap();
+    let listing = browse_directory(&database, library.root_directory_id, None, 20).unwrap();
+    let nested_directory_id = match &listing.items[0] {
+        PhotoDirectoryItem::Directory { directory } => directory.directory_id,
+        PhotoDirectoryItem::Photo { .. } => panic!("expected a directory first"),
+    };
+
+    let renamed = rename_directory(&database, nested_directory_id, "renamed").unwrap();
+
+    assert_eq!(renamed.name, "renamed");
+    assert_eq!(renamed.relative_path, "renamed");
+    assert!(!root.path().join("nested").exists());
+    assert!(root.path().join("renamed").is_dir());
+    assert!(
+        root.path()
+            .join("renamed")
+            .join("deep")
+            .join("deep.jpg")
+            .is_file()
+    );
+    let photos = list_photos(&database).unwrap();
+    assert_eq!(photos.len(), 2);
+    assert!(
+        photos
+            .iter()
+            .any(|photo| photo.relative_path == "renamed/nested.jpg")
+    );
+    assert!(
+        photos
+            .iter()
+            .any(|photo| photo.relative_path == "renamed/deep/deep.jpg")
+    );
+}
+
+#[test]
+fn rejects_renaming_photo_library_root() {
+    let data = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let database = Database::open(data.path().join("vividarium.db")).unwrap();
+    let library = open_library(&database, root.path().to_str().unwrap()).unwrap();
+
+    let error = rename_directory(&database, library.root_directory_id, "renamed").unwrap_err();
+
+    assert!(error.to_string().contains("root cannot be renamed"));
 }
 
 #[test]
@@ -284,10 +391,19 @@ fn groups_taxon_renames_as_one_operation() {
     assert_eq!(audit.items.len(), 2);
     assert_eq!(audit.items[0].sequence, 1);
     assert_eq!(audit.items[1].sequence, 2);
+    crate::general::update_general_settings(
+        &database,
+        &crate::general::GeneralSettings {
+            csv_delimiter: "\t".into(),
+            ..crate::general::GeneralSettings::default()
+        },
+    )
+    .unwrap();
     let mut output = Vec::new();
     write_operation_audit(&database, operation.operation_id, &mut output).unwrap();
     let exported = String::from_utf8(output).unwrap();
     assert_eq!(exported.lines().count(), 3);
+    assert!(exported.starts_with("operation_id\tsequence\t"));
 
     rollback_operation(&database, operation.operation_id).unwrap();
     assert!(root.path().join("first.jpg").is_file());

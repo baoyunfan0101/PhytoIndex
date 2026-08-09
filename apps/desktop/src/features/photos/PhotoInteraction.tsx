@@ -42,6 +42,7 @@ export function usePhotoInteraction({
     [photos, selectFirst, selectedId],
   );
   const selectPhoto = useCallback((photo: Photo) => setSelectedId(photo.photo_id), []);
+  const clearSelection = useCallback(() => setSelectedId(null), []);
 
   const openContextMenu = useCallback((event: MouseEvent, photo: Photo) => {
     event.preventDefault();
@@ -81,6 +82,7 @@ export function usePhotoInteraction({
   return {
     selected,
     selectedId: selected?.photo_id ?? null,
+    clearSelection,
     selectPhoto,
     openContextMenu,
     contextMenu,

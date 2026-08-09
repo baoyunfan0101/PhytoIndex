@@ -3,9 +3,7 @@ use std::collections::{HashMap, HashSet};
 use rusqlite::{Connection, functions::FunctionFlags, params_from_iter, types::Value as SqlValue};
 use serde::{Deserialize, Serialize};
 
-use super::{
-    TaxonomyNameType, page::page_limit, view::load_taxon_details, view::load_taxon_summaries,
-};
+use super::{TaxonomyNameType, page::page_limit};
 use crate::naming::normalize_taxonomy_name;
 use crate::{CoreError, CoreResult, Database};
 
@@ -20,8 +18,9 @@ pub struct TaxonNameMatch {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TaxonSearchResult {
-    pub summary: super::TaxonSummary,
-    pub detail: super::TaxonDetail,
+    pub taxon_id: i64,
+    pub rank: super::TaxonRank,
+    pub names: super::TaxonDisplayNames,
     pub matches: Vec<TaxonNameMatch>,
 }
 
@@ -31,6 +30,13 @@ pub struct TaxonSuggestion {
     pub rank: super::TaxonRank,
     pub names: super::TaxonDisplayNames,
     pub matches: Vec<TaxonNameMatch>,
+}
+
+#[derive(Debug)]
+struct CompactTaxon {
+    taxon_id: i64,
+    rank: super::TaxonRank,
+    names: super::TaxonDisplayNames,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -132,28 +138,27 @@ fn search_taxa_with_filter(
         .iter()
         .map(|matched| matched.key.taxon_id)
         .collect::<Vec<_>>();
-    let summaries = load_taxon_summaries(connection, &ids)?;
-    let details = load_taxon_details(connection, &ids)?;
+    let taxa = load_compact_taxa(connection, &ids)?;
     let fuzzy_taxon_ids = search_matches
         .iter()
         .filter(|matched| matched.key.match_level == FUZZY_MATCH_LEVEL)
         .map(|matched| matched.key.taxon_id)
         .collect::<HashSet<_>>();
     let matches_by_id = load_name_matches_for_taxa(connection, &ids, &search, &fuzzy_taxon_ids)?;
-    if summaries.len() != ids.len() || details.len() != ids.len() {
+    if taxa.len() != ids.len() {
         return Err(CoreError::InvalidArgument(
             "matched taxon no longer exists".into(),
         ));
     }
     search_matches
         .into_iter()
-        .zip(summaries)
-        .zip(details)
-        .map(|((matched, summary), detail)| {
+        .zip(taxa)
+        .map(|(matched, taxon)| {
             Ok(RankedTaxonSearchResult {
                 result: TaxonSearchResult {
-                    summary,
-                    detail,
+                    taxon_id: taxon.taxon_id,
+                    rank: taxon.rank,
+                    names: taxon.names,
                     matches: matches_by_id
                         .get(&matched.key.taxon_id)
                         .cloned()
@@ -180,26 +185,28 @@ fn suggest_taxa_with_filter(
         .iter()
         .map(|matched| matched.key.taxon_id)
         .collect::<Vec<_>>();
-    let mut suggestions = load_suggestions(connection, &ids)?;
+    let taxa = load_compact_taxa(connection, &ids)?;
     let fuzzy_taxon_ids = search_matches
         .iter()
         .filter(|matched| matched.key.match_level == FUZZY_MATCH_LEVEL)
         .map(|matched| matched.key.taxon_id)
         .collect::<HashSet<_>>();
     let matches_by_id = load_name_matches_for_taxa(connection, &ids, &search, &fuzzy_taxon_ids)?;
-    for suggestion in &mut suggestions {
-        suggestion.matches = matches_by_id
-            .get(&suggestion.taxon_id)
-            .cloned()
-            .unwrap_or_default();
-    }
-    Ok(suggestions)
+    Ok(taxa
+        .into_iter()
+        .map(|taxon| TaxonSuggestion {
+            taxon_id: taxon.taxon_id,
+            rank: taxon.rank,
+            names: taxon.names,
+            matches: matches_by_id
+                .get(&taxon.taxon_id)
+                .cloned()
+                .unwrap_or_default(),
+        })
+        .collect())
 }
 
-fn load_suggestions(
-    connection: &Connection,
-    taxon_ids: &[i64],
-) -> CoreResult<Vec<TaxonSuggestion>> {
+fn load_compact_taxa(connection: &Connection, taxon_ids: &[i64]) -> CoreResult<Vec<CompactTaxon>> {
     if taxon_ids.is_empty() {
         return Ok(Vec::new());
     }
@@ -238,7 +245,7 @@ fn load_suggestions(
                 error.to_string().into(),
             )
         })?;
-        Ok(TaxonSuggestion {
+        Ok(CompactTaxon {
             taxon_id: row.get(0)?,
             rank,
             names: super::TaxonDisplayNames {
@@ -246,7 +253,6 @@ fn load_suggestions(
                 zh_name: row.get(3)?,
                 en_name: row.get(4)?,
             },
-            matches: Vec::new(),
         })
     })?;
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -260,6 +266,8 @@ struct SearchQuery {
     contains_match: Option<String>,
     fuzzy_match: Option<String>,
     fuzzy_max_distance: usize,
+    relaxed_suffix_match: Option<String>,
+    relaxed_suffix_like_pattern: Option<String>,
     word_prefix_like_pattern: Option<String>,
     contains_like_pattern: Option<String>,
 }
@@ -268,12 +276,17 @@ impl SearchQuery {
     fn new(query: &str) -> Self {
         let normalized = query.to_ascii_lowercase();
         let char_count = query.chars().count();
+        let relaxed_suffix = relaxed_cjk_suffix(query);
         Self {
             prefix_upper: format!("{normalized}\u{10ffff}"),
             word_prefix_match: (char_count >= 2).then(|| quoted_fts_match(&format!(" {query}"))),
             contains_match: (char_count >= 3).then(|| quoted_fts_match(query)),
             fuzzy_match: trigram_match_query(&normalized),
             fuzzy_max_distance: fuzzy_max_distance(char_count),
+            relaxed_suffix_match: relaxed_suffix.as_deref().map(quoted_fts_match),
+            relaxed_suffix_like_pattern: relaxed_suffix
+                .as_deref()
+                .map(|value| format!("%{}%", escape_like(value))),
             word_prefix_like_pattern: (char_count >= 2)
                 .then(|| format!("% {}%", escape_like(query))),
             contains_like_pattern: (char_count >= 3).then(|| format!("%{}%", escape_like(query))),
@@ -478,6 +491,34 @@ fn build_taxon_search_relation(search: &SearchQuery) -> TaxonSearchRelation {
         ]);
     }
 
+    if let (Some(query), Some(pattern), Some(full_pattern)) = (
+        search.relaxed_suffix_match.as_ref(),
+        search.relaxed_suffix_like_pattern.as_ref(),
+        search.contains_like_pattern.as_ref(),
+    ) {
+        candidates.push(
+            r#"
+            SELECT taxon_names.name_id, taxon_names.taxon_id,
+                   4 AS match_level, 1 AS edit_distance,
+                   taxon_names.normalized_name AS sort_name,
+                   CASE taxon_names.name_type
+                       WHEN 1 THEN 0 WHEN 2 THEN 1 ELSE 2 END
+                       AS name_type_priority
+            FROM taxon_names_fts
+            JOIN taxon_names ON taxon_names.name_id = taxon_names_fts.rowid
+            WHERE taxon_names_fts MATCH ?
+              AND taxon_names.normalized_name LIKE ? ESCAPE '\'
+              AND taxon_names.normalized_name NOT LIKE ? ESCAPE '\'
+            "#
+            .to_string(),
+        );
+        params.extend([
+            SqlValue::Text(query.clone()),
+            SqlValue::Text(pattern.clone()),
+            SqlValue::Text(full_pattern.clone()),
+        ]);
+    }
+
     TaxonSearchRelation {
         cte_sql: format!(
             r#"
@@ -589,6 +630,10 @@ fn load_name_matches_for_taxa(
         conditions.push("taxon_names.name LIKE ? ESCAPE '\\'".to_string());
         query_params.push(SqlValue::Text(pattern.clone()));
     }
+    if let Some(pattern) = search.relaxed_suffix_like_pattern.as_ref() {
+        conditions.push("taxon_names.normalized_name LIKE ? ESCAPE '\\'".to_string());
+        query_params.push(SqlValue::Text(pattern.clone()));
+    }
     if !fuzzy_taxon_ids.is_empty() {
         let placeholders = vec!["?"; fuzzy_taxon_ids.len()].join(", ");
         conditions.push(format!(
@@ -685,6 +730,15 @@ fn fuzzy_max_distance(char_count: usize) -> usize {
     }
 }
 
+fn relaxed_cjk_suffix(query: &str) -> Option<String> {
+    let (suffix_index, suffix) = query.char_indices().next_back()?;
+    if suffix != '属' {
+        return None;
+    }
+    let stem = &query[..suffix_index];
+    (stem.chars().count() >= 3).then(|| stem.to_string())
+}
+
 fn edit_distance_with_limit(left: &str, right: &str, limit: usize) -> Option<usize> {
     let left = left.chars().collect::<Vec<_>>();
     let right = right.chars().collect::<Vec<_>>();
@@ -740,7 +794,7 @@ mod tests {
         let search_ids = search_taxa(&database, "Canis", 10)
             .unwrap()
             .into_iter()
-            .map(|result| result.summary.taxon_id)
+            .map(|result| result.taxon_id)
             .collect::<Vec<_>>();
         let suggestions = suggest_taxa(&database, "Canis", 10).unwrap();
         assert_eq!(
@@ -753,6 +807,12 @@ mod tests {
         assert_eq!(suggestions[0].names.sci_name.as_deref(), Some("Canis"));
         assert_eq!(suggestions[0].names.zh_name.as_deref(), Some("Dogs"));
         assert_eq!(suggestions[0].matches[0].name, "Canis");
+        let results = search_taxa(&database, "Canis", 10).unwrap();
+        assert_eq!(results[0].taxon_id, 1);
+        assert_eq!(results[0].rank, super::super::TaxonRank::Genus);
+        assert_eq!(results[0].names.sci_name.as_deref(), Some("Canis"));
+        assert_eq!(results[0].names.zh_name.as_deref(), Some("Dogs"));
+        assert_eq!(results[0].matches[0].name, "Canis");
     }
 
     #[test]
@@ -806,5 +866,220 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![(14, FUZZY_MATCH_LEVEL)]
         );
+
+        let results = search_taxa(&database, "Canis", 10).unwrap();
+        assert_eq!(
+            results
+                .iter()
+                .map(|result| result.taxon_id)
+                .collect::<Vec<_>>(),
+            vec![10, 11, 12, 13, 14]
+        );
+        assert_eq!(results[0].names.sci_name.as_deref(), Some("Canis"));
+        assert_eq!(
+            results[2].names.sci_name.as_deref(),
+            Some("Great Canis wolf")
+        );
+        assert_eq!(results[4].names.sci_name.as_deref(), Some("Canos"));
+        assert_eq!(
+            results
+                .iter()
+                .map(|result| result.matches[0].name.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "Canis",
+                "Canis lupus",
+                "Great Canis wolf",
+                "Toucanis",
+                "Canos",
+            ]
+        );
+    }
+
+    #[test]
+    fn cjk_prefix_does_not_suppress_substring_taxa() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = Database::open(directory.path().join("test.db")).unwrap();
+        let connection = database.connect_taxonomy_metadata_context().unwrap();
+        connection
+            .execute_batch(
+                r#"
+                INSERT INTO taxa (taxon_id, parent_taxon_id, rank) VALUES
+                    (101, NULL, 4),
+                    (102, NULL, 4),
+                    (103, NULL, 4),
+                    (104, NULL, 4),
+                    (105, NULL, 4),
+                    (106, NULL, 4),
+                    (107, NULL, 4);
+                INSERT INTO taxon_names (taxon_id, name_type, name) VALUES
+                    (101, 1, 'Fixture taxon 101'), (101, 3, '香科科属'),
+                    (102, 1, 'Fixture taxon 102'), (102, 3, '山地香科科'),
+                    (103, 1, 'Fixture taxon 103'), (103, 3, '蒜味香科科'),
+                    (104, 1, 'Fixture taxon 104'), (104, 3, '高山香科科'),
+                    (105, 1, 'Fixture taxon 105'), (105, 3, '石地香科科'),
+                    (106, 1, 'Fixture taxon 106'), (106, 3, '林地香科科'),
+                    (107, 1, 'Fixture taxon 107'), (107, 3, '河谷香科科');
+                "#,
+            )
+            .unwrap();
+
+        let raw_counts = connection
+            .query_row(
+                r#"
+                SELECT COUNT(*), COUNT(DISTINCT taxon_id)
+                FROM taxon_names
+                WHERE normalized_name LIKE '%香科科%'
+                "#,
+                [],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .unwrap();
+        assert_eq!(raw_counts, (7, 7));
+        let fts_counts = connection
+            .query_row(
+                r#"
+                SELECT COUNT(*), COUNT(DISTINCT taxon_names.taxon_id)
+                FROM taxon_names_fts
+                JOIN taxon_names ON taxon_names.name_id = taxon_names_fts.rowid
+                WHERE taxon_names_fts MATCH '"香科科"'
+                "#,
+                [],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .unwrap();
+        assert_eq!(fts_counts, (7, 7));
+        register_search_functions(&connection).unwrap();
+        let relation = build_taxon_search_relation(&SearchQuery::new("香科科"));
+        let counts_sql = format!(
+            r#"
+            WITH {}
+            SELECT
+                (SELECT COUNT(*) FROM search_name_candidates),
+                (SELECT COUNT(*) FROM ranked_taxa)
+            "#,
+            relation.cte_sql
+        );
+        let pipeline_counts = connection
+            .query_row(&counts_sql, params_from_iter(relation.params), |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+            })
+            .unwrap();
+        assert_eq!(pipeline_counts, (7, 7));
+
+        let results = search_taxa(&database, "香科科", 20).unwrap();
+
+        assert_eq!(results.len(), 7);
+        assert_eq!(results[0].taxon_id, 101);
+        assert_eq!(results[0].names.zh_name.as_deref(), Some("香科科属"));
+        assert_eq!(
+            results
+                .iter()
+                .map(|result| result.taxon_id)
+                .collect::<HashSet<_>>()
+                .len(),
+            7
+        );
+
+        let limited = search_taxa(&database, "香科科", 3).unwrap();
+        assert_eq!(limited.len(), 3);
+        assert_eq!(limited[0].taxon_id, 101);
+
+        let suggestions = suggest_taxa(&database, "香科科", 20).unwrap();
+        assert_eq!(suggestions.len(), 7);
+        assert_eq!(suggestions[0].taxon_id, 101);
+
+        let full_query_counts = connection
+            .query_row(
+                r#"
+                SELECT
+                    (SELECT COUNT(*) FROM taxon_names
+                     WHERE normalized_name LIKE '%香科科属%'),
+                    (SELECT COUNT(*)
+                     FROM taxon_names_fts
+                     WHERE taxon_names_fts MATCH '"香科科属"'),
+                    (SELECT COUNT(*)
+                     FROM taxon_names_fts
+                     WHERE taxon_names_fts MATCH '"香科科" OR "科科属"')
+                "#,
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(full_query_counts, (1, 1, 7));
+
+        let full_query_relation = build_taxon_search_relation(&SearchQuery::new("香科科属"));
+        let full_query_counts_sql = format!(
+            r#"
+            WITH {}
+            SELECT
+                (SELECT COUNT(*) FROM search_name_candidates),
+                (SELECT COUNT(*) FROM ranked_taxa)
+            "#,
+            full_query_relation.cte_sql
+        );
+        let full_query_pipeline_counts = connection
+            .query_row(
+                &full_query_counts_sql,
+                params_from_iter(full_query_relation.params),
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .unwrap();
+        assert_eq!(full_query_pipeline_counts, (7, 7));
+
+        let full_query_results = search_taxa(&database, "香科科属", 20).unwrap();
+        assert_eq!(full_query_results.len(), 7);
+        assert_eq!(full_query_results[0].taxon_id, 101);
+        let limited_full_query = search_taxa(&database, "香科科属", 3).unwrap();
+        assert_eq!(limited_full_query.len(), 3);
+        assert_eq!(limited_full_query[0].taxon_id, 101);
+        let full_query_suggestions = suggest_taxa(&database, "香科科属", 20).unwrap();
+        assert_eq!(full_query_suggestions.len(), 7);
+        assert_eq!(full_query_suggestions[0].taxon_id, 101);
+    }
+
+    #[test]
+    fn relaxed_cjk_suffix_requires_a_long_genus_stem() {
+        assert_eq!(relaxed_cjk_suffix("香科科属").as_deref(), Some("香科科"));
+        assert_eq!(relaxed_cjk_suffix("蔷薇属"), None);
+        assert_eq!(relaxed_cjk_suffix("Canis"), None);
+    }
+
+    #[test]
+    fn matching_names_are_deduplicated_only_within_each_taxon() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = Database::open(directory.path().join("test.db")).unwrap();
+        database
+            .connect_taxonomy_metadata_context()
+            .unwrap()
+            .execute_batch(
+                r#"
+                INSERT INTO taxa (taxon_id, parent_taxon_id, rank) VALUES
+                    (201, NULL, 4),
+                    (202, NULL, 4);
+                INSERT INTO taxon_names (taxon_id, name_type, name) VALUES
+                    (201, 1, 'Canis'),
+                    (201, 2, 'Canis familiaris'),
+                    (202, 1, 'Canis lupus');
+                "#,
+            )
+            .unwrap();
+
+        let results = search_taxa(&database, "Canis", 20).unwrap();
+
+        assert_eq!(
+            results
+                .iter()
+                .map(|result| result.taxon_id)
+                .collect::<Vec<_>>(),
+            vec![201, 202]
+        );
+        assert_eq!(results[0].matches.len(), 2);
     }
 }

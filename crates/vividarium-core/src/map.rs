@@ -68,6 +68,40 @@ pub fn set_map_settings(database: &Database, mut settings: MapSettings) -> CoreR
     Ok(settings)
 }
 
+pub fn get_map_photo_bounds(database: &Database) -> CoreResult<Option<MapBounds>> {
+    let connection = database.connect()?;
+    connection
+        .query_row(
+            r#"
+            SELECT
+                MIN(longitude),
+                MIN(latitude),
+                MAX(longitude),
+                MAX(latitude)
+            FROM photo_metadata
+            WHERE longitude BETWEEN -180.0 AND 180.0
+              AND latitude BETWEEN -90.0 AND 90.0
+            "#,
+            [],
+            |row| {
+                let west: Option<f64> = row.get(0)?;
+                let south: Option<f64> = row.get(1)?;
+                let east: Option<f64> = row.get(2)?;
+                let north: Option<f64> = row.get(3)?;
+                Ok(match (west, south, east, north) {
+                    (Some(west), Some(south), Some(east), Some(north)) => Some(MapBounds {
+                        west,
+                        south,
+                        east,
+                        north,
+                    }),
+                    _ => None,
+                })
+            },
+        )
+        .map_err(Into::into)
+}
+
 pub fn list_map_photos(
     database: &Database,
     bounds: Option<MapBounds>,
@@ -264,5 +298,26 @@ mod tests {
                 .len(),
             2
         );
+    }
+
+    #[test]
+    fn map_photo_bounds_cover_valid_geotagged_photos() {
+        let (_directory, database) = database();
+        assert_eq!(
+            get_map_photo_bounds(&database).unwrap(),
+            Some(MapBounds {
+                west: -120.0,
+                south: 30.0,
+                east: 120.0,
+                north: 40.0,
+            })
+        );
+
+        database
+            .connect()
+            .unwrap()
+            .execute("DELETE FROM photo_metadata", [])
+            .unwrap();
+        assert_eq!(get_map_photo_bounds(&database).unwrap(), None);
     }
 }

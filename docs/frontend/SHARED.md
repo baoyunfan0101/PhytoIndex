@@ -9,11 +9,20 @@ does not own business data or import feature modules.
 
 `VirtualList<T>` and `VirtualGrid<T>` render windowed collections. Their
 parameters include items, dimensions, a stable item key, a renderer, and an
-optional end-of-list callback.
+optional end-of-list callback. `VirtualList` clamps persisted scroll state when
+the collection shrinks; consumers may provide `resetKey` to return to the first
+row when a query or filter changes.
 
 `SectionHeader`, `EmptyState`, `Modal`, `Segmented`, `Disclosure`, and `Busy`
 provide domain-neutral presentation. `CodeEditor` provides the common SQL and
 Rhai editing surface with syntax highlighting.
+
+`ResizablePanels(props)` returns two panes separated by a pointer- and
+keyboard-adjustable divider. Parameters select horizontal or vertical layout,
+initial size or ratio, minimum pane sizes, an accessible separator label, and
+an optional `stateKey`. A keyed divider stores both horizontal and vertical
+sizes in the owning tab's view-state store, so a non-keep-alive page restores
+its layout after remounting.
 
 ## Cursor interfaces
 

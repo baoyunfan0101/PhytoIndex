@@ -1,67 +1,77 @@
-.settings-workbench { display: grid; height: 100%; min-height: 0; grid-template-columns: 180px minmax(0, 1fr); }
-.settings-nav { padding: 10px 6px; border-right: 1px solid var(--line); background: var(--panel); }
-.settings-nav button { display: flex; width: 100%; height: 32px; align-items: center; gap: 8px; padding: 0 10px; border: 0; text-align: left; background: transparent; }
-.settings-nav button:hover { background: var(--hover); }
+.settings-workbench { height: 100%; min-height: 0; }
+.settings-nav { display: flex; width: 100%; height: 100%; min-height: 0; flex-direction: column; padding: 10px 6px; background: var(--panel); }
+.settings-nav button { display: flex; width: 100%; height: 32px; align-items: center; gap: 8px; padding: 0 10px; border: 0; text-align: left; white-space: nowrap; background: transparent; }
 .settings-nav button.active { background: var(--active); }
-.settings-content { min-width: 0; min-height: 0; overflow: auto; }
+.settings-nav-chevron { margin-left: auto; }
+.settings-subnav { padding-left: 22px; }
+.settings-subnav button { height: 28px; color: var(--muted); }
+.settings-subnav button.active { color: var(--text); }
+.settings-language-badge { margin-left: auto; color: var(--quiet); font-size: 9px; letter-spacing: .05em; text-transform: uppercase; }
+.settings-subnav button.active .settings-language-badge { color: var(--accent-bright); }
+.settings-content { width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: auto; }
 .settings-section { max-width: 960px; margin: 0 auto; }
 .settings-section h3 { margin: 22px 12px 8px; font-size: 12px; font-weight: 600; }
+.settings-group { margin: 8px 12px 18px; }
+.settings-group > h3 { margin: 0 0 4px; padding: 0 0 6px; border-bottom: 1px solid var(--line); }
+.general-setting-row { display: grid; min-height: 42px; grid-template-columns: minmax(220px, 1fr) minmax(180px, 340px); align-items: center; gap: 20px; padding: 6px 0; }
+.general-setting-row > span { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.general-setting-row small { color: var(--muted); font-weight: 400; }
+.general-setting-row select, .general-setting-row input[type="number"] { width: 100%; height: 30px; padding: 0 8px; border: 1px solid var(--line-strong); border-radius: 3px; background: var(--input); }
+.general-setting-row input[type="checkbox"] { width: 16px; height: 16px; justify-self: end; accent-color: var(--accent); }
+.general-checkbox-row { display: grid; grid-template-columns: repeat(3, max-content); gap: 12px; justify-self: end; }
+.general-checkbox-row label { display: flex; align-items: center; gap: 7px; color: var(--muted); }
+.general-checkbox-row input[type="checkbox"] { justify-self: auto; }
 .setting-row { display: grid; grid-template-columns: 220px 1fr; gap: 20px; padding: 12px; border-bottom: 1px solid var(--line); }
 .setting-row span { color: var(--muted); }
-.update-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin: 16px 12px; padding: 14px; border: 1px solid var(--line); background: #202020; }
-.update-row > div { display: flex; flex-direction: column; gap: 4px; }
-.update-row span { color: var(--muted); }
-.base-database-action {
-  display: grid;
-  grid-template-columns: minmax(220px, 1fr) auto auto;
-  gap: 8px;
-  align-items: center;
-  margin: 16px 12px;
-  padding: 14px;
-  border: 1px solid var(--line);
-  background: #202020;
-}
-.base-database-action > div { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
-.base-database-action span { overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
 .priority-list { margin: 0 12px; border: 1px solid var(--line); }
 .priority-list > div { display: grid; height: 34px; grid-template-columns: 32px 1fr 30px 30px; align-items: center; border-bottom: 1px solid var(--line); }
 .priority-list b { color: var(--quiet); text-align: center; }
-.priority-list button { height: 100%; border: 0; border-left: 1px solid var(--line); background: transparent; }
+.priority-list button { align-self: center; border-color: transparent; background: transparent; }
 .checkbox-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; padding: 0 12px; }
 .checkbox-grid label { display: flex; align-items: center; gap: 7px; }
+.editor-message.error-message { color: var(--red); }
 .field-stack { display: flex; flex-direction: column; gap: 6px; padding: 12px; }
 .field-stack > span { color: var(--muted); }
+.field-stack > span strong { color: var(--text); font-weight: 600; }
+.field-stack > .priority-list { margin: 0; }
+.field-stack > .checkbox-grid { padding: 0; }
 .field-stack input, .field-stack select { height: 30px; padding: 0 8px; border: 1px solid var(--line-strong); border-radius: 3px; background: var(--input); }
-.hooks-settings { display: grid; height: 100%; min-height: 0; grid-template-rows: auto 38px minmax(0, 1fr) 32px; }
-.hooks-settings > .segmented { align-self: center; justify-self: start; margin-left: 10px; }
-.hook-columns { display: grid; min-height: 0; grid-template-columns: minmax(360px, 55%) minmax(300px, 1fr); border-top: 1px solid var(--line); }
-.hook-columns > *:first-child { border-right: 1px solid var(--line); }
-.hook-tests { display: grid; min-height: 0; grid-template-rows: 38px minmax(0, 1fr); }
+.hooks-settings { display: grid; height: 100%; min-height: 0; grid-template-rows: auto minmax(0, 1fr) 32px; }
+.hook-columns { min-height: 0; border-top: 1px solid var(--line); }
+.hook-columns .code-editor { width: 100%; height: 100%; }
+.hook-tests { display: grid; width: 100%; height: 100%; min-height: 0; grid-template-rows: 38px minmax(0, 1fr); overflow: hidden; }
 .hook-tests > header { display: flex; align-items: center; justify-content: space-between; padding: 0 10px; border-bottom: 1px solid var(--line); }
 .hook-tests > header button { border: 0; color: var(--accent-bright); background: transparent; }
+.hook-test-list { min-height: 0; padding: 6px; overflow: auto; }
 .hook-test-row {
-  display: grid;
-  height: calc(100% - 4px);
-  grid-template-columns: minmax(100px, .8fr) minmax(130px, 1.2fr) auto;
-  grid-template-rows: 30px minmax(0, 1fr);
+  display: flex;
+  flex-direction: column;
   gap: 5px;
-  align-items: center;
-  margin: 2px 6px;
+  margin-bottom: 6px;
   padding: 6px;
   border: 1px solid var(--line);
 }
 .hook-test-row.failed { border-color: var(--red); }
-.hook-test-row input { min-width: 0; height: 28px; padding: 0 6px; border: 1px solid var(--line); background: var(--input); }
-.hook-test-row button { height: 26px; border: 1px solid var(--line); background: #292929; }
-.hook-expected { grid-column: 1 / -1; width: 100%; height: 170px; border: 1px solid var(--line); }
+.hook-test-row > header { display: flex; height: 26px; align-items: center; gap: 8px; }
+.hook-test-row > header button { margin-left: auto; }
+.hook-test-row > header span { color: var(--muted); }
+.hook-test-row > header span.passed { color: var(--accent-bright); }
+.hook-test-row > header span.failed { color: var(--red); }
+.hook-test-row label, .hook-test-actual { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
+.hook-test-row label > span, .hook-test-actual > span { color: var(--muted); }
+.hook-test-row label.hook-raw-field { display: grid; grid-template-columns: 72px minmax(0, 1fr); align-items: center; gap: 6px; }
+.hook-raw-input { min-width: 0; height: 26px; padding: 0 6px; border: 1px solid var(--line); background: var(--input); }
+.hook-expected { width: 100%; min-height: 72px; max-height: 160px; border: 1px solid var(--line); }
 .hook-expected.invalid { border-color: var(--red); }
-.hook-expected .code-editor { width: 100%; height: 100%; }
-.hook-expected .code-editor pre, .hook-expected .code-editor textarea { padding: 6px; font-size: 10px; line-height: 1.4; }
-.hook-test-actual { grid-column: 1 / -1; overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
+.hook-expected .code-editor { width: 100%; }
+.hook-expected .cm-content, .hook-test-actual .cm-content { padding: 6px; }
+.hook-expected .cm-scroller, .hook-test-actual .cm-scroller { font-size: 10px; line-height: 1.4; }
+.hook-test-actual .code-editor { border: 1px solid var(--line); background: var(--input); }
+.hook-test-actual p { margin: 0; color: var(--red); }
 
-.storage-path { display: grid; grid-template-columns: 210px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 10px; border-bottom: 1px solid var(--line); }
-.storage-path > span { color: var(--muted); }
-.storage-path code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.storage-path { display: grid; grid-template-columns: 210px minmax(0, 1fr) auto; align-items: start; gap: 10px; padding: 10px; border-bottom: 1px solid var(--line); }
+.storage-path > span { padding-top: 6px; color: var(--muted); }
+.storage-path code { min-width: 0; padding-top: 6px; overflow-wrap: anywhere; white-space: normal; }
 .storage-path button, .library-actions button {
   display: inline-flex;
   height: 26px;
@@ -69,8 +79,9 @@
   gap: 5px;
   padding: 0 7px;
   border: 1px solid var(--line);
-  background: #292929;
+  background: var(--button-bg);
 }
+.storage-actions { display: flex; flex-wrap: wrap; gap: 5px; }
 .library-settings-list { display: grid; gap: 8px; padding: 10px; overflow: auto; }
 .library-settings-row { display: grid; gap: 6px; padding: 9px; border: 1px solid var(--line); background: var(--panel); }
 .library-settings-row.active { border-color: #4c7158; }
@@ -81,8 +92,8 @@
 .library-heading > b { margin-left: auto; color: var(--accent-bright); }
 .library-settings-row code { overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
 .library-actions { display: flex; flex-wrap: wrap; gap: 5px; }
-
-@media (max-width: 1050px) {
-  .hook-columns { grid-template-columns: 1fr; grid-template-rows: 52% 48%; }
-  .hook-columns > *:first-child { border-right: 0; border-bottom: 1px solid var(--line); }
-}
+.about-settings > strong { display: block; padding: 18px 12px 8px; font-size: 18px; }
+.about-settings a { overflow: hidden; color: var(--accent-bright); text-overflow: ellipsis; white-space: nowrap; }
+.about-update { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin: 16px 12px; padding: 14px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); }
+.about-update > div { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
+.about-update span { color: var(--muted); }

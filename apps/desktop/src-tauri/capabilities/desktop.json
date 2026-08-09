@@ -8,6 +8,13 @@
     "core:default",
     "core:event:default",
     "dialog:allow-open",
-    "dialog:allow-save"
+    "dialog:allow-save",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        { "url": "https://github.com/baoyunfan0101/Vividarium" },
+        { "url": "mailto:baoyunfan0101@gmail.com" }
+      ]
+    }
   ]
 }

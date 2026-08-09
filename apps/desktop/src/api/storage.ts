@@ -35,13 +35,7 @@ const demoLibrary = (): PhotoLibraryWorkspace => ({
 export const openPhotoLibrary = (root: string) =>
   call<PhotoLibrary>("open_photo_library", { root }, () => ({ root_path: root, root_directory_id: 1 }));
 export const getDatabaseLocations = () =>
-  call<DatabaseLocations>("get_database_locations", undefined, () => ({
-    metadata_database: "/Demo/Vividarium/metadata.db",
-    taxonomy_database: "/Demo/Vividarium/taxonomy.db",
-    default_taxonomy_directory: "/Demo/Vividarium",
-    default_photo_library_directory: "/Demo/Vividarium/Photo Libraries",
-    active_photo_library_uuid: "demo-library",
-  }));
+  call<DatabaseLocations>("get_database_locations", undefined, getDemoDatabaseLocations);
 export const listPhotoLibraries = () =>
   call<PhotoLibraryWorkspace[]>("list_photo_libraries", undefined, () => [demoLibrary()]);
 export const registerPhotoLibrary = (rootPath: string, databasePath: string, displayName: string | null) =>
@@ -72,6 +66,12 @@ export const relocatePhotoLibraryDatabase = (libraryUuid: string, databasePath: 
   }));
 export const removePhotoLibrary = (libraryUuid: string) =>
   call<void>("remove_photo_library", { libraryUuid }, () => undefined);
+export const openPathInFileManager = (path: string) =>
+  call<void>("open_path_in_file_manager", { path }, () => undefined);
+export const openTaxonomyDatabase = (databasePath: string) =>
+  call<DatabaseLocations>("open_taxonomy_database", { databasePath }, () => ({
+    ...getDemoDatabaseLocations(), taxonomy_database: databasePath,
+  }));
 export const relocateTaxonomyDatabase = (databasePath: string) =>
   call<DatabaseLocations>("relocate_taxonomy_database", { databasePath }, getDatabaseLocations);
 export const setDefaultTaxonomyDatabaseDirectory = (directory: string) =>
@@ -84,4 +84,14 @@ export function photoLibraryAvailabilityLabel(library: PhotoLibraryWorkspace): s
   if (!library.database_available) return "Database missing";
   if (!library.root_available) return "Photo root missing";
   return "Available";
+}
+
+function getDemoDatabaseLocations(): DatabaseLocations {
+  return {
+    metadata_database: "/Demo/Vividarium/metadata.db",
+    taxonomy_database: "/Demo/Vividarium/taxonomy.db",
+    default_taxonomy_directory: "/Demo/Vividarium",
+    default_photo_library_directory: "/Demo/Vividarium/Photo Libraries",
+    active_photo_library_uuid: "demo-library",
+  };
 }

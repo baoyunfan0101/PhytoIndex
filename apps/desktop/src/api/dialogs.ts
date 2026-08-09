@@ -1,15 +1,16 @@
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { desktopRuntime } from "./client";
 
-export async function selectPhotoDirectory(): Promise<string | null> {
-  if (!desktopRuntime) return "/Demo/Vividarium Photos";
-  const selected = await open({ directory: true, multiple: false });
+export async function selectPhotoDirectory(defaultPath?: string): Promise<string | null> {
+  if (!desktopRuntime) return defaultPath ?? "/Demo/Vividarium Photos";
+  const selected = await open({ defaultPath, directory: true, multiple: false });
   return typeof selected === "string" ? selected : null;
 }
 
-export async function selectSqliteDatabase(): Promise<string | null> {
+export async function selectSqliteDatabase(defaultPath?: string): Promise<string | null> {
   if (!desktopRuntime) return "/Demo/Vividarium/source.db";
   const selected = await open({
+    defaultPath,
     directory: false,
     multiple: false,
     filters: [{ name: "SQLite database", extensions: ["db", "sqlite", "sqlite3"] }],

@@ -92,6 +92,64 @@ export function useCursorTree<T, K extends string | number>({
 
   const loadMore = useCallback((key: K) => load(key, true), [load]);
 
+  const expandSubtree = useCallback(async (
+    key: K,
+    childKeyForItem: (item: T) => K | null | undefined,
+  ) => {
+    const visited = new Set<K>();
+    const expand = async (currentKey: K): Promise<void> => {
+      if (visited.has(currentKey)) return;
+      visited.add(currentKey);
+      const request = (requests.current.get(currentKey) ?? 0) + 1;
+      requests.current.set(currentKey, request);
+      setNodes((previous) => {
+        const next = new Map(previous);
+        next.set(currentKey, {
+          ...(next.get(currentKey) ?? emptyNode<T>(true)),
+          expanded: true,
+          loading: true,
+          error: "",
+        });
+        return next;
+      });
+      try {
+        const items: T[] = [];
+        let cursor: string | null = null;
+        do {
+          const page = await loadPageRef.current(currentKey, cursor);
+          items.push(...page.items);
+          cursor = page.next_cursor;
+        } while (cursor !== null);
+        if (requests.current.get(currentKey) !== request) return;
+        setNodes((previous) => {
+          const next = new Map(previous);
+          next.set(currentKey, {
+            expanded: true,
+            items,
+            nextCursor: null,
+            loading: false,
+            error: "",
+          });
+          return next;
+        });
+        for (const item of items) {
+          const childKey = childKeyForItem(item);
+          if (childKey !== null && childKey !== undefined) await expand(childKey);
+        }
+      } catch (nextError) {
+        if (requests.current.get(currentKey) !== request) return;
+        setNodes((previous) => {
+          const next = new Map(previous);
+          const node = next.get(currentKey) ?? emptyNode<T>(true);
+          next.set(currentKey, { ...node, expanded: true, loading: false, error: errorMessage(nextError) });
+          return next;
+        });
+      }
+    };
+
+    await expand(key);
+  }, []);
+
   const reloadExpanded = useCallback(async () => {
     const keys = [...nodesRef.current.entries()]
       .filter(([, node]) => node.expanded)
@@ -108,6 +166,7 @@ export function useCursorTree<T, K extends string | number>({
   return {
     nodes,
     toggle,
+    expandSubtree,
     loadMore,
     reloadExpanded,
     clear,

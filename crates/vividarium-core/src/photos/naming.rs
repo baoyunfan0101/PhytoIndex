@@ -200,6 +200,29 @@ mod tests {
     use super::*;
 
     #[test]
+    fn saves_and_reloads_photo_filename_format_settings() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let database = Database::open(directory.path().join("vividarium.db")).unwrap();
+        crate::photos::open_library(&database, root.path().to_str().unwrap()).unwrap();
+        let settings = PhotoFilenameFormatSettings {
+            family_zh: true,
+            family_sci: true,
+            genus_zh: false,
+            genus_sci: true,
+            species_zh: false,
+            species_sci: false,
+        };
+
+        set_photo_filename_format_settings(&database, &settings).unwrap();
+
+        assert_eq!(
+            get_photo_filename_format_settings(&database).unwrap(),
+            settings
+        );
+    }
+
+    #[test]
     fn formats_selected_fields_and_falls_back_to_available_rank_and_language() {
         let info = TaxonomicNameInfo {
             family_sci: Some("Canidae".into()),

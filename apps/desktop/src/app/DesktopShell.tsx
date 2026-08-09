@@ -1,38 +1,43 @@
 import {
   Activity,
+  ArrowDownUp,
   ArrowLeft,
-  ArrowRightLeft,
   ArrowRight,
-  Braces,
-  ChevronDown,
+  Code,
   Database,
+  DatabaseSearch,
   FileClock,
-  FolderOpen,
-  History,
-  ListTree,
-  Map,
-  MoreHorizontal,
-  Plus,
+  Folder,
+  FolderClock,
+  Image as ImageIcon,
+  Images,
+  Link,
+  MapPinned,
+  Network,
   Search,
   Settings,
   TableProperties,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  getWorkspaceState,
+  saveWorkspaceState,
+  type GeneralSettings,
+} from "../api/general";
 import {
   getPhoto,
   type Photo,
 } from "../api/photos";
 import {
+  getDatabaseLocations,
   listPhotoLibraries,
+  openTaxonomyDatabase,
   openPhotoLibrary,
-  photoLibraryAvailabilityLabel,
-  switchPhotoLibrary,
   type PhotoLibraryWorkspace,
 } from "../api/storage";
-import { suggestPhotoTaxa, type TaxonSuggestion } from "../api/taxonomy";
-import { selectPhotoDirectory } from "../api/dialogs";
-import type { IconComponent } from "../shared/ui";
+import { selectPhotoDirectory, selectSqliteDatabase } from "../api/dialogs";
+import { Button, EmptyState, IconButton, type IconComponent } from "../shared/ui";
 import { MappingEditor } from "../features/mapping/MappingEditor";
 import {
   createNavigationHistory,
@@ -42,6 +47,16 @@ import {
 } from "./navigationHistory";
 import { PhotoDetailView } from "../features/photos/PhotoDetailView";
 import { PhotoSet } from "../features/photos/PhotoSet";
+import { EmptyWorkspace } from "../features/photos/search/EmptyWorkspace";
+import { GlobalSearchOverlay } from "../features/photos/search/GlobalSearchOverlay";
+import {
+  addRecentSearch,
+  loadRecentSearches,
+  normalizeSearchQuery,
+  removeRecentSearch,
+  saveRecentSearches,
+  trimRecentSearches,
+} from "../features/photos/search/recentSearchStorage";
 import type { PhotoOpenHandlers } from "../features/photos/PhotoInteraction";
 import { emitPhotoMutation, usePhotoMutation } from "../features/photos/photoMutations";
 import {
@@ -50,46 +65,39 @@ import {
   TaxonPhotosView,
 } from "../features/photos/PhotosView";
 import { MappingView } from "../features/mapping/MappingView";
-import { SettingsView } from "../features/settings/SettingsView";
+import { SettingsView, type SettingsSection } from "../features/settings/SettingsView";
 import {
   FormattedUpdateView,
   TaxonomySearchView,
 } from "../features/taxonomy/TaxonomyView";
+import { TaxonomyHierarchyPage } from "../features/taxonomy/TaxonomyHierarchyPage";
 import { CustomSqlView } from "../features/taxonomy/CustomSqlView";
 import { OperationHistoryView } from "../features/operations/OperationHistoryView";
-import { EmptyState } from "../shared/ui";
 import { useOperationObserver } from "./useOperationObserver";
 import { ViewStateProvider, type ViewStateStore } from "../shared/viewState";
 import {
   dependsOnReplacedTaxonomy,
   retainTabsAfterTaxonomyReplacement,
 } from "./taxonomyReplacement";
+import {
+  closeAllTabsState,
+  closeTabState,
+  getCurrentTabStatus,
+  pruneTabStatuses,
+  updateTabStatus,
+  type TabStatusMap,
+} from "./tabState";
+import { nativeMenuActions, useNativeMenu } from "./nativeMenu";
+import { NativeAboutOverlay } from "./NativeAboutOverlay";
+import { getTaxonDetail } from "../api/taxonomy";
+import {
+  restoreWorkspaceState,
+  serializeWorkspaceState,
+  type AppTab,
+} from "./workspaceState";
+import { getTabName } from "./tabPresentation";
 
-type TabKind =
-  | "folders"
-  | "photo-taxonomy"
-  | "map"
-  | "photo-history"
-  | "mapping"
-  | "taxonomy-search"
-  | "formatted-update"
-  | "custom-sql"
-  | "taxonomy-history"
-  | "settings"
-  | "search-photos"
-  | "taxon-photos"
-  | "photo-detail"
-  | "mapping-editor"
-  | "taxon-detail";
-
-type AppTab = {
-  id: string;
-  kind: TabKind;
-  title: string;
-  query?: string;
-  taxonId?: number;
-  photo?: Photo;
-};
+type TabKind = AppTab["kind"];
 
 const initialTab: AppTab = { id: "folders", kind: "folders", title: "Folders" };
 const keepAliveTabKinds = new Set<TabKind>([
@@ -101,17 +109,35 @@ const keepAliveTabKinds = new Set<TabKind>([
 ]);
 
 const photoItems: Array<[TabKind, string, IconComponent]> = [
-  ["folders", "Folders", FolderOpen],
-  ["photo-taxonomy", "Photo hierarchy", ListTree],
-  ["map", "Map", Map],
-  ["photo-history", "Rename history", History],
+  ["folders", "Folders", Folder],
+  ["photo-taxonomy", "Taxon Tree", Network],
+  ["map", "Map", MapPinned],
+  ["photo-history", "Rename history", FolderClock],
 ];
 const taxonomyItems: Array<[TabKind, string, IconComponent]> = [
-  ["taxonomy-search", "Taxonomy search", Database],
+  ["taxonomy-search", "Taxonomy search", DatabaseSearch],
   ["formatted-update", "Formatted update", TableProperties],
-  ["custom-sql", "Custom SQL", Braces],
+  ["custom-sql", "Custom SQL", Code],
   ["taxonomy-history", "Update history", FileClock],
 ];
+
+const tabIcons: Record<TabKind, IconComponent> = {
+  folders: Folder,
+  "photo-taxonomy": Network,
+  map: MapPinned,
+  "photo-history": FolderClock,
+  mapping: ArrowDownUp,
+  "taxonomy-search": DatabaseSearch,
+  "formatted-update": TableProperties,
+  "custom-sql": Code,
+  "taxonomy-history": FileClock,
+  settings: Settings,
+  "search-photos": Search,
+  "taxon-photos": Images,
+  "photo-detail": ImageIcon,
+  "mapping-editor": Link,
+  "taxon-detail": Database,
+};
 
 const photoTabKinds = new Set<TabKind>([
   "folders",
@@ -125,34 +151,42 @@ const photoTabKinds = new Set<TabKind>([
   "mapping-editor",
 ]);
 
-export function DesktopShell() {
-  const [tabs, setTabs] = useState<AppTab[]>([initialTab]);
-  const [activeId, setActiveId] = useState(initialTab.id);
+export function DesktopShell({
+  generalSettings,
+  generalSettingsLoadError,
+  onGeneralSettingsChange,
+}: {
+  generalSettings: GeneralSettings;
+  generalSettingsLoadError?: string;
+  onGeneralSettingsChange: (settings: GeneralSettings) => void;
+}) {
+  const [tabs, setTabs] = useState<AppTab[]>([]);
+  const [activeId, setActiveId] = useState<string | null>(null);
   const [libraries, setLibraries] = useState<PhotoLibraryWorkspace[]>([]);
-  const [workspaceLoading, setWorkspaceLoading] = useState(true);
-  const [libraryMenuOpen, setLibraryMenuOpen] = useState(false);
+  const [workspaceReady, setWorkspaceReady] = useState(false);
   const [operationsOpen, setOperationsOpen] = useState(false);
-  const [moreOpen, setMoreOpen] = useState(false);
+  const [aboutOpen, setAboutOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [suggestions, setSuggestions] = useState<TaxonSuggestion[]>([]);
-  const [suggestionIndex, setSuggestionIndex] = useState(-1);
-  const [status, setStatus] = useState("Ready");
-  const searchRef = useRef<HTMLDivElement>(null);
-  const searchToggleRef = useRef<HTMLButtonElement>(null);
+  const [recentSearches, setRecentSearches] = useState(() => (
+    loadRecentSearches(undefined, generalSettings.recent_searches_limit)
+  ));
+  const [tabStatuses, setTabStatuses] = useState<TabStatusMap>({});
+  const emptySearchInputRef = useRef<HTMLInputElement>(null);
+  const operationsMenuRef = useRef<HTMLDivElement>(null);
+  const activeIdRef = useRef<string | null>(null);
   const viewStateStores = useRef(new globalThis.Map<string, ViewStateStore>());
   const [navigationHistory, setNavigationHistory] = useState(
-    createNavigationHistory(initialTab.id),
+    createNavigationHistory(null),
   );
   const operations = useOperationObserver();
-  const active = tabs.find((tab) => tab.id === activeId) ?? tabs[0];
+  const active = activeId === null ? null : tabs.find((tab) => tab.id === activeId) ?? null;
   const activeLibrary = libraries.find((library) => library.active) ?? null;
   const workspaceAvailable = Boolean(
     activeLibrary?.root_available && activeLibrary.database_available,
   );
   const runningOperations = Object.values(operations).filter((operation) => operation.running);
   const taxonomyMutationLocked = runningOperations.some(
-    (operation) => operation.operation === "apply_base_import",
+    (operation) => operation.operation === "apply_sql_import" || operation.operation === "apply_direct_import",
   );
   const existingTabIds = useMemo(
     () => new Set(tabs.map((tab) => tab.id)),
@@ -160,6 +194,16 @@ export function DesktopShell() {
   );
   const backTarget = findNavigationTarget(navigationHistory, existingTabIds, -1);
   const forwardTarget = findNavigationTarget(navigationHistory, existingTabIds, 1);
+  const status = getCurrentTabStatus(tabStatuses, activeId);
+
+  const reportTabStatus = useCallback((tabId: string, message: string) => {
+    setTabStatuses((current) => updateTabStatus(current, tabId, message));
+  }, []);
+
+  const reportActiveStatus = useCallback((message: string) => {
+    const tabId = activeIdRef.current;
+    if (tabId !== null) reportTabStatus(tabId, message);
+  }, [reportTabStatus]);
 
   usePhotoMutation((mutation) => {
     if (mutation.kind !== "photo") return;
@@ -168,7 +212,7 @@ export function DesktopShell() {
       const title = tab.kind === "photo-detail"
         ? photo.filename
         : tab.kind === "mapping-editor"
-          ? `Map ${photo.filename}`
+          ? photo.filename
           : tab.title;
       return { ...tab, photo, title };
     }));
@@ -182,7 +226,74 @@ export function DesktopShell() {
     }
   });
 
-  useEffect(() => { void reloadLibraries(); }, []);
+  useEffect(() => {
+    let cancelled = false;
+    async function bootstrap() {
+      let nextLibraries: PhotoLibraryWorkspace[] = [];
+      try {
+        nextLibraries = await listPhotoLibraries();
+      } catch (nextError) {
+        if (!cancelled) reportActiveStatus(String(nextError));
+      }
+      if (cancelled) return;
+      setLibraries(nextLibraries);
+      if (generalSettings.restore_tabs) {
+        try {
+          const activeLibrary = nextLibraries.find((library) => library.active) ?? null;
+          const restored = await restoreWorkspaceState(await getWorkspaceState(), {
+            getPhoto,
+            photoWorkspaceAvailable: Boolean(
+              activeLibrary?.root_available && activeLibrary.database_available,
+            ),
+            taxonExists: async (taxonId) => {
+              try {
+                await getTaxonDetail(taxonId);
+                return true;
+              } catch {
+                return false;
+              }
+            },
+          });
+          if (cancelled) return;
+          setTabs(restored.tabs);
+          setActiveId(restored.activeId);
+          setNavigationHistory(createNavigationHistory(restored.activeId));
+        } catch (nextError) {
+          if (!cancelled) reportActiveStatus(`Workspace state could not be restored: ${String(nextError)}`);
+        }
+      }
+      if (!cancelled) setWorkspaceReady(true);
+    }
+    void bootstrap();
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    const next = trimRecentSearches(
+      recentSearches,
+      generalSettings.recent_searches_limit,
+    );
+    if (next.length === recentSearches.length) return;
+    setRecentSearches(next);
+    saveRecentSearches(next);
+  }, [generalSettings.recent_searches_limit, recentSearches]);
+
+  useEffect(() => {
+    if (!workspaceReady || !generalSettings.restore_tabs) return;
+    const timer = window.setTimeout(() => {
+      void saveWorkspaceState(serializeWorkspaceState(tabs, activeId))
+        .catch((nextError) => reportActiveStatus(`Workspace state could not be saved: ${String(nextError)}`));
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [activeId, generalSettings.restore_tabs, tabs, workspaceReady]);
+
+  useEffect(() => {
+    activeIdRef.current = activeId;
+  }, [activeId]);
+
+  useEffect(() => {
+    setTabStatuses((current) => pruneTabStatuses(current, existingTabIds));
+  }, [existingTabIds]);
 
   useEffect(() => {
     setNavigationHistory((current) => pruneNavigationHistory(
@@ -193,36 +304,34 @@ export function DesktopShell() {
   }, [active?.id, existingTabIds]);
 
   useEffect(() => {
-    const value = searchQuery.trim();
-    if (!searchOpen || !value) {
-      setSuggestions([]);
-      setSuggestionIndex(-1);
-      return;
-    }
-    if (!workspaceAvailable) return;
-    const timer = window.setTimeout(() => void suggestPhotoTaxa(value)
-      .then((next) => {
-        setSuggestions(next);
-        setSuggestionIndex(-1);
-      })
-      .catch(() => setSuggestions([])), 140);
-    return () => window.clearTimeout(timer);
-  }, [searchOpen, searchQuery, workspaceAvailable]);
-
-  useEffect(() => {
-    if (!searchOpen) return;
-    const closeSearch = (event: PointerEvent) => {
+    if (!operationsOpen) return;
+    const closeMenuOnOutsidePointer = (event: PointerEvent) => {
       const target = event.target as Node;
-      if (searchRef.current?.contains(target) || searchToggleRef.current?.contains(target)) return;
-      setSearchOpen(false);
+      if (operationsOpen && !operationsMenuRef.current?.contains(target)) {
+        setOperationsOpen(false);
+      }
     };
-    window.addEventListener("pointerdown", closeSearch);
-    return () => window.removeEventListener("pointerdown", closeSearch);
-  }, [searchOpen]);
+    window.addEventListener("pointerdown", closeMenuOnOutsidePointer);
+    return () => window.removeEventListener("pointerdown", closeMenuOnOutsidePointer);
+  }, [operationsOpen]);
 
   function openTab(tab: AppTab, singleton = false) {
     const existing = tabs.find((item) => item.id === tab.id || (singleton && item.kind === tab.kind));
     if (existing) {
+      if (tab.kind === "settings" && tab.settingsSection !== undefined) {
+        setTabs((current) => current.map((item) => item.id === existing.id
+          ? { ...item, settingsSection: tab.settingsSection }
+          : item));
+      } else if (tab.kind === "search-photos" && tab.query !== undefined) {
+        setTabs((current) => current.map((item) => item.id === existing.id
+          ? {
+            ...item,
+            title: tab.title,
+            query: tab.query,
+            refreshKey: (item.refreshKey ?? 0) + 1,
+          }
+          : item));
+      }
       focusTab(existing.id);
       return;
     }
@@ -230,9 +339,9 @@ export function DesktopShell() {
     focusTab(tab.id);
   }
 
-  function focusTab(id: string, record = true) {
+  function focusTab(id: string | null, record = true) {
     setActiveId(id);
-    if (record) {
+    if (record && id !== null) {
       setNavigationHistory((current) => recordNavigation(current, id));
     }
   }
@@ -254,34 +363,80 @@ export function DesktopShell() {
       : tab));
   }
 
+  function updateSettingsTab(id: string, settingsSection: SettingsSection) {
+    setTabs((current) => current.map((tab) => tab.id === id && tab.kind === "settings"
+      ? { ...tab, settingsSection }
+      : tab));
+  }
+
   function closeTab(id: string) {
-    if (tabs.length === 1) return;
+    const remainingIds = new Set(tabs
+      .filter((tab) => tab.id !== id)
+      .map((tab) => tab.id));
+    const previousActiveId = activeId === id
+      ? findNavigationTarget(navigationHistory, remainingIds, -1)?.tabId ?? null
+      : null;
+    const next = closeTabState(tabs, activeId, id, previousActiveId);
+    if (next.tabs === tabs) return;
     viewStateStores.current.delete(id);
-    const index = tabs.findIndex((tab) => tab.id === id);
-    const next = tabs.filter((tab) => tab.id !== id);
-    setTabs(next);
-    if (activeId === id) focusTab(next[Math.max(0, index - 1)]?.id ?? next[0].id);
+    setTabs(next.tabs);
+    if (activeId !== next.activeId) focusTab(next.activeId);
+    if (next.activeId === null) setSearchOpen(false);
   }
 
   const handlers: PhotoOpenHandlers = useMemo(() => ({
     openDetails: (photo) => openTab({ id: `photo:${photo.photo_id}`, kind: "photo-detail", title: photo.filename, photo }),
-    openTaxon: (taxonId) => openTab({ id: `taxon-detail:${crypto.randomUUID()}`, kind: "taxon-detail", title: `Taxon ${taxonId}`, taxonId }),
-    openMappingEditor: (photo) => openTab({ id: `mapping:${photo.photo_id}`, kind: "mapping-editor", title: `Map ${photo.filename}`, photo }),
+    openTaxon: (taxonId) => openTab({ id: `taxon-detail:${crypto.randomUUID()}`, kind: "taxon-detail", title: String(taxonId), taxonId }),
+    openMappingEditor: (photo) => openTab({ id: `mapping:${photo.photo_id}`, kind: "mapping-editor", title: photo.filename, photo }),
   }), [tabs]);
 
-  function submitSearch(query = searchQuery) {
-    const value = query.trim();
-    if (!value || !workspaceAvailable) return;
+  async function submitSearch(query: string) {
+    const value = normalizeSearchQuery(query);
+    if (!value) return;
+    if (!workspaceAvailable) throw new Error("Photo Library unavailable");
     openTab({ id: `search:${value.toLocaleLowerCase()}`, kind: "search-photos", title: `Search: ${value}`, query: value });
+    setRecentSearches((current) => {
+      const next = addRecentSearch(
+        current,
+        value,
+        generalSettings.recent_searches_limit,
+      );
+      saveRecentSearches(next);
+      return next;
+    });
     setSearchOpen(false);
-    setSuggestionIndex(-1);
+  }
+
+  function deleteRecentSearch(query: string) {
+    setRecentSearches((current) => {
+      const next = removeRecentSearch(current, query);
+      saveRecentSearches(next);
+      return next;
+    });
+  }
+
+  function clearRecentSearches() {
+    setRecentSearches([]);
+    saveRecentSearches([]);
+  }
+
+  function openGlobalSearch() {
+    if (tabs.length === 0) {
+      setSearchOpen(false);
+      window.requestAnimationFrame(() => emptySearchInputRef.current?.focus());
+      return;
+    }
+    setSearchOpen(true);
   }
 
   function resetPhotoWorkspace(message: string) {
+    const statusTargetId = active !== null && !photoTabKinds.has(active.kind)
+      ? active.id
+      : initialTab.id;
     setTabs((current) => {
       const remaining = current.filter((tab) => !photoTabKinds.has(tab.kind));
       current.filter((tab) => photoTabKinds.has(tab.kind)).forEach((tab) => viewStateStores.current.delete(tab.id));
-      if (remaining.length === 0 || photoTabKinds.has(active?.kind)) {
+      if (remaining.length === 0 || (active !== null && photoTabKinds.has(active.kind))) {
         const folders = { ...initialTab };
         setActiveId(folders.id);
         return [...remaining, folders];
@@ -289,74 +444,90 @@ export function DesktopShell() {
       return remaining;
     });
     setSearchOpen(false);
-    setSearchQuery("");
-    setSuggestions([]);
-    setStatus(message);
+    reportTabStatus(statusTargetId, message);
   }
 
   async function reloadLibraries() {
-    setWorkspaceLoading(true);
     try {
       setLibraries(await listPhotoLibraries());
     } catch (nextError) {
-      setStatus(String(nextError));
-    } finally {
-      setWorkspaceLoading(false);
+      reportActiveStatus(String(nextError));
     }
   }
 
   async function createLibrary() {
     const selected = await selectPhotoDirectory();
     if (!selected) return;
-    await openPhotoLibrary(selected);
-    await reloadLibraries();
-    setLibraryMenuOpen(false);
-    resetPhotoWorkspace("Photo Library opened");
-  }
-
-  async function selectLibrary(library: PhotoLibraryWorkspace) {
-    if (library.active) {
-      setLibraryMenuOpen(false);
-      return;
-    }
-    if (!library.root_available || !library.database_available) {
-      setLibraryMenuOpen(false);
-      setStatus(`${library.display_name} is unavailable; rebind it in Settings`);
-      openModule("settings", "Settings");
-      return;
-    }
     try {
-      await switchPhotoLibrary(library.library_uuid);
+      await openPhotoLibrary(selected);
       await reloadLibraries();
-      setLibraryMenuOpen(false);
-      resetPhotoWorkspace(`Opened ${library.display_name}`);
+      resetPhotoWorkspace("Photo Library opened");
     } catch (nextError) {
-      setStatus(String(nextError));
-      await reloadLibraries();
+      reportActiveStatus(String(nextError));
     }
   }
 
-  function resetTaxonomyResources() {
-    setTabs((current) => {
-      current.filter((tab) => dependsOnReplacedTaxonomy(tab.kind)).forEach((tab) => viewStateStores.current.delete(tab.id));
-      const remaining = retainTabsAfterTaxonomyReplacement(current);
-      if (remaining.every((tab) => tab.id !== activeId)) {
-        setActiveId(remaining[0]?.id ?? initialTab.id);
-      }
-      return remaining.length > 0 ? remaining : [{ ...initialTab }];
-    });
-    emitPhotoMutation({ photoId: null, kind: "mapping" });
-    setStatus("Taxonomy database replaced successfully. Photo mappings are being rebuilt in the background.");
+  async function openExistingTaxonomyDatabase() {
+    try {
+      const locations = await getDatabaseLocations();
+      const selected = await selectSqliteDatabase(locations.default_taxonomy_directory);
+      if (!selected) return;
+      await openTaxonomyDatabase(selected);
+      resetTaxonomyResources("Taxonomy Database opened. Photo mappings are being rebuilt in the background.");
+    } catch (nextError) {
+      reportActiveStatus(String(nextError));
+    }
   }
+
+  function closeAllTabs() {
+    const next = closeAllTabsState<AppTab>();
+    viewStateStores.current.clear();
+    setTabStatuses({});
+    setTabs(next.tabs);
+    focusTab(next.activeId);
+    setOperationsOpen(false);
+    setAboutOpen(false);
+    setSearchOpen(false);
+  }
+
+  function resetTaxonomyResources(message = "Taxonomy database replaced successfully. Photo mappings are being rebuilt in the background.") {
+    tabs.filter((tab) => dependsOnReplacedTaxonomy(tab.kind))
+      .forEach((tab) => viewStateStores.current.delete(tab.id));
+    const remaining = retainTabsAfterTaxonomyReplacement(tabs);
+    const nextTabs = remaining.length > 0 ? remaining : [{ ...initialTab }];
+    const nextActiveId = nextTabs.some((tab) => tab.id === activeId)
+      ? activeId
+      : nextTabs[0]?.id ?? null;
+    setTabs(nextTabs);
+    if (nextActiveId !== activeId) setActiveId(nextActiveId);
+    emitPhotoMutation({ photoId: null, kind: "mapping" });
+    if (nextActiveId !== null) reportTabStatus(nextActiveId, message);
+  }
+
+  useNativeMenu((action) => {
+    if (action === nativeMenuActions.aboutVividarium) {
+      setSearchOpen(false);
+      setAboutOpen(true);
+    }
+    if (action === nativeMenuActions.openPhotoLibrary) void createLibrary();
+    if (action === nativeMenuActions.managePhotoLibraries) {
+      openTab({ id: "settings", kind: "settings", title: "Settings", settingsSection: "Photo Libraries" }, true);
+    }
+    if (action === nativeMenuActions.openTaxonomyDatabase) void openExistingTaxonomyDatabase();
+    if (action === nativeMenuActions.manageTaxonomyDatabases) {
+      openTab({ id: "settings", kind: "settings", title: "Settings", settingsSection: "Taxonomy Databases" }, true);
+    }
+    if (action === nativeMenuActions.closeAllTabs) closeAllTabs();
+  });
 
   return (
     <div className="desktop-shell">
       <aside className="activity-bar">
-        <ActivityButton buttonRef={searchToggleRef} icon={Search} label="Search photos" active={searchOpen} disabled={!workspaceAvailable} onClick={() => setSearchOpen((current) => !current)} />
+        <ActivityButton icon={Search} label="Search photos" active={searchOpen || active === null} onClick={openGlobalSearch} />
         <div className="activity-divider" />
         {photoItems.map(([kind, label, icon]) => <ActivityButton key={kind} icon={icon} label={label} active={active?.kind === kind} disabled={!workspaceAvailable} onClick={() => openModule(kind, label)} />)}
         <div className="activity-divider" />
-        <ActivityButton icon={ArrowRightLeft} label="Mapping" active={active?.kind === "mapping"} disabled={!workspaceAvailable} onClick={() => openModule("mapping", "Mapping")} />
+        <ActivityButton icon={ArrowDownUp} label="Mapping" active={active?.kind === "mapping"} disabled={!workspaceAvailable} onClick={() => openModule("mapping", "Mapping")} />
         <div className="activity-divider" />
         {taxonomyItems.map(([kind, label, icon]) => <ActivityButton key={kind} icon={icon} label={label} active={active?.kind === kind} onClick={() => openModule(kind, label)} />)}
         <div className="activity-spacer" />
@@ -365,143 +536,58 @@ export function DesktopShell() {
       <div className="desktop-main">
         <header className="app-topbar">
           <div className="toolbar-navigation">
-            <button type="button" title="Go Back" disabled={!backTarget} onClick={() => navigate(-1)}><ArrowLeft size={14} /></button>
-            <button type="button" title="Go Forward" disabled={!forwardTarget} onClick={() => navigate(1)}><ArrowRight size={14} /></button>
+            <IconButton aria-label="Go Back" title="Go Back" disabled={!backTarget} onClick={() => navigate(-1)}><ArrowLeft size={14} /></IconButton>
+            <IconButton aria-label="Go Forward" title="Go Forward" disabled={!forwardTarget} onClick={() => navigate(1)}><ArrowRight size={14} /></IconButton>
           </div>
-          <div className="library-selector">
-            <button
-              className={`library-selector-button${workspaceAvailable ? "" : " unavailable"}`}
-              type="button"
-              onClick={() => setLibraryMenuOpen((current) => !current)}
-              title={activeLibrary?.root_path ?? "Select a Photo Library"}
-            >
-              <Database size={14} />
-              <span>{workspaceLoading ? "Loading libraries" : activeLibrary?.display_name ?? "No Photo Library"}</span>
-              <ChevronDown size={13} />
-            </button>
-            {libraryMenuOpen && (
-              <div className="toolbar-popover library-popover">
-                <strong>Photo Libraries</strong>
-                {libraries.length === 0 && <span>No registered libraries</span>}
-                {libraries.map((library) => (
-                  <button
-                    className={library.active ? "active" : ""}
-                    type="button"
-                    key={library.library_uuid}
-                    onClick={() => void selectLibrary(library)}
-                  >
-                    <i className={library.root_available && library.database_available ? "available" : "unavailable"} />
-                      <span><b>{library.display_name}</b><small>{library.root_path}</small></span>
-                      <em>{photoLibraryAvailabilityLabel(library)}</em>
-                  </button>
-                ))}
-                <button className="popover-action" type="button" onClick={() => void createLibrary()}><Plus size={13} />Create or open library</button>
-                <button className="popover-action" type="button" onClick={() => {
-                  setLibraryMenuOpen(false);
-                  openModule("settings", "Settings");
-                }}><Settings size={13} />Manage libraries</button>
-              </div>
-            )}
-          </div>
-          <div className="tab-strip">
-            {tabs.map((tab) => (
-              <button className={`app-tab${tab.id === activeId ? " active" : ""}`} type="button" key={tab.id} onClick={() => focusTab(tab.id)}>
-                <span>{tab.title}</span>
-                <i role="button" tabIndex={0} onClick={(event) => {
-                  event.stopPropagation();
-                  closeTab(tab.id);
-                }}><X size={12} /></i>
-              </button>
-            ))}
-          </div>
-          <div className="toolbar-actions">
-            <button className={runningOperations.length > 0 ? "running" : ""} type="button" title="Background operations" onClick={() => setOperationsOpen((current) => !current)}>
-              <Activity size={15} /><span>{runningOperations.length}</span>
-            </button>
-            <button type="button" title="More actions" onClick={() => setMoreOpen((current) => !current)}><MoreHorizontal size={16} /></button>
-            {operationsOpen && (
-              <div className="toolbar-popover operations-popover">
-                <strong>Background operations</strong>
-                {Object.values(operations).length === 0 && <span>No operations</span>}
-                {Object.values(operations).map((operation) => (
-                  <div key={operation.module}>
-                    <b>{operation.module}</b>
-                    <span>{operation.message}</span>
-                    {operation.running && <progress value={operation.processed} max={operation.total ?? undefined} />}
-                    {operation.error && <small>{operation.error}</small>}
-                  </div>
-                ))}
-              </div>
-            )}
-            {moreOpen && (
-              <div className="toolbar-popover more-popover">
-                <button type="button" onClick={() => {
-                  setMoreOpen(false);
-                  openModule("settings", "Settings");
-                }}><Settings size={13} />Settings</button>
-                <button type="button" onClick={() => {
-                  setMoreOpen(false);
-                  void reloadLibraries();
-                }}><Database size={13} />Refresh libraries</button>
-              </div>
-            )}
-          </div>
-          {searchOpen && (
-            <div className="global-search" ref={searchRef}>
-              <label><Search size={15} /><input
-                autoFocus
-                role="combobox"
-                aria-autocomplete="list"
-                aria-expanded={suggestions.length > 0}
-                aria-activedescendant={suggestionIndex >= 0 ? `photo-suggestion-${suggestionIndex}` : undefined}
-                value={searchQuery}
-                onChange={(event) => {
-                  setSearchQuery(event.target.value);
-                  setSuggestionIndex(-1);
-                }}
-                onKeyDown={(event) => {
-                  if (suggestions.length > 0 && event.key === "ArrowDown") {
-                    event.preventDefault();
-                    setSuggestionIndex((current) => current < suggestions.length - 1 ? current + 1 : 0);
-                    return;
-                  }
-                  if (suggestions.length > 0 && event.key === "ArrowUp") {
-                    event.preventDefault();
-                    setSuggestionIndex((current) => current > 0 ? current - 1 : suggestions.length - 1);
-                    return;
-                  }
-                  if (suggestions.length > 0 && event.key === "ArrowRight" && suggestionIndex >= 0) {
-                    event.preventDefault();
-                    setSearchQuery(suggestionLabel(suggestions[suggestionIndex], searchQuery));
-                    return;
-                  }
-                  if (event.key === "Enter") {
-                    submitSearch(suggestionIndex >= 0
-                      ? suggestionLabel(suggestions[suggestionIndex], searchQuery)
-                      : searchQuery);
-                  }
-                  if (event.key === "Escape") setSearchOpen(false);
-                }}
-                placeholder="Search filenames and photo taxonomy"
-              /></label>
-              {suggestions.length > 0 && <div className="suggestions" role="listbox">{suggestions.map((item, index) => (
-                <button
-                  className={index === suggestionIndex ? "active" : ""}
-                  id={`photo-suggestion-${index}`}
-                  role="option"
-                  aria-selected={index === suggestionIndex}
-                  type="button"
-                  key={item.taxon_id}
-                  onMouseEnter={() => setSuggestionIndex(index)}
-                  onClick={() => submitSearch(suggestionLabel(item, searchQuery))}
+          <div className="tab-strip" role="tablist" aria-label="Open tabs">
+            {tabs.map((tab) => {
+              const name = getTabName(tab);
+              const TabIcon = tabIcons[tab.kind];
+              return (
+                <div
+                  aria-selected={tab.id === activeId}
+                  className={`app-tab${tab.id === activeId ? " active" : ""}`}
+                  key={tab.id}
+                  role="tab"
+                  tabIndex={0}
+                  title={name}
+                  onClick={() => focusTab(tab.id)}
+                  onKeyDown={(event) => {
+                    if (event.target !== event.currentTarget) return;
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      focusTab(tab.id);
+                    }
+                  }}
                 >
-                  <strong>{item.names.sci_name ?? `Taxon ${item.taxon_id}`}</strong><span>{item.rank} / {item.names.zh_name ?? item.names.en_name ?? ""}</span>
-                </button>
-              ))}</div>}
-            </div>
-          )}
+                  <TabIcon aria-hidden="true" className="app-tab-icon" size={14} strokeWidth={1.8} />
+                  <span className="app-tab-title">{name}</span>
+                  <IconButton
+                    aria-label={`Close ${name}`}
+                    className="app-tab-close"
+                    size="small"
+                    title={`Close ${name}`}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      closeTab(tab.id);
+                    }}
+                  ><X size={12} /></IconButton>
+                </div>
+              );
+            })}
+          </div>
         </header>
         <main className="tab-content">
+          {workspaceReady && tabs.length === 0 && (
+            <EmptyWorkspace
+              inputRef={emptySearchInputRef}
+              recentSearches={recentSearches}
+              suggestionsEnabled={workspaceAvailable}
+              onSubmit={submitSearch}
+              onRemoveRecent={deleteRecentSearch}
+              onClearRecent={clearRecentSearches}
+            />
+          )}
           {tabs.map((tab) => {
             const isActive = tab.id === activeId;
             if (!isActive && !keepAliveTabKinds.has(tab.kind)) return null;
@@ -521,9 +607,10 @@ export function DesktopShell() {
                     active={isActive}
                     tab={tab}
                     handlers={handlers}
-                    onStatus={setStatus}
+                    onTabStatus={reportTabStatus}
                     openTab={openTab}
                     updateTaxonTab={updateTaxonTab}
+                    updateSettingsTab={updateSettingsTab}
                     workspaceAvailable={workspaceAvailable}
                     activeLibrary={activeLibrary}
                     taxonomyMutationLocked={taxonomyMutationLocked}
@@ -532,15 +619,51 @@ export function DesktopShell() {
                       void reloadLibraries();
                       if (resetPhotoTabs) resetPhotoWorkspace("Photo Library workspace changed");
                     }}
-                    onBaseReplaced={resetTaxonomyResources}
+                    onTaxonomyImported={resetTaxonomyResources}
+                    generalSettings={generalSettings}
+                    generalSettingsLoadError={generalSettingsLoadError}
+                    onGeneralSettingsChange={onGeneralSettingsChange}
                   />
                 </ViewStateProvider>
               </section>
             );
           })}
         </main>
-        <footer className="status-bar"><span className="status-dot" />{status}<span>{active?.title}</span></footer>
+        <footer className="status-bar">
+          <span className="status-dot" />
+          {status}
+          <span className="status-title">{active?.title ?? ""}</span>
+          <div className="status-operations" ref={operationsMenuRef}>
+            <IconButton aria-label="Background operations" className={runningOperations.length > 0 ? "running" : ""} title="Background operations" onClick={() => {
+              setOperationsOpen((current) => !current);
+            }}>
+              <Activity size={12} /><span>{runningOperations.length}</span>
+            </IconButton>
+            {operationsOpen && (
+              <div className="toolbar-popover operations-popover">
+                <strong>Background operations</strong>
+                {Object.values(operations).length === 0 && <span>No operations</span>}
+                {Object.values(operations).map((operation) => (
+                  <div key={operation.module}>
+                    <b>{operation.module}</b>
+                    <span>{operation.message}</span>
+                    {operation.running && <progress value={operation.processed} max={operation.total ?? undefined} />}
+                    {operation.error && <small>{operation.error}</small>}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </footer>
       </div>
+      {searchOpen && active !== null && (
+        <GlobalSearchOverlay
+          suggestionsEnabled={workspaceAvailable}
+          onClose={() => setSearchOpen(false)}
+          onSubmit={submitSearch}
+        />
+      )}
+      {aboutOpen && <NativeAboutOverlay onClose={() => setAboutOpen(false)} />}
     </div>
   );
 }
@@ -549,29 +672,41 @@ function TabBody({
   active,
   tab,
   handlers,
-  onStatus,
+  onTabStatus,
   openTab,
   updateTaxonTab,
+  updateSettingsTab,
   workspaceAvailable,
   activeLibrary,
   taxonomyMutationLocked,
   onCreateLibrary,
   onWorkspaceChanged,
-  onBaseReplaced,
+  onTaxonomyImported,
+  generalSettings,
+  generalSettingsLoadError,
+  onGeneralSettingsChange,
 }: {
   active: boolean;
   tab: AppTab;
   handlers: PhotoOpenHandlers;
-  onStatus: (message: string, busy?: boolean) => void;
+  onTabStatus: (tabId: string, message: string, busy?: boolean) => void;
   openTab: (tab: AppTab, singleton?: boolean) => void;
   updateTaxonTab: (id: string, taxonId: number, title: string) => void;
+  updateSettingsTab: (id: string, section: SettingsSection) => void;
   workspaceAvailable: boolean;
   activeLibrary: PhotoLibraryWorkspace | null;
   taxonomyMutationLocked: boolean;
   onCreateLibrary: () => void;
   onWorkspaceChanged: (resetPhotoTabs: boolean) => void;
-  onBaseReplaced: () => void;
+  onTaxonomyImported: () => void;
+  generalSettings: GeneralSettings;
+  generalSettingsLoadError?: string;
+  onGeneralSettingsChange: (settings: GeneralSettings) => void;
 }) {
+  const onStatus = useCallback(
+    (message: string, busy?: boolean) => onTabStatus(tab.id, message, busy),
+    [onTabStatus, tab.id],
+  );
   if (photoTabKinds.has(tab.kind) && !workspaceAvailable) {
     return (
       <EmptyState
@@ -582,36 +717,29 @@ function TabBody({
         icon={Database}
         action={(
           <div className="empty-state-actions">
-            {!activeLibrary && <button className="primary-button" type="button" onClick={onCreateLibrary}>Create or open</button>}
-            <button className="secondary-button" type="button" onClick={() => openTab({ id: "settings", kind: "settings", title: "Settings" }, true)}>Manage libraries</button>
+            {!activeLibrary && <Button variant="primary" onClick={onCreateLibrary}>Create or open</Button>}
+            <Button onClick={() => openTab({ id: "settings", kind: "settings", title: "Settings", settingsSection: "Photo Libraries" }, true)}>Manage libraries</Button>
           </div>
         )}
       />
     );
   }
   if (tab.kind === "folders") return <FolderPhotosView handlers={handlers} onStatus={onStatus} />;
-  if (tab.kind === "photo-taxonomy") return <TaxonPhotosView handlers={handlers} />;
+  if (tab.kind === "photo-taxonomy") return <TaxonPhotosView handlers={handlers} nameParts={generalSettings.taxon_tree_name_parts} />;
   if (tab.kind === "map") return <PhotoMapView active={active} handlers={handlers} />;
   if (tab.kind === "photo-history") return <OperationHistoryView domain="photo" onStatus={onStatus} />;
   if (tab.kind === "mapping") return <MappingView active={active} onStatus={onStatus} handlers={handlers} />;
-  if (tab.kind === "taxonomy-search") return <TaxonomySearchView onOpenPhotos={(taxonId, label) => openTab({ id: `taxon-photos:${taxonId}`, kind: "taxon-photos", title: label, taxonId })} />;
-  if (tab.kind === "taxon-detail") return <TaxonomySearchView taxonId={tab.taxonId} onTaxonChange={(taxonId, label) => updateTaxonTab(tab.id, taxonId, label)} onOpenPhotos={(taxonId, label) => openTab({ id: `taxon-photos:${taxonId}`, kind: "taxon-photos", title: label, taxonId })} />;
-  if (tab.kind === "formatted-update") return <FormattedUpdateView mutationDisabled={taxonomyMutationLocked} />;
+  if (tab.kind === "taxonomy-search") return <TaxonomySearchView mutationDisabled={taxonomyMutationLocked} onOpenPhotos={(taxonId, label) => openTab({ id: `taxon-photos:${taxonId}`, kind: "taxon-photos", title: label, taxonId })} />;
+  if (tab.kind === "taxon-detail" && tab.taxonId !== undefined) return <TaxonomyHierarchyPage initialTaxonId={tab.taxonId} mutationDisabled={taxonomyMutationLocked} onTaxonChange={(taxonId, label) => updateTaxonTab(tab.id, taxonId, label)} onOpenPhotos={(taxonId, label) => openTab({ id: `taxon-photos:${taxonId}`, kind: "taxon-photos", title: label, taxonId })} />;
+  if (tab.kind === "formatted-update") return <FormattedUpdateView onStatus={onStatus} mutationDisabled={taxonomyMutationLocked} />;
   if (tab.kind === "custom-sql") return <CustomSqlView onStatus={onStatus} mutationDisabled={taxonomyMutationLocked} />;
   if (tab.kind === "taxonomy-history") return <OperationHistoryView domain="taxonomy" onStatus={onStatus} />;
-  if (tab.kind === "settings") return <SettingsView onBaseReplaced={onBaseReplaced} onWorkspaceChanged={onWorkspaceChanged} />;
-  if (tab.kind === "photo-detail" && tab.photo) return <PhotoDetailView photo={tab.photo} />;
-  if (tab.kind === "mapping-editor" && tab.photo) return <MappingEditor photo={tab.photo} />;
-  if (tab.kind === "search-photos" && tab.query) return <PhotoSet query={tab.query} handlers={handlers} />;
+  if (tab.kind === "settings") return <SettingsView section={tab.settingsSection ?? "General"} onSectionChange={(section) => updateSettingsTab(tab.id, section)} onTaxonomyImported={onTaxonomyImported} onWorkspaceChanged={onWorkspaceChanged} generalSettings={generalSettings} generalSettingsLoadError={generalSettingsLoadError} onGeneralSettingsChange={onGeneralSettingsChange} />;
+  if (tab.kind === "photo-detail" && tab.photo) return <PhotoDetailView photo={tab.photo} handlers={handlers} />;
+  if (tab.kind === "mapping-editor" && tab.photo) return <MappingEditor photo={tab.photo} onOpenTaxon={handlers.openTaxon} />;
+  if (tab.kind === "search-photos" && tab.query) return <PhotoSet query={tab.query} refreshKey={tab.refreshKey} handlers={handlers} />;
   if (tab.kind === "taxon-photos" && tab.taxonId !== undefined) return <PhotoSet taxonId={tab.taxonId} handlers={handlers} />;
   return null;
-}
-
-function suggestionLabel(suggestion: TaxonSuggestion, fallback: string) {
-  return suggestion.names.sci_name
-    ?? suggestion.names.zh_name
-    ?? suggestion.names.en_name
-    ?? fallback;
 }
 
 function ActivityButton({
@@ -619,15 +747,13 @@ function ActivityButton({
   label,
   active,
   onClick,
-  buttonRef,
   disabled = false,
 }: {
   icon: IconComponent;
   label: string;
   active: boolean;
   onClick: () => void;
-  buttonRef?: RefObject<HTMLButtonElement>;
   disabled?: boolean;
 }) {
-  return <button ref={buttonRef} className={`activity-button${active ? " active" : ""}`} type="button" title={label} aria-label={label} disabled={disabled} onClick={onClick}><Icon size={19} /></button>;
+  return <IconButton className={`activity-button${active ? " active" : ""}`} title={label} aria-label={label} disabled={disabled} onClick={onClick}><Icon size={19} /></IconButton>;
 }

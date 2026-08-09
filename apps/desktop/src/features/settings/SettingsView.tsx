@@ -1,31 +1,37 @@
 import {
   ArrowDown,
   ArrowUp,
-  Beaker,
+  BugPlay,
   CaseSensitive,
+  ChevronDown,
+  ChevronRight,
   Database,
   FolderCog,
+  FolderInput,
+  FolderOpen,
   Info,
   Library,
-  MapPinned,
+  Map,
   Move,
   Pencil,
+  Plug,
   RefreshCcw,
   Save,
   SlidersHorizontal,
   Trash2,
   type LucideIcon,
 } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 import {
-  checkAppUpdate,
-  getAppVersion,
-  installAppUpdate,
-} from "../../api/updater";
+  updateGeneralSettings,
+  type GeneralSettings as GeneralSettingsValue,
+  type WorkspaceSettingsSection,
+} from "../../api/general";
 import { errorMessage } from "../../api/common";
 import {
   getDatabaseLocations,
   listPhotoLibraries,
+  openPathInFileManager,
   photoLibraryAvailabilityLabel,
   rebindPhotoLibraryDatabase,
   rebindPhotoLibraryRoot,
@@ -40,8 +46,10 @@ import {
   type DatabaseLocations,
   type PhotoLibraryWorkspace,
 } from "../../api/storage";
-import { getPhotoLibrary, getPhotoLibraryCount } from "../../api/photos";
 import { getMapSettings, setMapSettings, type MapSettings } from "../../api/map";
+import { startPhotoMapping } from "../../api/mapping";
+import { waitForOperation } from "../../api/tasks";
+import { getTaxonomyImportMetadata, type TaxonomyImportMetadata } from "../../api/taxonomyImport";
 import {
   getNamingHookSettings,
   getNamingHookTemplates,
@@ -49,10 +57,11 @@ import {
   getPhotoFilenameFormatSettings,
   getPhotoNameMatchSettings,
   getTaxonomyNameSeparator,
+  runNamingHookTests,
+  saveNamingHook,
   setPhotoFilenameFormatSettings,
   setPhotoNameMatchSettings,
   setTaxonomyNameSeparator,
-  testAndSaveNamingHook,
   type NamingHookKind,
   type NamingHookTestCase,
   type NamingHookTestReport,
@@ -61,143 +70,358 @@ import {
   type PhotoNameField,
 } from "../../api/settings";
 import { selectDatabaseDestination, selectPhotoDirectory, selectSqliteDatabase } from "../../api/dialogs";
-import { SectionHeader, Segmented, VirtualList } from "../../shared/ui";
+import { Button, IconButton, SectionHeader } from "../../shared/ui";
 import { CodeEditor } from "../../shared/CodeEditor";
-import { BaseImportSettings } from "../taxonomy/BaseImportSettings";
+import { ResizablePanels } from "../../shared/ResizablePanels";
+import { SqlImportSettings } from "../taxonomy/SqlImportSettings";
+import { DirectImportSettings } from "../taxonomy/DirectImportSettings";
+import { AboutSettings } from "./AboutSettings";
+import { emitPhotoMutation } from "../photos/photoMutations";
 import { emitMetadataChange } from "../../shared/metadataChanges";
+import {
+  defaultPhotoFilenameFormatSettings,
+  normalizePhotoFilenameFormatSettings,
+  photoFilenameFormatChanged,
+  photoFilenameFormatFields,
+  photoNamePriorityChanged,
+  photoNamePriorityFields,
+  photoNamePriorityLabels,
+} from "./namingSettings";
 
-type SettingsSection =
-  | "General"
-  | "Storage"
-  | "Photo Libraries"
-  | "Naming"
-  | "Map"
-  | "Hooks"
-  | "Base Import"
-  | "About";
+export type SettingsSection = WorkspaceSettingsSection;
 
 const settingsSections: Array<{
   id: SettingsSection;
   icon: LucideIcon;
 }> = [
   { id: "General", icon: SlidersHorizontal },
-  { id: "Storage", icon: Database },
+  { id: "Storage", icon: FolderCog },
   { id: "Photo Libraries", icon: Library },
+  { id: "Taxonomy Databases", icon: Database },
   { id: "Naming", icon: CaseSensitive },
-  { id: "Map", icon: MapPinned },
-  { id: "Hooks", icon: Beaker },
-  { id: "Base Import", icon: FolderCog },
-  { id: "About", icon: Info },
+  { id: "Map", icon: Map },
 ];
 
 export function SettingsView({
-  onBaseReplaced,
+  onTaxonomyImported,
+  onSectionChange,
   onWorkspaceChanged,
+  generalSettings,
+  generalSettingsLoadError,
+  onGeneralSettingsChange,
+  section,
 }: {
-  onBaseReplaced?: () => void;
+  generalSettings: GeneralSettingsValue;
+  generalSettingsLoadError?: string;
+  onGeneralSettingsChange: (settings: GeneralSettingsValue) => void;
+  onTaxonomyImported?: () => void;
+  onSectionChange: (section: SettingsSection) => void;
   onWorkspaceChanged?: (resetPhotoTabs: boolean) => void;
+  section: SettingsSection;
 }) {
-  const [section, setSection] = useState<SettingsSection>("General");
+  const hookSection = section === "Filename Parser" || section === "Synonym Splitter";
+  const taxonomyDatabaseSection = section === "Taxonomy Databases"
+    || section === "SQL Import"
+    || section === "Direct Import";
+  const [hooksExpanded, setHooksExpanded] = useState(hookSection);
+  const [taxonomyDatabasesExpanded, setTaxonomyDatabasesExpanded] = useState(taxonomyDatabaseSection);
+
+  useEffect(() => {
+    if (hookSection) setHooksExpanded(true);
+  }, [hookSection]);
+
+  useEffect(() => {
+    if (taxonomyDatabaseSection) setTaxonomyDatabasesExpanded(true);
+  }, [taxonomyDatabaseSection]);
+
   return (
-    <div className="settings-workbench">
-      <aside className="settings-nav">
-        {settingsSections.map(({ id, icon: Icon }) => (
-          <button className={section === id ? "active" : ""} type="button" key={id} onClick={() => setSection(id)}>
+    <ResizablePanels
+      className="settings-workbench"
+      initialSize={220}
+      minFirst={210}
+      minSecond={420}
+      separatorLabel="Resize Settings navigation"
+      stateKey="settings.navigation"
+      first={(<aside className="settings-nav">
+        {settingsSections.map(({ id, icon: Icon }) => id === "Taxonomy Databases" ? (
+          <Fragment key={id}>
+            <button className={taxonomyDatabaseSection ? "active" : ""} type="button" onClick={() => setTaxonomyDatabasesExpanded((current) => !current)}>
+              <Icon size={14} />{id}
+              {taxonomyDatabasesExpanded ? <ChevronDown className="settings-nav-chevron" size={13} /> : <ChevronRight className="settings-nav-chevron" size={13} />}
+            </button>
+            {taxonomyDatabasesExpanded && (
+              <div className="settings-subnav">
+                {(["SQL Import", "Direct Import"] as const).map((id) => {
+                  const active = section === id || (id === "SQL Import" && section === "Taxonomy Databases");
+                  return (
+                    <button className={active ? "active" : ""} type="button" key={id} onClick={() => onSectionChange(id)}>
+                      {id}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </Fragment>
+        ) : (
+          <button className={section === id ? "active" : ""} type="button" key={id} onClick={() => onSectionChange(id)}>
             <Icon size={14} />{id}
           </button>
         ))}
-      </aside>
-      <main className="settings-content">
-        {section === "General" && <GeneralSettings />}
+        <button className={hookSection ? "active" : ""} type="button" onClick={() => setHooksExpanded((current) => !current)}>
+          <Plug size={14} />Hooks
+          {hooksExpanded ? <ChevronDown className="settings-nav-chevron" size={13} /> : <ChevronRight className="settings-nav-chevron" size={13} />}
+        </button>
+        {hooksExpanded && (
+          <div className="settings-subnav">
+            {(["Filename Parser", "Synonym Splitter"] as const).map((id) => (
+              <button className={section === id ? "active" : ""} type="button" key={id} onClick={() => onSectionChange(id)}>
+                {id}<span className="settings-language-badge">Rhai</span>
+              </button>
+            ))}
+          </div>
+        )}
+        <button className={section === "About" ? "active" : ""} type="button" onClick={() => onSectionChange("About")}>
+          <Info size={14} />About
+        </button>
+      </aside>)}
+      second={(<main className="settings-content">
+        {section === "General" && (
+          <GeneralSettings
+            settings={generalSettings}
+            loadError={generalSettingsLoadError}
+            onChange={onGeneralSettingsChange}
+          />
+        )}
         {section === "Storage" && <StorageSettings />}
         {section === "Photo Libraries" && <PhotoLibrariesSettings onChanged={onWorkspaceChanged} />}
+        {(section === "Taxonomy Databases" || section === "SQL Import") && <SqlImportSettings onApplied={onTaxonomyImported} />}
+        {section === "Direct Import" && <DirectImportSettings onApplied={onTaxonomyImported} />}
         {section === "Naming" && <NamingSettings />}
         {section === "Map" && <MapSettingsPanel />}
-        {section === "Hooks" && <HooksSettings />}
-        {section === "Base Import" && <BaseImportSettings onApplied={onBaseReplaced} />}
+        {hookSection && <HooksSettings kind={section === "Filename Parser" ? "photo_filename" : "synonym_authority"} />}
         {section === "About" && <AboutSettings />}
-      </main>
-    </div>
+      </main>)}
+    />
   );
 }
 
-function GeneralSettings() {
-  const [root, setRoot] = useState("Loading");
-  const [count, setCount] = useState(0);
-  const [version, setVersion] = useState("3.0.0");
-  const [updateMessage, setUpdateMessage] = useState("");
-  const [updateAvailable, setUpdateAvailable] = useState(false);
+function GeneralSettings({
+  settings,
+  loadError = "",
+  onChange,
+}: {
+  settings: GeneralSettingsValue;
+  loadError?: string;
+  onChange: (settings: GeneralSettingsValue) => void;
+}) {
+  const [message, setMessage] = useState(loadError);
+  const [saving, setSaving] = useState(false);
+  const saveSequence = useRef(0);
+
   useEffect(() => {
-    void getAppVersion().then(setVersion);
-    void getPhotoLibrary()
-      .then((library) => setRoot(library?.root_path ?? "Not configured"))
-      .catch(() => setRoot("Active library unavailable"));
-    void getPhotoLibraryCount().then(setCount).catch(() => setCount(0));
-  }, []);
+    if (loadError) setMessage(loadError);
+  }, [loadError]);
 
-  async function checkUpdate() {
+  async function change(next: GeneralSettingsValue) {
+    const previous = settings;
+    const sequence = ++saveSequence.current;
+    onChange(next);
+    setSaving(true);
+    setMessage("");
     try {
-      setUpdateMessage("Checking GitHub Releases");
-      const update = await checkAppUpdate();
-      setUpdateAvailable(Boolean(update));
-      setUpdateMessage(update ? `Version ${update.version} is available` : "Vividarium is up to date");
+      const saved = await updateGeneralSettings(next);
+      if (sequence === saveSequence.current) {
+        onChange(saved);
+        if (previous.csv_delimiter !== saved.csv_delimiter) {
+          emitMetadataChange({ key: "csv_delimiter", value: saved.csv_delimiter });
+        }
+        setMessage("");
+      }
     } catch (nextError) {
-      setUpdateMessage(errorMessage(nextError));
+      if (sequence === saveSequence.current) {
+        onChange(previous);
+        setMessage(errorMessage(nextError));
+      }
+    } finally {
+      if (sequence === saveSequence.current) setSaving(false);
     }
   }
 
-  async function installUpdate() {
-    try {
-      await installAppUpdate((event) => {
-        if (event.event === "progress") setUpdateMessage(`Downloaded ${event.data.downloaded} bytes`);
-        if (event.event === "finished") setUpdateMessage("Installing and restarting");
-      });
-    } catch (nextError) {
-      setUpdateMessage(errorMessage(nextError));
-    }
+  function changeTaxonTreeNamePart(
+    key: keyof GeneralSettingsValue["taxon_tree_name_parts"],
+    checked: boolean,
+  ) {
+    const next = {
+      ...settings.taxon_tree_name_parts,
+      [key]: checked,
+    };
+    if (!next.sci_name && !next.zh_name && !next.en_name) return;
+    void change({ ...settings, taxon_tree_name_parts: next });
   }
+
+  const visibleTaxonTreeNameCount = Object.values(settings.taxon_tree_name_parts)
+    .filter(Boolean).length;
+
   return (
     <div className="settings-section">
-      <SectionHeader title="General" detail="Workspace metadata" />
-      <Setting label="Product" value="Vividarium" />
-      <Setting label="Software version" value={version} />
-      <Setting label="Photo root" value={root} />
-      <Setting label="Indexed photos" value={String(count)} />
-      <Setting label="Database schema" value="2" />
-      <div className="update-row">
-        <div><strong>Software update</strong><span>{updateMessage || "Updates are delivered from GitHub Releases."}</span></div>
-        {updateAvailable ? <button className="primary-button" type="button" onClick={() => void installUpdate()}>Install and restart</button> : <button className="secondary-button" type="button" onClick={() => void checkUpdate()}>Check for updates</button>}
-      </div>
+      <SectionHeader title="General" detail="Configure application-wide settings." />
+      <section className="settings-group" aria-labelledby="general-appearance-heading">
+        <h3 id="general-appearance-heading">Appearance</h3>
+        <label className="general-setting-row">
+          <span><strong>Theme</strong><small>Choose the application color scheme.</small></span>
+          <select
+            aria-label="Theme"
+            disabled={saving}
+            value={settings.theme}
+            onChange={(event) => void change({
+              ...settings,
+              theme: event.target.value as GeneralSettingsValue["theme"],
+            })}
+          >
+            <option value="system">System</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+          </select>
+        </label>
+      </section>
+      <section className="settings-group" aria-labelledby="general-startup-heading">
+        <h3 id="general-startup-heading">Startup</h3>
+        <label className="general-setting-row">
+          <span><strong>Restore previously opened tabs</strong><small>Restore valid tabs and the active tab on the next launch.</small></span>
+          <input
+            aria-label="Restore previously opened tabs"
+            disabled={saving}
+            type="checkbox"
+            checked={settings.restore_tabs}
+            onChange={(event) => void change({ ...settings, restore_tabs: event.target.checked })}
+          />
+        </label>
+      </section>
+      <section className="settings-group" aria-labelledby="general-search-heading">
+        <h3 id="general-search-heading">Search</h3>
+        <label className="general-setting-row">
+          <span><strong>Recent searches limit</strong><small>Keep between 1 and 50 searches on this computer.</small></span>
+          <input
+            aria-label="Recent searches limit"
+            disabled={saving}
+            type="number"
+            min={1}
+            max={50}
+            value={settings.recent_searches_limit}
+            onChange={(event) => {
+              const value = Number(event.target.value);
+              if (Number.isInteger(value) && value >= 1 && value <= 50) {
+                void change({ ...settings, recent_searches_limit: value });
+              }
+            }}
+          />
+        </label>
+      </section>
+      <section className="settings-group" aria-labelledby="general-csv-heading">
+        <h3 id="general-csv-heading">CSV</h3>
+        <label className="general-setting-row">
+          <span><strong>CSV delimiter</strong><small>Used for every CSV import, export, and formatted-update template.</small></span>
+          <select
+            aria-label="CSV delimiter"
+            disabled={saving}
+            value={settings.csv_delimiter}
+            onChange={(event) => void change({
+              ...settings,
+              csv_delimiter: event.target.value as GeneralSettingsValue["csv_delimiter"],
+            })}
+          >
+            <option value=",">,</option>
+            <option value=";">;</option>
+            <option value={"\t"}>Tab (\t)</option>
+            <option value="|">|</option>
+          </select>
+        </label>
+      </section>
+      <section className="settings-group" aria-labelledby="general-taxon-tree-heading">
+        <h3 id="general-taxon-tree-heading">Taxon Tree</h3>
+        <div className="general-setting-row">
+          <span><strong>Visible taxon names</strong><small>Choose which names are shown in photo taxon tree rows.</small></span>
+          <div className="general-checkbox-row" role="group" aria-label="Visible taxon names">
+            {([
+              ["sci_name", "Scientific"],
+              ["zh_name", "Chinese"],
+              ["en_name", "English"],
+            ] as const).map(([key, label]) => {
+              const checked = settings.taxon_tree_name_parts[key];
+              return (
+                <label key={key}>
+                  <input
+                    type="checkbox"
+                    disabled={saving || (checked && visibleTaxonTreeNameCount === 1)}
+                    checked={checked}
+                    onChange={(event) => changeTaxonTreeNamePart(key, event.target.checked)}
+                  />
+                  <span>{label}</span>
+                </label>
+              );
+            })}
+          </div>
+        </div>
+      </section>
+      {(saving || message) && (
+        <div className={saving ? "editor-message" : "inline-error"} role={saving ? "status" : "alert"}>
+          {saving ? "Saving..." : message}
+        </div>
+      )}
     </div>
   );
 }
 
 function StorageSettings() {
   const [locations, setLocations] = useState<DatabaseLocations | null>(null);
+  const [importMetadata, setImportMetadata] = useState<TaxonomyImportMetadata | null>(null);
   const [message, setMessage] = useState("");
   useEffect(() => {
-    void getDatabaseLocations().then(setLocations).catch((nextError) => setMessage(errorMessage(nextError)));
+    void Promise.all([getDatabaseLocations(), getTaxonomyImportMetadata()])
+      .then(([nextLocations, nextMetadata]) => {
+        setLocations(nextLocations);
+        setImportMetadata(nextMetadata);
+      })
+      .catch((nextError) => setMessage(errorMessage(nextError)));
   }, []);
 
-  async function changeTaxonomyDatabase() {
-    const destination = await selectDatabaseDestination(locations?.taxonomy_database);
-    if (!destination) return;
+  async function changeDefaultPhotoLibraryDirectory() {
+    const directory = await selectPhotoDirectory(locations?.default_photo_library_directory);
+    if (!directory) return;
     try {
-      setLocations(await relocateTaxonomyDatabase(destination));
-      setMessage("Taxonomy database relocated.");
+      setLocations(await setDefaultPhotoLibraryDatabaseDirectory(directory));
+      setMessage("Default storage directory updated.");
     } catch (nextError) {
       setMessage(errorMessage(nextError));
     }
   }
 
-  async function changeDefault(kind: "taxonomy" | "photo") {
-    const directory = await selectPhotoDirectory();
+  async function relocate() {
+    const destination = await selectDatabaseDestination(locations?.default_taxonomy_directory);
+    if (!destination) return;
+    try {
+      setLocations(await relocateTaxonomyDatabase(destination));
+      setMessage("Taxonomy Database relocated.");
+    } catch (nextError) {
+      setMessage(errorMessage(nextError));
+    }
+  }
+
+  async function changeDefaultDirectory() {
+    const directory = await selectPhotoDirectory(locations?.default_taxonomy_directory);
     if (!directory) return;
     try {
-      setLocations(kind === "taxonomy"
-        ? await setDefaultTaxonomyDatabaseDirectory(directory)
-        : await setDefaultPhotoLibraryDatabaseDirectory(directory));
-      setMessage("Default storage directory updated.");
+      setLocations(await setDefaultTaxonomyDatabaseDirectory(directory));
+      setMessage("Default Taxonomy Database directory updated.");
+    } catch (nextError) {
+      setMessage(errorMessage(nextError));
+    }
+  }
+
+  async function openStoragePath(path: string) {
+    setMessage("");
+    try {
+      await openPathInFileManager(path);
     } catch (nextError) {
       setMessage(errorMessage(nextError));
     }
@@ -205,23 +429,35 @@ function StorageSettings() {
 
   return (
     <div className="settings-section">
-      <SectionHeader title="Storage" detail="Independent metadata, taxonomy, and photo library database locations" />
-      <StoragePath label="Metadata database" value={locations?.metadata_database ?? "Loading"} />
+      <SectionHeader title="Storage" detail="View database locations, default directories, and taxonomy metadata." />
+      <StoragePath
+        label="Metadata database"
+        value={locations?.metadata_database ?? "Loading"}
+        onOpen={locations ? () => void openStoragePath(locations.metadata_database) : undefined}
+      />
       <StoragePath
         label="Taxonomy database"
         value={locations?.taxonomy_database ?? "Loading"}
-        action={<button type="button" onClick={() => void changeTaxonomyDatabase()}><Move size={13} />Relocate</button>}
+        onOpen={locations ? () => void openStoragePath(locations.taxonomy_database) : undefined}
+        action={<Button onClick={() => void relocate()}><FolderInput size={13} />Move</Button>}
       />
       <StoragePath
-        label="Default taxonomy directory"
-        value={locations?.default_taxonomy_directory ?? "Loading"}
-        action={<button type="button" onClick={() => void changeDefault("taxonomy")}><FolderCog size={13} />Change</button>}
-      />
-      <StoragePath
-        label="Default photo library DB directory"
+        label="Photo Library database default directory"
         value={locations?.default_photo_library_directory ?? "Loading"}
-        action={<button type="button" onClick={() => void changeDefault("photo")}><FolderCog size={13} />Change</button>}
+        onOpen={locations ? () => void openStoragePath(locations.default_photo_library_directory) : undefined}
+        action={<Button onClick={() => void changeDefaultPhotoLibraryDirectory()}><FolderCog size={13} />Change</Button>}
       />
+      <StoragePath
+        label="Taxonomy database default directory"
+        value={locations?.default_taxonomy_directory ?? "Loading"}
+        onOpen={locations ? () => void openStoragePath(locations.default_taxonomy_directory) : undefined}
+        action={<Button onClick={() => void changeDefaultDirectory()}><FolderCog size={13} />Change</Button>}
+      />
+      <h3>Taxonomy metadata</h3>
+      <StoragePath label="Current source" value={importMetadata?.source_path ?? "Not imported"} />
+      <Setting label="Taxa" value={importMetadata ? String(importMetadata.taxa_count) : "-"} />
+      <Setting label="Names" value={importMetadata ? String(importMetadata.taxon_names_count) : "-"} />
+      <Setting label="Imported" value={importMetadata?.imported_at ?? "-"} />
       <div className="editor-message">{message}</div>
     </div>
   );
@@ -245,15 +481,20 @@ function PhotoLibrariesSettings({ onChanged }: { onChanged?: (resetPhotoTabs: bo
   async function createLibrary() {
     const rootPath = await selectPhotoDirectory();
     if (!rootPath) return;
-    const databasePath = await selectDatabaseDestination();
-    if (!databasePath) return;
-    const displayName = window.prompt("Photo Library name", rootPath.split(/[\\/]/).pop() ?? "Photo Library");
-    if (displayName === null) return;
-    await mutate(
-      "Creating library",
-      () => registerPhotoLibrary(rootPath, databasePath, displayName),
-      true,
-    );
+    try {
+      const locations = await getDatabaseLocations();
+      const databasePath = await selectDatabaseDestination(locations.default_photo_library_directory);
+      if (!databasePath) return;
+      const displayName = window.prompt("Photo Library name", rootPath.split(/[\\/]/).pop() ?? "Photo Library");
+      if (displayName === null) return;
+      await mutate(
+        "Creating library",
+        () => registerPhotoLibrary(rootPath, databasePath, displayName),
+        true,
+      );
+    } catch (nextError) {
+      setMessage(errorMessage(nextError));
+    }
   }
 
   async function mutate(
@@ -278,11 +519,11 @@ function PhotoLibrariesSettings({ onChanged }: { onChanged?: (resetPhotoTabs: bo
     <div className="settings-section">
       <SectionHeader
         title="Photo Libraries"
-        detail="One registered library represents one real photo root and one independent database"
+        detail="Open, register, and manage photo libraries."
         actions={(
           <>
-            <button className="secondary-button" type="button" onClick={() => void load()}><RefreshCcw size={13} />Refresh</button>
-            <button className="primary-button" type="button" disabled={Boolean(busy)} onClick={() => void createLibrary()}>Create or register</button>
+            <Button onClick={() => void load()}><RefreshCcw size={13} />Refresh</Button>
+            <Button variant="primary" disabled={Boolean(busy)} onClick={() => void createLibrary()}>Create or register</Button>
           </>
         )}
       />
@@ -300,21 +541,21 @@ function PhotoLibrariesSettings({ onChanged }: { onChanged?: (resetPhotoTabs: bo
             <code>{library.db_path}</code>
             <small>Last opened: {library.last_opened_at}</small>
             <div className="library-actions">
-              <button type="button" disabled={library.active || !library.root_available || !library.database_available} onClick={() => void mutate("Switching library", () => switchPhotoLibrary(library.library_uuid), true)}>Open</button>
-              <button type="button" onClick={() => {
+              <Button size="small" disabled={library.active || !library.root_available || !library.database_available} onClick={() => void mutate("Switching library", () => switchPhotoLibrary(library.library_uuid), true)}>Open</Button>
+              <Button size="small" onClick={() => {
                 const name = window.prompt("Photo Library name", library.display_name)?.trim();
                 if (name) void mutate("Renaming library", () => renamePhotoLibrary(library.library_uuid, name));
-              }}><Pencil size={12} />Rename</button>
-              <button type="button" onClick={() => void selectPhotoDirectory().then((path) => {
+              }}><Pencil size={12} />Rename</Button>
+              <Button size="small" onClick={() => void selectPhotoDirectory(library.root_path).then((path) => {
                 if (path) return mutate("Rebinding root", () => rebindPhotoLibraryRoot(library.library_uuid, path), library.active);
-              })}>Rebind root</button>
-              <button type="button" onClick={() => void selectSqliteDatabase().then((path) => {
+              })}>Rebind root</Button>
+              <Button size="small" onClick={() => void selectSqliteDatabase(library.db_path).then((path) => {
                 if (path) return mutate("Rebinding database", () => rebindPhotoLibraryDatabase(library.library_uuid, path), library.active);
-              })}>Rebind DB</button>
-              <button type="button" disabled={!library.database_available} onClick={() => void selectDatabaseDestination(library.db_path).then((path) => {
+              })}>Rebind DB</Button>
+              <Button size="small" disabled={!library.database_available} onClick={() => void selectDatabaseDestination(library.db_path).then((path) => {
                 if (path) return mutate("Relocating database", () => relocatePhotoLibraryDatabase(library.library_uuid, path), library.active);
-              })}><Move size={12} />Relocate DB</button>
-              <button type="button" disabled={library.active} onClick={() => void mutate("Removing registration", () => removePhotoLibrary(library.library_uuid))}><Trash2 size={12} />Remove</button>
+              })}><Move size={12} />Relocate DB</Button>
+              <Button size="small" disabled={library.active} onClick={() => void mutate("Removing registration", () => removePhotoLibrary(library.library_uuid))}><Trash2 size={12} />Remove</Button>
             </div>
           </article>
         ))}
@@ -324,44 +565,59 @@ function PhotoLibrariesSettings({ onChanged }: { onChanged?: (resetPhotoTabs: bo
   );
 }
 
-function AboutSettings() {
-  const [version, setVersion] = useState("3.0.0");
-  useEffect(() => { void getAppVersion().then(setVersion); }, []);
-  return (
-    <div className="settings-section">
-      <SectionHeader title="About" detail="Vividarium desktop application" />
-      <Setting label="Product" value="Vividarium" />
-      <Setting label="Software version" value={version} />
-      <Setting label="Database schema" value="2" />
-    </div>
-  );
-}
-
 function StoragePath({
   label,
   value,
+  onOpen,
   action,
 }: {
   label: string;
   value: string;
+  onOpen?: () => void;
   action?: ReactNode;
 }) {
-  return <div className="storage-path"><span>{label}</span><code title={value}>{value}</code>{action}</div>;
+  return <div className="storage-path"><span>{label}</span><code>{value}</code>{onOpen || action ? <div className="storage-actions">{onOpen ? <Button onClick={onOpen}><FolderOpen size={13} />Open</Button> : null}{action}</div> : null}</div>;
 }
 
 function NamingSettings() {
-  const allFields: PhotoNameField[] = ["species_sci", "species_zh", "genus_sci", "genus_zh", "family_sci", "family_zh"];
-  const [priority, setPriority] = useState<PhotoNameField[]>(allFields);
-  const [format, setFormat] = useState<PhotoFilenameFormatSettings | null>(null);
+  const [priority, setPriority] = useState<PhotoNameField[]>([...photoNamePriorityFields]);
+  const [format, setFormat] = useState<PhotoFilenameFormatSettings>(defaultPhotoFilenameFormatSettings);
   const [separator, setSeparator] = useState(";");
+  const [loadError, setLoadError] = useState("");
   const [message, setMessage] = useState("");
+  const [saving, setSaving] = useState(false);
+  const savedPriority = useRef<PhotoNameField[]>([...photoNamePriorityFields]);
+  const savedFormat = useRef<PhotoFilenameFormatSettings>(defaultPhotoFilenameFormatSettings());
+  const savedSeparator = useRef(";");
   useEffect(() => {
-    Promise.all([getPhotoNameMatchSettings(), getPhotoFilenameFormatSettings(), getTaxonomyNameSeparator()])
-      .then(([match, nextFormat, nextSeparator]) => {
-        setPriority(match.priority);
-        setFormat(nextFormat);
-        setSeparator(nextSeparator);
-      });
+    let active = true;
+    void Promise.allSettled([
+      getPhotoNameMatchSettings(),
+      getPhotoFilenameFormatSettings(),
+      getTaxonomyNameSeparator(),
+    ]).then(([matchResult, formatResult, separatorResult]) => {
+      if (!active) return;
+      const errors: string[] = [];
+      if (matchResult.status === "fulfilled") {
+        setPriority(matchResult.value.priority);
+        savedPriority.current = [...matchResult.value.priority];
+      }
+      else errors.push(`Mapping priority: ${errorMessage(matchResult.reason)}`);
+      if (formatResult.status === "fulfilled") {
+        const loadedFormat = normalizePhotoFilenameFormatSettings(formatResult.value);
+        setFormat(loadedFormat);
+        savedFormat.current = loadedFormat;
+      } else {
+        errors.push(`Photo filename format: ${errorMessage(formatResult.reason)}. Showing defaults.`);
+      }
+      if (separatorResult.status === "fulfilled") {
+        setSeparator(separatorResult.value);
+        savedSeparator.current = separatorResult.value;
+      }
+      else errors.push(`Multiple-name separator: ${errorMessage(separatorResult.reason)}`);
+      setLoadError(errors.join(" "));
+    });
+    return () => { active = false; };
   }, []);
 
   function move(index: number, direction: -1 | 1) {
@@ -373,34 +629,76 @@ function NamingSettings() {
   }
 
   async function save() {
-    if (!format) return;
+    const priorityChanged = photoNamePriorityChanged(savedPriority.current, priority);
+    const formatChanged = photoFilenameFormatChanged(savedFormat.current, format);
+    const separatorChanged = savedSeparator.current !== separator;
+    if (!priorityChanged && !formatChanged && !separatorChanged) {
+      setMessage("No naming changes to save.");
+      return;
+    }
+    setSaving(true);
     try {
-      await Promise.all([
-        setPhotoNameMatchSettings({ priority }),
-        setPhotoFilenameFormatSettings(format),
-        setTaxonomyNameSeparator(separator),
-      ]);
-      emitMetadataChange({ key: "taxonomy_name_separator", value: separator });
-      setMessage("Naming metadata saved. Photos have been queued for remapping.");
+      const updates: Promise<void>[] = [];
+      if (priorityChanged) updates.push(setPhotoNameMatchSettings({ priority }));
+      if (formatChanged) updates.push(setPhotoFilenameFormatSettings(format));
+      if (separatorChanged) updates.push(setTaxonomyNameSeparator(separator));
+      await Promise.all(updates);
+
+      if (formatChanged) savedFormat.current = { ...format };
+      if (separatorChanged) {
+        savedSeparator.current = separator;
+        emitMetadataChange({ key: "taxonomy_name_separator", value: separator });
+      }
+
+      if (priorityChanged) {
+        setMessage("Naming settings saved. Remapping photos...");
+        const started = await startPhotoMapping();
+        const operation = await waitForOperation("mapping", started.operation.task_id);
+        if (operation.error) throw new Error(operation.error);
+        savedPriority.current = [...priority];
+        emitPhotoMutation({ photoId: null, kind: "mapping" });
+        setMessage("Naming settings saved. Photo mapping complete.");
+      } else {
+        setMessage("Naming settings saved.");
+      }
     } catch (nextError) {
       setMessage(errorMessage(nextError));
+    } finally {
+      setSaving(false);
     }
   }
 
   return (
     <div className="settings-section">
-      <SectionHeader title="Naming" detail="Mapping priority, filename output, and formatted input" actions={<button className="primary-button" type="button" onClick={() => void save()}><Save size={13} />Save</button>} />
-      <h3>Six-field mapping priority</h3>
-      <div className="priority-list">
-        {priority.map((field, index) => (
-          <div key={field}><b>{index + 1}</b><span>{field}</span><button type="button" onClick={() => move(index, -1)}><ArrowUp size={13} /></button><button type="button" onClick={() => move(index, 1)}><ArrowDown size={13} /></button></div>
-        ))}
+      <SectionHeader title="Naming" detail="Configure taxonomy matching and mapped-photo filename generation." actions={<Button variant="primary" disabled={saving} onClick={() => void save()}><Save size={13} />Save</Button>} />
+      <div className="field-stack">
+        <span><strong>Mapping name priority</strong></span>
+        <div className="priority-list">
+          {priority.map((field, index) => (
+            <div key={field}>
+              <b>{index + 1}</b><span>{photoNamePriorityLabels[field]}</span>
+              <IconButton
+                aria-label={`Move ${photoNamePriorityLabels[field]} up`}
+                disabled={index === 0}
+                onClick={() => move(index, -1)}
+              ><ArrowUp size={13} /></IconButton>
+              <IconButton
+                aria-label={`Move ${photoNamePriorityLabels[field]} down`}
+                disabled={index === priority.length - 1}
+                onClick={() => move(index, 1)}
+              ><ArrowDown size={13} /></IconButton>
+            </div>
+          ))}
+        </div>
       </div>
-      <h3>Photo filename fields</h3>
-      {format && <div className="checkbox-grid">{allFields.map((field) => (
-        <label key={field}><input type="checkbox" checked={format[field]} onChange={(event) => setFormat({ ...format, [field]: event.target.checked })} />{field}</label>
-      ))}</div>}
-      <label className="field-stack"><span>Multiple-name separator</span><input value={separator} maxLength={1} onChange={(event) => setSeparator(event.target.value)} /></label>
+      <div className="field-stack">
+        <span><strong>Photo filename format</strong></span>
+        <div className="checkbox-grid">{photoFilenameFormatFields.map(({ field, label }) => (
+          <label key={field}><input type="checkbox" checked={format[field]} onChange={(event) => setFormat({ ...format, [field]: event.target.checked })} />{label}</label>
+        ))}</div>
+      </div>
+      <label className="field-stack"><span><strong>Multiple-name separator</strong></span><input value={separator} maxLength={1} onChange={(event) => setSeparator(event.target.value)} /></label>
+      {loadError && <div className="editor-message error-message" role="alert">{loadError}</div>}
       <div className="editor-message">{message}</div>
     </div>
   );
@@ -420,19 +718,20 @@ function MapSettingsPanel() {
   }
   return (
     <div className="settings-section">
-      <SectionHeader title="Map" detail="Tile source metadata" actions={<button className="primary-button" type="button" onClick={() => void save()}><Save size={13} />Save</button>} />
-      <label className="field-stack"><span>Tile provider</span><select value={settings.provider} onChange={(event) => setSettings({ ...settings, provider: event.target.value as MapSettings["provider"] })}><option value="osm">OpenStreetMap</option><option value="tianditu">Tianditu</option></select></label>
-      <label className="field-stack"><span>Tianditu token</span><input value={settings.tianditu_token ?? ""} onChange={(event) => setSettings({ ...settings, tianditu_token: event.target.value || null })} /></label>
+      <SectionHeader title="Map" detail="Configure the map tile provider and provider credentials." actions={<Button variant="primary" onClick={() => void save()}><Save size={13} />Save</Button>} />
+      <label className="field-stack"><span><strong>Tile provider</strong></span><select value={settings.provider} onChange={(event) => setSettings({ ...settings, provider: event.target.value as MapSettings["provider"] })}><option value="osm">OpenStreetMap</option><option value="tianditu">Tianditu</option></select></label>
+      <label className="field-stack"><span><strong>Token</strong></span><input disabled={settings.provider !== "tianditu"} value={settings.tianditu_token ?? ""} onChange={(event) => setSettings({ ...settings, tianditu_token: event.target.value || null })} /></label>
       <div className="editor-message">{message}</div>
     </div>
   );
 }
 
-function HooksSettings() {
-  const [kind, setKind] = useState<NamingHookKind>("photo_filename");
+function HooksSettings({ kind }: { kind: NamingHookKind }) {
   const [scripts, setScripts] = useState<Record<NamingHookKind, string>>({ photo_filename: "", synonym_authority: "" });
   const [cases, setCases] = useState<Record<NamingHookKind, NamingHookTestCase[]>>({ photo_filename: [], synonym_authority: [] });
   const [report, setReport] = useState<NamingHookTestReport | null>(null);
+  const [testedSnapshot, setTestedSnapshot] = useState<Record<NamingHookKind, string | null>>({ photo_filename: null, synonym_authority: null });
+  const [busy, setBusy] = useState("");
   const [message, setMessage] = useState("");
 
   useEffect(() => {
@@ -460,70 +759,134 @@ function HooksSettings() {
     };
   }, []);
 
+  useEffect(() => {
+    setReport(null);
+    setMessage("");
+  }, [kind]);
+
+  const currentSnapshot = JSON.stringify({ script: scripts[kind], cases: cases[kind] });
+
+  function invalidate(nextScripts = scripts, nextCases = cases) {
+    setScripts(nextScripts);
+    setCases(nextCases);
+    setReport(null);
+    setTestedSnapshot((current) => ({ ...current, [kind]: null }));
+  }
+
   async function run() {
+    setBusy("Testing Hook");
     try {
-      const next = await testAndSaveNamingHook(kind, scripts[kind], cases[kind]);
+      const snapshot = currentSnapshot;
+      const next = await runNamingHookTests(kind, scripts[kind], cases[kind]);
       setReport(next);
       if (next.failed === 0) {
-        setMessage("All tests passed. Hook and project tests saved.");
+        setTestedSnapshot((current) => ({ ...current, [kind]: snapshot }));
+        setMessage("All tests passed. The current Hook can be saved.");
       } else {
-        setMessage("Hook was not saved because tests failed.");
+        setTestedSnapshot((current) => ({ ...current, [kind]: null }));
+        setMessage("Tests failed. Review the actual output before saving.");
       }
     } catch (nextError) {
+      setTestedSnapshot((current) => ({ ...current, [kind]: null }));
       setMessage(errorMessage(nextError));
+    } finally {
+      setBusy("");
     }
   }
 
+  async function save() {
+    setBusy("Saving Hook");
+    try {
+      await saveNamingHook(kind, scripts[kind], cases[kind]);
+      setMessage("Hook and project tests saved.");
+    } catch (nextError) {
+      setMessage(errorMessage(nextError));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  const title = kind === "photo_filename" ? "Filename Parser" : "Synonym Splitter";
+  const detail = kind === "photo_filename"
+    ? "Edit and test the hook that extracts taxonomy information from filenames."
+    : "Edit and test the hook that separates names from authority information.";
+
   return (
     <div className="hooks-settings">
-      <SectionHeader title="Rhai hooks" detail="Default implementations and user overrides share the same execution path" actions={
-        <button className="primary-button" type="button" onClick={() => void run()}><Beaker size={13} />Test and save</button>
-      } />
-      <Segmented value={kind} items={["photo_filename", "synonym_authority"] as const} onChange={(next) => {
-        setKind(next);
-        setReport(null);
-      }} />
-      <div className="hook-columns">
-        <CodeEditor
-          language="rhai"
-          ariaLabel={`${kind} Rhai source`}
-          value={scripts[kind]}
-          onChange={(value) => setScripts({ ...scripts, [kind]: value })}
-        />
-        <div className="hook-tests">
-          <header><strong>Project tests</strong><button type="button" onClick={() => setCases({ ...cases, [kind]: [...cases[kind], { name: "New test", input: "", expected: { kind, output: {} } }] })}>+ Add</button></header>
-          <VirtualList
-            items={cases[kind]}
-            rowHeight={report ? 252 : 228}
-            itemKey={(_, index) => index}
-            renderItem={(item, index) => (
-              <div className={`hook-test-row${report?.cases[index] && !report.cases[index].passed ? " failed" : ""}`}>
-                <input value={item.name} onChange={(event) => changeCase(cases, setCases, kind, index, { ...item, name: event.target.value })} />
-                <input value={item.input} placeholder="Raw input" onChange={(event) => changeCase(cases, setCases, kind, index, { ...item, input: event.target.value })} />
-                <button type="button" onClick={() => setCases({ ...cases, [kind]: cases[kind].filter((_, itemIndex) => itemIndex !== index) })}>Delete</button>
-                <ExpectedEditor
-                  value={item.expected}
-                  testName={item.name}
-                  onChange={(expected) => changeCase(cases, setCases, kind, index, { ...item, expected })}
-                />
-                {report?.cases[index] && <span className="hook-test-actual">Actual: {JSON.stringify(report.cases[index].actual)}</span>}
+      <SectionHeader title={title} detail={detail} actions={(
+        <>
+          <Button disabled={Boolean(busy) || !scripts[kind].trim()} onClick={() => void run()}><BugPlay size={13} />Test</Button>
+          <Button variant="primary" disabled={Boolean(busy) || testedSnapshot[kind] !== currentSnapshot} onClick={() => void save()}><Save size={13} />Save</Button>
+        </>
+      )} />
+      <ResizablePanels
+        className="hook-columns"
+        initialRatio={{ horizontal: 0.55, vertical: 0.52 }}
+        minFirst={{ horizontal: 320, vertical: 180 }}
+        minSecond={{ horizontal: 300, vertical: 180 }}
+        responsiveBreakpoint={800}
+        separatorLabel="Resize Hook editor and Project tests"
+        stateKey={`settings.hooks.${kind}`}
+        first={(<CodeEditor
+            language="rhai"
+            ariaLabel={`${kind} Rhai source`}
+            value={scripts[kind]}
+            onChange={(value) => invalidate({ ...scripts, [kind]: value })}
+          />)}
+        second={(<div className="hook-tests">
+          <header><strong>Project tests</strong><Button variant="ghost" size="small" onClick={() => invalidate(scripts, { ...cases, [kind]: [...cases[kind], { input: "", expected: { kind, output: {} } }] })}>+ Add</Button></header>
+          <div className="hook-test-list">
+            {cases[kind].map((item, index) => (
+              <div className={`hook-test-row${report?.cases[index] && !report.cases[index].passed ? " failed" : ""}`} key={index}>
+                <header>
+                  <strong>Test {index + 1}</strong>
+                  {report?.cases[index] && <span className={report.cases[index].passed ? "passed" : "failed"}>{report.cases[index].passed ? "Passed" : "Failed"}</span>}
+                  <IconButton size="small" aria-label={`Delete Test ${index + 1}`} title={`Delete Test ${index + 1}`} onClick={() => invalidate(scripts, { ...cases, [kind]: cases[kind].filter((_, itemIndex) => itemIndex !== index) })}><Trash2 size={12} /></IconButton>
+                </header>
+                <label className="hook-raw-field"><span>Raw input</span><input className="hook-raw-input" value={item.input} onChange={(event) => invalidate(scripts, changeCase(cases, kind, index, { ...item, input: event.target.value }))} /></label>
+                <label><span>Expected output</span>
+                  <ExpectedEditor
+                    value={item.expected}
+                    testNumber={index + 1}
+                    onDraftChange={() => invalidate()}
+                    onChange={(expected) => invalidate(scripts, changeCase(cases, kind, index, { ...item, expected }))}
+                  />
+                </label>
+                {report?.cases[index] && (
+                  <div className="hook-test-actual">
+                    <span>Actual output</span>
+                    <CodeEditor
+                      autoGrow
+                      language="json"
+                      ariaLabel={`Test ${index + 1} actual output`}
+                      minHeight={72}
+                      maxHeight={160}
+                      onChange={() => undefined}
+                      readOnly
+                      value={JSON.stringify(report.cases[index].actual, null, 2)}
+                    />
+                    {report.cases[index].error && <p>{report.cases[index].error}</p>}
+                  </div>
+                )}
               </div>
-            )}
-          />
-        </div>
-      </div>
-      <div className="editor-message">{report ? `${report.passed} passed, ${report.failed} failed. ${message}` : message}</div>
+            ))}
+          </div>
+        </div>)}
+      />
+      <div className="editor-message">{busy || (report ? `${report.passed} passed, ${report.failed} failed. ${message}` : message)}</div>
     </div>
   );
 }
 
 function ExpectedEditor({
   value,
-  testName,
+  testNumber,
+  onDraftChange,
   onChange,
 }: {
   value: NamingHookTestResult;
-  testName: string;
+  testNumber: number;
+  onDraftChange: () => void;
   onChange: (value: NamingHookTestResult) => void;
 }) {
   const serialized = JSON.stringify(value, null, 2);
@@ -534,6 +897,7 @@ function ExpectedEditor({
 
   function update(next: string) {
     setDraft(next);
+    onDraftChange();
     try {
       const parsed = JSON.parse(next) as NamingHookTestResult;
       if (!parsed || typeof parsed !== "object" || !("kind" in parsed) || !("output" in parsed)) {
@@ -548,19 +912,26 @@ function ExpectedEditor({
 
   return (
     <div className={`hook-expected${error ? " invalid" : ""}`} title={error}>
-      <CodeEditor language="json" ariaLabel={`${testName} expected output`} value={draft} onChange={update} />
+      <CodeEditor
+        autoGrow
+        language="json"
+        ariaLabel={`Test ${testNumber} expected output`}
+        minHeight={72}
+        maxHeight={160}
+        value={draft}
+        onChange={update}
+      />
     </div>
   );
 }
 
 function changeCase(
   cases: Record<NamingHookKind, NamingHookTestCase[]>,
-  setCases: (value: Record<NamingHookKind, NamingHookTestCase[]>) => void,
   kind: NamingHookKind,
   index: number,
   value: NamingHookTestCase,
-) {
-  setCases({ ...cases, [kind]: cases[kind].map((item, itemIndex) => itemIndex === index ? value : item) });
+): Record<NamingHookKind, NamingHookTestCase[]> {
+  return { ...cases, [kind]: cases[kind].map((item, itemIndex) => itemIndex === index ? value : item) };
 }
 
 function Setting({ label, value }: { label: string; value: string }) {

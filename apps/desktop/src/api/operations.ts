@@ -62,6 +62,8 @@ export const rollbackPhotoOperation = (operationId: number) =>
   call<void>("rollback_photo_operation", { operationId }, () => undefined);
 export const exportPhotoOperationAudit = (operationId: number, destinationPath: string) =>
   call<void>("export_photo_operation_audit", { operationId, destinationPath }, () => undefined);
+export const exportPhotoOperationsAudit = (operationIds: number[], destinationPath: string) =>
+  call<void>("export_photo_operations_audit", { operationIds, destinationPath }, () => undefined);
 export const exportAllPhotoOperationAudit = (destinationPath: string) =>
   call<void>("export_all_photo_operation_audit", { destinationPath }, () => undefined);
 
@@ -88,9 +90,13 @@ export const rollbackTaxonomyOperation = (operationId: number) =>
   call<void>("rollback_taxonomy_operation", { operationId }, () => undefined);
 export const exportTaxonomyOperationAudit = (operationId: number, destinationPath: string) =>
   call<void>("export_taxonomy_operation_audit", { operationId, destinationPath }, () => undefined);
+export const exportTaxonomyOperationsAudit = (operationIds: number[], destinationPath: string) =>
+  call<void>("export_taxonomy_operations_audit", { operationIds, destinationPath }, () => undefined);
 export const exportAllTaxonomyOperationAudit = (destinationPath: string) =>
   call<void>("export_all_taxonomy_operation_audit", { destinationPath }, () => undefined);
-export const exportTaxonomyOperationInput = (operationId: number) =>
-  call<string>("export_taxonomy_operation_input", { operationId }, getTaxonomyTemplate);
+export const exportTaxonomyOperationInput = (operationId: number, destinationPath: string) =>
+  call<void>("export_taxonomy_operation_input", { operationId, destinationPath }, () => undefined);
+export const exportTaxonomyOperationsInput = (operationIds: number[], destinationPath: string) =>
+  call<void>("export_taxonomy_operations_input", { operationIds, destinationPath }, () => undefined);
 export const exportAllReplayableTaxonomyInputs = () =>
   call<string>("export_all_replayable_taxonomy_inputs", undefined, getTaxonomyTemplate);

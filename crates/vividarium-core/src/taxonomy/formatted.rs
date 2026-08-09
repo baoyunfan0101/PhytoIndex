@@ -1,6 +1,6 @@
 //! Formatted taxonomy input, preview, apply, operation history, and rollback.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io::Cursor;
 
 use csv::{ReaderBuilder, WriterBuilder};
@@ -272,18 +272,59 @@ pub struct TaxonomyOperationResult {
     pub rows: Vec<TaxonRowOutcome>,
 }
 
+#[derive(Debug)]
+pub struct PreparedTaxonomyUpdate {
+    rows: Vec<TaxonInputRow>,
+    preview: TaxonomyPreviewResult,
+    changeset_blob: Vec<u8>,
+    revision: TaxonomyRevision,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TaxonomyRevision {
+    taxonomy_identity: String,
+    latest_operation_id: i64,
+    operation_count: i64,
+}
+
+impl PreparedTaxonomyUpdate {
+    pub fn preview_result(&self) -> &TaxonomyPreviewResult {
+        &self.preview
+    }
+}
+
 pub fn preview_rows(
     database: &Database,
     rows: &[TaxonInputRow],
 ) -> CoreResult<TaxonomyPreviewResult> {
+    Ok(prepare_rows(database, rows)?.preview)
+}
+
+pub fn prepare_rows(
+    database: &Database,
+    rows: &[TaxonInputRow],
+) -> CoreResult<PreparedTaxonomyUpdate> {
+    let delimiter = crate::general::get_csv_delimiter(database)?;
+    let _guard = database.try_taxonomy_mutation()?;
     let mut connection = database.connect_taxonomy_metadata_context()?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let revision = taxonomy_revision(&transaction)?;
+    let mut session = start_taxonomy_session(&transaction)?;
     let outcomes = process_rows(&transaction, rows)?;
+    validate_taxonomy(&transaction)?;
+    let mut changeset_blob = Vec::new();
+    session.changeset_strm(&mut changeset_blob)?;
+    drop(session);
     transaction.rollback()?;
-    Ok(TaxonomyPreviewResult {
-        delimiter: "|".into(),
-        encoding: "UTF-8".into(),
-        rows: outcomes,
+    Ok(PreparedTaxonomyUpdate {
+        rows: rows.to_vec(),
+        preview: TaxonomyPreviewResult {
+            delimiter,
+            encoding: "UTF-8".into(),
+            rows: outcomes,
+        },
+        changeset_blob,
+        revision,
     })
 }
 
@@ -291,6 +332,7 @@ pub fn apply_rows(
     database: &Database,
     rows: &[TaxonInputRow],
 ) -> CoreResult<TaxonomyOperationResult> {
+    let delimiter = crate::general::get_csv_delimiter(database)?;
     let _guard = database.try_taxonomy_mutation()?;
     let mut connection = database.connect_taxonomy_metadata_context()?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -301,6 +343,56 @@ pub fn apply_rows(
     session.changeset_strm(&mut changeset_blob)?;
     drop(session);
 
+    let result = store_applied_rows(&transaction, rows, outcomes, changeset_blob, delimiter)?;
+    transaction.commit()?;
+    Ok(result)
+}
+
+pub fn apply_prepared_rows(
+    database: &Database,
+    prepared: PreparedTaxonomyUpdate,
+) -> CoreResult<TaxonomyOperationResult> {
+    let delimiter = prepared.preview.delimiter.clone();
+    let _guard = database.try_taxonomy_mutation()?;
+    let mut connection = database.connect_taxonomy_metadata_context()?;
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    if taxonomy_revision(&transaction)? != prepared.revision {
+        return Err(CoreError::InvalidArgument(
+            "formatted update preview is stale; preview again".into(),
+        ));
+    }
+    if !prepared.changeset_blob.is_empty() {
+        transaction
+            .apply_strm(
+                &mut Cursor::new(&prepared.changeset_blob),
+                Some(is_taxonomy_session_table),
+                |_, _| ConflictAction::SQLITE_CHANGESET_ABORT,
+            )
+            .map_err(|_| {
+                CoreError::InvalidArgument(
+                    "formatted update preview is stale; preview again".into(),
+                )
+            })?;
+    }
+    validate_taxonomy(&transaction)?;
+    let result = store_applied_rows(
+        &transaction,
+        &prepared.rows,
+        prepared.preview.rows,
+        prepared.changeset_blob,
+        delimiter,
+    )?;
+    transaction.commit()?;
+    Ok(result)
+}
+
+fn store_applied_rows(
+    transaction: &Transaction<'_>,
+    rows: &[TaxonInputRow],
+    outcomes: Vec<TaxonRowOutcome>,
+    changeset_blob: Vec<u8>,
+    delimiter: String,
+) -> CoreResult<TaxonomyOperationResult> {
     let stored_input = rows
         .iter()
         .cloned()
@@ -314,7 +406,7 @@ pub fn apply_rows(
         .filter(|row| row.operation_types.iter().any(|value| value.is_failure()))
         .count();
     let operation_id = operations::insert_operation(
-        &transaction,
+        transaction,
         NewOperation {
             kind: "taxonomy_update",
             source: "formatted_update",
@@ -330,7 +422,7 @@ pub fn apply_rows(
         total_rows: outcomes.len(),
         succeeded_rows: outcomes.len() - failed_rows,
         failed_rows,
-        delimiter: "|".into(),
+        delimiter,
         encoding: "UTF-8".into(),
         rows: outcomes,
     };
@@ -356,11 +448,32 @@ pub fn apply_rows(
         ])?;
     }
     drop(insert_input);
-    insert_operation_audit(&transaction, operation_id, &result.rows)?;
-    let affected_taxon_ids = affected_taxon_ids_from_changeset(&transaction, &changeset_blob)?;
-    super::sync::record_event(&transaction, Some(operation_id), affected_taxon_ids, false)?;
-    transaction.commit()?;
+    insert_operation_audit(transaction, operation_id, &result.rows)?;
+    let affected_taxon_ids = affected_taxon_ids_from_changeset(transaction, &changeset_blob)?;
+    super::sync::record_event(transaction, Some(operation_id), affected_taxon_ids, false)?;
     Ok(result)
+}
+
+fn taxonomy_revision(connection: &Connection) -> CoreResult<TaxonomyRevision> {
+    connection
+        .query_row(
+            r#"
+            SELECT taxonomy_identity,
+                   (SELECT COALESCE(MAX(operation_id), 0) FROM operations),
+                   (SELECT COUNT(*) FROM operations)
+            FROM taxonomy_identity
+            WHERE identity_id = 1
+            "#,
+            [],
+            |row| {
+                Ok(TaxonomyRevision {
+                    taxonomy_identity: row.get(0)?,
+                    latest_operation_id: row.get(1)?,
+                    operation_count: row.get(2)?,
+                })
+            },
+        )
+        .map_err(Into::into)
 }
 
 fn insert_operation_audit(
@@ -503,109 +616,66 @@ fn create_taxon(
     row_number: usize,
     input: &NormalizedInput,
 ) -> CoreResult<TaxonRowOutcome> {
-    let parent = match input.target_rank.parent() {
-        None => None,
-        Some(parent_rank) => {
-            let parent_name = input.parent_name().ok_or_else(|| {
-                CoreError::InvalidArgument(format!(
-                    "new {} taxon requires a {} scientific name",
-                    input.target_rank.as_str(),
-                    parent_rank.as_str()
-                ))
-            });
-            let parent_name = match parent_name {
-                Ok(value) => value,
-                Err(error) => {
-                    return Ok(failed_outcome(
-                        row_number,
-                        TaxonRowStatus::NotMatched,
-                        error.to_string(),
-                    ));
-                }
-            };
-            let candidates = find_scientific_candidates(
-                transaction,
+    let mut changes = Vec::new();
+    let parent = if let Some(parent_rank) = input.target_rank.parent() {
+        match resolve_or_create_lineage(
+            transaction,
+            input,
+            parent_rank,
+            input.target_rank,
+            &mut changes,
+        )? {
+            Ok(parent) => Some(parent),
+            Err(LineageFailure::MissingParent {
+                child_rank,
                 parent_rank,
-                parent_name,
-                input,
-                parent_rank,
-            )?;
-            match candidates.as_slice() {
-                [] => {
-                    return Ok(failed_outcome(
-                        row_number,
-                        TaxonRowStatus::NotMatched,
-                        format!(
-                            "parent {} '{}' was not found",
-                            parent_rank.as_str(),
-                            parent_name
-                        ),
-                    ));
-                }
-                [parent] => Some(parent.clone()),
-                _ => {
-                    return Ok(TaxonRowOutcome {
-                        row_number,
-                        operation_types: vec![TaxonRowStatus::MultipleCandidates],
-                        message: candidate_message(&candidates),
-                        target: None,
-                        parent: None,
-                        candidates,
-                        changes: Vec::new(),
-                    });
-                }
+            }) => {
+                return Ok(failed_outcome(
+                    row_number,
+                    TaxonRowStatus::NotMatched,
+                    format!(
+                        "new {} taxon requires a {} scientific name",
+                        child_rank.as_str(),
+                        parent_rank.as_str()
+                    ),
+                ));
+            }
+            Err(LineageFailure::MultipleCandidates(candidates)) => {
+                return Ok(TaxonRowOutcome {
+                    row_number,
+                    operation_types: vec![TaxonRowStatus::MultipleCandidates],
+                    message: candidate_message(&candidates),
+                    target: None,
+                    parent: None,
+                    candidates,
+                    changes: Vec::new(),
+                });
             }
         }
+    } else {
+        None
     };
 
-    transaction.execute(
-        "INSERT INTO taxa (parent_taxon_id, rank, geological_range) VALUES (?, ?, ?)",
-        params![
-            parent.as_ref().map(|value| value.taxon_id),
-            input.target_rank.code(),
-            input.geological_range
-        ],
+    let target = insert_taxon_with_scientific_name(
+        transaction,
+        input.target_rank,
+        &input.target_name,
+        parent.as_ref(),
+        input.geological_range.as_deref(),
+        input.authority_year.as_deref(),
+        input.source.as_deref(),
+        &mut changes,
     )?;
-    let taxon_id = transaction.last_insert_rowid();
-    transaction.execute(
-        r#"
-        INSERT INTO taxon_names (taxon_id, name_type, name, authority_year, source)
-        VALUES (?, ?, ?, ?, ?)
-        "#,
-        params![
-            taxon_id,
-            TaxonomyNameType::SciName.code(),
-            input.target_name,
-            input.authority_year,
-            input.source
-        ],
-    )?;
-    let mut changes = vec![
-        TaxonChange {
-            kind: TaxonChangeKind::CreateTaxon,
-            field: "taxon".into(),
-            old_value: None,
-            new_value: Some(input.target_name.clone()),
-        },
-        TaxonChange {
-            kind: TaxonChangeKind::AppendName,
-            field: "sci_name".into(),
-            old_value: None,
-            new_value: Some(input.target_name.clone()),
-        },
-    ];
+    let taxon_id = target.taxon_id;
     apply_additional_names(transaction, taxon_id, input, &mut changes)?;
-    let target = load_taxon_summary(transaction, taxon_id)?;
-    if let Some(target) = target.as_ref() {
-        supplement_path_sources(transaction, input, target, &mut changes)?;
-    }
+    supplement_path_sources(transaction, input, &target, &mut changes)?;
     let mut operation_types = classify_changes(&changes);
     operation_types.insert(0, TaxonRowStatus::NewTaxon);
     Ok(TaxonRowOutcome {
         row_number,
         operation_types,
         message: describe_changes(&changes),
-        target,
+        target: Some(target),
         parent,
         candidates: Vec::new(),
         changes,
@@ -679,24 +749,22 @@ fn supplement_path_sources(
     let Some(source) = input.source.as_deref() else {
         return Ok(());
     };
-    for (taxon_id, rank, names) in target
+    for (taxon_id, rank) in target
         .breadcrumb
         .iter()
-        .map(|item| (item.taxon_id, item.rank, &item.names))
-        .chain(std::iter::once((
-            target.taxon_id,
-            target.rank,
-            &target.names,
-        )))
+        .map(|item| (item.taxon_id, item.rank))
+        .chain(std::iter::once((target.taxon_id, target.rank)))
     {
         let Some(expected_name) = input.path[rank.index()].as_deref() else {
             continue;
         };
-        if names.sci_name.as_deref() == Some(expected_name) {
+        if let Some(existing_type) =
+            existing_scientific_name_type(transaction, taxon_id, expected_name)?
+        {
             update_name_fields(
                 transaction,
                 taxon_id,
-                TaxonomyNameType::SciName,
+                existing_type,
                 expected_name,
                 None,
                 Some(source),
@@ -1015,29 +1083,30 @@ fn existing_scientific_name_type(
 
 fn find_target(transaction: &Transaction<'_>, input: &NormalizedInput) -> CoreResult<MatchResult> {
     for (input_index, input_name) in input.scientific_names().into_iter().enumerate() {
-        for existing_type in [TaxonomyNameType::SciName, TaxonomyNameType::Synonym] {
-            let candidates = find_candidates_by_type(
-                transaction,
-                input.target_rank,
-                &input_name.name,
-                existing_type,
-                input,
-                input.target_rank,
-            )?;
-            if !candidates.is_empty() {
-                return Ok(match candidates.as_slice() {
-                    [one] => MatchResult::One(
-                        one.clone(),
-                        MatchedName {
-                            input_index,
-                            name: input_name.name,
-                            authority_year: input_name.authority_year,
-                            existing_type,
-                        },
-                    ),
-                    _ => MatchResult::Many(candidates),
-                });
-            }
+        let mut candidates =
+            find_scientific_candidates(transaction, input.target_rank, &input_name.name)?;
+        if candidates.len() > 1 {
+            candidates =
+                disambiguate_candidates(transaction, candidates, input, input.target_rank)?;
+        }
+        if let [candidate] = candidates.as_slice() {
+            return Ok(MatchResult::One(
+                candidate.summary.clone(),
+                MatchedName {
+                    input_index,
+                    name: input_name.name,
+                    authority_year: input_name.authority_year,
+                    existing_type: candidate.existing_type,
+                },
+            ));
+        }
+        if candidates.len() > 1 {
+            return Ok(MatchResult::Many(
+                candidates
+                    .into_iter()
+                    .map(|candidate| candidate.summary)
+                    .collect(),
+            ));
         }
     }
     Ok(MatchResult::None)
@@ -1047,57 +1116,65 @@ fn find_scientific_candidates(
     transaction: &Transaction<'_>,
     rank: TaxonRank,
     name: &str,
-    input: &NormalizedInput,
-    lineage_limit: TaxonRank,
-) -> CoreResult<Vec<TaxonSummary>> {
-    find_candidates_by_type(
-        transaction,
-        rank,
-        name,
-        TaxonomyNameType::SciName,
-        input,
-        lineage_limit,
-    )
-}
-
-fn find_candidates_by_type(
-    transaction: &Transaction<'_>,
-    rank: TaxonRank,
-    name: &str,
-    name_type: TaxonomyNameType,
-    input: &NormalizedInput,
-    lineage_limit: TaxonRank,
-) -> CoreResult<Vec<TaxonSummary>> {
+) -> CoreResult<Vec<ScientificCandidate>> {
     let mut statement = transaction.prepare(
         r#"
-        SELECT DISTINCT taxa.taxon_id
+        SELECT taxa.taxon_id, MIN(taxon_names.name_type)
         FROM taxa JOIN taxon_names USING (taxon_id)
         WHERE taxa.rank = ? AND taxon_names.name = ? COLLATE BINARY
-          AND taxon_names.name_type = ?
+          AND taxon_names.name_type IN (1, 2)
+        GROUP BY taxa.taxon_id
         ORDER BY taxa.taxon_id
         "#,
     )?;
-    let ids = statement
-        .query_map(params![rank.code(), name, name_type.code()], |row| {
-            row.get::<_, i64>(0)
+    let rows = statement
+        .query_map(params![rank.code(), name], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
         })?
         .collect::<Result<Vec<_>, _>>()?;
-    let mut filtered = Vec::new();
-    for taxon_id in ids {
-        let mut matches = true;
-        for ancestor_rank in TaxonRank::ALL.into_iter().take(lineage_limit.index()) {
-            if let Some(expected) = input.path[ancestor_rank.index()].as_deref()
-                && !lineage_has_scientific_name(transaction, taxon_id, ancestor_rank, expected)?
-            {
-                matches = false;
-                break;
+    let ids = rows
+        .iter()
+        .map(|(taxon_id, _)| *taxon_id)
+        .collect::<Vec<_>>();
+    let summaries = load_taxon_summaries(transaction, &ids)?;
+    rows.into_iter()
+        .zip(summaries)
+        .map(|((_, name_type), summary)| {
+            Ok(ScientificCandidate {
+                summary,
+                existing_type: TaxonomyNameType::from_code(name_type)?,
+            })
+        })
+        .collect()
+}
+
+fn disambiguate_candidates(
+    transaction: &Transaction<'_>,
+    mut candidates: Vec<ScientificCandidate>,
+    input: &NormalizedInput,
+    rank: TaxonRank,
+) -> CoreResult<Vec<ScientificCandidate>> {
+    for ancestor_rank in TaxonRank::ALL[..rank.index()].iter().rev().copied() {
+        let Some(expected) = input.path[ancestor_rank.index()].as_deref() else {
+            continue;
+        };
+        let mut filtered = Vec::new();
+        for candidate in candidates {
+            if lineage_has_scientific_name(
+                transaction,
+                candidate.summary.taxon_id,
+                ancestor_rank,
+                expected,
+            )? {
+                filtered.push(candidate);
             }
         }
-        if matches {
-            filtered.push(taxon_id);
+        candidates = filtered;
+        if candidates.len() <= 1 {
+            break;
         }
     }
-    load_taxon_summaries(transaction, &filtered)
+    Ok(candidates)
 }
 
 fn lineage_has_scientific_name(
@@ -1117,7 +1194,7 @@ fn lineage_has_scientific_name(
         )
         SELECT EXISTS(
             SELECT 1 FROM lineage JOIN taxon_names USING (taxon_id)
-            WHERE lineage.rank = ? AND taxon_names.name_type = 1
+            WHERE lineage.rank = ? AND taxon_names.name_type IN (1, 2)
               AND taxon_names.name = ? COLLATE BINARY
         )
         "#,
@@ -1126,10 +1203,132 @@ fn lineage_has_scientific_name(
     )?)
 }
 
+fn resolve_or_create_lineage(
+    transaction: &Transaction<'_>,
+    input: &NormalizedInput,
+    rank: TaxonRank,
+    child_rank: TaxonRank,
+    changes: &mut Vec<TaxonChange>,
+) -> CoreResult<Result<TaxonSummary, LineageFailure>> {
+    let Some(name) = input.path[rank.index()].as_deref() else {
+        return Ok(Err(LineageFailure::MissingParent {
+            child_rank,
+            parent_rank: rank,
+        }));
+    };
+    let mut candidates = find_scientific_candidates(transaction, rank, name)?;
+    if candidates.len() > 1 {
+        candidates = disambiguate_candidates(transaction, candidates, input, rank)?;
+    }
+    match candidates.as_slice() {
+        [candidate] => return Ok(Ok(candidate.summary.clone())),
+        [_, _, ..] => {
+            return Ok(Err(LineageFailure::MultipleCandidates(
+                candidates
+                    .into_iter()
+                    .map(|candidate| candidate.summary)
+                    .collect(),
+            )));
+        }
+        [] => {}
+    }
+
+    let parent = if let Some(parent_rank) = rank.parent() {
+        if input.path[parent_rank.index()].is_none() {
+            return Ok(Err(LineageFailure::MissingParent {
+                child_rank: rank,
+                parent_rank,
+            }));
+        }
+        match resolve_or_create_lineage(transaction, input, parent_rank, rank, changes)? {
+            Ok(parent) => Some(parent),
+            Err(failure) => return Ok(Err(failure)),
+        }
+    } else {
+        None
+    };
+    insert_taxon_with_scientific_name(
+        transaction,
+        rank,
+        name,
+        parent.as_ref(),
+        None,
+        None,
+        input.source.as_deref(),
+        changes,
+    )
+    .map(Ok)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn insert_taxon_with_scientific_name(
+    transaction: &Transaction<'_>,
+    rank: TaxonRank,
+    name: &str,
+    parent: Option<&TaxonSummary>,
+    geological_range: Option<&str>,
+    authority_year: Option<&str>,
+    source: Option<&str>,
+    changes: &mut Vec<TaxonChange>,
+) -> CoreResult<TaxonSummary> {
+    transaction.execute(
+        "INSERT INTO taxa (parent_taxon_id, rank, geological_range) VALUES (?, ?, ?)",
+        params![
+            parent.map(|value| value.taxon_id),
+            rank.code(),
+            geological_range
+        ],
+    )?;
+    let taxon_id = transaction.last_insert_rowid();
+    transaction.execute(
+        r#"
+        INSERT INTO taxon_names (taxon_id, name_type, name, authority_year, source)
+        VALUES (?, ?, ?, ?, ?)
+        "#,
+        params![
+            taxon_id,
+            TaxonomyNameType::SciName.code(),
+            name,
+            authority_year,
+            source
+        ],
+    )?;
+    changes.extend([
+        TaxonChange {
+            kind: TaxonChangeKind::CreateTaxon,
+            field: "taxon".into(),
+            old_value: None,
+            new_value: Some(name.into()),
+        },
+        TaxonChange {
+            kind: TaxonChangeKind::AppendName,
+            field: "sci_name".into(),
+            old_value: None,
+            new_value: Some(name.into()),
+        },
+    ]);
+    load_taxon_summary(transaction, taxon_id)?
+        .ok_or_else(|| CoreError::NotFound(format!("new {} taxon {taxon_id}", rank.as_str())))
+}
+
 enum MatchResult {
     None,
     One(TaxonSummary, MatchedName),
     Many(Vec<TaxonSummary>),
+}
+
+#[derive(Debug)]
+struct ScientificCandidate {
+    summary: TaxonSummary,
+    existing_type: TaxonomyNameType,
+}
+
+enum LineageFailure {
+    MissingParent {
+        child_rank: TaxonRank,
+        parent_rank: TaxonRank,
+    },
+    MultipleCandidates(Vec<TaxonSummary>),
 }
 
 #[derive(Debug, Clone)]
@@ -1209,12 +1408,6 @@ impl NormalizedInput {
             geological_range: normalize_text(row.geological_range.as_deref()),
             source: normalize_text(row.source.as_deref()),
         })
-    }
-
-    fn parent_name(&self) -> Option<&str> {
-        self.target_rank
-            .parent()
-            .and_then(|rank| self.path[rank.index()].as_deref())
     }
 
     fn scientific_names(&self) -> Vec<ParsedSynonym> {
@@ -1361,8 +1554,10 @@ pub fn set_taxonomy_name_separator(database: &Database, separator: &str) -> Core
     )
 }
 
-pub fn taxonomy_formatted_update_template() -> CoreResult<String> {
-    let mut writer = WriterBuilder::new().delimiter(b'|').from_writer(Vec::new());
+pub fn taxonomy_formatted_update_template(database: &Database) -> CoreResult<String> {
+    let mut writer = WriterBuilder::new()
+        .delimiter(crate::general::get_csv_delimiter_byte(database)?)
+        .from_writer(Vec::new());
     writer.write_record(TAXONOMY_INPUT_COLUMNS)?;
     writer.flush()?;
     String::from_utf8(writer.into_inner().map_err(|error| error.into_error())?)
@@ -1376,7 +1571,7 @@ pub fn parse_taxonomy_input_csv(
     let separator = get_taxonomy_name_separator(database)?;
     let separator = separator.chars().next().unwrap_or(';');
     let mut reader = ReaderBuilder::new()
-        .delimiter(b'|')
+        .delimiter(crate::general::get_csv_delimiter_byte(database)?)
         .from_reader(input.as_bytes());
     let headers = reader.headers()?.clone();
     if headers.is_empty() {
@@ -1440,8 +1635,10 @@ pub fn parse_taxonomy_input_csv(
     Ok(rows)
 }
 
-pub fn taxonomy_log_csv(rows: &[TaxonRowOutcome]) -> CoreResult<String> {
-    let mut writer = WriterBuilder::new().delimiter(b'|').from_writer(Vec::new());
+pub fn taxonomy_log_csv(database: &Database, rows: &[TaxonRowOutcome]) -> CoreResult<String> {
+    let mut writer = WriterBuilder::new()
+        .delimiter(crate::general::get_csv_delimiter_byte(database)?)
+        .from_writer(Vec::new());
     writer.write_record([
         "row_number",
         "operation_types",
@@ -1640,29 +1837,115 @@ fn collect_changeset_integer(
     }
 }
 
-pub(super) fn validate_taxonomy(connection: &Connection) -> CoreResult<()> {
-    let invalid_taxon = connection
-        .query_row(
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct TaxonomyValidationIssue {
+    pub code: &'static str,
+    pub message: String,
+    pub taxon_id: Option<i64>,
+    pub related_taxon_id: Option<i64>,
+}
+
+pub(super) fn visit_taxonomy_validation_issues(
+    connection: &Connection,
+    require_normalized_names: bool,
+    mut visit: impl FnMut(TaxonomyValidationIssue) -> bool,
+) -> CoreResult<()> {
+    let taxa = connection
+        .prepare("SELECT taxon_id, parent_taxon_id, rank FROM taxa ORDER BY taxon_id")?
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, Option<i64>>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    let by_id = taxa
+        .iter()
+        .map(|(taxon_id, parent_taxon_id, rank)| (*taxon_id, (*parent_taxon_id, *rank)))
+        .collect::<HashMap<_, _>>();
+    let cycle_taxa = connection
+        .prepare(
             r#"
-            SELECT child.taxon_id
-            FROM taxa AS child
-            LEFT JOIN taxa AS parent ON parent.taxon_id = child.parent_taxon_id
-            WHERE (child.rank = 1 AND child.parent_taxon_id IS NOT NULL)
-               OR (child.rank > 1 AND (parent.taxon_id IS NULL OR parent.rank != child.rank - 1))
-            LIMIT 1
+            WITH RECURSIVE ancestry(origin_taxon_id, ancestor_taxon_id) AS (
+                SELECT taxon_id, parent_taxon_id
+                FROM taxa
+                WHERE parent_taxon_id IS NOT NULL
+                UNION
+                SELECT ancestry.origin_taxon_id, parent.parent_taxon_id
+                FROM ancestry
+                JOIN taxa AS parent ON parent.taxon_id = ancestry.ancestor_taxon_id
+                WHERE parent.parent_taxon_id IS NOT NULL
+            )
+            SELECT DISTINCT origin_taxon_id
+            FROM ancestry
+            WHERE origin_taxon_id = ancestor_taxon_id
             "#,
-            [],
-            |row| row.get::<_, i64>(0),
-        )
-        .optional()?;
-    if let Some(taxon_id) = invalid_taxon {
-        return Err(CoreError::InvalidArgument(format!(
-            "taxon {taxon_id} has invalid parentage"
-        )));
+        )?
+        .query_map([], |row| row.get::<_, i64>(0))?
+        .collect::<Result<HashSet<_>, _>>()?;
+    for (taxon_id, parent_taxon_id, rank) in taxa {
+        if cycle_taxa.contains(&taxon_id) {
+            if !visit(TaxonomyValidationIssue {
+                code: "parent_cycle",
+                message: format!("Taxon {taxon_id} belongs to a cyclic parent relationship."),
+                taxon_id: Some(taxon_id),
+                related_taxon_id: parent_taxon_id,
+            }) {
+                return Ok(());
+            }
+            continue;
+        }
+        if rank == TaxonRank::Kingdom.code() {
+            if parent_taxon_id.is_some()
+                && !visit(TaxonomyValidationIssue {
+                    code: "kingdom_has_parent",
+                    message: format!("Kingdom taxon {taxon_id} must be a root taxon."),
+                    taxon_id: Some(taxon_id),
+                    related_taxon_id: parent_taxon_id,
+                })
+            {
+                return Ok(());
+            }
+            continue;
+        }
+        let Some(parent_taxon_id) = parent_taxon_id else {
+            if !visit(TaxonomyValidationIssue {
+                code: "missing_parent",
+                message: format!("Taxon {taxon_id} must have a parent taxon."),
+                taxon_id: Some(taxon_id),
+                related_taxon_id: None,
+            }) {
+                return Ok(());
+            }
+            continue;
+        };
+        let Some((_, parent_rank)) = by_id.get(&parent_taxon_id) else {
+            if !visit(TaxonomyValidationIssue {
+                code: "parent_not_found",
+                message: format!(
+                    "Taxon {taxon_id} references missing parent taxon {parent_taxon_id}."
+                ),
+                taxon_id: Some(taxon_id),
+                related_taxon_id: Some(parent_taxon_id),
+            }) {
+                return Ok(());
+            }
+            continue;
+        };
+        if *parent_rank >= rank
+            && !visit(TaxonomyValidationIssue {
+                code: "invalid_parent_rank",
+                message: format!("Taxon {taxon_id} must have a parent with a higher rank."),
+                taxon_id: Some(taxon_id),
+                related_taxon_id: Some(parent_taxon_id),
+            })
+        {
+            return Ok(());
+        }
     }
-    let invalid_name = connection
-        .query_row(
-            r#"
+    let mut invalid_sci_names = connection.prepare(
+        r#"
             SELECT taxa.taxon_id
             FROM taxa
             LEFT JOIN taxon_names
@@ -1670,27 +1953,106 @@ pub(super) fn validate_taxonomy(connection: &Connection) -> CoreResult<()> {
              AND taxon_names.name_type = 1
             GROUP BY taxa.taxon_id
             HAVING COUNT(taxon_names.name_id) != 1
-            LIMIT 1
+            ORDER BY taxa.taxon_id
             "#,
-            [],
-            |row| row.get::<_, i64>(0),
-        )
-        .optional()?;
-    if let Some(taxon_id) = invalid_name {
-        return Err(CoreError::InvalidArgument(format!(
-            "taxon {taxon_id} must have exactly one sci_name"
-        )));
-    }
-    let mut statement = connection.prepare("SELECT name_id, name FROM taxon_names")?;
-    for row in statement.query_map([], |row| {
-        Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-    })? {
-        let (name_id, name) = row?;
-        if normalize_name(Some(&name)).as_deref() != Some(name.as_str()) {
-            return Err(CoreError::InvalidArgument(format!(
-                "taxon name {name_id} is not normalized"
-            )));
+    )?;
+    for row in invalid_sci_names.query_map([], |row| row.get::<_, i64>(0))? {
+        let taxon_id = row?;
+        if !visit(TaxonomyValidationIssue {
+            code: "invalid_sci_name_count",
+            message: format!("Taxon {taxon_id} must have exactly one scientific name."),
+            taxon_id: Some(taxon_id),
+            related_taxon_id: None,
+        }) {
+            return Ok(());
         }
+    }
+    let mut duplicate_accepted_names = connection.prepare(
+        r#"
+            SELECT taxon_id, name_type
+            FROM taxon_names
+            WHERE name_type IN (?, ?)
+            GROUP BY taxon_id, name_type
+            HAVING COUNT(name_id) > 1
+            ORDER BY taxon_id, name_type
+            "#,
+    )?;
+    for row in duplicate_accepted_names.query_map(
+        params![
+            TaxonomyNameType::ZhName.code(),
+            TaxonomyNameType::EnName.code()
+        ],
+        |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+    )? {
+        let (taxon_id, name_type) = row?;
+        let (code, language) = if name_type == TaxonomyNameType::ZhName.code() {
+            ("invalid_zh_name_count", "Chinese")
+        } else {
+            ("invalid_en_name_count", "English")
+        };
+        if !visit(TaxonomyValidationIssue {
+            code,
+            message: format!("Taxon {taxon_id} must have at most one {language} accepted name."),
+            taxon_id: Some(taxon_id),
+            related_taxon_id: None,
+        }) {
+            return Ok(());
+        }
+    }
+    let mut orphan_name_taxa = connection.prepare(
+        r#"
+            SELECT DISTINCT taxon_names.taxon_id
+            FROM taxon_names
+            LEFT JOIN taxa ON taxa.taxon_id = taxon_names.taxon_id
+            WHERE taxa.taxon_id IS NULL
+            ORDER BY taxon_names.taxon_id
+            "#,
+    )?;
+    for row in orphan_name_taxa.query_map([], |row| row.get::<_, i64>(0))? {
+        let taxon_id = row?;
+        if !visit(TaxonomyValidationIssue {
+            code: "name_taxon_not_found",
+            message: format!("Taxon names reference missing taxon {taxon_id}."),
+            taxon_id: Some(taxon_id),
+            related_taxon_id: None,
+        }) {
+            return Ok(());
+        }
+    }
+    if require_normalized_names {
+        let mut statement =
+            connection.prepare("SELECT name_id, taxon_id, name FROM taxon_names")?;
+        for row in statement.query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })? {
+            let (name_id, taxon_id, name) = row?;
+            if normalize_name(Some(&name)).as_deref() != Some(name.as_str())
+                && !visit(TaxonomyValidationIssue {
+                    code: "name_not_normalized",
+                    message: format!("Taxon name {name_id} is not normalized."),
+                    taxon_id: Some(taxon_id),
+                    related_taxon_id: None,
+                })
+            {
+                return Ok(());
+            }
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn validate_taxonomy(connection: &Connection) -> CoreResult<()> {
+    let mut first_issue = None;
+    visit_taxonomy_validation_issues(connection, true, |issue| {
+        first_issue = Some(issue);
+        false
+    })?;
+    if let Some(issue) = first_issue {
+        return Err(CoreError::InvalidArgument(issue.message));
     }
     Ok(())
 }

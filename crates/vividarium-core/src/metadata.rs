@@ -6,8 +6,9 @@ use crate::{CoreError, CoreResult};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MetadataKey {
-    BaseImportSql,
+    SqlImportSql,
     CustomTaxonomySql,
+    GeneralSettings,
     MapSettings,
     PhotoFilenameFormatSettings,
     PhotoFilenameHook,
@@ -17,13 +18,15 @@ pub(crate) enum MetadataKey {
     SynonymAuthorityHook,
     SynonymAuthorityHookTests,
     TaxonomyNameSeparator,
+    WorkspaceState,
 }
 
 impl MetadataKey {
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
-            Self::BaseImportSql => "base_import_sql",
+            Self::SqlImportSql => "sql_import_sql",
             Self::CustomTaxonomySql => "custom_taxonomy_sql",
+            Self::GeneralSettings => "general_settings",
             Self::MapSettings => "map_settings",
             Self::PhotoFilenameFormatSettings => "photo_filename_format_settings",
             Self::PhotoFilenameHook => "photo_filename_hook",
@@ -33,6 +36,7 @@ impl MetadataKey {
             Self::SynonymAuthorityHook => "synonym_authority_hook",
             Self::SynonymAuthorityHookTests => "synonym_authority_hook_tests",
             Self::TaxonomyNameSeparator => "taxonomy_name_separator",
+            Self::WorkspaceState => "workspace_state",
         }
     }
 }

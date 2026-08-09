@@ -64,6 +64,15 @@ pub fn set_map_settings(
 
 Returns the normalized saved value. An empty Tianditu token becomes `None`.
 
+### `get_map_photo_bounds`
+
+```rust
+pub fn get_map_photo_bounds(database: &Database) -> CoreResult<Option<MapBounds>>
+```
+
+Returns the minimum bounding rectangle for all photos with valid stored
+coordinates. Returns `None` when there are no geotagged photos.
+
 ### `list_map_photos`
 
 ```rust
@@ -94,6 +103,7 @@ case.
 | --- | --- | --- |
 | `get_map_settings` | none | `MapSettings` |
 | `set_map_settings` | `settings: MapSettings` | normalized `MapSettings` |
+| `get_map_photo_bounds` | none | `MapBounds | null` |
 | `list_map_photos` | optional `bounds: MapBounds`, optional `cursor: string`, optional `limit: number` | `PhotoPage<MapPhoto>` |
 
 The desktop map-photo page limit defaults to `500`.

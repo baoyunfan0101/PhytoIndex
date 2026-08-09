@@ -24,6 +24,98 @@ fn initializes_metadata_and_taxonomy_without_a_fake_photo_library() {
 }
 
 #[test]
+fn opens_an_existing_taxonomy_database_and_marks_libraries_for_remap() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = Database::open_test(directory.path().join("metadata.db")).unwrap();
+    database
+        .connect_metadata()
+        .unwrap()
+        .execute(
+            "UPDATE taxonomy_sync_dispatch SET last_dispatched_sync_id = 42 WHERE dispatch_id = 1",
+            [],
+        )
+        .unwrap();
+    let taxonomy_path = directory.path().join("alternate-taxonomy.db");
+    initialize_taxonomy_database_file(&taxonomy_path).unwrap();
+    let expected_identity = open_existing_connection(&taxonomy_path)
+        .unwrap()
+        .query_row(
+            "SELECT taxonomy_identity FROM taxonomy_identity WHERE identity_id = 1",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .unwrap();
+
+    let locations = database.open_taxonomy_database(&taxonomy_path).unwrap();
+
+    assert_eq!(
+        locations.taxonomy_database,
+        path_string(&fs::canonicalize(&taxonomy_path).unwrap())
+    );
+    assert_eq!(database.taxonomy_identity().unwrap(), expected_identity);
+    let metadata = database.connect_metadata().unwrap();
+    assert_eq!(
+        metadata
+            .query_row(
+                "SELECT last_dispatched_sync_id FROM taxonomy_sync_dispatch WHERE dispatch_id = 1",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        metadata
+            .query_row(
+                "SELECT COUNT(*) FROM photo_library_taxonomy_pending WHERE full_remap_required = 1",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        1
+    );
+}
+
+#[test]
+fn rejects_a_non_taxonomy_database_when_opening_taxonomy_storage() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = Database::open(directory.path().join("metadata.db")).unwrap();
+    let photo_database = directory.path().join("photo.db");
+    initialize_file(&photo_database, PHOTO_SCHEMA).unwrap();
+
+    let error = database
+        .open_taxonomy_database(&photo_database)
+        .unwrap_err();
+
+    assert!(matches!(error, CoreError::InvalidArgument(_)));
+    assert_ne!(
+        database.taxonomy_path().unwrap(),
+        fs::canonicalize(photo_database).unwrap()
+    );
+}
+
+#[test]
+fn opening_taxonomy_storage_does_not_initialize_an_empty_database() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = Database::open(directory.path().join("metadata.db")).unwrap();
+    let empty_database = directory.path().join("empty.db");
+    Connection::open(&empty_database).unwrap();
+
+    let error = database
+        .open_taxonomy_database(&empty_database)
+        .unwrap_err();
+
+    assert!(matches!(error, CoreError::InvalidArgument(_)));
+    assert_eq!(
+        open_existing_connection(&empty_database)
+            .unwrap()
+            .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
 fn switches_between_independent_photo_libraries() {
     let directory = tempfile::tempdir().unwrap();
     let root_a = directory.path().join("photos-a");

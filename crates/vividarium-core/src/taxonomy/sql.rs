@@ -142,7 +142,8 @@ pub fn execute_custom_taxonomy_sql(
         .min(DEFAULT_SQL_RESULT_ROW_LIMIT);
     let mut connection = database.connect_taxonomy()?;
     let sources = sql_inputs::stored_sources(database, SqlInputScope::CustomSql)?;
-    let attached = prepare_sources(&mut connection, &sources)?;
+    let delimiter = crate::general::get_csv_delimiter_byte(database)?;
+    let attached = prepare_sources(&mut connection, &sources, delimiter)?;
     let execution: CoreResult<CustomSqlExecutionResult> = (|| {
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let mut session = start_taxonomy_session(&transaction)?;
@@ -211,8 +212,9 @@ pub fn export_custom_taxonomy_query(
     }
     let mut connection = database.connect_taxonomy()?;
     let sources = sql_inputs::stored_sources(database, SqlInputScope::CustomSql)?;
-    let attached = prepare_sources(&mut connection, &sources)?;
-    let export = export_single_query(&connection, sql, &request.destination_path);
+    let delimiter = crate::general::get_csv_delimiter_byte(database)?;
+    let attached = prepare_sources(&mut connection, &sources, delimiter)?;
+    let export = export_single_query(&connection, sql, &request.destination_path, delimiter);
     let detach = detach_sources(&connection, &attached);
     match (export, detach) {
         (Ok(result), Ok(())) => Ok(result),
@@ -221,10 +223,13 @@ pub fn export_custom_taxonomy_query(
     }
 }
 
-pub(super) fn inspect_sql_data_source(source: &SqlDataSource) -> CoreResult<SqlSourceSchema> {
+pub(super) fn inspect_sql_data_source(
+    source: &SqlDataSource,
+    delimiter: u8,
+) -> CoreResult<SqlSourceSchema> {
     validate_sources(std::slice::from_ref(source))?;
     match source {
-        SqlDataSource::Csv { alias, path } => inspect_csv_source(alias, path),
+        SqlDataSource::Csv { alias, path } => inspect_csv_source(alias, path, delimiter),
         SqlDataSource::Sqlite { alias, path } => inspect_sqlite_source(alias, path),
     }
 }
@@ -241,6 +246,13 @@ pub fn get_custom_taxonomy_sql(database: &Database) -> CoreResult<String> {
 
 pub fn list_custom_sql_inputs(database: &Database) -> CoreResult<Vec<PersistentSqlInput>> {
     sql_inputs::list_inputs(database, SqlInputScope::CustomSql)
+}
+
+pub fn list_custom_sql_database_schemas(database: &Database) -> CoreResult<Vec<SqlSourceSchema>> {
+    Ok(vec![inspect_sqlite_source(
+        "main",
+        &database.taxonomy_path()?,
+    )?])
 }
 
 pub fn add_custom_sql_input(
@@ -349,9 +361,10 @@ fn export_single_query(
     connection: &Connection,
     sql: &str,
     destination_path: &Path,
+    delimiter: u8,
 ) -> CoreResult<SqlExportResult> {
     connection.authorizer(Some(custom_sql_authorizer()));
-    let result = unsafe { export_single_query_raw(connection, sql, destination_path) };
+    let result = unsafe { export_single_query_raw(connection, sql, destination_path, delimiter) };
     connection.authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
     result
 }
@@ -360,6 +373,7 @@ unsafe fn export_single_query_raw(
     connection: &Connection,
     sql: &str,
     destination_path: &Path,
+    delimiter: u8,
 ) -> CoreResult<SqlExportResult> {
     let database = unsafe { connection.handle() };
     let sql = CString::new(sql)
@@ -401,7 +415,9 @@ unsafe fn export_single_query_raw(
         ));
     }
     let file = File::create(destination_path)?;
-    let mut writer = csv::Writer::from_writer(BufWriter::new(file));
+    let mut writer = csv::WriterBuilder::new()
+        .delimiter(delimiter)
+        .from_writer(BufWriter::new(file));
     let columns = unsafe { statement_columns(statement.0, column_count) };
     writer.write_record(columns.iter().map(|column| column.name.as_str()))?;
     let mut row_count = 0_u64;
@@ -427,26 +443,36 @@ unsafe fn export_single_query_raw(
 pub(super) fn prepare_sources(
     connection: &mut Connection,
     sources: &[SqlDataSource],
+    delimiter: u8,
 ) -> CoreResult<Vec<String>> {
     validate_sources(sources)?;
     let mut attached = Vec::new();
     for source in sources {
         match source {
             SqlDataSource::Csv { alias, path } => {
-                load_csv_table(connection, alias, path)?;
+                load_csv_table(connection, alias, path, delimiter)?;
             }
             SqlDataSource::Sqlite { alias, path } => {
-                let path = std::fs::canonicalize(path)?;
-                let uri = sqlite_read_only_uri(&path);
-                connection.execute(
-                    &format!("ATTACH DATABASE ? AS {}", quote_identifier(alias)),
-                    [uri],
-                )?;
+                attach_read_only_sqlite(connection, alias, path)?;
                 attached.push(alias.clone());
             }
         }
     }
     Ok(attached)
+}
+
+pub(super) fn attach_read_only_sqlite(
+    connection: &Connection,
+    alias: &str,
+    path: &Path,
+) -> CoreResult<()> {
+    let path = std::fs::canonicalize(path)?;
+    let uri = sqlite_read_only_uri(&path);
+    connection.execute(
+        &format!("ATTACH DATABASE ? AS {}", quote_identifier(alias)),
+        [uri],
+    )?;
+    Ok(())
 }
 
 pub(super) fn detach_sources(connection: &Connection, aliases: &[String]) -> CoreResult<()> {
@@ -456,8 +482,14 @@ pub(super) fn detach_sources(connection: &Connection, aliases: &[String]) -> Cor
     Ok(())
 }
 
-fn load_csv_table(connection: &mut Connection, alias: &str, path: &Path) -> CoreResult<()> {
+fn load_csv_table(
+    connection: &mut Connection,
+    alias: &str,
+    path: &Path,
+    delimiter: u8,
+) -> CoreResult<()> {
     let mut reader = csv::ReaderBuilder::new()
+        .delimiter(delimiter)
         .has_headers(true)
         .flexible(false)
         .from_path(path)?;
@@ -546,8 +578,9 @@ fn validate_sources(sources: &[SqlDataSource]) -> CoreResult<()> {
     Ok(())
 }
 
-fn inspect_csv_source(alias: &str, path: &Path) -> CoreResult<SqlSourceSchema> {
+fn inspect_csv_source(alias: &str, path: &Path, delimiter: u8) -> CoreResult<SqlSourceSchema> {
     let mut reader = csv::ReaderBuilder::new()
+        .delimiter(delimiter)
         .has_headers(true)
         .flexible(false)
         .from_path(path)?;

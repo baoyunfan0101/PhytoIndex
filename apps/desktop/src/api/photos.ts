@@ -24,6 +24,20 @@ export type PhotoMetadata = {
   exif_json: string | null;
 };
 
+export type PhotoRenameRowStatus = "applied" | "no_change" | "failed";
+export type PhotoRenameRowOutcome = {
+  row_number: number;
+  photo_id: number;
+  operation_id: number | null;
+  status: PhotoRenameRowStatus;
+  message: string;
+  photo: Photo | null;
+};
+export type PhotoRenameOperationResult = {
+  operation_id: number | null;
+  rows: PhotoRenameRowOutcome[];
+};
+
 export type PhotoLibrary = { root_path: string; root_directory_id: number };
 export type PhotoDirectory = {
   directory_id: number;
@@ -36,6 +50,8 @@ export type PhotoDirectoryItem =
   | { kind: "photo"; photo: Photo };
 export type DirectoryEntryCounts = { directory_count: number; file_count: number };
 
+const demoModifiedAtStart = Date.UTC(2026, 6, 25, 8, 14, 22) * 1_000_000;
+
 export const demoPhotos: Photo[] = Array.from({ length: 96 }, (_, index) => {
   const species = ["Canis lupus", "Panthera leo", "Vulpes vulpes", "Ursus arctos"][index % 4];
   const filename = `${species.split(" ").join("_")}_${String(index + 1).padStart(3, "0")}.jpg`;
@@ -45,7 +61,7 @@ export const demoPhotos: Photo[] = Array.from({ length: 96 }, (_, index) => {
     relative_path: `Mammalia/Field ${Math.floor(index / 24) + 1}/${filename}`,
     filename,
     file_size: 1_200_000 + index * 14_311,
-    modified_at_ns: index + 1,
+    modified_at_ns: demoModifiedAtStart + index * 60_000_000_000,
     thumbnail_path: null,
   };
 });
@@ -119,7 +135,22 @@ export const renamePhoto = (photoId: number, newFilename: string) =>
     photo.filename = newFilename;
     return { ...photo };
   });
+export const renamePhotoDirectory = (directoryId: number, newName: string) =>
+  call<PhotoDirectory>("rename_photo_directory", { directoryId, newName }, () => ({
+    directory_id: directoryId,
+    parent_directory_id: 1,
+    name: newName,
+    relative_path: newName,
+  }));
 export const renamePhotoFromTaxon = (photoId: number) =>
   call<Photo>("rename_photo_from_taxon", { photoId }, () => getPhoto(photoId));
+export const renamePhotosInDirectoryFromTaxa = (directoryId: number, includeDescendants = true) =>
+  call<PhotoRenameOperationResult>(
+    "rename_photos_in_directory_from_taxa",
+    { directoryId, includeDescendants },
+    () => ({ operation_id: null, rows: [] }),
+  );
 export const revealPhotoInFileManager = (photoId: number) =>
   call<void>("reveal_photo_in_file_manager", { photoId }, () => undefined);
+export const openPhotoDirectoryInFileManager = (directoryId: number) =>
+  call<void>("open_photo_directory_in_file_manager", { directoryId }, () => undefined);

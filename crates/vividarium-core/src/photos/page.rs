@@ -24,7 +24,6 @@ pub(crate) enum PhotoCursor {
     TaxonEntries {
         taxon_id: Option<i64>,
         show_empty: bool,
-        include_descendants: bool,
         section: PhotoPageSection,
         rank: i64,
         item_id: i64,

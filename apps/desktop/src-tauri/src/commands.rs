@@ -5,13 +5,15 @@ use std::path::Path;
 use serde::Serialize;
 use serde_json::{Value, json};
 use tauri::{AppHandle, State, ipc::Channel};
+use vividarium_core::general::{GeneralSettings, WorkspaceState};
 use vividarium_core::mapping::{
     PhotoMappingListItem, PhotoMappingListStatus, PhotoMappingSummary, PhotoNameMatchSettings,
     PhotoTaxonCandidate, PhotoTaxonItem, PhotoTaxonNode,
 };
 use vividarium_core::models::{
     DatabaseLocations, DirectoryEntryCounts, MappingMetadata, OperationState, OperationsStatus,
-    Photo, PhotoDirectoryItem, PhotoLibrary, PhotoLibraryRegistration, PhotoMetadata, PhotoPage,
+    Photo, PhotoDirectory, PhotoDirectoryItem, PhotoLibrary, PhotoLibraryRegistration,
+    PhotoMetadata, PhotoPage,
 };
 use vividarium_core::naming::{
     NamingHookKind, NamingHookSettings, NamingHookTemplates, NamingHookTestCase,
@@ -21,20 +23,20 @@ use vividarium_core::naming::{
 use vividarium_core::operations::{OperationAuditRow, OperationPage, OperationSummary};
 use vividarium_core::photos::{PhotoFilenameFormatSettings, PhotoRenameOperationResult};
 use vividarium_core::taxonomy::{
-    AddSqlInputRequest, AddSqlInputResult, BaseImportExecutionResult, BaseImportValidationResult,
-    CustomSqlExecutionResult, CustomTaxonomySqlExportRequest, CustomTaxonomySqlRequest,
-    DeleteTaxonNameInput, ExecuteBaseImportSqlRequest, PersistentSqlInput, PromoteTaxonNameInput,
-    RemoveSqlInputRequest, RemoveSqlInputResult, SqlExportResult, TaxonChild, TaxonDetailNode,
-    TaxonInputRow, TaxonRowOutcome, TaxonSearchResult, TaxonSuggestion, TaxonUpdateInput,
-    TaxonomyBaseMetadata, TaxonomyOperationResult, TaxonomyPage, TaxonomyPreviewResult,
+    AddSqlInputRequest, AddSqlInputResult, CustomSqlExecutionResult,
+    CustomTaxonomySqlExportRequest, CustomTaxonomySqlRequest, DeleteTaxonNameInput,
+    DirectImportDatabase, PersistentSqlInput, PromoteTaxonNameInput, RemoveSqlInputRequest,
+    RemoveSqlInputResult, SaveTaxonNameGroupInput, SqlExportResult, SqlSourceSchema, TaxonChild,
+    TaxonDetail, TaxonInputRow, TaxonRowOutcome, TaxonSearchResult, TaxonSuggestion,
+    TaxonUpdateInput, TaxonomyImportMetadata, TaxonomyOperationResult, TaxonomyPage,
+    TaxonomyPreviewResult, ValidateSqlImportRequest,
 };
-use vividarium_core::{
-    map::{self, MapBounds, MapPhoto, MapSettings},
-    mapping, naming, photos, taxonomy,
-};
+use vividarium_core::{mapping, naming, photos, taxonomy};
 
 use crate::state::AppState;
 use crate::updater::{AppUpdateEvent, AppUpdateInfo, PendingAppUpdate};
+
+pub mod map;
 
 type CommandResult<T> = Result<T, String>;
 
@@ -50,9 +52,54 @@ pub struct PhotoLibraryWorkspace {
     pub database_available: bool,
 }
 
+#[derive(Debug, Serialize)]
+pub struct FormattedUpdatePreviewResult {
+    pub preview_id: String,
+    pub delimiter: String,
+    pub encoding: String,
+    pub rows: Vec<TaxonRowOutcome>,
+}
+
+impl FormattedUpdatePreviewResult {
+    fn new(preview_id: String, preview: TaxonomyPreviewResult) -> Self {
+        Self {
+            preview_id,
+            delimiter: preview.delimiter,
+            encoding: preview.encoding,
+            rows: preview.rows,
+        }
+    }
+}
+
 #[tauri::command]
 pub fn get_app_version(app: AppHandle) -> String {
     app.package_info().version.to_string()
+}
+
+#[tauri::command]
+pub fn get_general_settings(state: State<'_, AppState>) -> CommandResult<GeneralSettings> {
+    vividarium_core::general::get_general_settings(&state.database).map_err(error)
+}
+
+#[tauri::command]
+pub fn update_general_settings(
+    state: State<'_, AppState>,
+    settings: GeneralSettings,
+) -> CommandResult<GeneralSettings> {
+    vividarium_core::general::update_general_settings(&state.database, &settings).map_err(error)
+}
+
+#[tauri::command]
+pub fn get_workspace_state(state: State<'_, AppState>) -> CommandResult<WorkspaceState> {
+    vividarium_core::general::get_workspace_state(&state.database).map_err(error)
+}
+
+#[tauri::command]
+pub fn save_workspace_state(
+    state: State<'_, AppState>,
+    workspace_state: WorkspaceState,
+) -> CommandResult<()> {
+    vividarium_core::general::save_workspace_state(&state.database, &workspace_state).map_err(error)
 }
 
 #[tauri::command]
@@ -226,6 +273,21 @@ pub fn rename_photo_library(
 }
 
 #[tauri::command]
+pub fn open_path_in_file_manager(path: String) -> CommandResult<()> {
+    let path = Path::new(&path);
+    if !path.is_absolute() {
+        return Err("storage path must be absolute".into());
+    }
+    if path.is_dir() {
+        crate::file_manager::open_directory(path)
+    } else if path.is_file() {
+        crate::file_manager::reveal(path)
+    } else {
+        Err(format!("storage path is unavailable: {}", path.display()))
+    }
+}
+
+#[tauri::command]
 pub fn relocate_taxonomy_database(
     state: State<'_, AppState>,
     database_path: String,
@@ -235,6 +297,21 @@ pub fn relocate_taxonomy_database(
         .database
         .relocate_taxonomy_database(Path::new(&database_path))
         .map_err(error)
+}
+
+#[tauri::command]
+pub fn open_taxonomy_database(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    database_path: String,
+) -> CommandResult<DatabaseLocations> {
+    ensure_database_relocation_allowed(&state)?;
+    let locations = state
+        .database
+        .open_taxonomy_database(Path::new(&database_path))
+        .map_err(error)?;
+    schedule_taxonomy_sync(app, &state);
+    Ok(locations)
 }
 
 #[tauri::command]
@@ -358,21 +435,21 @@ pub fn get_naming_hook_test_cases(
 
 #[tauri::command]
 pub fn run_naming_hook_tests(
-    state: State<'_, AppState>,
-    kind: NamingHookKind,
-    script: Option<String>,
-) -> CommandResult<NamingHookTestReport> {
-    naming::run_naming_hook_tests(&state.database, kind, script.as_deref()).map_err(error)
-}
-
-#[tauri::command]
-pub fn test_and_save_naming_hook(
-    state: State<'_, AppState>,
     kind: NamingHookKind,
     script: String,
     cases: Vec<NamingHookTestCase>,
 ) -> CommandResult<NamingHookTestReport> {
-    naming::test_and_save_naming_hook(&state.database, kind, &script, &cases).map_err(error)
+    naming::run_naming_hook_tests(kind, &script, &cases).map_err(error)
+}
+
+#[tauri::command]
+pub fn save_naming_hook(
+    state: State<'_, AppState>,
+    kind: NamingHookKind,
+    script: String,
+    cases: Vec<NamingHookTestCase>,
+) -> CommandResult<()> {
+    naming::save_naming_hook(&state.database, kind, &script, &cases).map_err(error)
 }
 
 #[tauri::command]
@@ -424,6 +501,15 @@ pub fn rename_photo(
 }
 
 #[tauri::command]
+pub fn rename_photo_directory(
+    state: State<'_, AppState>,
+    directory_id: i64,
+    new_name: String,
+) -> CommandResult<PhotoDirectory> {
+    photos::rename_directory(&state.database, directory_id, &new_name).map_err(error)
+}
+
+#[tauri::command]
 pub fn rename_photo_from_taxon(state: State<'_, AppState>, photo_id: i64) -> CommandResult<Photo> {
     photos::rename_photo_from_taxon(&state.database, photo_id).map_err(error)
 }
@@ -451,68 +537,98 @@ pub fn rename_photos_in_directory_from_taxa(
 }
 
 #[tauri::command]
-pub fn list_photo_operations(
+pub async fn list_photo_operations(
     state: State<'_, AppState>,
     cursor: Option<String>,
     limit: Option<usize>,
 ) -> CommandResult<OperationPage<OperationSummary>> {
-    photos::list_operations(&state.database, cursor.as_deref(), limit.unwrap_or(50)).map_err(error)
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        photos::list_operations(&database, cursor.as_deref(), limit.unwrap_or(50)).map_err(error)
+    })
+    .await
+    .map_err(error)?
 }
 
 #[tauri::command]
-pub fn list_photo_operation_audit(
+pub async fn list_photo_operation_audit(
     state: State<'_, AppState>,
     operation_id: i64,
     cursor: Option<String>,
     limit: Option<usize>,
 ) -> CommandResult<OperationPage<OperationAuditRow>> {
-    photos::list_operation_audit(
-        &state.database,
-        operation_id,
-        cursor.as_deref(),
-        limit.unwrap_or(50),
-    )
-    .map_err(error)
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        photos::list_operation_audit(
+            &database,
+            operation_id,
+            cursor.as_deref(),
+            limit.unwrap_or(50),
+        )
+        .map_err(error)
+    })
+    .await
+    .map_err(error)?
 }
 
 #[tauri::command]
-pub fn rollback_photo_operation(
+pub async fn rollback_photo_operation(
     state: State<'_, AppState>,
     operation_id: i64,
 ) -> CommandResult<()> {
-    photos::rollback_operation(&state.database, operation_id).map_err(error)
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        photos::rollback_operation(&database, operation_id).map_err(error)
+    })
+    .await
+    .map_err(error)?
 }
 
 #[tauri::command]
-pub fn export_photo_operation_audit(
+pub async fn export_photo_operation_audit(
     state: State<'_, AppState>,
     operation_id: i64,
     destination_path: String,
 ) -> CommandResult<()> {
-    let mut writer = audit_writer(&destination_path)?;
-    photos::write_operation_audit(&state.database, operation_id, &mut writer).map_err(error)?;
-    writer.flush().map_err(error)
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut writer = audit_writer(&destination_path)?;
+        photos::write_operation_audit(&database, operation_id, &mut writer).map_err(error)?;
+        writer.flush().map_err(error)
+    })
+    .await
+    .map_err(error)?
 }
 
 #[tauri::command]
-pub fn export_photo_operations_audit(
+pub async fn export_photo_operations_audit(
     state: State<'_, AppState>,
     operation_ids: Vec<i64>,
     destination_path: String,
 ) -> CommandResult<()> {
-    let mut writer = audit_writer(&destination_path)?;
-    photos::write_operations_audit(&state.database, &operation_ids, &mut writer).map_err(error)?;
-    writer.flush().map_err(error)
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut writer = audit_writer(&destination_path)?;
+        photos::write_operations_audit(&database, &operation_ids, &mut writer).map_err(error)?;
+        writer.flush().map_err(error)
+    })
+    .await
+    .map_err(error)?
 }
 
 #[tauri::command]
-pub fn export_all_photo_operation_audit(
+pub async fn export_all_photo_operation_audit(
     state: State<'_, AppState>,
     destination_path: String,
 ) -> CommandResult<()> {
-    let mut writer = audit_writer(&destination_path)?;
-    photos::write_all_operation_audit(&state.database, &mut writer).map_err(error)?;
-    writer.flush().map_err(error)
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut writer = audit_writer(&destination_path)?;
+        photos::write_all_operation_audit(&database, &mut writer).map_err(error)?;
+        writer.flush().map_err(error)
+    })
+    .await
+    .map_err(error)?
 }
 
 #[tauri::command]
@@ -523,19 +639,19 @@ pub fn get_photo(state: State<'_, AppState>, photo_id: i64) -> CommandResult<Pho
 }
 
 #[tauri::command]
-pub fn search_photos(
+pub async fn search_photos(
     state: State<'_, AppState>,
     query: String,
     cursor: Option<String>,
     limit: Option<usize>,
 ) -> CommandResult<PhotoPage<Photo>> {
-    photos::search_photos(
-        &state.database,
-        &query,
-        cursor.as_deref(),
-        limit.unwrap_or(50),
-    )
-    .map_err(error)
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        photos::search_photos(&database, &query, cursor.as_deref(), limit.unwrap_or(50))
+            .map_err(error)
+    })
+    .await
+    .map_err(error)?
 }
 
 #[tauri::command]
@@ -572,6 +688,15 @@ pub fn reveal_photo_in_file_manager(
 }
 
 #[tauri::command]
+pub fn open_photo_directory_in_file_manager(
+    state: State<'_, AppState>,
+    directory_id: i64,
+) -> CommandResult<()> {
+    let path = photos::photo_directory_path(&state.database, directory_id).map_err(error)?;
+    crate::file_manager::open_directory(&path)
+}
+
+#[tauri::command]
 pub fn get_photo_metadata(
     state: State<'_, AppState>,
     photo_id: i64,
@@ -580,107 +705,156 @@ pub fn get_photo_metadata(
 }
 
 #[tauri::command]
-pub fn search_taxa(
+pub async fn search_taxa(
     state: State<'_, AppState>,
     query: String,
     limit: Option<usize>,
 ) -> CommandResult<Vec<TaxonSearchResult>> {
-    taxonomy::search_taxa(&state.database, &query, limit.unwrap_or(50)).map_err(error)
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        taxonomy::search_taxa(&database, &query, limit.unwrap_or(50)).map_err(error)
+    })
+    .await
+    .map_err(error)?
 }
 
 #[tauri::command]
-pub fn suggest_taxa(
+pub async fn suggest_taxa(
     state: State<'_, AppState>,
     query: String,
     limit: Option<usize>,
 ) -> CommandResult<Vec<TaxonSuggestion>> {
-    taxonomy::suggest_taxa(&state.database, &query, limit.unwrap_or(10)).map_err(error)
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        taxonomy::suggest_taxa(&database, &query, limit.unwrap_or(10)).map_err(error)
+    })
+    .await
+    .map_err(error)?
 }
 
 #[tauri::command]
-pub fn get_taxon_detail_node(
+pub async fn get_taxon_detail(
     state: State<'_, AppState>,
     taxon_id: i64,
-    children_cursor: Option<String>,
-    children_limit: Option<usize>,
-) -> CommandResult<TaxonDetailNode> {
-    taxonomy::get_taxon_detail_node(
-        &state.database,
-        taxon_id,
-        children_cursor.as_deref(),
-        children_limit.unwrap_or(50),
-    )
+) -> CommandResult<TaxonDetail> {
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        taxonomy::get_taxon_detail(&database, taxon_id)
+            .map_err(error)?
+            .ok_or_else(|| format!("taxon {taxon_id} not found"))
+    })
+    .await
     .map_err(error)?
-    .ok_or_else(|| format!("taxon {taxon_id} not found"))
 }
 
 #[tauri::command]
-pub fn list_taxon_children(
+pub async fn list_taxon_children(
     state: State<'_, AppState>,
     taxon_id: i64,
     cursor: Option<String>,
     limit: Option<usize>,
 ) -> CommandResult<TaxonomyPage<TaxonChild>> {
-    taxonomy::list_taxon_children(
-        &state.database,
-        taxon_id,
-        cursor.as_deref(),
-        limit.unwrap_or(50),
-    )
-    .map_err(error)
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        taxonomy::list_taxon_children(&database, taxon_id, cursor.as_deref(), limit.unwrap_or(50))
+            .map_err(error)
+    })
+    .await
+    .map_err(error)?
 }
 
 #[tauri::command]
-pub fn delete_taxon_name(
+pub async fn delete_taxon_name(
     app: AppHandle,
     state: State<'_, AppState>,
     input: DeleteTaxonNameInput,
 ) -> CommandResult<()> {
-    taxonomy::delete_taxon_name(&state.database, input).map_err(error)?;
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        taxonomy::delete_taxon_name(&database, input).map_err(error)
+    })
+    .await
+    .map_err(error)??;
     schedule_taxonomy_sync(app, &state);
     Ok(())
 }
 
 #[tauri::command]
-pub fn update_taxon(
+pub async fn update_taxon(
     app: AppHandle,
     state: State<'_, AppState>,
     input: TaxonUpdateInput,
 ) -> CommandResult<TaxonomyOperationResult> {
-    let result = taxonomy::update_taxon(&state.database, input).map_err(error)?;
+    let database = state.database.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        taxonomy::update_taxon(&database, input).map_err(error)
+    })
+    .await
+    .map_err(error)??;
     schedule_taxonomy_sync(app, &state);
     Ok(result)
 }
 
 #[tauri::command]
-pub fn promote_taxon_name(
+pub async fn promote_taxon_name(
     app: AppHandle,
     state: State<'_, AppState>,
     input: PromoteTaxonNameInput,
 ) -> CommandResult<()> {
-    taxonomy::promote_taxon_name(&state.database, input).map_err(error)?;
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        taxonomy::promote_taxon_name(&database, input).map_err(error)
+    })
+    .await
+    .map_err(error)??;
     schedule_taxonomy_sync(app, &state);
     Ok(())
 }
 
 #[tauri::command]
-pub fn delete_taxon(
+pub async fn save_taxon_name_group(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    input: SaveTaxonNameGroupInput,
+) -> CommandResult<()> {
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        taxonomy::save_taxon_name_group(&database, input).map_err(error)
+    })
+    .await
+    .map_err(error)??;
+    schedule_taxonomy_sync(app, &state);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn delete_taxon(
     app: AppHandle,
     state: State<'_, AppState>,
     taxon_id: i64,
 ) -> CommandResult<()> {
-    taxonomy::delete_taxon(&state.database, taxon_id).map_err(error)?;
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        taxonomy::delete_taxon(&database, taxon_id).map_err(error)
+    })
+    .await
+    .map_err(error)??;
     schedule_taxonomy_sync(app, &state);
     Ok(())
 }
 
 #[tauri::command]
-pub fn execute_custom_taxonomy_sql(
+pub async fn execute_custom_taxonomy_sql(
     app: AppHandle,
     state: State<'_, AppState>,
     request: CustomTaxonomySqlRequest,
 ) -> CommandResult<CustomSqlExecutionResult> {
-    let result = taxonomy::execute_custom_taxonomy_sql(&state.database, &request).map_err(error)?;
+    let database = state.database.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        taxonomy::execute_custom_taxonomy_sql(&database, &request).map_err(error)
+    })
+    .await
+    .map_err(error)??;
     if result.changeset_size > 0 {
         schedule_taxonomy_sync(app, &state);
     }
@@ -700,64 +874,112 @@ pub fn list_custom_sql_inputs(
 }
 
 #[tauri::command]
-pub fn add_custom_sql_input(
+pub fn list_custom_sql_database_schemas(
+    state: State<'_, AppState>,
+) -> CommandResult<Vec<SqlSourceSchema>> {
+    taxonomy::list_custom_sql_database_schemas(&state.database).map_err(error)
+}
+
+#[tauri::command]
+pub async fn add_custom_sql_input(
     state: State<'_, AppState>,
     request: AddSqlInputRequest,
 ) -> CommandResult<AddSqlInputResult> {
-    taxonomy::add_custom_sql_input(&state.database, &request).map_err(error)
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        taxonomy::add_custom_sql_input(&database, &request).map_err(error)
+    })
+    .await
+    .map_err(error)?
 }
 
 #[tauri::command]
-pub fn remove_custom_sql_input(
+pub async fn remove_custom_sql_input(
     state: State<'_, AppState>,
     request: RemoveSqlInputRequest,
 ) -> CommandResult<RemoveSqlInputResult> {
-    taxonomy::remove_custom_sql_input(&state.database, &request).map_err(error)
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        taxonomy::remove_custom_sql_input(&database, &request).map_err(error)
+    })
+    .await
+    .map_err(error)?
 }
 
 #[tauri::command]
-pub fn export_custom_taxonomy_query(
+pub async fn export_custom_taxonomy_query(
     state: State<'_, AppState>,
     request: CustomTaxonomySqlExportRequest,
 ) -> CommandResult<SqlExportResult> {
-    taxonomy::export_custom_taxonomy_query(&state.database, &request).map_err(error)
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        taxonomy::export_custom_taxonomy_query(&database, &request).map_err(error)
+    })
+    .await
+    .map_err(error)?
 }
 
 #[tauri::command]
-pub fn preview_taxonomy_rows(
+pub async fn preview_taxonomy_rows(
     state: State<'_, AppState>,
     rows: Vec<TaxonInputRow>,
-) -> CommandResult<TaxonomyPreviewResult> {
-    taxonomy::preview_rows(&state.database, &rows).map_err(error)
+) -> CommandResult<FormattedUpdatePreviewResult> {
+    state.clear_formatted_update_preview().map_err(error)?;
+    let database = state.database.clone();
+    let prepared = tauri::async_runtime::spawn_blocking(move || {
+        taxonomy::prepare_rows(&database, &rows).map_err(error)
+    })
+    .await
+    .map_err(error)??;
+    let (preview_id, preview) = state
+        .replace_formatted_update_preview(prepared)
+        .map_err(error)?;
+    Ok(FormattedUpdatePreviewResult::new(preview_id, preview))
 }
 
 #[tauri::command]
-pub fn apply_taxonomy_rows(
+pub async fn apply_taxonomy_rows(
     app: AppHandle,
     state: State<'_, AppState>,
-    rows: Vec<TaxonInputRow>,
+    preview_id: String,
 ) -> CommandResult<TaxonomyOperationResult> {
-    let result = taxonomy::apply_rows(&state.database, &rows).map_err(error)?;
+    let prepared = state
+        .take_formatted_update_preview(&preview_id)
+        .map_err(error)?;
+    let database = state.database.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        taxonomy::apply_prepared_rows(&database, prepared).map_err(error)
+    })
+    .await
+    .map_err(error)??;
     schedule_taxonomy_sync(app, &state);
     Ok(result)
 }
 
 #[tauri::command]
-pub fn parse_taxonomy_input_csv(
+pub async fn parse_taxonomy_input_csv(
     state: State<'_, AppState>,
     input: String,
 ) -> CommandResult<Vec<TaxonInputRow>> {
-    taxonomy::parse_taxonomy_input_csv(&state.database, &input).map_err(error)
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        taxonomy::parse_taxonomy_input_csv(&database, &input).map_err(error)
+    })
+    .await
+    .map_err(error)?
 }
 
 #[tauri::command]
-pub fn get_taxonomy_formatted_update_template() -> CommandResult<String> {
-    taxonomy::taxonomy_formatted_update_template().map_err(error)
+pub fn get_taxonomy_formatted_update_template(state: State<'_, AppState>) -> CommandResult<String> {
+    taxonomy::taxonomy_formatted_update_template(&state.database).map_err(error)
 }
 
 #[tauri::command]
-pub fn export_taxonomy_log(rows: Vec<TaxonRowOutcome>) -> CommandResult<String> {
-    taxonomy::taxonomy_log_csv(&rows).map_err(error)
+pub fn export_taxonomy_log(
+    state: State<'_, AppState>,
+    rows: Vec<TaxonRowOutcome>,
+) -> CommandResult<String> {
+    taxonomy::taxonomy_log_csv(&state.database, &rows).map_err(error)
 }
 
 #[tauri::command]
@@ -774,148 +996,248 @@ pub fn set_taxonomy_name_separator(
 }
 
 #[tauri::command]
-pub fn list_taxonomy_operations(
+pub async fn list_taxonomy_operations(
     state: State<'_, AppState>,
     cursor: Option<String>,
     limit: Option<usize>,
 ) -> CommandResult<OperationPage<OperationSummary>> {
-    taxonomy::list_operations(&state.database, cursor.as_deref(), limit.unwrap_or(50))
-        .map_err(error)
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        taxonomy::list_operations(&database, cursor.as_deref(), limit.unwrap_or(50)).map_err(error)
+    })
+    .await
+    .map_err(error)?
 }
 
 #[tauri::command]
-pub fn list_taxonomy_operation_audit(
+pub async fn list_taxonomy_operation_audit(
     state: State<'_, AppState>,
     operation_id: i64,
     cursor: Option<String>,
     limit: Option<usize>,
 ) -> CommandResult<OperationPage<OperationAuditRow>> {
-    taxonomy::list_operation_audit(
-        &state.database,
-        operation_id,
-        cursor.as_deref(),
-        limit.unwrap_or(50),
-    )
-    .map_err(error)
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        taxonomy::list_operation_audit(
+            &database,
+            operation_id,
+            cursor.as_deref(),
+            limit.unwrap_or(50),
+        )
+        .map_err(error)
+    })
+    .await
+    .map_err(error)?
 }
 
 #[tauri::command]
-pub fn rollback_taxonomy_operation(
+pub async fn rollback_taxonomy_operation(
     app: AppHandle,
     state: State<'_, AppState>,
     operation_id: i64,
 ) -> CommandResult<()> {
-    taxonomy::rollback_operation(&state.database, operation_id).map_err(error)?;
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        taxonomy::rollback_operation(&database, operation_id).map_err(error)
+    })
+    .await
+    .map_err(error)??;
     schedule_taxonomy_sync(app, &state);
     Ok(())
 }
 
 #[tauri::command]
-pub fn export_taxonomy_operation_audit(
+pub async fn export_taxonomy_operation_audit(
     state: State<'_, AppState>,
     operation_id: i64,
     destination_path: String,
 ) -> CommandResult<()> {
-    let mut writer = audit_writer(&destination_path)?;
-    taxonomy::write_operation_audit(&state.database, operation_id, &mut writer).map_err(error)?;
-    writer.flush().map_err(error)
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut writer = audit_writer(&destination_path)?;
+        taxonomy::write_operation_audit(&database, operation_id, &mut writer).map_err(error)?;
+        writer.flush().map_err(error)
+    })
+    .await
+    .map_err(error)?
 }
 
 #[tauri::command]
-pub fn export_taxonomy_operations_audit(
+pub async fn export_taxonomy_operations_audit(
     state: State<'_, AppState>,
     operation_ids: Vec<i64>,
     destination_path: String,
 ) -> CommandResult<()> {
-    let mut writer = audit_writer(&destination_path)?;
-    taxonomy::write_operations_audit(&state.database, &operation_ids, &mut writer)
-        .map_err(error)?;
-    writer.flush().map_err(error)
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut writer = audit_writer(&destination_path)?;
+        taxonomy::write_operations_audit(&database, &operation_ids, &mut writer).map_err(error)?;
+        writer.flush().map_err(error)
+    })
+    .await
+    .map_err(error)?
 }
 
 #[tauri::command]
-pub fn export_all_taxonomy_operation_audit(
+pub async fn export_all_taxonomy_operation_audit(
     state: State<'_, AppState>,
     destination_path: String,
 ) -> CommandResult<()> {
-    let mut writer = audit_writer(&destination_path)?;
-    taxonomy::write_all_operation_audit(&state.database, &mut writer).map_err(error)?;
-    writer.flush().map_err(error)
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut writer = audit_writer(&destination_path)?;
+        taxonomy::write_all_operation_audit(&database, &mut writer).map_err(error)?;
+        writer.flush().map_err(error)
+    })
+    .await
+    .map_err(error)?
 }
 
 #[tauri::command]
-pub fn export_taxonomy_operation_input(
+pub async fn export_taxonomy_operation_input(
     state: State<'_, AppState>,
     operation_id: i64,
-) -> CommandResult<String> {
-    taxonomy::export_operation_input(&state.database, operation_id).map_err(error)
+    destination_path: String,
+) -> CommandResult<()> {
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let csv = taxonomy::export_operation_input(&database, operation_id).map_err(error)?;
+        write_csv_export(&destination_path, &csv)
+    })
+    .await
+    .map_err(error)?
 }
 
 #[tauri::command]
-pub fn export_taxonomy_operations_input(
+pub async fn export_taxonomy_operations_input(
     state: State<'_, AppState>,
     operation_ids: Vec<i64>,
-) -> CommandResult<String> {
-    taxonomy::export_operations_input(&state.database, &operation_ids).map_err(error)
+    destination_path: String,
+) -> CommandResult<()> {
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let csv = taxonomy::export_operations_input(&database, &operation_ids).map_err(error)?;
+        write_csv_export(&destination_path, &csv)
+    })
+    .await
+    .map_err(error)?
 }
 
 #[tauri::command]
-pub fn export_all_replayable_taxonomy_inputs(state: State<'_, AppState>) -> CommandResult<String> {
-    taxonomy::export_all_replayable_inputs(&state.database).map_err(error)
-}
-
-#[tauri::command]
-pub fn get_taxonomy_base_metadata(
+pub async fn export_all_replayable_taxonomy_inputs(
     state: State<'_, AppState>,
-) -> CommandResult<Option<TaxonomyBaseMetadata>> {
-    taxonomy::get_taxonomy_base_metadata(&state.database).map_err(error)
+) -> CommandResult<String> {
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        taxonomy::export_all_replayable_inputs(&database).map_err(error)
+    })
+    .await
+    .map_err(error)?
 }
 
 #[tauri::command]
-pub fn get_base_import_sql(state: State<'_, AppState>) -> CommandResult<String> {
-    taxonomy::get_base_import_sql(&state.database).map_err(error)
+pub fn get_taxonomy_import_metadata(
+    state: State<'_, AppState>,
+) -> CommandResult<Option<TaxonomyImportMetadata>> {
+    taxonomy::get_taxonomy_import_metadata(&state.database).map_err(error)
 }
 
 #[tauri::command]
-pub fn list_base_import_inputs(
+pub async fn inspect_direct_import_database(
+    state: State<'_, AppState>,
+    source_path: String,
+) -> CommandResult<DirectImportDatabase> {
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        taxonomy::inspect_direct_import_database(&database, Path::new(&source_path)).map_err(error)
+    })
+    .await
+    .map_err(error)?
+}
+
+#[tauri::command]
+pub fn get_sql_import_sql(state: State<'_, AppState>) -> CommandResult<String> {
+    taxonomy::get_sql_import_sql(&state.database).map_err(error)
+}
+
+#[tauri::command]
+pub fn list_sql_import_inputs(
     state: State<'_, AppState>,
 ) -> CommandResult<Vec<PersistentSqlInput>> {
-    taxonomy::list_base_import_inputs(&state.database).map_err(error)
+    taxonomy::list_sql_import_inputs(&state.database).map_err(error)
 }
 
 #[tauri::command]
-pub fn add_base_import_input(
+pub fn list_sql_import_database_schemas(
+    state: State<'_, AppState>,
+) -> CommandResult<Vec<SqlSourceSchema>> {
+    taxonomy::list_sql_import_database_schemas(&state.database).map_err(error)
+}
+
+#[tauri::command]
+pub fn list_sql_import_staging_schemas(
+    state: State<'_, AppState>,
+) -> CommandResult<Vec<SqlSourceSchema>> {
+    taxonomy::list_sql_import_staging_schemas(&state.database).map_err(error)
+}
+
+#[tauri::command]
+pub async fn add_sql_import_input(
     state: State<'_, AppState>,
     request: AddSqlInputRequest,
 ) -> CommandResult<AddSqlInputResult> {
-    taxonomy::add_base_import_input(&state.database, &request).map_err(error)
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        taxonomy::add_sql_import_input(&database, &request).map_err(error)
+    })
+    .await
+    .map_err(error)?
 }
 
 #[tauri::command]
-pub fn remove_base_import_input(
+pub async fn remove_sql_import_input(
     state: State<'_, AppState>,
     request: RemoveSqlInputRequest,
 ) -> CommandResult<RemoveSqlInputResult> {
-    taxonomy::remove_base_import_input(&state.database, &request).map_err(error)
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        taxonomy::remove_sql_import_input(&database, &request).map_err(error)
+    })
+    .await
+    .map_err(error)?
 }
 
 #[tauri::command]
-pub fn execute_base_import_sql(
+pub fn start_sql_import_validation(
+    app: AppHandle,
     state: State<'_, AppState>,
-    request: ExecuteBaseImportSqlRequest,
-) -> CommandResult<BaseImportExecutionResult> {
-    taxonomy::execute_base_import_sql(&state.database, &request).map_err(error)
+    request: ValidateSqlImportRequest,
+) -> CommandResult<OperationState> {
+    let database = state.database.clone();
+    state.operations.start_with_progress(
+        app,
+        "sql_import",
+        "validate_sql_import",
+        move |progress| match taxonomy::validate_sql_import_with_progress(
+            &database, &request, progress,
+        ) {
+            Ok(result) => serde_json::to_value(result).map_err(error),
+            Err(failure) => {
+                progress(vividarium_core::OperationProgress {
+                    stage: "operational_failure".into(),
+                    current: None,
+                    total: None,
+                    statement_index: None,
+                    statement_total: None,
+                });
+                Err(error(failure))
+            }
+        },
+    )
 }
 
 #[tauri::command]
-pub fn validate_base_import(
-    state: State<'_, AppState>,
-) -> CommandResult<BaseImportValidationResult> {
-    taxonomy::validate_base_import(&state.database).map_err(error)
-}
-
-#[tauri::command]
-pub fn apply_base_import(
+pub fn apply_sql_import(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CommandResult<OperationState> {
@@ -924,13 +1246,37 @@ pub fn apply_base_import(
     let sync_app = app.clone();
     state
         .operations
-        .start(app, "mapping", "apply_base_import", move |progress| {
-            progress(0, None, "Validating base import candidate");
-            let result = taxonomy::apply_base_import(&database).map_err(error)?;
-            progress(1, Some(1), "Taxonomy base import applied");
+        .start(app, "sql_import", "apply_sql_import", move |progress| {
+            progress(0, None, "Validating SQL import candidate");
+            let result = taxonomy::apply_sql_import(&database).map_err(error)?;
+            progress(1, Some(1), "Taxonomy SQL import applied");
             schedule_taxonomy_sync(sync_app, &background_state);
             serde_json::to_value(result).map_err(error)
         })
+}
+
+#[tauri::command]
+pub fn apply_direct_import(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    source_path: String,
+) -> CommandResult<OperationState> {
+    let database = state.database.clone();
+    let background_state = state.inner().clone();
+    let sync_app = app.clone();
+    state.operations.start(
+        app,
+        "direct_import",
+        "apply_direct_import",
+        move |progress| {
+            progress(0, None, "Validating direct import database");
+            let result =
+                taxonomy::apply_direct_import(&database, Path::new(&source_path)).map_err(error)?;
+            progress(1, Some(1), "Direct import applied");
+            schedule_taxonomy_sync(sync_app, &background_state);
+            serde_json::to_value(result).map_err(error)
+        },
+    )
 }
 
 fn schedule_taxonomy_sync(app: AppHandle, state: &AppState) {
@@ -986,9 +1332,15 @@ fn schedule_taxonomy_sync(app: AppHandle, state: &AppState) {
 fn audit_writer(destination_path: &str) -> CommandResult<BufWriter<File>> {
     let destination = Path::new(destination_path);
     if !destination.is_absolute() {
-        return Err("audit export destination must be an absolute path".into());
+        return Err("CSV export destination must be an absolute path".into());
     }
     File::create(destination).map(BufWriter::new).map_err(error)
+}
+
+fn write_csv_export(destination_path: &str, contents: &str) -> CommandResult<()> {
+    let mut writer = audit_writer(destination_path)?;
+    writer.write_all(contents.as_bytes()).map_err(error)?;
+    writer.flush().map_err(error)
 }
 
 fn ensure_database_relocation_allowed(state: &AppState) -> CommandResult<()> {
@@ -1031,12 +1383,17 @@ pub fn search_photo_taxa(
 }
 
 #[tauri::command]
-pub fn suggest_photo_taxa(
+pub async fn suggest_photo_taxa(
     state: State<'_, AppState>,
     query: String,
     limit: Option<usize>,
 ) -> CommandResult<Vec<TaxonSuggestion>> {
-    mapping::suggest_photo_taxa(&state.database, &query, limit.unwrap_or(10)).map_err(error)
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        mapping::suggest_photo_taxa(&database, &query, limit.unwrap_or(10)).map_err(error)
+    })
+    .await
+    .map_err(error)?
 }
 
 #[tauri::command]
@@ -1111,7 +1468,6 @@ pub fn browse_photo_taxon(
     state: State<'_, AppState>,
     taxon_id: Option<i64>,
     show_empty: Option<bool>,
-    include_descendants: Option<bool>,
     cursor: Option<String>,
     limit: Option<usize>,
 ) -> CommandResult<PhotoPage<PhotoTaxonItem>> {
@@ -1119,7 +1475,6 @@ pub fn browse_photo_taxon(
         &state.database,
         taxon_id,
         show_empty.unwrap_or(false),
-        include_descendants.unwrap_or(true),
         cursor.as_deref(),
         limit.unwrap_or(50),
     )
@@ -1156,35 +1511,6 @@ pub fn search_photos_by_mapping_status(
         &query,
         cursor.as_deref(),
         limit.unwrap_or(50),
-    )
-    .map_err(error)
-}
-
-#[tauri::command]
-pub fn get_map_settings(state: State<'_, AppState>) -> CommandResult<MapSettings> {
-    map::get_map_settings(&state.database).map_err(error)
-}
-
-#[tauri::command]
-pub fn set_map_settings(
-    state: State<'_, AppState>,
-    settings: MapSettings,
-) -> CommandResult<MapSettings> {
-    map::set_map_settings(&state.database, settings).map_err(error)
-}
-
-#[tauri::command]
-pub fn list_map_photos(
-    state: State<'_, AppState>,
-    bounds: Option<MapBounds>,
-    cursor: Option<String>,
-    limit: Option<usize>,
-) -> CommandResult<PhotoPage<MapPhoto>> {
-    map::list_map_photos(
-        &state.database,
-        bounds,
-        cursor.as_deref(),
-        limit.unwrap_or(500),
     )
     .map_err(error)
 }

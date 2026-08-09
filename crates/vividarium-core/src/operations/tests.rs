@@ -82,7 +82,7 @@ fn pages_summaries_and_audit_without_loading_nested_rows() {
     assert_eq!(next_audit.next_cursor, None);
 
     let mut output = Vec::new();
-    write_operation_audit(&connection, Some(&[2, 1]), &mut output).unwrap();
+    write_operation_audit(&connection, Some(&[2, 1]), b'|', &mut output).unwrap();
     let exported = String::from_utf8(output).unwrap();
     let mut csv = csv::ReaderBuilder::new()
         .delimiter(b'|')

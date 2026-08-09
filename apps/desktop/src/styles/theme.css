@@ -23,13 +23,138 @@
   --amber: #d2ad63;
   --red: #d66f6f;
   --purple: #b49add;
+  --button-radius: 4px;
+  --button-transition: 100ms ease;
+  --button-bg: #2b2b2b;
+  --button-bg-hover: #3a3a3a;
+  --button-bg-active: #444;
+  --button-primary: #396449;
+  --button-primary-hover: #467959;
+  --button-primary-active: #31563f;
+  --button-focus-ring: #78b58dcc;
+  --tab: #242424;
+  --selected: #373c39;
+  --popover: #252525;
+  --code: #171717;
+  --code-read-only: #1b1b1b;
+  --on-accent: #fff;
+  --scrollbar: #484848;
+  --danger-bg: #492626;
+  --danger-text: #ef9a9a;
+  --overlay: #0008;
+  --shadow: #000a;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  color: #282828;
+  background: #f7f7f7;
+  --activity: #f1f1f1;
+  --top: #ececec;
+  --panel: #f5f5f5;
+  --panel-2: #ededed;
+  --input: #fff;
+  --hover: #e5e7e6;
+  --active: #d9dedb;
+  --line: #d3d3d3;
+  --line-strong: #b7b7b7;
+  --text: #282828;
+  --muted: #666;
+  --quiet: #8a8a8a;
+  --accent: #39704d;
+  --accent-bright: #28643e;
+  --blue: #2869a6;
+  --amber: #8a650f;
+  --red: #a83232;
+  --purple: #6f52a1;
+  --button-bg: #f3f3f3;
+  --button-bg-hover: #e4e4e4;
+  --button-bg-active: #d7d7d7;
+  --button-primary: #39704d;
+  --button-primary-hover: #2f6543;
+  --button-primary-active: #28583a;
+  --button-focus-ring: #39704dcc;
+  --tab: #e5e5e5;
+  --selected: #d5ddd8;
+  --popover: #fff;
+  --code: #fff;
+  --code-read-only: #f4f4f4;
+  --on-accent: #fff;
+  --scrollbar: #aaa;
+  --danger-bg: #f9dddd;
+  --danger-text: #8f2424;
+  --overlay: #0005;
+  --shadow: #0003;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    color-scheme: light;
+    color: #282828;
+    background: #f7f7f7;
+    --activity: #f1f1f1;
+    --top: #ececec;
+    --panel: #f5f5f5;
+    --panel-2: #ededed;
+    --input: #fff;
+    --hover: #e5e7e6;
+    --active: #d9dedb;
+    --line: #d3d3d3;
+    --line-strong: #b7b7b7;
+    --text: #282828;
+    --muted: #666;
+    --quiet: #8a8a8a;
+    --accent: #39704d;
+    --accent-bright: #28643e;
+    --blue: #2869a6;
+    --amber: #8a650f;
+    --red: #a83232;
+    --purple: #6f52a1;
+    --button-bg: #f3f3f3;
+    --button-bg-hover: #e4e4e4;
+    --button-bg-active: #d7d7d7;
+    --button-primary: #39704d;
+    --button-primary-hover: #2f6543;
+    --button-primary-active: #28583a;
+    --button-focus-ring: #39704dcc;
+    --tab: #e5e5e5;
+    --selected: #d5ddd8;
+    --popover: #fff;
+    --code: #fff;
+    --code-read-only: #f4f4f4;
+    --on-accent: #fff;
+    --scrollbar: #aaa;
+    --danger-bg: #f9dddd;
+    --danger-text: #8f2424;
+    --overlay: #0005;
+    --shadow: #0003;
+  }
 }
 
 * { box-sizing: border-box; }
-html, body, #root { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #181818; }
+html, body, #root { width: 100%; height: 100%; margin: 0; overflow: hidden; background: var(--activity); }
 button, input, textarea, select { font: inherit; color: inherit; }
-button { cursor: default; }
+button, .button {
+  cursor: pointer;
+  transition:
+    color var(--button-transition),
+    background-color var(--button-transition),
+    border-color var(--button-transition),
+    box-shadow var(--button-transition),
+    filter var(--button-transition),
+    opacity var(--button-transition),
+    transform var(--button-transition);
+}
+button:hover:not(:disabled), .button:hover { background-color: #ffffff0d; filter: brightness(1.14); }
+button:active:not(:disabled), .button:active { background-color: #ffffff16; filter: brightness(.94); transform: translateY(1px) scale(.98); }
 button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible {
   outline: 1px solid var(--accent-bright);
   outline-offset: -1px;
+}
+button:focus-visible { outline: 0; box-shadow: 0 0 0 2px var(--button-focus-ring); }
+.button:focus-within { outline: 0; box-shadow: 0 0 0 2px var(--button-focus-ring); }
+button:disabled { cursor: default; opacity: .42; pointer-events: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  button, .button { transition-duration: 0ms; }
 }

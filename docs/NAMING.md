@@ -220,9 +220,9 @@ The public test models are:
 | Type | Fields | Description |
 | --- | --- | --- |
 | `NamingHookTestResult` | tagged `kind` and `output` | A photo-filename or synonym-authority output. |
-| `NamingHookTestCase` | `name`, `input`, `expected` | One named raw input and its expected tagged output. |
+| `NamingHookTestCase` | `input`, `expected` | One raw input and its expected tagged output. |
 | `NamingHookTestCases` | `photo_filename`, `synonym_authority` | Project cases grouped by hook kind. |
-| `NamingHookCaseResult` | `name`, `input`, `expected`, `actual`, `passed`, `error` | Actual outcome for one case. |
+| `NamingHookCaseResult` | `input`, `expected`, `actual`, `passed`, `error` | Actual outcome for one case. |
 | `NamingHookTestReport` | `kind`, `passed`, `failed`, `cases` | Complete test run result. |
 
 ```rust
@@ -231,39 +231,37 @@ pub fn get_naming_hook_test_cases(
 ) -> CoreResult<NamingHookTestCases>
 
 pub fn run_naming_hook_tests(
-    database: &Database,
-    kind: NamingHookKind,
-    script: Option<&str>,
-) -> CoreResult<NamingHookTestReport>
-
-pub fn test_and_save_naming_hook(
-    database: &Database,
     kind: NamingHookKind,
     script: &str,
     cases: &[NamingHookTestCase],
 ) -> CoreResult<NamingHookTestReport>
+
+pub fn save_naming_hook(
+    database: &Database,
+    kind: NamingHookKind,
+    script: &str,
+    cases: &[NamingHookTestCase],
+) -> CoreResult<()>
 ```
 
 `NamingHookTestCases` contains the project test cases for both hook kinds.
-Each `NamingHookTestCase` has `name`, raw `input`, and tagged `expected`
-output. New projects include the bundled photo filename golden cases and
+Each `NamingHookTestCase` has raw `input` and tagged `expected` output. New
+projects include the bundled photo filename golden cases and
 synonym-authority golden cases.
 
-`run_naming_hook_tests` uses the supplied unsaved script when `script` is
-`Some`; `None` uses the project's effective saved or bundled script. It
-executes every project case in order and returns passed and failed counts.
+`run_naming_hook_tests` executes the supplied unsaved script against every
+supplied project case in order and returns passed and failed counts.
 Every `NamingHookCaseResult` includes `expected`, optional `actual`, `passed`,
 and an optional execution `error`.
 
 | Function | Parameters | Return |
 | --- | --- | --- |
 | `get_naming_hook_test_cases` | `database`: project database | Test cases grouped by hook kind. |
-| `run_naming_hook_tests` | `database`; `kind`; optional unsaved `script` | Per-case results plus passed and failed counts. |
-| `test_and_save_naming_hook` | `database`; `kind`; current `script`; ordered `cases` | Test report; saves script and cases atomically only when every case passes. |
+| `run_naming_hook_tests` | `kind`; unsaved `script`; ordered `cases` | Per-case results plus passed and failed counts without persistence. |
+| `save_naming_hook` | `database`; `kind`; current `script`; ordered `cases` | Saves the script and cases atomically. |
 
 Saving a photo filename hook queues photos in available libraries for
-remapping. A failed test run leaves both the last successful script and saved
-project cases unchanged.
+remapping. Testing never changes the saved script or project cases.
 
 ## Desktop commands
 
@@ -275,5 +273,5 @@ project cases unchanged.
 | `get_naming_hook_templates` | none | `NamingHookTemplates` |
 | `test_naming_hook` | `kind: NamingHookKind`, `script: string`, `input: string` | `NamingHookTestResult` |
 | `get_naming_hook_test_cases` | none | `NamingHookTestCases` |
-| `run_naming_hook_tests` | `kind: NamingHookKind`, optional `script: string` | `NamingHookTestReport` |
-| `test_and_save_naming_hook` | `kind: NamingHookKind`, `script: string`, `cases: NamingHookTestCase[]` | `NamingHookTestReport` |
+| `run_naming_hook_tests` | `kind: NamingHookKind`, `script: string`, `cases: NamingHookTestCase[]` | `NamingHookTestReport` |
+| `save_naming_hook` | `kind: NamingHookKind`, `script: string`, `cases: NamingHookTestCase[]` | `void` |

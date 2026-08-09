@@ -1,11 +1,11 @@
 import {
-  ArrowRightLeft,
+  Database,
+  FileInput,
   FilePenLine,
-  FolderSearch,
+  FolderOpen,
   Info,
+  Link,
   Link2,
-  RefreshCw,
-  Tags,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -16,7 +16,7 @@ import {
 } from "../../api/photos";
 import { errorMessage } from "../../api/common";
 import { remapPhoto, type PhotoMappingSummary } from "../../api/mapping";
-import { Modal } from "../../shared/ui";
+import { Button, Modal } from "../../shared/ui";
 import { MappingBadge } from "../mapping/MappingBadge";
 
 export function PhotoContextMenu({
@@ -102,19 +102,19 @@ export function PhotoContextMenu({
         </div>
         <MenuSeparator />
         <MenuButton icon={Info} label="Photo details" onClick={onOpenDetails} />
-        <MenuButton icon={Tags} label="Go to taxonomy" disabled={!matched} onClick={() => matched && onOpenTaxon(mapping.taxon_id!)} />
+        <MenuButton icon={Database} label="Go to taxonomy" disabled={!matched} onClick={() => matched && onOpenTaxon(mapping.taxon_id!)} />
         <MenuSeparator />
         <MenuButton icon={FilePenLine} label="Rename" onClick={() => setRenaming(true)} />
         <MenuButton
-          icon={ArrowRightLeft}
+          icon={FileInput}
           label="Rename from taxonomy"
           disabled={!matched || Boolean(busy)}
           onClick={() => void run("Renaming", async () => onChanged(await renamePhotoFromTaxon(photo.photo_id)))}
         />
         <MenuSeparator />
-        <MenuButton icon={Link2} label="Edit mapping" onClick={onOpenMappingEditor} />
+        <MenuButton icon={Link} label="Edit mapping" onClick={onOpenMappingEditor} />
         <MenuButton
-          icon={RefreshCw}
+          icon={Link2}
           label="Remap from filename"
           disabled={Boolean(busy)}
           onClick={() => void run("Remapping", async () => {
@@ -124,7 +124,7 @@ export function PhotoContextMenu({
         />
         <MenuSeparator />
         <MenuButton
-          icon={FolderSearch}
+          icon={FolderOpen}
           label="Reveal in Finder / Explorer"
           disabled={Boolean(busy)}
           onClick={() => void run("Revealing", () => revealPhotoInFileManager(photo.photo_id))}
@@ -138,15 +138,14 @@ export function PhotoContextMenu({
           onClose={() => setRenaming(false)}
           actions={
             <>
-              <button className="secondary-button" type="button" onClick={() => setRenaming(false)}>Cancel</button>
-              <button
-                className="primary-button"
-                type="button"
+              <Button onClick={() => setRenaming(false)}>Cancel</Button>
+              <Button
+                variant="primary"
                 disabled={!newFilename.trim() || Boolean(busy)}
                 onClick={() => void run("Renaming", async () => onChanged(await renamePhoto(photo.photo_id, newFilename.trim())))}
               >
                 Rename
-              </button>
+              </Button>
             </>
           }
         >

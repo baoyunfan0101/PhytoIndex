@@ -69,11 +69,19 @@ states search filename only.
 
 | Function | Parameters after `database` | Return | Description |
 | --- | --- | --- | --- |
-| `search_photo_taxa` | `query: &str`, `cursor: Option<&str>`, `limit: usize` | `PhotoPage<TaxonSearchResult>` | Search taxa that currently have photos with the taxonomy ranked search order. |
+| `search_photo_taxa` | `query: &str`, `cursor: Option<&str>`, `limit: usize` | `PhotoPage<TaxonSearchResult>` | Search taxa that currently have photos and return lightweight taxon identity, display names, and name matches. |
 | `suggest_photo_taxa` | `query: &str`, `limit: usize` | `Vec<TaxonSuggestion>` | Lightweight autocomplete restricted to taxa with photos. |
 | `list_taxon_photos` | `taxon_id: i64`, `cursor: Option<&str>`, `limit: usize` | `PhotoPage<Photo>` | List current matched photos for the taxon and descendants. |
 | `get_photo_taxon_node` | `taxon_id: Option<i64>`, `show_empty: bool` | `PhotoTaxonNode` | Load one photo taxonomy node or the virtual root. |
-| `browse_photo_taxon` | `taxon_id: Option<i64>`, `show_empty: bool`, `include_descendants: bool`, `cursor: Option<&str>`, `limit: usize` | `PhotoPage<PhotoTaxonItem>` | Browse child taxa followed by photos. |
+| `browse_photo_taxon` | `taxon_id: Option<i64>`, `show_empty: bool`, `cursor: Option<&str>`, `limit: usize` | `PhotoPage<PhotoTaxonItem>` | Browse direct child taxa followed by directly mapped photos. |
+
+Photo-taxon search and suggestions use the same complete ranked taxonomy
+candidate relation as taxonomy search, then filter to taxa with current photo
+usage. Pagination continues across match levels; a prefix result does not
+suppress substring or fuzzy results on later pages.
+
+The desktop `suggest_photo_taxa` command executes the database lookup on a
+blocking worker and resolves asynchronously.
 
 `PhotoTaxonUsage` contains `taxon_id`, `rank`, accepted `names`,
 `direct_photo_count`, and `subtree_photo_count`.

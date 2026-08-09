@@ -313,13 +313,14 @@ pub(crate) fn list_operation_audit(
 pub(crate) fn write_operation_audit<W: Write>(
     connection: &Connection,
     operation_ids: Option<&[i64]>,
+    delimiter: u8,
     writer: W,
 ) -> CoreResult<()> {
     if let Some(operation_ids) = operation_ids {
         validate_operation_ids(connection, operation_ids)?;
     }
     let mut csv = csv::WriterBuilder::new()
-        .delimiter(b'|')
+        .delimiter(delimiter)
         .from_writer(writer);
     csv.write_record(AUDIT_COLUMNS)?;
     let (filter, values) = operation_filter(operation_ids);

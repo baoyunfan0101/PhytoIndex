@@ -6,20 +6,42 @@ All notable changes to Vividarium are documented in this file.
 
 ### Added
 
+- Added multiple independently registered Photo Libraries with root and database rebind, relocation, and availability recovery.
+- Added global photo search, recent searches, Photo Sets, photographed Taxon Tree browsing, thumbnail grids, full-image mode, and keyboard navigation.
+- Added MapLibre browsing with aggregate initial bounds, retained viewport, viewport-paged markers, and reusable photo previews.
+- Added persistent photo mapping states, ambiguous candidates, explicit mapping overrides, filename remapping, and photographed-taxonomy usage trees.
+- Added taxonomy autocomplete, complete ranked search, hierarchy navigation, inline six-group name editing, promotion, deletion, and childless taxon deletion.
+- Added preview-first Formatted Update with prepared apply, progressive lineage creation, accepted-or-synonym matching, strict-parent validation, template download, and rule help.
+- Added persistent Custom SQL inputs, readable internal schemas, typed result sets, safe mutation execution, and complete read-only query export.
+- Added staged SQL Import and validated Direct Import taxonomy replacement workflows.
+- Added configurable application theme, workspace restoration, recent-search limit, taxon-tree display fields, mapping priority, filename output fields, taxonomy name separator, CSV delimiter, map provider, and Rhai hook project tests.
+- Added selectable Rename History and Taxonomy History with formatted audit JSON, batch audit export, replayable taxonomy input export, and rollback.
 - Added signed in-app update checks and installation from Vividarium GitHub Releases.
-- Added release metadata and updater artifacts to the desktop release workflow.
-- Added lightweight taxonomy autocomplete for complete and photo-filtered searches.
-- Added cursor-paged map-photo queries and backend map-provider settings.
-- Added cursor-paged PhotoSet sources for combined photo search and taxon photos.
+- Added native file, folder, database, external repository, and author email actions.
 
 ### Changed
 
-- Kept the SQLite schema version at `2`; databases with other schema versions remain incompatible.
-- Centralized application metadata storage behind one internal module.
+- Reorganized the application into React feature domains, typed frontend API wrappers, thin Tauri adapters, and a Tauri-independent `vividarium-core` service crate.
+- Separated application metadata, taxonomy, and each Photo Library into distinct SQLite roles so one taxonomy can serve several libraries.
+- Replaced unbounded collection loads with cursor pages, virtualized lists, and adjustable workbench panes.
+- Made long-running mapping, refresh, import, SQL, and update work report structured background progress without blocking the interface.
+- Standardized tab names, icons, compressed tab layout, status isolation, context-menu icons, button feedback, and shared photo interactions.
+- Kept SQLite schema version `2`; databases with other schema versions remain incompatible and are rejected.
+
+### Fixed
+
+- Fixed taxonomy searches that dropped lower-priority or Chinese fuzzy matches before pagination.
+- Fixed stale hierarchy positions being reused after a new formal search.
+- Fixed filename-format-only settings changes unnecessarily queueing every photo for remapping.
+- Fixed map initialization, tab viewport retention, marker preview reuse, and preview hover rendering.
+- Fixed Photo Detail metadata layout, scrolling, image aspect transitions, and context-menu access.
+- Fixed SQL source sidebar grouping, schema duplication, scrolling, and collapsed-content flicker.
+- Fixed history row hover layering, selection coverage, oversized errors, JSON alignment, and code-block rendering.
+- Fixed project hook tests, long settings paths, Direct Import prompts, and several long-running actions that previously lacked visible feedback.
 
 ### Removed
 
-- Removed unpaged all-photo loading, legacy mapping suggestions, photo-ID-only taxon pages, and generic raw-table export commands.
+- Removed the legacy frontend bridge, old V3 parallel structure, unpaged all-photo loading, generic raw-table export commands, and the earlier Base Import naming.
 
 ## [2.1.0] - 2026-07-12
 

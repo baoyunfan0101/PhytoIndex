@@ -48,6 +48,7 @@ interface.
 | `Database::rebind_photo_library_root` | `library_uuid: &str`, `root_path: &Path` | `CoreResult<PhotoLibraryRegistration>` | Bind a copied library DB to a new local photo root. |
 | `Database::rebind_photo_library_database` | `library_uuid: &str`, `existing_database_path: &Path` | `CoreResult<PhotoLibraryRegistration>` | Point an existing registration at an existing DB without copying or moving it. The schema and persisted library UUID must match. A taxonomy identity or synchronization watermark mismatch creates a full-remap request. |
 | `Database::relocate_photo_library_database` | `library_uuid: &str`, `destination: &Path` | `CoreResult<PhotoLibraryRegistration>` | Safely move one library database and update its registered path. |
+| `Database::open_taxonomy_database` | `existing_database: &Path` | `CoreResult<DatabaseLocations>` | Validate and select an existing schema-2 taxonomy database without moving it. A changed taxonomy identity resets the dispatch cursor and marks every registered Photo Library for a full remap. |
 | `Database::relocate_taxonomy_database` | `destination: &Path` | `CoreResult<DatabaseLocations>` | Safely move taxonomy storage and update its configured path. |
 | `Database::set_default_taxonomy_directory` | `directory: &Path` | `CoreResult<DatabaseLocations>` | Set the default taxonomy creation directory. |
 | `Database::set_default_photo_library_directory` | `directory: &Path` | `CoreResult<DatabaseLocations>` | Set the default photo library creation directory. |
@@ -65,8 +66,15 @@ the desktop commands enforce this requirement. Taxonomy relocation cannot
 overlap another taxonomy replacement.
 
 Metadata and taxonomy storage remain available when the active photo library
-is offline. Pure taxonomy reads, updates, history, settings, and base database
-interfaces do not attach the photo library. Photo interfaces and cross-module
+is offline. Pure taxonomy reads, updates, history, settings, and taxonomy
+import interfaces do not attach the photo library. Photo interfaces and cross-module
 taxonomy/photo interfaces require the active library DB and return
 `CoreError::NotFound` when it is unavailable. The registration is retained,
 and no interface silently creates an empty replacement DB.
+
+The desktop `open_path_in_file_manager` command accepts one absolute path. It
+opens directories directly and reveals files in the system file manager;
+missing or relative paths are rejected. Desktop destination dialogs use
+`default_taxonomy_directory` for taxonomy selection and relocation, and
+`default_photo_library_directory` when creating or registering a Photo Library
+database.

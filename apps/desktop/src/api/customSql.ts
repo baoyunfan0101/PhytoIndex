@@ -64,6 +64,34 @@ export function demoSqlInput(kind: "csv" | "sqlite", alias: string, path: string
   };
 }
 
+export function demoTaxonomySqlSchema(alias: string): SqlSourceSchema {
+  return {
+    alias,
+    objects: [
+      {
+        name: "taxa",
+        object_type: "table",
+        columns: [
+          { name: "taxon_id", declared_type: "INTEGER" },
+          { name: "parent_taxon_id", declared_type: "INTEGER" },
+          { name: "rank", declared_type: "INTEGER" },
+          { name: "geological_range", declared_type: "TEXT" },
+        ],
+      },
+      {
+        name: "taxon_names",
+        object_type: "table",
+        columns: [
+          { name: "name_id", declared_type: "INTEGER" },
+          { name: "taxon_id", declared_type: "INTEGER" },
+          { name: "name_type", declared_type: "INTEGER" },
+          { name: "name", declared_type: "TEXT" },
+        ],
+      },
+    ],
+  };
+}
+
 export const executeCustomSql = (sql: string, maximumResultRows: number | null = 1000) =>
   call<CustomSqlExecutionResult>("execute_custom_taxonomy_sql", {
     request: { sql, maximum_result_rows: maximumResultRows },
@@ -88,6 +116,8 @@ export const getCustomTaxonomySql = () =>
   call<string>("get_custom_taxonomy_sql", undefined, () => "SELECT * FROM taxa LIMIT 100;");
 export const listCustomSqlInputs = () =>
   call<PersistentSqlInput[]>("list_custom_sql_inputs", undefined, () => []);
+export const listCustomSqlDatabaseSchemas = () =>
+  call<SqlSourceSchema[]>("list_custom_sql_database_schemas", undefined, () => [demoTaxonomySqlSchema("main")]);
 export const addCustomSqlInput = (kind: "csv" | "sqlite", alias: string, path: string) =>
   call<AddSqlInputResult>("add_custom_sql_input", { request: { kind, alias, path } }, () => {
     const input = demoSqlInput(kind, alias, path);

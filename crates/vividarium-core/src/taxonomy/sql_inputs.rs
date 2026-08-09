@@ -55,21 +55,21 @@ pub struct RemoveSqlInputResult {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SqlInputScope {
     CustomSql,
-    BaseImport,
+    SqlImport,
 }
 
 impl SqlInputScope {
     const fn code(self) -> i64 {
         match self {
             Self::CustomSql => 1,
-            Self::BaseImport => 2,
+            Self::SqlImport => 2,
         }
     }
 
     const fn directory(self) -> &'static str {
         match self {
             Self::CustomSql => "custom-sql",
-            Self::BaseImport => "base-import",
+            Self::SqlImport => "sql-import",
         }
     }
 }
@@ -172,7 +172,8 @@ pub(crate) fn add_input(
         )));
     }
     let source = data_source(request.kind, request.alias.clone(), request.path.clone());
-    inspect_sql_data_source(&source)?;
+    let delimiter = crate::general::get_csv_delimiter_byte(database)?;
+    inspect_sql_data_source(&source, delimiter)?;
     let directory = input_directory(database, scope);
     fs::create_dir_all(&directory)?;
     let extension = match request.kind {
@@ -184,7 +185,7 @@ pub(crate) fn add_input(
     let added = (|| {
         copy_input(request.kind, &request.path, &stored_path)?;
         let stored_source = data_source(request.kind, request.alias.clone(), stored_path.clone());
-        let schema = inspect_sql_data_source(&stored_source)?;
+        let schema = inspect_sql_data_source(&stored_source, delimiter)?;
         let schema_json = serde_json::to_string(&schema).map_err(|error| {
             CoreError::Consistency(format!("could not serialize SQL input schema: {error}"))
         })?;
@@ -309,7 +310,7 @@ fn validate_alias(alias: &str) -> CoreResult<()> {
     }
     if matches!(
         alias.to_ascii_lowercase().as_str(),
-        "main" | "temp" | "base" | "metadata" | "taxonomy" | "active_photo_library"
+        "main" | "temp" | "sql_import" | "metadata" | "taxonomy" | "active_photo_library"
     ) {
         return Err(CoreError::InvalidArgument(format!(
             "reserved SQL input alias: {alias}"
@@ -444,7 +445,7 @@ mod tests {
 
         add_input(
             &database,
-            SqlInputScope::BaseImport,
+            SqlInputScope::SqlImport,
             &AddSqlInputRequest {
                 kind: SqlInputKind::Sqlite,
                 alias: "source".into(),
@@ -455,7 +456,7 @@ mod tests {
         assert!(
             add_input(
                 &database,
-                SqlInputScope::BaseImport,
+                SqlInputScope::SqlImport,
                 &AddSqlInputRequest {
                     kind: SqlInputKind::Csv,
                     alias: "source".into(),
@@ -465,7 +466,7 @@ mod tests {
             .is_err()
         );
         assert_eq!(
-            fs::read_dir(input_directory(&database, SqlInputScope::BaseImport))
+            fs::read_dir(input_directory(&database, SqlInputScope::SqlImport))
                 .unwrap()
                 .count(),
             1

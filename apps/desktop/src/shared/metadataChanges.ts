@@ -1,7 +1,8 @@
 import { useEffect, useRef } from "react";
 
 export type MetadataChange =
-  | { key: "taxonomy_name_separator"; value: string };
+  | { key: "taxonomy_name_separator"; value: string }
+  | { key: "csv_delimiter"; value: string };
 
 type MetadataChangeListener = (change: MetadataChange) => void;
 

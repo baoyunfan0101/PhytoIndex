@@ -268,10 +268,13 @@ fn csv_and_sqlite_sources_are_read_only() {
             .unwrap(),
         1
     );
-    let schema = inspect_sql_data_source(&SqlDataSource::Csv {
-        alias: "csv_input".into(),
-        path: csv_path,
-    })
+    let schema = inspect_sql_data_source(
+        &SqlDataSource::Csv {
+            alias: "csv_input".into(),
+            path: csv_path,
+        },
+        b',',
+    )
     .unwrap();
     assert_eq!(schema.objects[0].columns[0].name, "name");
 }
@@ -283,7 +286,7 @@ fn csv_load_uses_one_atomic_transaction() {
     std::fs::write(&path, "name,value\nvalid,1\nbroken\n").unwrap();
     let mut connection = Connection::open_in_memory().unwrap();
 
-    let error = load_csv_table(&mut connection, "source", &path).unwrap_err();
+    let error = load_csv_table(&mut connection, "source", &path, b',').unwrap_err();
 
     assert!(error.to_string().contains("CSV row 3"));
     assert_eq!(
@@ -303,7 +306,7 @@ fn csv_load_uses_one_atomic_transaction() {
     }
     let large_path = directory.path().join("large.csv");
     std::fs::write(&large_path, large_csv).unwrap();
-    load_csv_table(&mut connection, "large_source", &large_path).unwrap();
+    load_csv_table(&mut connection, "large_source", &large_path, b',').unwrap();
     assert_eq!(
         connection
             .query_row("SELECT COUNT(*) FROM large_source", [], |row| {
@@ -311,6 +314,29 @@ fn csv_load_uses_one_atomic_transaction() {
             })
             .unwrap(),
         5_000
+    );
+}
+
+#[test]
+fn custom_sql_database_schemas_include_main_taxonomy_tables() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = Database::open(directory.path().join("metadata.db")).unwrap();
+
+    let schemas = list_custom_sql_database_schemas(&database).unwrap();
+
+    assert_eq!(schemas.len(), 1);
+    assert_eq!(schemas[0].alias, "main");
+    assert!(
+        schemas[0]
+            .objects
+            .iter()
+            .any(|object| object.name == "taxa")
+    );
+    assert!(
+        schemas[0]
+            .objects
+            .iter()
+            .any(|object| object.name == "taxon_names")
     );
 }
 
@@ -350,5 +376,57 @@ fn streams_one_query_to_csv() {
     assert_eq!(
         std::fs::read_to_string(destination).unwrap(),
         "rank,name\n1,Animalia\n"
+    );
+}
+
+#[test]
+fn configured_csv_delimiter_controls_sql_sources_and_exports() {
+    let (directory, database) = database();
+    crate::general::update_general_settings(
+        &database,
+        &crate::general::GeneralSettings {
+            csv_delimiter: "|".into(),
+            ..crate::general::GeneralSettings::default()
+        },
+    )
+    .unwrap();
+    let source = directory.path().join("source.csv");
+    std::fs::write(&source, "name|value\nAnimalia|Recent\n").unwrap();
+    add_custom_sql_input(
+        &database,
+        &AddSqlInputRequest {
+            kind: super::SqlInputKind::Csv,
+            alias: "csv_input".into(),
+            path: source,
+        },
+    )
+    .unwrap();
+    let result = execute_custom_taxonomy_sql(
+        &database,
+        &CustomTaxonomySqlRequest {
+            sql: "SELECT name, value FROM csv_input".into(),
+            maximum_result_rows: None,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        result.result_sets[0].rows[0],
+        vec![
+            SqlValue::Text("Animalia".into()),
+            SqlValue::Text("Recent".into())
+        ]
+    );
+    let destination = directory.path().join("query.csv");
+    export_custom_taxonomy_query(
+        &database,
+        &CustomTaxonomySqlExportRequest {
+            sql: "SELECT name, value FROM csv_input".into(),
+            destination_path: destination.clone(),
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(destination).unwrap(),
+        "name|value\nAnimalia|Recent\n"
     );
 }

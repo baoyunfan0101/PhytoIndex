@@ -28,7 +28,8 @@ mod page;
 mod search;
 
 pub use media::{
-    get_or_create_thumbnail, get_photo_metadata, photo_file_path, rebase_thumbnail_paths,
+    get_or_create_thumbnail, get_photo_metadata, photo_directory_path, photo_file_path,
+    rebase_thumbnail_paths,
 };
 pub use naming::{
     PhotoFilenameFormatSettings, format_photo_filename, get_photo_filename_format_settings,
@@ -60,6 +61,13 @@ pub type ProgressCallback<'a> = dyn FnMut(u64, Option<u64>, &str) + Send + 'a;
 #[derive(Debug)]
 struct ScannedDirectory {
     name: String,
+    contents: ScannedDirectoryContents,
+}
+
+#[derive(Debug)]
+struct ScannedDirectoryContents {
+    directories: Vec<ScannedDirectory>,
+    photos: Vec<ScannedPhoto>,
 }
 
 #[derive(Debug)]
@@ -96,6 +104,17 @@ pub struct PhotoRenameOperationResult {
 struct PhotoRenameResult {
     photo: Photo,
     operation_id: Option<i64>,
+}
+
+#[derive(Default)]
+struct DirectoryRefreshStats {
+    inserted: usize,
+    unchanged: usize,
+    updated: usize,
+    deleted: usize,
+    directories_inserted: usize,
+    directories_deleted: usize,
+    changed_photo_ids: Vec<i64>,
 }
 
 pub fn open_library(database: &Database, root: &str) -> CoreResult<PhotoLibrary> {
@@ -336,19 +355,43 @@ fn refresh_directory_locked(database: &Database, directory_id: i64) -> CoreResul
         .ok_or_else(|| CoreError::NotFound(format!("photo directory {directory_id}")))?;
     let root = library_root(&connection)?;
     let path = safe_directory_path(&root, &directory.relative_path)?;
-    let (scanned_directories, scanned_photos) = scan_directory(&path)?;
+    let scanned = scan_directory(&path)?;
     drop(connection);
 
     let mut connection = database.connect()?;
     let transaction = connection.transaction()?;
-    let existing_directories = direct_directories(&transaction, directory_id)?;
-    let existing_photos = direct_photos(&transaction, directory_id)?;
-    let photos_with_mapping_state = direct_photos_with_mapping_state(&transaction, directory_id)?;
-    let scanned_directory_names = scanned_directories
+    let mut stats = DirectoryRefreshStats::default();
+    refresh_directory_tree(&transaction, &directory, scanned, &mut stats)?;
+    mapping::queue_photo_ids(&transaction, &stats.changed_photo_ids, "refresh")?;
+    transaction.commit()?;
+    Ok(PhotoSyncResult {
+        directory_id,
+        inserted: stats.inserted,
+        unchanged: stats.unchanged,
+        updated: stats.updated,
+        deleted: stats.deleted,
+        directories_inserted: stats.directories_inserted,
+        directories_deleted: stats.directories_deleted,
+    })
+}
+
+fn refresh_directory_tree(
+    transaction: &Transaction<'_>,
+    directory: &PhotoDirectory,
+    scanned: ScannedDirectoryContents,
+    stats: &mut DirectoryRefreshStats,
+) -> CoreResult<()> {
+    let existing_directories = direct_directories(transaction, directory.directory_id)?;
+    let existing_photos = direct_photos(transaction, directory.directory_id)?;
+    let photos_with_mapping_state =
+        direct_photos_with_mapping_state(transaction, directory.directory_id)?;
+    let scanned_directory_names = scanned
+        .directories
         .iter()
         .map(|value| value.name.as_str())
         .collect::<HashSet<_>>();
-    let scanned_photo_names = scanned_photos
+    let scanned_photo_names = scanned
+        .photos
         .iter()
         .map(|value| value.filename.as_str())
         .collect::<HashSet<_>>();
@@ -364,38 +407,64 @@ fn refresh_directory_locked(database: &Database, directory_id: i64) -> CoreResul
             (!scanned_photo_names.contains(name.as_str())).then_some(value.photo_id)
         })
         .collect::<Vec<_>>();
+    let (removed_directory_count, removed_subtree_photo_count) =
+        removed_directory_subtree_stats(transaction, &removed_directory_ids)?;
 
-    mapping::remove_directory_mappings(&transaction, &removed_directory_ids)?;
-    mapping::remove_photo_mappings(&transaction, &removed_photo_ids)?;
+    mapping::remove_directory_mappings(transaction, &removed_directory_ids)?;
+    mapping::remove_photo_mappings(transaction, &removed_photo_ids)?;
     for id in &removed_directory_ids {
         transaction.execute("DELETE FROM photo_directories WHERE directory_id = ?", [id])?;
     }
     for id in &removed_photo_ids {
         transaction.execute("DELETE FROM photos WHERE photo_id = ?", [id])?;
     }
+    stats.directories_deleted += removed_directory_count;
+    stats.deleted += removed_subtree_photo_count + removed_photo_ids.len();
 
-    let mut directories_inserted = 0;
-    for entry in scanned_directories {
-        if existing_directories.contains_key(&entry.name) {
-            continue;
-        }
-        let relative_path = join_relative_path(&directory.relative_path, &entry.name);
-        transaction.execute(
-            "INSERT INTO photo_directories (parent_directory_id, name, relative_path) VALUES (?, ?, ?)",
-            params![directory_id, entry.name, relative_path],
-        )?;
-        directories_inserted += 1;
+    for entry in scanned.directories {
+        let ScannedDirectory { name, contents } = entry;
+        let child = if let Some(existing) = existing_directories.get(&name) {
+            existing.clone()
+        } else {
+            let relative_path = join_relative_path(&directory.relative_path, &name);
+            transaction.execute(
+                "INSERT INTO photo_directories (parent_directory_id, name, relative_path) VALUES (?, ?, ?)",
+                params![directory.directory_id, &name, &relative_path],
+            )?;
+            stats.directories_inserted += 1;
+            PhotoDirectory {
+                directory_id: transaction.last_insert_rowid(),
+                parent_directory_id: Some(directory.directory_id),
+                name,
+                relative_path,
+            }
+        };
+        refresh_directory_tree(transaction, &child, contents, stats)?;
     }
 
-    let mut inserted = 0;
-    let mut updated = 0;
-    let mut unchanged = 0;
-    let mut changed_photo_ids = Vec::new();
+    refresh_directory_photos(
+        transaction,
+        directory.directory_id,
+        scanned.photos,
+        &existing_photos,
+        &photos_with_mapping_state,
+        stats,
+    )
+}
+
+fn refresh_directory_photos(
+    transaction: &Transaction<'_>,
+    directory_id: i64,
+    scanned_photos: Vec<ScannedPhoto>,
+    existing_photos: &HashMap<String, Photo>,
+    photos_with_mapping_state: &HashSet<i64>,
+    stats: &mut DirectoryRefreshStats,
+) -> CoreResult<()> {
     for entry in scanned_photos {
         match existing_photos.get(&entry.filename) {
             None => {
                 let photo_id = insert_photo(
-                    &transaction,
+                    transaction,
                     &NewPhoto {
                         directory_id,
                         filename: entry.filename,
@@ -404,17 +473,17 @@ fn refresh_directory_locked(database: &Database, directory_id: i64) -> CoreResul
                         thumbnail_path: None,
                     },
                 )?;
-                changed_photo_ids.push(photo_id);
-                inserted += 1;
+                stats.changed_photo_ids.push(photo_id);
+                stats.inserted += 1;
             }
             Some(photo)
                 if photo.file_size == entry.file_size
                     && photo.modified_at_ns == entry.modified_at_ns =>
             {
                 if !photos_with_mapping_state.contains(&photo.photo_id) {
-                    changed_photo_ids.push(photo.photo_id);
+                    stats.changed_photo_ids.push(photo.photo_id);
                 }
-                unchanged += 1;
+                stats.unchanged += 1;
             }
             Some(photo) => {
                 transaction.execute(
@@ -429,22 +498,60 @@ fn refresh_directory_locked(database: &Database, directory_id: i64) -> CoreResul
                     "DELETE FROM photo_metadata WHERE photo_id = ?",
                     [photo.photo_id],
                 )?;
-                changed_photo_ids.push(photo.photo_id);
-                updated += 1;
+                stats.changed_photo_ids.push(photo.photo_id);
+                stats.updated += 1;
             }
         }
     }
-    mapping::queue_photo_ids(&transaction, &changed_photo_ids, "refresh")?;
-    transaction.commit()?;
-    Ok(PhotoSyncResult {
-        directory_id,
-        inserted,
-        unchanged,
-        updated,
-        deleted: removed_photo_ids.len(),
-        directories_inserted,
-        directories_deleted: removed_directory_ids.len(),
-    })
+    Ok(())
+}
+
+fn removed_directory_subtree_stats(
+    transaction: &Transaction<'_>,
+    directory_ids: &[i64],
+) -> CoreResult<(usize, usize)> {
+    if directory_ids.is_empty() {
+        return Ok((0, 0));
+    }
+    let mut deleted_directory_ids = HashSet::new();
+    let mut deleted_photo_ids = HashSet::new();
+    for directory_id in directory_ids {
+        let mut statement = transaction.prepare(
+            r#"
+            WITH RECURSIVE descendants(directory_id) AS (
+                SELECT directory_id FROM photo_directories WHERE directory_id = ?
+                UNION ALL
+                SELECT child.directory_id
+                FROM photo_directories AS child
+                JOIN descendants ON child.parent_directory_id = descendants.directory_id
+            )
+            SELECT directory_id FROM descendants
+            "#,
+        )?;
+        let rows = statement.query_map([directory_id], |row| row.get::<_, i64>(0))?;
+        for id in rows.collect::<Result<Vec<_>, _>>()? {
+            deleted_directory_ids.insert(id);
+        }
+        let mut statement = transaction.prepare(
+            r#"
+            WITH RECURSIVE descendants(directory_id) AS (
+                SELECT directory_id FROM photo_directories WHERE directory_id = ?
+                UNION ALL
+                SELECT child.directory_id
+                FROM photo_directories AS child
+                JOIN descendants ON child.parent_directory_id = descendants.directory_id
+            )
+            SELECT photos.photo_id
+            FROM photos
+            JOIN descendants USING (directory_id)
+            "#,
+        )?;
+        let rows = statement.query_map([directory_id], |row| row.get::<_, i64>(0))?;
+        for id in rows.collect::<Result<Vec<_>, _>>()? {
+            deleted_photo_ids.insert(id);
+        }
+    }
+    Ok((deleted_directory_ids.len(), deleted_photo_ids.len()))
 }
 
 pub fn rename_photo(database: &Database, photo_id: i64, new_filename: &str) -> CoreResult<Photo> {
@@ -502,6 +609,96 @@ pub fn rename_photo_from_taxon(database: &Database, photo_id: i64) -> CoreResult
         rename_photo_locked(database, photo_id, &new_filename, 1, operation_id)
     });
     finish_single_photo_rename(database, operation_id, photo_id, result)
+}
+
+pub fn rename_directory(
+    database: &Database,
+    directory_id: i64,
+    new_name: &str,
+) -> CoreResult<PhotoDirectory> {
+    let _guard = PHOTO_WRITE_LOCK
+        .lock()
+        .map_err(|_| CoreError::InvalidArgument("photo workspace lock is poisoned".into()))?;
+    let new_name = validate_directory_name(new_name)?;
+    let connection = database.connect()?;
+    let root = library_root(&connection)?;
+    let directory = load_directory(&connection, directory_id)?
+        .ok_or_else(|| CoreError::NotFound(format!("photo directory {directory_id}")))?;
+    let parent_id = directory
+        .parent_directory_id
+        .ok_or_else(|| CoreError::InvalidArgument("photo library root cannot be renamed".into()))?;
+    if directory.name == new_name {
+        return Ok(directory);
+    }
+    let parent = load_directory(&connection, parent_id)?
+        .ok_or_else(|| CoreError::NotFound(format!("photo directory {parent_id}")))?;
+    let parent_path = safe_directory_path(&root, &parent.relative_path)?;
+    let source = safe_directory_path(&root, &directory.relative_path)?;
+    let destination = parent_path.join(&new_name);
+    let temporary = parent_path.join(format!(".vividarium-rename-directory-{directory_id}.tmp"));
+    let new_relative_path = join_relative_path(&parent.relative_path, &new_name);
+    rename_file(&source, &destination, &temporary)?;
+
+    let result = (|| -> CoreResult<PhotoDirectory> {
+        let mut connection = database.connect()?;
+        let transaction = connection.transaction()?;
+        transaction.execute(
+            r#"
+            UPDATE photo_directories
+            SET name = ?, relative_path = ?
+            WHERE directory_id = ?
+            "#,
+            params![new_name, new_relative_path, directory_id],
+        )?;
+        let old_prefix = format!("{}/", directory.relative_path);
+        let new_prefix = format!("{}/", new_relative_path);
+        let descendants = transaction
+            .prepare(
+                r#"
+                WITH RECURSIVE descendants(directory_id, relative_path) AS (
+                    SELECT directory_id, relative_path
+                    FROM photo_directories
+                    WHERE parent_directory_id = ?1
+                    UNION ALL
+                    SELECT child.directory_id, child.relative_path
+                    FROM photo_directories AS child
+                    JOIN descendants
+                      ON child.parent_directory_id = descendants.directory_id
+                )
+                SELECT directory_id, relative_path FROM descendants
+                "#,
+            )?
+            .query_map([directory_id], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        for (descendant_id, relative_path) in descendants {
+            let suffix = relative_path.strip_prefix(&old_prefix).ok_or_else(|| {
+                CoreError::Consistency(format!(
+                    "photo directory {} is not under {}",
+                    descendant_id, directory.relative_path
+                ))
+            })?;
+            transaction.execute(
+                "UPDATE photo_directories SET relative_path = ? WHERE directory_id = ?",
+                params![format!("{new_prefix}{suffix}"), descendant_id],
+            )?;
+        }
+        let updated = load_directory(&transaction, directory_id)?
+            .ok_or_else(|| CoreError::NotFound(format!("photo directory {directory_id}")))?;
+        transaction.commit()?;
+        Ok(updated)
+    })();
+
+    match result {
+        Ok(directory) => Ok(directory),
+        Err(error) => match rename_file(&destination, &source, &temporary) {
+            Ok(()) => Err(error),
+            Err(rollback_error) => Err(CoreError::Consistency(format!(
+                "photo directory database update failed: {error}; filesystem rollback failed: {rollback_error}"
+            ))),
+        },
+    }
 }
 
 pub fn rename_photos_from_taxa(
@@ -891,7 +1088,7 @@ fn insert_photo(transaction: &Transaction<'_>, photo: &NewPhoto) -> CoreResult<i
     Ok(transaction.last_insert_rowid())
 }
 
-fn scan_directory(path: &Path) -> CoreResult<(Vec<ScannedDirectory>, Vec<ScannedPhoto>)> {
+fn scan_directory(path: &Path) -> CoreResult<ScannedDirectoryContents> {
     let mut directories = Vec::new();
     let mut photos = Vec::new();
     for entry in fs::read_dir(path)? {
@@ -905,7 +1102,10 @@ fn scan_directory(path: &Path) -> CoreResult<(Vec<ScannedDirectory>, Vec<Scanned
             .into_string()
             .map_err(|_| CoreError::InvalidArgument("photo path is not valid UTF-8".into()))?;
         if file_type.is_dir() {
-            directories.push(ScannedDirectory { name });
+            directories.push(ScannedDirectory {
+                contents: scan_directory(&entry.path())?,
+                name,
+            });
         } else if file_type.is_file() && is_image_filename(&name) {
             let metadata = entry.metadata()?;
             photos.push(ScannedPhoto {
@@ -917,7 +1117,10 @@ fn scan_directory(path: &Path) -> CoreResult<(Vec<ScannedDirectory>, Vec<Scanned
             });
         }
     }
-    Ok((directories, photos))
+    Ok(ScannedDirectoryContents {
+        directories,
+        photos,
+    })
 }
 
 fn normalize_root(root: &str) -> CoreResult<String> {
@@ -979,6 +1182,21 @@ fn validate_filename(value: &str) -> CoreResult<String> {
     {
         return Err(CoreError::InvalidArgument(
             "photo filename must be one image filename without a path".into(),
+        ));
+    }
+    Ok(value.into())
+}
+
+fn validate_directory_name(value: &str) -> CoreResult<String> {
+    let value = value.trim();
+    let path = Path::new(value);
+    if value.is_empty()
+        || path.components().count() != 1
+        || matches!(value, "." | "..")
+        || value.contains(['/', '\\'])
+    {
+        return Err(CoreError::InvalidArgument(
+            "photo directory name must be one folder name without a path".into(),
         ));
     }
     Ok(value.into())
