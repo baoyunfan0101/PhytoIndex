@@ -65,12 +65,14 @@ Both `photos` and `taxonomy` expose:
 Audit CSV columns are identical in both domains:
 
 ```text
-operation_id|sequence|entity_type|entity_id|action|before_json|after_json|succeeded|message
+operation_id,sequence,entity_type,entity_id,action,before_json,after_json,succeeded,message
 ```
 
 Rows stream directly from the database to the caller-provided writer in
 operation and sequence order. Batch and all-history exports use one header;
-the complete CSV is never materialized by the export interface.
+the complete CSV is never materialized by the export interface. The delimiter
+is comma by default and follows the application-wide General setting; supported
+values are comma, semicolon, tab, and pipe.
 
 Successful rollback deletes the original operation and its audit data.
 Taxonomy rollback also applies its reverse changeset and records pending
@@ -92,4 +94,5 @@ The taxonomy module additionally exposes:
 Delete and custom SQL operations have audit rows but no formatted input.
 Selected input export returns an error if any selected operation is not
 replayable. Desktop audit and formatted-input export commands take an absolute
-destination path selected by the caller and write the resulting CSV there.
+destination path selected by the caller and write the resulting CSV there with
+the same configured delimiter.

@@ -29,16 +29,18 @@ Returns: CSV upload and template actions, an editable formatted-input table,
 preview, apply, and row-level result logs. Preview stores a backend candidate
 and enables Apply. Apply consumes that candidate and directly commits its
 precomputed changeset. Editing rows, importing another file, changing the name
-separator, or receiving another taxonomy mutation clears the preview and
-disables Apply until Preview succeeds again. The current taxonomy name
-separator is loaded from Settings metadata.
+separator or CSV delimiter, or receiving another taxonomy mutation clears the
+preview and disables Apply until Preview succeeds again. The current taxonomy
+name separator is loaded from Settings metadata. CSV uploads and downloaded
+templates use the application-wide CSV delimiter.
 
 ### `CustomSqlView(props)`
 
 Parameters include a status callback and optional mutation guard.
 
 Returns: managed input sources, SQL editor, execution messages, typed result
-sets, warnings, and full export for truncated read-only queries.
+sets, warnings, and full export for truncated read-only queries. CSV sources
+and exports use the application-wide CSV delimiter.
 
 ### `BaseImportSettings({ onApplied })`
 

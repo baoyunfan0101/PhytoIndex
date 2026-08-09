@@ -227,7 +227,7 @@ fn formatted_update_uses_the_configured_synonym_hook() {
     .unwrap();
     let rows = parse_taxonomy_input_csv(
         &database,
-        "kingdom|synonyms\nAnimalia|  Raw_synonym  ;   \n",
+        "kingdom,synonyms\nAnimalia,\"  Raw_synonym  ;   \"\n",
     )
     .unwrap();
     assert_eq!(rows[0].synonyms, vec!["  Raw_synonym  ", "   "]);
@@ -255,7 +255,7 @@ fn formatted_update_uses_the_configured_synonym_hook() {
 #[test]
 fn empty_synonym_cell_is_an_empty_list() {
     let (_directory, database) = database();
-    let rows = parse_taxonomy_input_csv(&database, "kingdom|synonyms\nAnimalia|\n").unwrap();
+    let rows = parse_taxonomy_input_csv(&database, "kingdom,synonyms\nAnimalia,\n").unwrap();
 
     assert!(rows[0].synonyms.is_empty());
 }
@@ -265,7 +265,7 @@ fn csv_accepts_subset_and_reordered_headers() {
     let (_directory, database) = database();
     let rows = parse_taxonomy_input_csv(
         &database,
-        "synonyms|species|zh_alias\nCanis lycaon Linnaeus, 1758|Canis lupus|wolf;dog\n",
+        "synonyms,species,zh_alias\n\"Canis lycaon Linnaeus, 1758\",Canis lupus,wolf;dog\n",
     )
     .unwrap();
     assert_eq!(rows[0].species.as_deref(), Some("Canis lupus"));
@@ -276,8 +276,37 @@ fn csv_accepts_subset_and_reordered_headers() {
 #[test]
 fn csv_rejects_rows_with_a_different_column_count() {
     let (_directory, database) = database();
-    let error = parse_taxonomy_input_csv(&database, "kingdom|order\nAnimalia\n").unwrap_err();
+    let error = parse_taxonomy_input_csv(&database, "kingdom,order\nAnimalia\n").unwrap_err();
     assert!(error.to_string().contains("fields"));
+}
+
+#[test]
+fn configured_csv_delimiter_controls_formatted_io() {
+    let (_directory, database) = database();
+    crate::general::update_general_settings(
+        &database,
+        &crate::general::GeneralSettings {
+            csv_delimiter: "\t".into(),
+            ..crate::general::GeneralSettings::default()
+        },
+    )
+    .unwrap();
+
+    let template = taxonomy_formatted_update_template(&database).unwrap();
+    assert_eq!(template.lines().next().unwrap(), TAXONOMY_INPUT_COLUMNS.join("\t"));
+    let rows = parse_taxonomy_input_csv(
+        &database,
+        "kingdom\tsynonyms\nAnimalia\tMetazoa;Metazoa sensu lato\n",
+    )
+    .unwrap();
+    assert_eq!(rows[0].synonyms.len(), 2);
+    let preview = preview_rows(&database, &rows).unwrap();
+    assert_eq!(preview.delimiter, "\t");
+    let applied = apply_rows(&database, &rows).unwrap();
+    assert_eq!(applied.delimiter, "\t");
+    assert!(taxonomy_log_csv(&database, &applied.rows)
+        .unwrap()
+        .starts_with("row_number\toperation_types\t"));
 }
 
 #[test]

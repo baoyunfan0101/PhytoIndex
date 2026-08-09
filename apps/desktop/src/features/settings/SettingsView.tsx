@@ -205,6 +205,9 @@ function GeneralSettings({
       const saved = await updateGeneralSettings(next);
       if (sequence === saveSequence.current) {
         onChange(saved);
+        if (previous.csv_delimiter !== saved.csv_delimiter) {
+          emitMetadataChange({ key: "csv_delimiter", value: saved.csv_delimiter });
+        }
         setMessage("");
       }
     } catch (nextError) {
@@ -285,6 +288,26 @@ function GeneralSettings({
               }
             }}
           />
+        </label>
+      </section>
+      <section className="settings-group" aria-labelledby="general-csv-heading">
+        <h3 id="general-csv-heading">CSV</h3>
+        <label className="general-setting-row">
+          <span><strong>CSV delimiter</strong><small>Used for every CSV import, export, and formatted-update template.</small></span>
+          <select
+            aria-label="CSV delimiter"
+            disabled={saving}
+            value={settings.csv_delimiter}
+            onChange={(event) => void change({
+              ...settings,
+              csv_delimiter: event.target.value as GeneralSettingsValue["csv_delimiter"],
+            })}
+          >
+            <option value=",">,</option>
+            <option value=";">;</option>
+            <option value={"\t"}>Tab (\t)</option>
+            <option value="|">|</option>
+          </select>
         </label>
       </section>
       <section className="settings-group" aria-labelledby="general-taxon-tree-heading">

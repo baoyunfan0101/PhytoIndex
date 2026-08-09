@@ -948,13 +948,16 @@ pub async fn parse_taxonomy_input_csv(
 }
 
 #[tauri::command]
-pub fn get_taxonomy_formatted_update_template() -> CommandResult<String> {
-    taxonomy::taxonomy_formatted_update_template().map_err(error)
+pub fn get_taxonomy_formatted_update_template(state: State<'_, AppState>) -> CommandResult<String> {
+    taxonomy::taxonomy_formatted_update_template(&state.database).map_err(error)
 }
 
 #[tauri::command]
-pub fn export_taxonomy_log(rows: Vec<TaxonRowOutcome>) -> CommandResult<String> {
-    taxonomy::taxonomy_log_csv(&rows).map_err(error)
+pub fn export_taxonomy_log(
+    state: State<'_, AppState>,
+    rows: Vec<TaxonRowOutcome>,
+) -> CommandResult<String> {
+    taxonomy::taxonomy_log_csv(&state.database, &rows).map_err(error)
 }
 
 #[tauri::command]

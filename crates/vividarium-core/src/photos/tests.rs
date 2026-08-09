@@ -391,10 +391,19 @@ fn groups_taxon_renames_as_one_operation() {
     assert_eq!(audit.items.len(), 2);
     assert_eq!(audit.items[0].sequence, 1);
     assert_eq!(audit.items[1].sequence, 2);
+    crate::general::update_general_settings(
+        &database,
+        &crate::general::GeneralSettings {
+            csv_delimiter: "\t".into(),
+            ..crate::general::GeneralSettings::default()
+        },
+    )
+    .unwrap();
     let mut output = Vec::new();
     write_operation_audit(&database, operation.operation_id, &mut output).unwrap();
     let exported = String::from_utf8(output).unwrap();
     assert_eq!(exported.lines().count(), 3);
+    assert!(exported.starts_with("operation_id\tsequence\t"));
 
     rollback_operation(&database, operation.operation_id).unwrap();
     assert!(root.path().join("first.jpg").is_file());

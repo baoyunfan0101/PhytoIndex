@@ -172,7 +172,8 @@ pub(crate) fn add_input(
         )));
     }
     let source = data_source(request.kind, request.alias.clone(), request.path.clone());
-    inspect_sql_data_source(&source)?;
+    let delimiter = crate::general::get_csv_delimiter_byte(database)?;
+    inspect_sql_data_source(&source, delimiter)?;
     let directory = input_directory(database, scope);
     fs::create_dir_all(&directory)?;
     let extension = match request.kind {
@@ -184,7 +185,7 @@ pub(crate) fn add_input(
     let added = (|| {
         copy_input(request.kind, &request.path, &stored_path)?;
         let stored_source = data_source(request.kind, request.alias.clone(), stored_path.clone());
-        let schema = inspect_sql_data_source(&stored_source)?;
+        let schema = inspect_sql_data_source(&stored_source, delimiter)?;
         let schema_json = serde_json::to_string(&schema).map_err(|error| {
             CoreError::Consistency(format!("could not serialize SQL input schema: {error}"))
         })?;

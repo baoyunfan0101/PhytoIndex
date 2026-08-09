@@ -5,6 +5,7 @@ export function normalizeGeneralSettings(value: Partial<GeneralSettings>): Gener
     theme: "dark",
     restore_tabs: true,
     recent_searches_limit: 10,
+    csv_delimiter: ",",
     taxon_tree_name_parts: {
       sci_name: true,
       zh_name: true,
@@ -21,6 +22,7 @@ export function normalizeGeneralSettings(value: Partial<GeneralSettings>): Gener
     theme,
     restore_tabs: typeof value.restore_tabs === "boolean" ? value.restore_tabs : fallback.restore_tabs,
     recent_searches_limit: recentSearchesLimit,
+    csv_delimiter: isCsvDelimiter(value.csv_delimiter) ? value.csv_delimiter : fallback.csv_delimiter,
     taxon_tree_name_parts: normalizeTaxonTreeNameParts(value.taxon_tree_name_parts, fallback.taxon_tree_name_parts),
   };
 }
@@ -35,6 +37,10 @@ export function applyTheme(
 
 function isTheme(value: unknown): value is ThemePreference {
   return value === "system" || value === "light" || value === "dark";
+}
+
+function isCsvDelimiter(value: unknown): value is GeneralSettings["csv_delimiter"] {
+  return value === "," || value === ";" || value === "\t" || value === "|";
 }
 
 function normalizeTaxonTreeNameParts(

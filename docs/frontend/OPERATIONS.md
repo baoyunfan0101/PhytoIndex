@@ -23,7 +23,8 @@ history also exports the replayable formatted inputs contained in the current
 selection, combining them into one CSV and ignoring selected operations that
 do not have formatted input. The action is disabled only when the selection has
 no replayable operation. Export actions always open the native CSV destination
-dialog.
+dialog. Photo and taxonomy audit exports plus taxonomy replayable-input exports
+use the application-wide CSV delimiter selected in General settings.
 
 Opening an operation replaces the list with its detail. The detail toolbar has
 a back button and actions scoped to that operation. Audit before and after

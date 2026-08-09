@@ -29,8 +29,11 @@ Databases, Naming, Map, Filename Parser, Synonym Splitter, and About.
 ### General
 
 Reads and updates the application theme, workspace-tab restoration preference,
-and recent-search limit. Changes are persisted immediately; there is no
-page-level Save action. Recent-search contents remain in browser-local storage.
+recent-search limit, and global CSV delimiter. The delimiter choices are comma,
+semicolon, tab, and pipe; comma is the default. It controls formatted-update
+templates and imports, SQL CSV sources and exports, and every history CSV
+export. Changes are persisted immediately; there is no page-level Save action.
+Recent-search contents remain in browser-local storage.
 
 ### Storage
 
@@ -86,4 +89,5 @@ installs an available update through the desktop updater.
 
 `emitMetadataChange(change)` publishes a committed metadata update.
 `useMetadataChange(listener)` subscribes to changes so dependent views refresh
-only the values they consume.
+only the values they consume. CSV delimiter changes invalidate an outstanding
+formatted-update preview.

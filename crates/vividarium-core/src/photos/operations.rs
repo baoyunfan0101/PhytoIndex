@@ -201,7 +201,12 @@ pub fn write_operation_audit<W: std::io::Write>(
     operation_id: i64,
     writer: &mut W,
 ) -> CoreResult<()> {
-    operations::write_operation_audit(&database.connect()?, Some(&[operation_id]), writer)
+    operations::write_operation_audit(
+        &database.connect()?,
+        Some(&[operation_id]),
+        crate::general::get_csv_delimiter_byte(database)?,
+        writer,
+    )
 }
 
 pub fn write_operations_audit<W: std::io::Write>(
@@ -209,14 +214,24 @@ pub fn write_operations_audit<W: std::io::Write>(
     operation_ids: &[i64],
     writer: &mut W,
 ) -> CoreResult<()> {
-    operations::write_operation_audit(&database.connect()?, Some(operation_ids), writer)
+    operations::write_operation_audit(
+        &database.connect()?,
+        Some(operation_ids),
+        crate::general::get_csv_delimiter_byte(database)?,
+        writer,
+    )
 }
 
 pub fn write_all_operation_audit<W: std::io::Write>(
     database: &Database,
     writer: &mut W,
 ) -> CoreResult<()> {
-    operations::write_operation_audit(&database.connect()?, None, writer)
+    operations::write_operation_audit(
+        &database.connect()?,
+        None,
+        crate::general::get_csv_delimiter_byte(database)?,
+        writer,
+    )
 }
 
 pub fn rollback_operation(database: &Database, operation_id: i64) -> CoreResult<()> {

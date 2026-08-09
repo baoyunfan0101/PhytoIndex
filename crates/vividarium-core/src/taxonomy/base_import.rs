@@ -200,7 +200,8 @@ fn execute_base_import_sql_in_workspace(
         let mut connection = Connection::open_in_memory()?;
         connection.execute_batch("PRAGMA foreign_keys = ON")?;
         let sources = sql_inputs::stored_sources(database, SqlInputScope::BaseImport)?;
-        let attached = prepare_sources(&mut connection, &sources)?;
+        let delimiter = crate::general::get_csv_delimiter_byte(database)?;
+        let attached = prepare_sources(&mut connection, &sources, delimiter)?;
         let execution = execute_base_import_script(&connection, &sql, &staging_path, progress);
         report_progress(progress, BUILDING_STAGING_DATABASE, None, None, None, None);
         let attachments = validate_base_import_attachments(&connection, &attached);

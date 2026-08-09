@@ -93,6 +93,44 @@ fn validate_executes_sql_and_builds_the_candidate_in_one_request() {
 }
 
 #[test]
+fn base_import_uses_the_configured_csv_delimiter() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = Database::open(directory.path().join("metadata.db")).unwrap();
+    crate::general::update_general_settings(
+        &database,
+        &crate::general::GeneralSettings {
+            csv_delimiter: ";".into(),
+            ..crate::general::GeneralSettings::default()
+        },
+    )
+    .unwrap();
+    let csv_path = directory.path().join("semicolon-source.csv");
+    fs::write(
+        &csv_path,
+        "taxon_id;rank;name;geological_range\n101;1;Animalia;Recent\n",
+    )
+    .unwrap();
+    add_base_import_input(
+        &database,
+        &AddSqlInputRequest {
+            kind: SqlInputKind::Csv,
+            alias: "source_taxa".into(),
+            path: csv_path,
+        },
+    )
+    .unwrap();
+    let result = validate_base_import(
+        &database,
+        &ValidateBaseImportRequest {
+            sql: SIMPLE_IMPORT_SQL.into(),
+        },
+    )
+    .unwrap();
+    assert!(result.validation.valid);
+    assert_eq!(result.validation.taxa_count, 1);
+}
+
+#[test]
 fn validate_reports_real_stages_and_sql_statement_progress() {
     let directory = tempfile::tempdir().unwrap();
     let database = Database::open(directory.path().join("metadata.db")).unwrap();

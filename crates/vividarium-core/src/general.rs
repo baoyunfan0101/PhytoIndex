@@ -21,6 +21,8 @@ pub struct GeneralSettings {
     pub theme: ThemePreference,
     pub restore_tabs: bool,
     pub recent_searches_limit: u8,
+    #[serde(default = "default_csv_delimiter")]
+    pub csv_delimiter: String,
     #[serde(default = "default_taxon_tree_name_parts")]
     pub taxon_tree_name_parts: TaxonTreeNameParts,
 }
@@ -46,12 +48,17 @@ fn default_taxon_tree_name_parts() -> TaxonTreeNameParts {
     TaxonTreeNameParts::default()
 }
 
+fn default_csv_delimiter() -> String {
+    ",".into()
+}
+
 impl Default for GeneralSettings {
     fn default() -> Self {
         Self {
             theme: ThemePreference::Dark,
             restore_tabs: true,
             recent_searches_limit: 10,
+            csv_delimiter: default_csv_delimiter(),
             taxon_tree_name_parts: TaxonTreeNameParts::default(),
         }
     }
@@ -135,6 +142,32 @@ pub fn update_general_settings(
     Ok(settings.clone())
 }
 
+pub fn get_csv_delimiter(database: &Database) -> CoreResult<String> {
+    let delimiter = get_general_settings(database)?.csv_delimiter;
+    csv_delimiter_byte(&delimiter)?;
+    Ok(delimiter)
+}
+
+pub(crate) fn get_csv_delimiter_byte(database: &Database) -> CoreResult<u8> {
+    match get_csv_delimiter(database) {
+        Ok(delimiter) => csv_delimiter_byte(&delimiter),
+        Err(CoreError::Database(_)) => Ok(b','),
+        Err(error) => Err(error),
+    }
+}
+
+pub(crate) fn csv_delimiter_byte(delimiter: &str) -> CoreResult<u8> {
+    match delimiter {
+        "," => Ok(b','),
+        ";" => Ok(b';'),
+        "\t" => Ok(b'\t'),
+        "|" => Ok(b'|'),
+        _ => Err(CoreError::InvalidArgument(
+            "csv_delimiter must be one of ',', ';', '\\t', or '|'".into(),
+        )),
+    }
+}
+
 pub fn get_workspace_state(database: &Database) -> CoreResult<WorkspaceState> {
     let connection = database.connect_metadata()?;
     let Some(raw) = metadata::get_raw(&connection, MetadataKey::WorkspaceState)? else {
@@ -161,6 +194,7 @@ fn validate_general_settings(settings: &GeneralSettings) -> CoreResult<()> {
             "recent_searches_limit must be between 1 and 50".to_string(),
         ));
     }
+    csv_delimiter_byte(&settings.csv_delimiter)?;
     if !settings.taxon_tree_name_parts.sci_name
         && !settings.taxon_tree_name_parts.zh_name
         && !settings.taxon_tree_name_parts.en_name
@@ -240,6 +274,7 @@ mod tests {
                 theme: ThemePreference::Dark,
                 restore_tabs: true,
                 recent_searches_limit: 10,
+                csv_delimiter: ",".into(),
                 taxon_tree_name_parts: TaxonTreeNameParts::default(),
             }
         );
@@ -252,6 +287,7 @@ mod tests {
             theme: ThemePreference::Light,
             restore_tabs: false,
             recent_searches_limit: 24,
+            csv_delimiter: "\t".into(),
             taxon_tree_name_parts: TaxonTreeNameParts {
                 sci_name: true,
                 zh_name: false,
@@ -278,6 +314,27 @@ mod tests {
                 Err(CoreError::InvalidArgument(_))
             ));
         }
+    }
+
+    #[test]
+    fn accepts_only_supported_csv_delimiters() {
+        let (_directory, database) = test_database();
+        for delimiter in [",", ";", "\t", "|"] {
+            let settings = GeneralSettings {
+                csv_delimiter: delimiter.into(),
+                ..GeneralSettings::default()
+            };
+            update_general_settings(&database, &settings).unwrap();
+            assert_eq!(get_csv_delimiter(&database).unwrap(), delimiter);
+        }
+        let settings = GeneralSettings {
+            csv_delimiter: ":".into(),
+            ..GeneralSettings::default()
+        };
+        assert!(matches!(
+            update_general_settings(&database, &settings),
+            Err(CoreError::InvalidArgument(_))
+        ));
     }
 
     #[test]

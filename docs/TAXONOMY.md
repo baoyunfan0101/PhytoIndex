@@ -102,12 +102,14 @@ model and reports a missing taxon as an error.
 The CSV columns are:
 
 ```text
-kingdom|order|family|genus|species|authority_year|synonyms|zh_name|zh_alias|en_name|en_alias|geological_range|source
+kingdom,order,family,genus,species,authority_year,synonyms,zh_name,zh_alias,en_name,en_alias,geological_range,source
 ```
 
-CSV is UTF-8, pipe-delimited, and requires a header. Columns may be omitted or
-reordered, but every row must have the same field count as the header.
-Multi-name cells use the configured one-character name separator.
+CSV is UTF-8 and requires a header. Its application-wide delimiter is comma by
+default and may be configured as comma, semicolon, tab, or pipe. Columns may be
+omitted or reordered, but every row must have the same field count as the
+header. Multi-name cells use the separate configured one-character name
+separator.
 
 The lowest supplied scientific lineage name and then each supplied synonym
 are matched in input order. Each input name searches both existing
@@ -131,13 +133,13 @@ and the same ordered row log.
 
 | Function | Parameters after `database` | Return |
 | --- | --- | --- |
-| `taxonomy_formatted_update_template` | no `database` parameter | UTF-8 pipe-delimited header `String` |
+| `taxonomy_formatted_update_template` | none | UTF-8 header using the configured CSV delimiter `String` |
 | `parse_taxonomy_input_csv` | `input: &str` | `Vec<TaxonInputRow>` |
 | `preview_rows` | `rows: &[TaxonInputRow]` | `TaxonomyPreviewResult` |
 | `prepare_rows` | `rows: &[TaxonInputRow]` | `PreparedTaxonomyUpdate` |
 | `apply_rows` | `rows: &[TaxonInputRow]` | `TaxonomyOperationResult` |
 | `apply_prepared_rows` | `prepared: PreparedTaxonomyUpdate` | `TaxonomyOperationResult` |
-| `taxonomy_log_csv` | no `database`; `rows: &[TaxonRowOutcome]` | UTF-8 pipe-delimited CSV `String` |
+| `taxonomy_log_csv` | `rows: &[TaxonRowOutcome]` | UTF-8 CSV using the configured delimiter `String` |
 | `get_taxonomy_name_separator` | none | `String` |
 | `set_taxonomy_name_separator` | `separator: &str` | `()` |
 
@@ -192,7 +194,8 @@ synchronization.
 Custom SQL and Base Import use persistent SQL inputs. `SqlInputKind` is `csv`
 or `sqlite`. SQLite inputs are read through `alias.object`; CSV inputs are
 read as a table named by the alias. Aliases must be valid SQLite identifiers
-and cannot use reserved database names.
+and cannot use reserved database names. CSV source inspection and loading use
+the application-wide CSV delimiter.
 
 | Type | Fields | Description |
 | --- | --- | --- |
@@ -253,7 +256,8 @@ synchronization. SQL is saved only after prepare, execution, and transaction
 commit succeed. A script-save failure returns the committed execution with
 `script_saved = false` and a warning; an execution failure does not replace
 the last successful SQL. Export accepts exactly one
-read-only query and streams its rows to the destination CSV.
+read-only query and streams its rows to the destination CSV using the
+application-wide delimiter.
 Desktop source removal, SQL execution, and query export commands execute file
 and database work on blocking workers and resolve asynchronously.
 
@@ -392,4 +396,5 @@ deletes the original operation. Desktop history pagination, rollback, audit
 export, and formatted-input export execute database and file work on blocking
 workers and resolve asynchronously. Desktop audit and formatted-input export
 commands accept an absolute destination path and write the CSV after the caller
-selects that path.
+selects that path. Audit and replayable-input exports use the application-wide
+CSV delimiter.

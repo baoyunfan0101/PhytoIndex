@@ -304,6 +304,7 @@ pub fn prepare_rows(
     database: &Database,
     rows: &[TaxonInputRow],
 ) -> CoreResult<PreparedTaxonomyUpdate> {
+    let delimiter = crate::general::get_csv_delimiter(database)?;
     let _guard = database.try_taxonomy_mutation()?;
     let mut connection = database.connect_taxonomy_metadata_context()?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -318,7 +319,7 @@ pub fn prepare_rows(
     Ok(PreparedTaxonomyUpdate {
         rows: rows.to_vec(),
         preview: TaxonomyPreviewResult {
-            delimiter: "|".into(),
+            delimiter,
             encoding: "UTF-8".into(),
             rows: outcomes,
         },
@@ -331,6 +332,7 @@ pub fn apply_rows(
     database: &Database,
     rows: &[TaxonInputRow],
 ) -> CoreResult<TaxonomyOperationResult> {
+    let delimiter = crate::general::get_csv_delimiter(database)?;
     let _guard = database.try_taxonomy_mutation()?;
     let mut connection = database.connect_taxonomy_metadata_context()?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -341,7 +343,7 @@ pub fn apply_rows(
     session.changeset_strm(&mut changeset_blob)?;
     drop(session);
 
-    let result = store_applied_rows(&transaction, rows, outcomes, changeset_blob)?;
+    let result = store_applied_rows(&transaction, rows, outcomes, changeset_blob, delimiter)?;
     transaction.commit()?;
     Ok(result)
 }
@@ -350,6 +352,7 @@ pub fn apply_prepared_rows(
     database: &Database,
     prepared: PreparedTaxonomyUpdate,
 ) -> CoreResult<TaxonomyOperationResult> {
+    let delimiter = prepared.preview.delimiter.clone();
     let _guard = database.try_taxonomy_mutation()?;
     let mut connection = database.connect_taxonomy_metadata_context()?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -377,6 +380,7 @@ pub fn apply_prepared_rows(
         &prepared.rows,
         prepared.preview.rows,
         prepared.changeset_blob,
+        delimiter,
     )?;
     transaction.commit()?;
     Ok(result)
@@ -387,6 +391,7 @@ fn store_applied_rows(
     rows: &[TaxonInputRow],
     outcomes: Vec<TaxonRowOutcome>,
     changeset_blob: Vec<u8>,
+    delimiter: String,
 ) -> CoreResult<TaxonomyOperationResult> {
     let stored_input = rows
         .iter()
@@ -417,7 +422,7 @@ fn store_applied_rows(
         total_rows: outcomes.len(),
         succeeded_rows: outcomes.len() - failed_rows,
         failed_rows,
-        delimiter: "|".into(),
+        delimiter,
         encoding: "UTF-8".into(),
         rows: outcomes,
     };
@@ -1469,8 +1474,10 @@ pub fn set_taxonomy_name_separator(database: &Database, separator: &str) -> Core
     )
 }
 
-pub fn taxonomy_formatted_update_template() -> CoreResult<String> {
-    let mut writer = WriterBuilder::new().delimiter(b'|').from_writer(Vec::new());
+pub fn taxonomy_formatted_update_template(database: &Database) -> CoreResult<String> {
+    let mut writer = WriterBuilder::new()
+        .delimiter(crate::general::get_csv_delimiter_byte(database)?)
+        .from_writer(Vec::new());
     writer.write_record(TAXONOMY_INPUT_COLUMNS)?;
     writer.flush()?;
     String::from_utf8(writer.into_inner().map_err(|error| error.into_error())?)
@@ -1484,7 +1491,7 @@ pub fn parse_taxonomy_input_csv(
     let separator = get_taxonomy_name_separator(database)?;
     let separator = separator.chars().next().unwrap_or(';');
     let mut reader = ReaderBuilder::new()
-        .delimiter(b'|')
+        .delimiter(crate::general::get_csv_delimiter_byte(database)?)
         .from_reader(input.as_bytes());
     let headers = reader.headers()?.clone();
     if headers.is_empty() {
@@ -1548,8 +1555,10 @@ pub fn parse_taxonomy_input_csv(
     Ok(rows)
 }
 
-pub fn taxonomy_log_csv(rows: &[TaxonRowOutcome]) -> CoreResult<String> {
-    let mut writer = WriterBuilder::new().delimiter(b'|').from_writer(Vec::new());
+pub fn taxonomy_log_csv(database: &Database, rows: &[TaxonRowOutcome]) -> CoreResult<String> {
+    let mut writer = WriterBuilder::new()
+        .delimiter(crate::general::get_csv_delimiter_byte(database)?)
+        .from_writer(Vec::new());
     writer.write_record([
         "row_number",
         "operation_types",

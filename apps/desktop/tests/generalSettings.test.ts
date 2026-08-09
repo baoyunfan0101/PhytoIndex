@@ -11,6 +11,7 @@ test("normalizes missing and invalid general settings to defaults", () => {
     theme: "dark",
     restore_tabs: true,
     recent_searches_limit: 10,
+    csv_delimiter: ",",
     taxon_tree_name_parts: {
       sci_name: true,
       zh_name: true,
@@ -29,6 +30,7 @@ test("preserves valid general settings", () => {
     theme: "light",
     restore_tabs: false,
     recent_searches_limit: 1,
+    csv_delimiter: "\t",
     taxon_tree_name_parts: {
       sci_name: false,
       zh_name: true,
@@ -38,6 +40,7 @@ test("preserves valid general settings", () => {
     theme: "light",
     restore_tabs: false,
     recent_searches_limit: 1,
+    csv_delimiter: "\t",
     taxon_tree_name_parts: {
       sci_name: false,
       zh_name: true,

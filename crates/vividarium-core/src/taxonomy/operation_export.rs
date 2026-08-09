@@ -15,6 +15,7 @@ pub fn write_operation_audit<W: std::io::Write>(
     operations::write_operation_audit(
         &database.connect_taxonomy_metadata_context()?,
         Some(&[operation_id]),
+        crate::general::get_csv_delimiter_byte(database)?,
         writer,
     )
 }
@@ -27,6 +28,7 @@ pub fn write_operations_audit<W: std::io::Write>(
     operations::write_operation_audit(
         &database.connect_taxonomy_metadata_context()?,
         Some(operation_ids),
+        crate::general::get_csv_delimiter_byte(database)?,
         writer,
     )
 }
@@ -35,7 +37,12 @@ pub fn write_all_operation_audit<W: std::io::Write>(
     database: &Database,
     writer: &mut W,
 ) -> CoreResult<()> {
-    operations::write_operation_audit(&database.connect_taxonomy_metadata_context()?, None, writer)
+    operations::write_operation_audit(
+        &database.connect_taxonomy_metadata_context()?,
+        None,
+        crate::general::get_csv_delimiter_byte(database)?,
+        writer,
+    )
 }
 
 pub fn export_operation_input(database: &Database, operation_id: i64) -> CoreResult<String> {
@@ -52,11 +59,14 @@ pub fn export_all_replayable_inputs(database: &Database) -> CoreResult<String> {
 
 fn export_inputs(database: &Database, operation_ids: Option<&[i64]>) -> CoreResult<String> {
     let separator = get_taxonomy_name_separator(database)?;
+    let delimiter = crate::general::get_csv_delimiter_byte(database)?;
     let connection = database.connect_taxonomy_metadata_context()?;
     if let Some(operation_ids) = operation_ids {
         validate_replayable_operations(&connection, operation_ids)?;
     }
-    let mut writer = WriterBuilder::new().delimiter(b'|').from_writer(Vec::new());
+    let mut writer = WriterBuilder::new()
+        .delimiter(delimiter)
+        .from_writer(Vec::new());
     writer.write_record(TAXONOMY_INPUT_COLUMNS)?;
     let filter = operation_ids
         .map(|operation_ids| {
@@ -168,6 +178,14 @@ mod tests {
     fn exports_selected_or_all_replayable_inputs_with_one_header() {
         let directory = tempfile::tempdir().unwrap();
         let database = Database::open(directory.path().join("test.db")).unwrap();
+        crate::general::update_general_settings(
+            &database,
+            &crate::general::GeneralSettings {
+                csv_delimiter: ";".into(),
+                ..crate::general::GeneralSettings::default()
+            },
+        )
+        .unwrap();
         let first = apply_rows(
             &database,
             &[
@@ -197,7 +215,7 @@ mod tests {
             export_operations_input(&database, &[first.operation_id, second.operation_id]).unwrap();
         assert_eq!(
             selected.lines().next().unwrap(),
-            TAXONOMY_INPUT_COLUMNS.join("|")
+            TAXONOMY_INPUT_COLUMNS.join(";")
         );
         let rows = parse_taxonomy_input_csv(&database, &selected).unwrap();
         assert_eq!(rows.len(), 3);
@@ -205,10 +223,20 @@ mod tests {
         let all = export_all_replayable_inputs(&database).unwrap();
         assert_eq!(
             all.lines()
-                .filter(|line| *line == TAXONOMY_INPUT_COLUMNS.join("|"))
+                .filter(|line| *line == TAXONOMY_INPUT_COLUMNS.join(";"))
                 .count(),
             1
         );
         assert_eq!(parse_taxonomy_input_csv(&database, &all).unwrap().len(), 3);
+        let mut audit = Vec::new();
+        write_operations_audit(
+            &database,
+            &[first.operation_id, second.operation_id],
+            &mut audit,
+        )
+        .unwrap();
+        assert!(String::from_utf8(audit)
+            .unwrap()
+            .starts_with("operation_id;sequence;"));
     }
 }

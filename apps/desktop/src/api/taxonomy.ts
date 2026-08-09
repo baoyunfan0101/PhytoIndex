@@ -1,5 +1,6 @@
 import { call } from "./client";
 import type { Page } from "./common";
+import { getGeneralSettings } from "./general";
 import { demoPhotos, type Photo } from "./photos";
 
 export type TaxonRank = "kingdom" | "order" | "family" | "genus" | "species";
@@ -740,9 +741,15 @@ function demoOperationTypes(changes: DemoTaxonChange[]): string[] {
 }
 
 export const getTaxonomyTemplate = () =>
-  call<string>("get_taxonomy_formatted_update_template", undefined, () => "kingdom|order|family|genus|species|authority_year|synonyms|zh_name|zh_alias|en_name|en_alias|geological_range|source\n");
+  call<string>("get_taxonomy_formatted_update_template", undefined, async () => {
+    const { csv_delimiter: delimiter } = await getGeneralSettings();
+    return ["kingdom", "order", "family", "genus", "species", "authority_year", "synonyms", "zh_name", "zh_alias", "en_name", "en_alias", "geological_range", "source"].join(delimiter) + "\n";
+  });
 export const parseTaxonomyCsv = (input: string) =>
-  call<TaxonInputRow[]>("parse_taxonomy_input_csv", { input }, () => parseDemoTaxonomyCsv(input));
+  call<TaxonInputRow[]>("parse_taxonomy_input_csv", { input }, async () => {
+    const { csv_delimiter: delimiter } = await getGeneralSettings();
+    return parseDemoTaxonomyCsv(input, delimiter);
+  });
 
 let demoFormattedUpdatePreview: {
   previewId: string;
@@ -750,10 +757,11 @@ let demoFormattedUpdatePreview: {
 } | null = null;
 
 export const previewTaxonomyRows = (rows: TaxonInputRow[]) =>
-  call<FormattedUpdatePreviewResult>("preview_taxonomy_rows", { rows }, () => {
+  call<FormattedUpdatePreviewResult>("preview_taxonomy_rows", { rows }, async () => {
+    const { csv_delimiter: delimiter } = await getGeneralSettings();
     const previewId = `demo-preview-${Date.now()}`;
     const result: TaxonomyPreviewResult = {
-      delimiter: "|",
+      delimiter,
       encoding: "UTF-8",
       rows: rows.map((row, index) => ({
         row_number: index + 1,
@@ -784,12 +792,11 @@ export const applyTaxonomyRows = (previewId: string) =>
     };
   });
 
-function parseDemoTaxonomyCsv(input: string): TaxonInputRow[] {
-  const lines = input.trim().split(/\r?\n/);
-  if (lines.length < 2) return [];
-  const headers = lines[0].split("|");
-  return lines.slice(1).filter(Boolean).map((line) => {
-    const values = line.split("|");
+function parseDemoTaxonomyCsv(input: string, delimiter: string): TaxonInputRow[] {
+  const records = parseDemoCsvRecords(input, delimiter);
+  if (records.length < 2) return [];
+  const headers = records[0];
+  return records.slice(1).filter((values) => values.some(Boolean)).map((values) => {
     const row: Record<string, unknown> = {};
     headers.forEach((header, index) => {
       const value = values[index] ?? "";
@@ -799,4 +806,35 @@ function parseDemoTaxonomyCsv(input: string): TaxonInputRow[] {
     });
     return row as TaxonInputRow;
   });
+}
+
+function parseDemoCsvRecords(input: string, delimiter: string): string[][] {
+  const records: string[][] = [];
+  let record: string[] = [];
+  let field = "";
+  let quoted = false;
+  for (let index = 0; index < input.length; index += 1) {
+    const character = input[index];
+    if (quoted) {
+      if (character === '"' && input[index + 1] === '"') {
+        field += '"';
+        index += 1;
+      } else if (character === '"') quoted = false;
+      else field += character;
+    } else if (character === '"' && field.length === 0) quoted = true;
+    else if (character === delimiter) {
+      record.push(field);
+      field = "";
+    } else if (character === "\n") {
+      record.push(field);
+      records.push(record);
+      record = [];
+      field = "";
+    } else if (character !== "\r") field += character;
+  }
+  if (field.length > 0 || record.length > 0) {
+    record.push(field);
+    records.push(record);
+  }
+  return records;
 }
