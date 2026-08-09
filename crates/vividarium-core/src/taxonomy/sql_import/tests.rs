@@ -96,7 +96,11 @@ fn validate_executes_sql_and_builds_the_candidate_in_one_request() {
 fn sql_import_staging_schemas_follow_the_staging_database() {
     let directory = tempfile::tempdir().unwrap();
     let database = Database::open(directory.path().join("metadata.db")).unwrap();
-    assert!(list_sql_import_staging_schemas(&database).unwrap().is_empty());
+    assert!(
+        list_sql_import_staging_schemas(&database)
+            .unwrap()
+            .is_empty()
+    );
     add_simple_input(&directory, &database);
 
     execute_simple(&database);
@@ -104,7 +108,12 @@ fn sql_import_staging_schemas_follow_the_staging_database() {
 
     assert_eq!(schemas.len(), 1);
     assert_eq!(schemas[0].alias, "sql_import");
-    assert!(schemas[0].objects.iter().any(|object| object.name == "taxa"));
+    assert!(
+        schemas[0]
+            .objects
+            .iter()
+            .any(|object| object.name == "taxa")
+    );
     assert!(
         schemas[0]
             .objects
@@ -122,7 +131,12 @@ fn sql_import_database_schemas_expose_the_current_taxonomy() {
 
     assert_eq!(schemas.len(), 1);
     assert_eq!(schemas[0].alias, "taxonomy");
-    assert!(schemas[0].objects.iter().any(|object| object.name == "taxa"));
+    assert!(
+        schemas[0]
+            .objects
+            .iter()
+            .any(|object| object.name == "taxa")
+    );
     assert!(
         schemas[0]
             .objects
@@ -155,7 +169,8 @@ DETACH DATABASE sql_import;
     assert_eq!(
         Connection::open(staging)
             .unwrap()
-            .query_row("SELECT COUNT(*) FROM existing_taxa", [], |row| row.get::<_, i64>(0))
+            .query_row("SELECT COUNT(*) FROM existing_taxa", [], |row| row
+                .get::<_, i64>(0))
             .unwrap(),
         1
     );

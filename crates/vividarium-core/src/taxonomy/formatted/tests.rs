@@ -293,7 +293,10 @@ fn configured_csv_delimiter_controls_formatted_io() {
     .unwrap();
 
     let template = taxonomy_formatted_update_template(&database).unwrap();
-    assert_eq!(template.lines().next().unwrap(), TAXONOMY_INPUT_COLUMNS.join("\t"));
+    assert_eq!(
+        template.lines().next().unwrap(),
+        TAXONOMY_INPUT_COLUMNS.join("\t")
+    );
     let rows = parse_taxonomy_input_csv(
         &database,
         "kingdom\tsynonyms\nAnimalia\tMetazoa;Metazoa sensu lato\n",
@@ -304,9 +307,11 @@ fn configured_csv_delimiter_controls_formatted_io() {
     assert_eq!(preview.delimiter, "\t");
     let applied = apply_rows(&database, &rows).unwrap();
     assert_eq!(applied.delimiter, "\t");
-    assert!(taxonomy_log_csv(&database, &applied.rows)
-        .unwrap()
-        .starts_with("row_number\toperation_types\t"));
+    assert!(
+        taxonomy_log_csv(&database, &applied.rows)
+            .unwrap()
+            .starts_with("row_number\toperation_types\t")
+    );
 }
 
 #[test]
@@ -353,12 +358,16 @@ fn prepared_preview_applies_the_cached_changeset() {
     };
     let prepared = prepare_rows(&database, std::slice::from_ref(&input)).unwrap();
     let preview = prepared.preview_result().clone();
-    assert_eq!(preview.rows[0].operation_types, vec![TaxonRowStatus::NewTaxon, TaxonRowStatus::NewName]);
+    assert_eq!(
+        preview.rows[0].operation_types,
+        vec![TaxonRowStatus::NewTaxon, TaxonRowStatus::NewName]
+    );
     assert!(
         database
             .connect_taxonomy_metadata_context()
             .unwrap()
-            .query_row("SELECT NOT EXISTS(SELECT 1 FROM taxa)", [], |row| row.get::<_, bool>(0))
+            .query_row("SELECT NOT EXISTS(SELECT 1 FROM taxa)", [], |row| row
+                .get::<_, bool>(0))
             .unwrap()
     );
 
@@ -369,7 +378,8 @@ fn prepared_preview_applies_the_cached_changeset() {
         database
             .connect_taxonomy_metadata_context()
             .unwrap()
-            .query_row("SELECT COUNT(*) FROM taxon_names", [], |row| row.get::<_, i64>(0))
+            .query_row("SELECT COUNT(*) FROM taxon_names", [], |row| row
+                .get::<_, i64>(0))
             .unwrap(),
         2
     );

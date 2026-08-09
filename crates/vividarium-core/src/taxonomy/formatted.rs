@@ -1897,15 +1897,15 @@ pub(super) fn visit_taxonomy_validation_issues(
             continue;
         }
         if rank == TaxonRank::Kingdom.code() {
-            if parent_taxon_id.is_some() {
-                if !visit(TaxonomyValidationIssue {
+            if parent_taxon_id.is_some()
+                && !visit(TaxonomyValidationIssue {
                     code: "kingdom_has_parent",
                     message: format!("Kingdom taxon {taxon_id} must be a root taxon."),
                     taxon_id: Some(taxon_id),
                     related_taxon_id: parent_taxon_id,
-                }) {
-                    return Ok(());
-                }
+                })
+            {
+                return Ok(());
             }
             continue;
         }
@@ -1933,15 +1933,15 @@ pub(super) fn visit_taxonomy_validation_issues(
             }
             continue;
         };
-        if *parent_rank >= rank {
-            if !visit(TaxonomyValidationIssue {
+        if *parent_rank >= rank
+            && !visit(TaxonomyValidationIssue {
                 code: "invalid_parent_rank",
                 message: format!("Taxon {taxon_id} must have a parent with a higher rank."),
                 taxon_id: Some(taxon_id),
                 related_taxon_id: Some(parent_taxon_id),
-            }) {
-                return Ok(());
-            }
+            })
+        {
+            return Ok(());
         }
     }
     let mut invalid_sci_names = connection.prepare(
@@ -2030,15 +2030,15 @@ pub(super) fn visit_taxonomy_validation_issues(
             ))
         })? {
             let (name_id, taxon_id, name) = row?;
-            if normalize_name(Some(&name)).as_deref() != Some(name.as_str()) {
-                if !visit(TaxonomyValidationIssue {
+            if normalize_name(Some(&name)).as_deref() != Some(name.as_str())
+                && !visit(TaxonomyValidationIssue {
                     code: "name_not_normalized",
                     message: format!("Taxon name {name_id} is not normalized."),
                     taxon_id: Some(taxon_id),
                     related_taxon_id: None,
-                }) {
-                    return Ok(());
-                }
+                })
+            {
+                return Ok(());
             }
         }
     }

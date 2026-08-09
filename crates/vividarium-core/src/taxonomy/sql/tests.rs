@@ -326,7 +326,12 @@ fn custom_sql_database_schemas_include_main_taxonomy_tables() {
 
     assert_eq!(schemas.len(), 1);
     assert_eq!(schemas[0].alias, "main");
-    assert!(schemas[0].objects.iter().any(|object| object.name == "taxa"));
+    assert!(
+        schemas[0]
+            .objects
+            .iter()
+            .any(|object| object.name == "taxa")
+    );
     assert!(
         schemas[0]
             .objects
@@ -406,7 +411,10 @@ fn configured_csv_delimiter_controls_sql_sources_and_exports() {
     .unwrap();
     assert_eq!(
         result.result_sets[0].rows[0],
-        vec![SqlValue::Text("Animalia".into()), SqlValue::Text("Recent".into())]
+        vec![
+            SqlValue::Text("Animalia".into()),
+            SqlValue::Text("Recent".into())
+        ]
     );
     let destination = directory.path().join("query.csv");
     export_custom_taxonomy_query(

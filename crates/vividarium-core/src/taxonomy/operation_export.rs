@@ -235,8 +235,10 @@ mod tests {
             &mut audit,
         )
         .unwrap();
-        assert!(String::from_utf8(audit)
-            .unwrap()
-            .starts_with("operation_id;sequence;"));
+        assert!(
+            String::from_utf8(audit)
+                .unwrap()
+                .starts_with("operation_id;sequence;")
+        );
     }
 }

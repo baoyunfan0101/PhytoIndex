@@ -89,12 +89,12 @@ fn replace_default_about<R: Runtime>(menu: &Menu<R>, app: &AppHandle<R>) -> taur
     for item in menu.items()? {
         if let MenuItemKind::Submenu(submenu) = item {
             for (index, child) in submenu.items()?.into_iter().enumerate() {
-                if let MenuItemKind::Predefined(predefined) = child {
-                    if predefined.text()?.replace('&', "").starts_with("About") {
-                        submenu.remove_at(index)?;
-                        submenu.insert(&about, index)?;
-                        return Ok(());
-                    }
+                if let MenuItemKind::Predefined(predefined) = child
+                    && predefined.text()?.replace('&', "").starts_with("About")
+                {
+                    submenu.remove_at(index)?;
+                    submenu.insert(&about, index)?;
+                    return Ok(());
                 }
             }
         }
@@ -105,10 +105,10 @@ fn replace_default_about<R: Runtime>(menu: &Menu<R>, app: &AppHandle<R>) -> taur
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 fn default_file_menu<R: Runtime>(menu: &Menu<R>) -> tauri::Result<Submenu<R>> {
     for item in menu.items()? {
-        if let MenuItemKind::Submenu(submenu) = item {
-            if submenu.text()? == "File" {
-                return Ok(submenu);
-            }
+        if let MenuItemKind::Submenu(submenu) = item
+            && submenu.text()? == "File"
+        {
+            return Ok(submenu);
         }
     }
     Err(std::io::Error::other("default File menu is missing").into())

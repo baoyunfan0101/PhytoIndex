@@ -248,9 +248,7 @@ pub fn list_custom_sql_inputs(database: &Database) -> CoreResult<Vec<PersistentS
     sql_inputs::list_inputs(database, SqlInputScope::CustomSql)
 }
 
-pub fn list_custom_sql_database_schemas(
-    database: &Database,
-) -> CoreResult<Vec<SqlSourceSchema>> {
+pub fn list_custom_sql_database_schemas(database: &Database) -> CoreResult<Vec<SqlSourceSchema>> {
     Ok(vec![inspect_sqlite_source(
         "main",
         &database.taxonomy_path()?,

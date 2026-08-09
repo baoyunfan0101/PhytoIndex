@@ -18,8 +18,8 @@ use super::formatted::{
     TaxonomyNameType, TaxonomyValidationIssue, validate_taxonomy, visit_taxonomy_validation_issues,
 };
 use super::sql::{
-    SqlSourceSchema, SqlStatementMessage, attach_read_only_sqlite, detach_sources,
-    prepare_sources, quote_identifier,
+    SqlSourceSchema, SqlStatementMessage, attach_read_only_sqlite, detach_sources, prepare_sources,
+    quote_identifier,
 };
 use super::sql_inputs::{
     self, AddSqlInputRequest, AddSqlInputResult, PersistentSqlInput, RemoveSqlInputRequest,
@@ -113,18 +113,14 @@ pub fn list_sql_import_inputs(database: &Database) -> CoreResult<Vec<PersistentS
     sql_inputs::list_inputs(database, SqlInputScope::SqlImport)
 }
 
-pub fn list_sql_import_database_schemas(
-    database: &Database,
-) -> CoreResult<Vec<SqlSourceSchema>> {
+pub fn list_sql_import_database_schemas(database: &Database) -> CoreResult<Vec<SqlSourceSchema>> {
     Ok(vec![super::sql::inspect_sqlite_source(
         "taxonomy",
         &database.taxonomy_path()?,
     )?])
 }
 
-pub fn list_sql_import_staging_schemas(
-    database: &Database,
-) -> CoreResult<Vec<SqlSourceSchema>> {
+pub fn list_sql_import_staging_schemas(database: &Database) -> CoreResult<Vec<SqlSourceSchema>> {
     let staging = workspace(database)?.join(STAGING_DATABASE);
     if !staging.is_file() {
         return Ok(Vec::new());
@@ -227,11 +223,9 @@ fn execute_sql_import_sql_in_workspace(
         let sources = sql_inputs::stored_sources(database, SqlInputScope::SqlImport)?;
         let delimiter = crate::general::get_csv_delimiter_byte(database)?;
         let mut attached = prepare_sources(&mut connection, &sources, delimiter)?;
-        if let Err(error) = attach_read_only_sqlite(
-            &connection,
-            "taxonomy",
-            &database.taxonomy_path()?,
-        ) {
+        if let Err(error) =
+            attach_read_only_sqlite(&connection, "taxonomy", &database.taxonomy_path()?)
+        {
             let _ = detach_sources(&connection, &attached);
             return Err(error);
         }
@@ -292,11 +286,11 @@ fn validate_sql_import_candidate_in_workspace(
         errors: Vec::new(),
     };
     if !staging.is_file() {
-        clear_validation_artifacts(&workspace)?;
+        clear_validation_artifacts(workspace)?;
         return Err(CoreError::NotFound("SQL import staging database".into()));
     }
-    let staging_fingerprint = workspace_fingerprint(&workspace)?;
-    if let Some(candidate) = read_validation_state(&workspace)?
+    let staging_fingerprint = workspace_fingerprint(workspace)?;
+    if let Some(candidate) = read_validation_state(workspace)?
         && candidate.staging_fingerprint == staging_fingerprint
         && workspace.join(CANDIDATE_DATABASE).is_file()
         && validate_candidate_database(&workspace.join(CANDIDATE_DATABASE)).is_ok()
@@ -304,7 +298,7 @@ fn validate_sql_import_candidate_in_workspace(
         report_validation_outcome(progress, &candidate.validation_result);
         return Ok(candidate.validation_result);
     }
-    clear_validation_artifacts(&workspace)?;
+    clear_validation_artifacts(workspace)?;
     let connection = Connection::open_with_flags(
         &staging,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
@@ -387,7 +381,7 @@ fn validate_sql_import_candidate_in_workspace(
                 ),
             }
             processed_names += 1;
-            if processed_names % IMPORT_BATCH_SIZE as u64 == 0 {
+            if processed_names.is_multiple_of(IMPORT_BATCH_SIZE as u64) {
                 report_progress(
                     progress,
                     NORMALIZING_NAMES,
@@ -447,7 +441,7 @@ fn validate_sql_import_candidate_in_workspace(
     validation.can_apply = validation.valid;
     if validation.can_apply && workspace.join(CANDIDATE_DATABASE).is_file() {
         write_validation_state(
-            &workspace,
+            workspace,
             &ValidatedSqlImportCandidate {
                 staging_fingerprint,
                 validation_result: validation.clone(),
