@@ -9,6 +9,9 @@ import {
   FileClock,
   Folder,
   FolderClock,
+  Image as ImageIcon,
+  Images,
+  Link,
   MapPinned,
   Network,
   Search,
@@ -92,6 +95,7 @@ import {
   serializeWorkspaceState,
   type AppTab,
 } from "./workspaceState";
+import { getTabName } from "./tabPresentation";
 
 type TabKind = AppTab["kind"];
 
@@ -116,6 +120,24 @@ const taxonomyItems: Array<[TabKind, string, IconComponent]> = [
   ["custom-sql", "Custom SQL", Code],
   ["taxonomy-history", "Update history", FileClock],
 ];
+
+const tabIcons: Record<TabKind, IconComponent> = {
+  folders: Folder,
+  "photo-taxonomy": Network,
+  map: MapPinned,
+  "photo-history": FolderClock,
+  mapping: ArrowDownUp,
+  "taxonomy-search": DatabaseSearch,
+  "formatted-update": TableProperties,
+  "custom-sql": Code,
+  "taxonomy-history": FileClock,
+  settings: Settings,
+  "search-photos": Search,
+  "taxon-photos": Images,
+  "photo-detail": ImageIcon,
+  "mapping-editor": Link,
+  "taxon-detail": Database,
+};
 
 const photoTabKinds = new Set<TabKind>([
   "folders",
@@ -190,7 +212,7 @@ export function DesktopShell({
       const title = tab.kind === "photo-detail"
         ? photo.filename
         : tab.kind === "mapping-editor"
-          ? `Map ${photo.filename}`
+          ? photo.filename
           : tab.title;
       return { ...tab, photo, title };
     }));
@@ -355,8 +377,8 @@ export function DesktopShell({
 
   const handlers: PhotoOpenHandlers = useMemo(() => ({
     openDetails: (photo) => openTab({ id: `photo:${photo.photo_id}`, kind: "photo-detail", title: photo.filename, photo }),
-    openTaxon: (taxonId) => openTab({ id: `taxon-detail:${crypto.randomUUID()}`, kind: "taxon-detail", title: `Taxon ${taxonId}`, taxonId }),
-    openMappingEditor: (photo) => openTab({ id: `mapping:${photo.photo_id}`, kind: "mapping-editor", title: `Map ${photo.filename}`, photo }),
+    openTaxon: (taxonId) => openTab({ id: `taxon-detail:${crypto.randomUUID()}`, kind: "taxon-detail", title: String(taxonId), taxonId }),
+    openMappingEditor: (photo) => openTab({ id: `mapping:${photo.photo_id}`, kind: "mapping-editor", title: photo.filename, photo }),
   }), [tabs]);
 
   async function submitSearch(query: string) {
@@ -509,35 +531,41 @@ export function DesktopShell({
             <IconButton aria-label="Go Forward" title="Go Forward" disabled={!forwardTarget} onClick={() => navigate(1)}><ArrowRight size={14} /></IconButton>
           </div>
           <div className="tab-strip" role="tablist" aria-label="Open tabs">
-            {tabs.map((tab) => (
-              <div
-                aria-selected={tab.id === activeId}
-                className={`app-tab${tab.id === activeId ? " active" : ""}`}
-                key={tab.id}
-                role="tab"
-                tabIndex={0}
-                onClick={() => focusTab(tab.id)}
-                onKeyDown={(event) => {
-                  if (event.target !== event.currentTarget) return;
-                  if (event.key === "Enter" || event.key === " ") {
-                    event.preventDefault();
-                    focusTab(tab.id);
-                  }
-                }}
-              >
-                <span className="app-tab-title">{tab.title}</span>
-                <IconButton
-                  aria-label={`Close ${tab.title}`}
-                  className="app-tab-close"
-                  size="small"
-                  title={`Close ${tab.title}`}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    closeTab(tab.id);
+            {tabs.map((tab) => {
+              const name = getTabName(tab);
+              const TabIcon = tabIcons[tab.kind];
+              return (
+                <div
+                  aria-selected={tab.id === activeId}
+                  className={`app-tab${tab.id === activeId ? " active" : ""}`}
+                  key={tab.id}
+                  role="tab"
+                  tabIndex={0}
+                  title={name}
+                  onClick={() => focusTab(tab.id)}
+                  onKeyDown={(event) => {
+                    if (event.target !== event.currentTarget) return;
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      focusTab(tab.id);
+                    }
                   }}
-                ><X size={12} /></IconButton>
-              </div>
-            ))}
+                >
+                  <TabIcon aria-hidden="true" className="app-tab-icon" size={14} strokeWidth={1.8} />
+                  <span className="app-tab-title">{name}</span>
+                  <IconButton
+                    aria-label={`Close ${name}`}
+                    className="app-tab-close"
+                    size="small"
+                    title={`Close ${name}`}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      closeTab(tab.id);
+                    }}
+                  ><X size={12} /></IconButton>
+                </div>
+              );
+            })}
           </div>
         </header>
         <main className="tab-content">
