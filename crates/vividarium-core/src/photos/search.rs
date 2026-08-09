@@ -405,7 +405,7 @@ mod tests {
     }
 
     #[test]
-    fn shared_taxonomy_search_keeps_cjk_prefix_and_substring_matches() {
+    fn shared_taxonomy_search_keeps_cjk_fuzzy_substring_matches() {
         let (_directory, database) = database();
         database
             .connect()
@@ -460,33 +460,37 @@ mod tests {
             )
             .unwrap();
 
-        let photos = search_photos(&database, "香科科", None, 20).unwrap();
+        let photos = search_photos(&database, "香科科属", None, 20).unwrap();
         assert_eq!(photos.items.len(), 7);
 
-        let taxa = crate::mapping::search_photo_taxa(&database, "香科科", None, 20).unwrap();
+        let taxa = crate::mapping::search_photo_taxa(&database, "香科科属", None, 20).unwrap();
         assert_eq!(taxa.items.len(), 7);
         assert_eq!(taxa.items[0].taxon_id, 301);
 
         let mapped = crate::mapping::search_photos_by_mapping_status(
             &database,
             crate::mapping::PhotoMappingListStatus::Matched,
-            "香科科",
+            "香科科属",
             None,
             20,
         )
         .unwrap();
         assert_eq!(mapped.items.len(), 7);
 
-        let first = crate::mapping::search_photo_taxa(&database, "香科科", None, 3).unwrap();
+        let first = crate::mapping::search_photo_taxa(&database, "香科科属", None, 3).unwrap();
         assert_eq!(first.items.len(), 3);
         assert_eq!(first.items[0].taxon_id, 301);
         assert!(first.next_cursor.is_some());
-        let second =
-            crate::mapping::search_photo_taxa(&database, "香科科", first.next_cursor.as_deref(), 3)
-                .unwrap();
+        let second = crate::mapping::search_photo_taxa(
+            &database,
+            "香科科属",
+            first.next_cursor.as_deref(),
+            3,
+        )
+        .unwrap();
         let third = crate::mapping::search_photo_taxa(
             &database,
-            "香科科",
+            "香科科属",
             second.next_cursor.as_deref(),
             3,
         )

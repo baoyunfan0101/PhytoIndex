@@ -266,6 +266,8 @@ struct SearchQuery {
     contains_match: Option<String>,
     fuzzy_match: Option<String>,
     fuzzy_max_distance: usize,
+    relaxed_suffix_match: Option<String>,
+    relaxed_suffix_like_pattern: Option<String>,
     word_prefix_like_pattern: Option<String>,
     contains_like_pattern: Option<String>,
 }
@@ -274,12 +276,17 @@ impl SearchQuery {
     fn new(query: &str) -> Self {
         let normalized = query.to_ascii_lowercase();
         let char_count = query.chars().count();
+        let relaxed_suffix = relaxed_cjk_suffix(query);
         Self {
             prefix_upper: format!("{normalized}\u{10ffff}"),
             word_prefix_match: (char_count >= 2).then(|| quoted_fts_match(&format!(" {query}"))),
             contains_match: (char_count >= 3).then(|| quoted_fts_match(query)),
             fuzzy_match: trigram_match_query(&normalized),
             fuzzy_max_distance: fuzzy_max_distance(char_count),
+            relaxed_suffix_match: relaxed_suffix.as_deref().map(quoted_fts_match),
+            relaxed_suffix_like_pattern: relaxed_suffix
+                .as_deref()
+                .map(|value| format!("%{}%", escape_like(value))),
             word_prefix_like_pattern: (char_count >= 2)
                 .then(|| format!("% {}%", escape_like(query))),
             contains_like_pattern: (char_count >= 3).then(|| format!("%{}%", escape_like(query))),
@@ -484,6 +491,34 @@ fn build_taxon_search_relation(search: &SearchQuery) -> TaxonSearchRelation {
         ]);
     }
 
+    if let (Some(query), Some(pattern), Some(full_pattern)) = (
+        search.relaxed_suffix_match.as_ref(),
+        search.relaxed_suffix_like_pattern.as_ref(),
+        search.contains_like_pattern.as_ref(),
+    ) {
+        candidates.push(
+            r#"
+            SELECT taxon_names.name_id, taxon_names.taxon_id,
+                   4 AS match_level, 1 AS edit_distance,
+                   taxon_names.normalized_name AS sort_name,
+                   CASE taxon_names.name_type
+                       WHEN 1 THEN 0 WHEN 2 THEN 1 ELSE 2 END
+                       AS name_type_priority
+            FROM taxon_names_fts
+            JOIN taxon_names ON taxon_names.name_id = taxon_names_fts.rowid
+            WHERE taxon_names_fts MATCH ?
+              AND taxon_names.normalized_name LIKE ? ESCAPE '\'
+              AND taxon_names.normalized_name NOT LIKE ? ESCAPE '\'
+            "#
+            .to_string(),
+        );
+        params.extend([
+            SqlValue::Text(query.clone()),
+            SqlValue::Text(pattern.clone()),
+            SqlValue::Text(full_pattern.clone()),
+        ]);
+    }
+
     TaxonSearchRelation {
         cte_sql: format!(
             r#"
@@ -595,6 +630,10 @@ fn load_name_matches_for_taxa(
         conditions.push("taxon_names.name LIKE ? ESCAPE '\\'".to_string());
         query_params.push(SqlValue::Text(pattern.clone()));
     }
+    if let Some(pattern) = search.relaxed_suffix_like_pattern.as_ref() {
+        conditions.push("taxon_names.normalized_name LIKE ? ESCAPE '\\'".to_string());
+        query_params.push(SqlValue::Text(pattern.clone()));
+    }
     if !fuzzy_taxon_ids.is_empty() {
         let placeholders = vec!["?"; fuzzy_taxon_ids.len()].join(", ");
         conditions.push(format!(
@@ -689,6 +728,15 @@ fn fuzzy_max_distance(char_count: usize) -> usize {
         5..=8 => 2,
         _ => 3,
     }
+}
+
+fn relaxed_cjk_suffix(query: &str) -> Option<String> {
+    let (suffix_index, suffix) = query.char_indices().next_back()?;
+    if suffix != '属' {
+        return None;
+    }
+    let stem = &query[..suffix_index];
+    (stem.chars().count() >= 3).then(|| stem.to_string())
 }
 
 fn edit_distance_with_limit(left: &str, right: &str, limit: usize) -> Option<usize> {
@@ -940,6 +988,67 @@ mod tests {
         let suggestions = suggest_taxa(&database, "香科科", 20).unwrap();
         assert_eq!(suggestions.len(), 7);
         assert_eq!(suggestions[0].taxon_id, 101);
+
+        let full_query_counts = connection
+            .query_row(
+                r#"
+                SELECT
+                    (SELECT COUNT(*) FROM taxon_names
+                     WHERE normalized_name LIKE '%香科科属%'),
+                    (SELECT COUNT(*)
+                     FROM taxon_names_fts
+                     WHERE taxon_names_fts MATCH '"香科科属"'),
+                    (SELECT COUNT(*)
+                     FROM taxon_names_fts
+                     WHERE taxon_names_fts MATCH '"香科科" OR "科科属"')
+                "#,
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(full_query_counts, (1, 1, 7));
+
+        let full_query_relation = build_taxon_search_relation(&SearchQuery::new("香科科属"));
+        let full_query_counts_sql = format!(
+            r#"
+            WITH {}
+            SELECT
+                (SELECT COUNT(*) FROM search_name_candidates),
+                (SELECT COUNT(*) FROM ranked_taxa)
+            "#,
+            full_query_relation.cte_sql
+        );
+        let full_query_pipeline_counts = connection
+            .query_row(
+                &full_query_counts_sql,
+                params_from_iter(full_query_relation.params),
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .unwrap();
+        assert_eq!(full_query_pipeline_counts, (7, 7));
+
+        let full_query_results = search_taxa(&database, "香科科属", 20).unwrap();
+        assert_eq!(full_query_results.len(), 7);
+        assert_eq!(full_query_results[0].taxon_id, 101);
+        let limited_full_query = search_taxa(&database, "香科科属", 3).unwrap();
+        assert_eq!(limited_full_query.len(), 3);
+        assert_eq!(limited_full_query[0].taxon_id, 101);
+        let full_query_suggestions = suggest_taxa(&database, "香科科属", 20).unwrap();
+        assert_eq!(full_query_suggestions.len(), 7);
+        assert_eq!(full_query_suggestions[0].taxon_id, 101);
+    }
+
+    #[test]
+    fn relaxed_cjk_suffix_requires_a_long_genus_stem() {
+        assert_eq!(relaxed_cjk_suffix("香科科属").as_deref(), Some("香科科"));
+        assert_eq!(relaxed_cjk_suffix("蔷薇属"), None);
+        assert_eq!(relaxed_cjk_suffix("Canis"), None);
     }
 
     #[test]

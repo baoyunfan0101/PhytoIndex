@@ -76,11 +76,14 @@ an empty vector. Candidates from every eligible match level are combined
 before one best matching name is selected per `taxon_id`; distinct taxa are
 then globally ranked and the requested limit is applied. A stronger match
 therefore ranks first without suppressing lower-tier matches that fit within
-the final limit. These taxonomy-only interfaces remain available when the
-active photo library is offline. The desktop `search_taxa` and `suggest_taxa`
-commands execute database lookups on blocking workers and resolve
-asynchronously. The desktop `get_taxon_detail` command uses the same execution
-model and reports a missing taxon as an error.
+the final limit. A Chinese genus query ending in `属` also admits its stem as a
+lower-ranked fuzzy candidate when the stem is at least three characters long;
+the complete query keeps its stronger exact, prefix, and substring ranking.
+These taxonomy-only interfaces remain available when the active photo library
+is offline. The desktop `search_taxa` and `suggest_taxa` commands execute
+database lookups on blocking workers and resolve asynchronously. The desktop
+`get_taxon_detail` command uses the same execution model and reports a missing
+taxon as an error.
 
 ## Formatted update
 
