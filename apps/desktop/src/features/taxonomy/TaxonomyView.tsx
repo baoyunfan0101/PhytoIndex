@@ -105,6 +105,7 @@ export function TaxonomySearchView({
     setQuery(normalized);
     setSubmittedQuery(normalized);
     setSelectedRootTaxonId(null);
+    setHierarchyPositions({});
     setSelectedSuggestionIndex(-1);
     setSuggestionsOpen(false);
   }
