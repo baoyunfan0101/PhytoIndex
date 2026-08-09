@@ -126,7 +126,7 @@ export function CustomSqlView({
       minSecond={320}
       separatorLabel="Resize Input sources"
       stateKey="custom-sql.inputs"
-      first={<SqlInputList inputs={inputs} databaseSchemas={databaseSchemas} busy={Boolean(busy) || loadingWorkbench} operation={busy} onAdd={addInput} onRemove={removeInput} />}
+      first={<SqlInputList inputs={inputs} workspaceSchemas={[]} databaseSchemas={databaseSchemas} busy={Boolean(busy) || loadingWorkbench} operation={busy} onAdd={addInput} onRemove={removeInput} />}
       second={(<div className="custom-sql-editor">
         <CodeEditor language="sql" ariaLabel="Custom taxonomy SQL" value={sql} onChange={setSql} />
       </div>)}

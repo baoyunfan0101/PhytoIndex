@@ -54,8 +54,10 @@ Parameters: optional callback invoked after an SQL Import is applied.
 Returns: the SQL Import source registry, SQL workspace, validation issues,
 metadata, and apply controls. Its source sidebar uses the same mutually
 exclusive groups and scrolling behavior as Custom SQL. All accessible tables
-combines uploaded source schemas with the `sql_import` staging schema when a
-staging database exists.
+combines uploaded source schemas with the current internal taxonomy schema,
+which SQL Import can read through the `taxonomy` alias. The `sql_import`
+staging schema appears only in Input sources when staging exists, so it is not
+duplicated in All accessible tables.
 
 ### `DirectImportSettings({ onApplied })`
 

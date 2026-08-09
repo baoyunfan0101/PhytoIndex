@@ -57,7 +57,8 @@ pub use sql_import::{
     NameTypeCount, SqlImportExecutionResult, SqlImportIssue, SqlImportValidationResult,
     ValidateSqlImportRequest, ValidateSqlImportResult, add_sql_import_input, apply_sql_import,
     get_sql_import_sql, list_sql_import_database_schemas, list_sql_import_inputs,
-    remove_sql_import_input, validate_sql_import, validate_sql_import_with_progress,
+    list_sql_import_staging_schemas, remove_sql_import_input, validate_sql_import,
+    validate_sql_import_with_progress,
 };
 pub use sql_inputs::{
     AddSqlInputRequest, AddSqlInputResult, PersistentSqlInput, RemoveSqlInputRequest,

@@ -1,5 +1,5 @@
 import { call } from "./client";
-import { demoSqlInput, type AddSqlInputResult, type PersistentSqlInput, type RemoveSqlInputResult, type SqlSourceSchema, type SqlStatementMessage } from "./customSql";
+import { demoSqlInput, demoTaxonomySqlSchema, type AddSqlInputResult, type PersistentSqlInput, type RemoveSqlInputResult, type SqlSourceSchema, type SqlStatementMessage } from "./customSql";
 import { demoOperation, type OperationState } from "./tasks";
 import type { TaxonomyImportResult } from "./taxonomyImport";
 
@@ -42,7 +42,9 @@ export const getSqlImportSql = () => call<string>("get_sql_import_sql", undefine
 export const listSqlImportInputs = () =>
   call<PersistentSqlInput[]>("list_sql_import_inputs", undefined, () => []);
 export const listSqlImportDatabaseSchemas = () =>
-  call<SqlSourceSchema[]>("list_sql_import_database_schemas", undefined, () => []);
+  call<SqlSourceSchema[]>("list_sql_import_database_schemas", undefined, () => [demoTaxonomySqlSchema("taxonomy")]);
+export const listSqlImportStagingSchemas = () =>
+  call<SqlSourceSchema[]>("list_sql_import_staging_schemas", undefined, () => []);
 export const addSqlImportInput = (kind: "csv" | "sqlite", alias: string, path: string) =>
   call<AddSqlInputResult>("add_sql_import_input", { request: { kind, alias, path } }, () => {
     const input = demoSqlInput(kind, alias, path);

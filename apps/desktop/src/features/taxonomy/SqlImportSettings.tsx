@@ -6,6 +6,7 @@ import {
   getSqlImportSql,
   listSqlImportDatabaseSchemas,
   listSqlImportInputs,
+  listSqlImportStagingSchemas,
   removeSqlImportInput,
   startSqlImportValidation,
   type SqlImportValidationResult,
@@ -26,6 +27,7 @@ import { resolveSqlWorkbenchLoads } from "./sqlWorkbenchLoading";
 export function SqlImportSettings({ onApplied }: { onApplied?: () => void }) {
   const [inputs, setInputs] = useState<PersistentSqlInput[]>([]);
   const [databaseSchemas, setDatabaseSchemas] = useState<SqlSourceSchema[]>([]);
+  const [stagingSchemas, setStagingSchemas] = useState<SqlSourceSchema[]>([]);
   const [sql, setSql] = useState("");
   const [validation, setValidation] = useState<SqlImportValidationResult | null>(null);
   const [confirming, setConfirming] = useState(false);
@@ -39,14 +41,17 @@ export function SqlImportSettings({ onApplied }: { onApplied?: () => void }) {
       getSqlImportSql(),
       listSqlImportInputs(),
       listSqlImportDatabaseSchemas(),
+      listSqlImportStagingSchemas(),
     ])
-      .then(([sqlResult, inputsResult, schemasResult]) => {
+      .then(([sqlResult, inputsResult, schemasResult, stagingResult]) => {
         const loaded = resolveSqlWorkbenchLoads(sqlResult, inputsResult);
         if (loaded.sql !== undefined) setSql(loaded.sql);
         if (loaded.inputs !== undefined) setInputs(loaded.inputs);
         if (schemasResult.status === "fulfilled") setDatabaseSchemas(schemasResult.value);
+        if (stagingResult.status === "fulfilled") setStagingSchemas(stagingResult.value);
         const schemasError = schemasResult.status === "rejected" ? errorMessage(schemasResult.reason) : "";
-        setError([loaded.error, schemasError].filter(Boolean).join(" "));
+        const stagingError = stagingResult.status === "rejected" ? errorMessage(stagingResult.reason) : "";
+        setError([loaded.error, schemasError, stagingError].filter(Boolean).join(" "));
       })
       .finally(() => setLoadingWorkbench(false));
   }, []);
@@ -58,7 +63,7 @@ export function SqlImportSettings({ onApplied }: { onApplied?: () => void }) {
     try {
       const result = await addSqlImportInput(kind, alias, path);
       setInputs(result.inputs);
-      setDatabaseSchemas([]);
+      setStagingSchemas([]);
       setValidation(null);
       setMessage(result.warnings.length > 0 ? result.warnings.join(" ") : "Data source added.");
     } catch (nextError) {
@@ -83,7 +88,7 @@ export function SqlImportSettings({ onApplied }: { onApplied?: () => void }) {
       if (!result) throw new Error("SQL import validation completed without a result");
       setValidation(result.validation);
       try {
-        setDatabaseSchemas(await listSqlImportDatabaseSchemas());
+        setStagingSchemas(await listSqlImportStagingSchemas());
       } catch (schemasError) {
         setError(errorMessage(schemasError));
       }
@@ -114,7 +119,7 @@ export function SqlImportSettings({ onApplied }: { onApplied?: () => void }) {
       const result = completed.result as TaxonomyImportResult | null;
       if (!result) throw new Error("SQL import completed without a replacement result");
       setValidation(null);
-      setDatabaseSchemas([]);
+      setStagingSchemas([]);
       setConfirming(false);
       onApplied?.();
       emitTaxonomyMutation({ kind: "replacement" });
@@ -140,7 +145,7 @@ export function SqlImportSettings({ onApplied }: { onApplied?: () => void }) {
     try {
       const result = await removeSqlImportInput(input.alias);
       setInputs(result.inputs);
-      setDatabaseSchemas([]);
+      setStagingSchemas([]);
       setValidation(null);
       setMessage(result.warnings.length > 0 ? result.warnings.join(" ") : "Data source removed.");
     } catch (nextError) {
@@ -159,7 +164,7 @@ export function SqlImportSettings({ onApplied }: { onApplied?: () => void }) {
         minSecond={320}
         separatorLabel="Resize Input sources"
         stateKey="sql-import.inputs"
-        first={<SqlInputList inputs={inputs} databaseSchemas={databaseSchemas} busy={Boolean(busy) || loadingWorkbench} operation={busy} onAdd={addInput} onRemove={removeInput} />}
+        first={<SqlInputList inputs={inputs} workspaceSchemas={stagingSchemas} databaseSchemas={databaseSchemas} busy={Boolean(busy) || loadingWorkbench} operation={busy} onAdd={addInput} onRemove={removeInput} />}
         second={(<div className="sql-import-editor">
           <CodeEditor language="sql" ariaLabel="SQL import SQL" value={sql} onChange={(value) => {
             setSql(value);

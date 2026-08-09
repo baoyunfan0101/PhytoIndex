@@ -14,7 +14,7 @@ owns one backend domain, its request types, and response types.
 | `taxonomy` | Taxon views, search, suggestions, children, taxon photos, formatted input, staged preview tokens, and prepared apply. |
 | `operations` | Photo and taxonomy operation summaries, audit pages, rollback, and single or selected-operation CSV exports to an absolute destination path. |
 | `customSql` | Custom SQL execution, result sets, managed SQL inputs, readable database schemas, and full-query export. |
-| `sqlImport` | SQL Import workspace, validation, apply, managed inputs, and staging schemas. |
+| `sqlImport` | SQL Import workspace, validation, apply, managed inputs, readable taxonomy schemas, and staging schemas. |
 | `directImport` | Direct Import database inspection and confirmed replacement. |
 | `taxonomyImport` | Shared taxonomy import metadata and result types. |
 | `general` | Application-wide theme, workspace, search, taxon-tree display, and CSV delimiter settings. |

@@ -293,7 +293,8 @@ fields remain authoritative.
 | --- | --- | --- |
 | `get_sql_import_sql` | none | Last successful SQL, or the initial built-in script `String` |
 | `list_sql_import_inputs` | none | `Vec<PersistentSqlInput>` |
-| `list_sql_import_database_schemas` | none | `Vec<SqlSourceSchema>` for the current staging database, or an empty vector |
+| `list_sql_import_database_schemas` | none | `Vec<SqlSourceSchema>` for the current taxonomy database |
+| `list_sql_import_staging_schemas` | none | `Vec<SqlSourceSchema>` for the current staging database, or an empty vector |
 | `add_sql_import_input` | `request: &AddSqlInputRequest` | `AddSqlInputResult` |
 | `remove_sql_import_input` | `request: &RemoveSqlInputRequest` | `RemoveSqlInputResult` |
 | `validate_sql_import` | `request: &ValidateSqlImportRequest` | `ValidateSqlImportResult` |
@@ -305,15 +306,19 @@ SQL outlive tabs, application restarts, and successful Apply. Adding or
 removing an input, validating new SQL, or recreating staging
 invalidates the prior staging-dependent candidate and validation state.
 Removal is rejected while another operation holds the workspace lock.
-`list_sql_import_database_schemas` exposes the `sql_import` staging catalog
-when staging exists. Managed input schemas remain available from
-`list_sql_import_inputs`; clients combine both sources when presenting every
-table accessible to the SQL Import workspace.
+`list_sql_import_database_schemas` exposes the current taxonomy catalog through
+the read-only `taxonomy` alias. Managed input schemas remain available from
+`list_sql_import_inputs`; clients combine them when presenting every table the
+SQL Import script can read. `list_sql_import_staging_schemas` separately
+exposes the `sql_import` staging catalog when staging exists so clients can
+present it with input sources without duplicating it in the readable database
+catalog.
 
-Validate first executes SQL Import SQL, which can read the isolated source
-and can attach only the
-backend-selected `vividarium_sql_import.db` path with the `sql_import` alias. It may create
-and mutate staging objects only in `sql_import`; the execution result never creates
+Validate first executes SQL Import SQL, which can read the current taxonomy
+through the read-only `taxonomy` alias and every managed input through its
+registered alias. The script can attach only the backend-selected
+`vividarium_sql_import.db` path with the `sql_import` alias. It may create and
+mutate staging objects only in `sql_import`; the execution result never creates
 a taxonomy operation or returns Custom SQL result sets. It reports only
 per-statement messages or a syntax/runtime error. After a fully successful
 script commits, script persistence is attempted separately. Save failure is

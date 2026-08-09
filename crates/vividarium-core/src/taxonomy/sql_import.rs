@@ -18,7 +18,8 @@ use super::formatted::{
     TaxonomyNameType, TaxonomyValidationIssue, validate_taxonomy, visit_taxonomy_validation_issues,
 };
 use super::sql::{
-    SqlSourceSchema, SqlStatementMessage, detach_sources, prepare_sources, quote_identifier,
+    SqlSourceSchema, SqlStatementMessage, attach_read_only_sqlite, detach_sources,
+    prepare_sources, quote_identifier,
 };
 use super::sql_inputs::{
     self, AddSqlInputRequest, AddSqlInputResult, PersistentSqlInput, RemoveSqlInputRequest,
@@ -113,6 +114,15 @@ pub fn list_sql_import_inputs(database: &Database) -> CoreResult<Vec<PersistentS
 }
 
 pub fn list_sql_import_database_schemas(
+    database: &Database,
+) -> CoreResult<Vec<SqlSourceSchema>> {
+    Ok(vec![super::sql::inspect_sqlite_source(
+        "taxonomy",
+        &database.taxonomy_path()?,
+    )?])
+}
+
+pub fn list_sql_import_staging_schemas(
     database: &Database,
 ) -> CoreResult<Vec<SqlSourceSchema>> {
     let staging = workspace(database)?.join(STAGING_DATABASE);
@@ -216,7 +226,16 @@ fn execute_sql_import_sql_in_workspace(
         connection.execute_batch("PRAGMA foreign_keys = ON")?;
         let sources = sql_inputs::stored_sources(database, SqlInputScope::SqlImport)?;
         let delimiter = crate::general::get_csv_delimiter_byte(database)?;
-        let attached = prepare_sources(&mut connection, &sources, delimiter)?;
+        let mut attached = prepare_sources(&mut connection, &sources, delimiter)?;
+        if let Err(error) = attach_read_only_sqlite(
+            &connection,
+            "taxonomy",
+            &database.taxonomy_path()?,
+        ) {
+            let _ = detach_sources(&connection, &attached);
+            return Err(error);
+        }
+        attached.push("taxonomy".into());
         let execution = execute_sql_import_script(&connection, &sql, &staging_path, progress);
         report_progress(progress, BUILDING_STAGING_DATABASE, None, None, None, None);
         let attachments = validate_sql_import_attachments(&connection, &attached);

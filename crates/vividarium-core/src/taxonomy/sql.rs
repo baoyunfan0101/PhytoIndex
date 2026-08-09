@@ -455,17 +455,26 @@ pub(super) fn prepare_sources(
                 load_csv_table(connection, alias, path, delimiter)?;
             }
             SqlDataSource::Sqlite { alias, path } => {
-                let path = std::fs::canonicalize(path)?;
-                let uri = sqlite_read_only_uri(&path);
-                connection.execute(
-                    &format!("ATTACH DATABASE ? AS {}", quote_identifier(alias)),
-                    [uri],
-                )?;
+                attach_read_only_sqlite(connection, alias, path)?;
                 attached.push(alias.clone());
             }
         }
     }
     Ok(attached)
+}
+
+pub(super) fn attach_read_only_sqlite(
+    connection: &Connection,
+    alias: &str,
+    path: &Path,
+) -> CoreResult<()> {
+    let path = std::fs::canonicalize(path)?;
+    let uri = sqlite_read_only_uri(&path);
+    connection.execute(
+        &format!("ATTACH DATABASE ? AS {}", quote_identifier(alias)),
+        [uri],
+    )?;
+    Ok(())
 }
 
 pub(super) fn detach_sources(connection: &Connection, aliases: &[String]) -> CoreResult<()> {

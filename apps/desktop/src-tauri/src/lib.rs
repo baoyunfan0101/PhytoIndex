@@ -119,6 +119,7 @@ pub fn run() {
             commands::get_sql_import_sql,
             commands::list_sql_import_inputs,
             commands::list_sql_import_database_schemas,
+            commands::list_sql_import_staging_schemas,
             commands::add_sql_import_input,
             commands::remove_sql_import_input,
             commands::start_sql_import_validation,

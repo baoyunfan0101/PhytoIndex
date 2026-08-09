@@ -14,6 +14,7 @@ type PendingSqlInput = {
 
 export function SqlInputList({
   inputs,
+  workspaceSchemas,
   databaseSchemas,
   busy,
   operation = "",
@@ -21,6 +22,7 @@ export function SqlInputList({
   onRemove,
 }: {
   inputs: PersistentSqlInput[];
+  workspaceSchemas: SqlSourceSchema[];
   databaseSchemas: SqlSourceSchema[];
   busy: boolean;
   operation?: string;
@@ -83,7 +85,16 @@ export function SqlInputList({
         </header>
         {expandedGroup === "inputs" && (
           <div className="sql-source-group-body">
-            {inputs.length === 0 && <span className="sql-source-empty">No data sources</span>}
+            {workspaceSchemas.length === 0 && inputs.length === 0 && <span className="sql-source-empty">No data sources</span>}
+            {workspaceSchemas.map((schema) => (
+              <section className="sql-source-card sql-schema-card" key={schema.alias}>
+                <header>
+                  <span><Database size={12} /><b>{schema.alias}</b></span>
+                  <i>STAGING</i>
+                </header>
+                <SqlSourceSchemaObjects schema={schema} />
+              </section>
+            ))}
             {inputs.map((input) => {
               const removing = operation === `Removing ${input.alias}`;
               return (

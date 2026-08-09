@@ -1176,6 +1176,13 @@ pub fn list_sql_import_database_schemas(
 }
 
 #[tauri::command]
+pub fn list_sql_import_staging_schemas(
+    state: State<'_, AppState>,
+) -> CommandResult<Vec<SqlSourceSchema>> {
+    taxonomy::list_sql_import_staging_schemas(&state.database).map_err(error)
+}
+
+#[tauri::command]
 pub async fn add_sql_import_input(
     state: State<'_, AppState>,
     request: AddSqlInputRequest,
