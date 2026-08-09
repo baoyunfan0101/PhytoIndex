@@ -25,10 +25,11 @@ use vividarium_core::photos::{PhotoFilenameFormatSettings, PhotoRenameOperationR
 use vividarium_core::taxonomy::{
     AddSqlInputRequest, AddSqlInputResult, CustomSqlExecutionResult,
     CustomTaxonomySqlExportRequest, CustomTaxonomySqlRequest, DeleteTaxonNameInput,
-    PersistentSqlInput, PromoteTaxonNameInput, RemoveSqlInputRequest, RemoveSqlInputResult,
-    SaveTaxonNameGroupInput, SqlExportResult, TaxonChild, TaxonDetail, TaxonInputRow,
-    TaxonRowOutcome, TaxonSearchResult, TaxonSuggestion, TaxonUpdateInput, TaxonomyBaseMetadata,
-    TaxonomyOperationResult, TaxonomyPage, TaxonomyPreviewResult, ValidateBaseImportRequest,
+    DirectImportDatabase, PersistentSqlInput, PromoteTaxonNameInput, RemoveSqlInputRequest,
+    RemoveSqlInputResult, SaveTaxonNameGroupInput, SqlExportResult, TaxonChild, TaxonDetail,
+    TaxonInputRow, TaxonRowOutcome, TaxonSearchResult, TaxonSuggestion, TaxonUpdateInput,
+    TaxonomyImportMetadata, TaxonomyOperationResult, TaxonomyPage, TaxonomyPreviewResult,
+    ValidateSqlImportRequest,
 };
 use vividarium_core::{
     map::{self, MapBounds, MapPhoto, MapSettings},
@@ -1129,62 +1130,75 @@ pub async fn export_all_replayable_taxonomy_inputs(
 }
 
 #[tauri::command]
-pub fn get_taxonomy_base_metadata(
+pub fn get_taxonomy_import_metadata(
     state: State<'_, AppState>,
-) -> CommandResult<Option<TaxonomyBaseMetadata>> {
-    taxonomy::get_taxonomy_base_metadata(&state.database).map_err(error)
+) -> CommandResult<Option<TaxonomyImportMetadata>> {
+    taxonomy::get_taxonomy_import_metadata(&state.database).map_err(error)
 }
 
 #[tauri::command]
-pub fn get_base_import_sql(state: State<'_, AppState>) -> CommandResult<String> {
-    taxonomy::get_base_import_sql(&state.database).map_err(error)
+pub async fn inspect_direct_import_database(
+    state: State<'_, AppState>,
+    source_path: String,
+) -> CommandResult<DirectImportDatabase> {
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        taxonomy::inspect_direct_import_database(&database, Path::new(&source_path)).map_err(error)
+    })
+    .await
+    .map_err(error)?
 }
 
 #[tauri::command]
-pub fn list_base_import_inputs(
+pub fn get_sql_import_sql(state: State<'_, AppState>) -> CommandResult<String> {
+    taxonomy::get_sql_import_sql(&state.database).map_err(error)
+}
+
+#[tauri::command]
+pub fn list_sql_import_inputs(
     state: State<'_, AppState>,
 ) -> CommandResult<Vec<PersistentSqlInput>> {
-    taxonomy::list_base_import_inputs(&state.database).map_err(error)
+    taxonomy::list_sql_import_inputs(&state.database).map_err(error)
 }
 
 #[tauri::command]
-pub async fn add_base_import_input(
+pub async fn add_sql_import_input(
     state: State<'_, AppState>,
     request: AddSqlInputRequest,
 ) -> CommandResult<AddSqlInputResult> {
     let database = state.database.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        taxonomy::add_base_import_input(&database, &request).map_err(error)
+        taxonomy::add_sql_import_input(&database, &request).map_err(error)
     })
     .await
     .map_err(error)?
 }
 
 #[tauri::command]
-pub async fn remove_base_import_input(
+pub async fn remove_sql_import_input(
     state: State<'_, AppState>,
     request: RemoveSqlInputRequest,
 ) -> CommandResult<RemoveSqlInputResult> {
     let database = state.database.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        taxonomy::remove_base_import_input(&database, &request).map_err(error)
+        taxonomy::remove_sql_import_input(&database, &request).map_err(error)
     })
     .await
     .map_err(error)?
 }
 
 #[tauri::command]
-pub fn start_base_import_validation(
+pub fn start_sql_import_validation(
     app: AppHandle,
     state: State<'_, AppState>,
-    request: ValidateBaseImportRequest,
+    request: ValidateSqlImportRequest,
 ) -> CommandResult<OperationState> {
     let database = state.database.clone();
     state.operations.start_with_progress(
         app,
-        "base_import",
-        "validate_base_import",
-        move |progress| match taxonomy::validate_base_import_with_progress(
+        "sql_import",
+        "validate_sql_import",
+        move |progress| match taxonomy::validate_sql_import_with_progress(
             &database, &request, progress,
         ) {
             Ok(result) => serde_json::to_value(result).map_err(error),
@@ -1203,7 +1217,7 @@ pub fn start_base_import_validation(
 }
 
 #[tauri::command]
-pub fn apply_base_import(
+pub fn apply_sql_import(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CommandResult<OperationState> {
@@ -1212,17 +1226,17 @@ pub fn apply_base_import(
     let sync_app = app.clone();
     state
         .operations
-        .start(app, "base_import", "apply_base_import", move |progress| {
-            progress(0, None, "Validating base import candidate");
-            let result = taxonomy::apply_base_import(&database).map_err(error)?;
-            progress(1, Some(1), "Taxonomy base import applied");
+        .start(app, "sql_import", "apply_sql_import", move |progress| {
+            progress(0, None, "Validating SQL import candidate");
+            let result = taxonomy::apply_sql_import(&database).map_err(error)?;
+            progress(1, Some(1), "Taxonomy SQL import applied");
             schedule_taxonomy_sync(sync_app, &background_state);
             serde_json::to_value(result).map_err(error)
         })
 }
 
 #[tauri::command]
-pub fn replace_taxonomy_base_database(
+pub fn apply_direct_import(
     app: AppHandle,
     state: State<'_, AppState>,
     source_path: String,
@@ -1232,14 +1246,13 @@ pub fn replace_taxonomy_base_database(
     let sync_app = app.clone();
     state.operations.start(
         app,
-        "base_import",
-        "replace_taxonomy_base_database",
+        "direct_import",
+        "apply_direct_import",
         move |progress| {
             progress(0, None, "Validating direct import database");
             let result =
-                taxonomy::replace_taxonomy_base_database(&database, Path::new(&source_path))
-                    .map_err(error)?;
-            progress(1, Some(1), "Taxonomy database imported");
+                taxonomy::apply_direct_import(&database, Path::new(&source_path)).map_err(error)?;
+            progress(1, Some(1), "Direct import applied");
             schedule_taxonomy_sync(sync_app, &background_state);
             serde_json::to_value(result).map_err(error)
         },

@@ -20,7 +20,7 @@ Packages and signed in-app updates are available from [GitHub Releases](https://
 ## Features
 
 - Register multiple independent photo libraries and activate one at a time.
-- Replace the taxonomy base database and apply structured taxonomy updates.
+- Replace taxonomy data through SQL Import or Direct Import and apply structured taxonomy updates.
 - Map indexed photos to taxa through configurable six-field filename matching.
 - Browse large photo collections with cursor-based pagination.
 - Browse and search the photographed taxonomy tree.

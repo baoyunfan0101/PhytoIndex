@@ -13,7 +13,7 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use super::base::{TaxonomyBaseMetadata, TaxonomyBaseReplaceResult};
+use super::direct_import::{TaxonomyImportMetadata, TaxonomyImportResult};
 use super::formatted::{
     TaxonomyNameType, TaxonomyValidationIssue, validate_taxonomy, visit_taxonomy_validation_issues,
 };
@@ -31,13 +31,13 @@ use crate::models::OperationProgress;
 use crate::naming::normalize_taxonomy_name;
 use crate::{CoreError, CoreResult, Database};
 
-const STAGING_DATABASE: &str = "vividarium_base.db";
+const STAGING_DATABASE: &str = "vividarium_sql_import.db";
 const CANDIDATE_DATABASE: &str = "candidate-taxonomy.db";
 const CANDIDATE_BUILD_DATABASE: &str = ".candidate-building.db";
 const VALIDATION_STATE: &str = "validation.json";
 const IMPORT_BATCH_SIZE: i64 = 10_000;
 const MAX_ISSUE_SAMPLES: usize = 100;
-const INITIAL_BASE_IMPORT_SQL: &str = include_str!("templates/initial_base_import.sql");
+const INITIAL_SQL_IMPORT_SQL: &str = include_str!("templates/initial_sql_import.sql");
 static WORKSPACE_LOCKS: OnceLock<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> = OnceLock::new();
 
 const PREPARING_INPUT_SOURCES: &str = "preparing_input_sources";
@@ -51,12 +51,12 @@ const READY_TO_APPLY: &str = "ready_to_apply";
 const VALIDATION_FAILED: &str = "validation_failed";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ValidateBaseImportRequest {
+pub struct ValidateSqlImportRequest {
     pub sql: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct BaseImportExecutionResult {
+pub struct SqlImportExecutionResult {
     pub statements_executed: usize,
     pub messages: Vec<SqlStatementMessage>,
     pub script_saved: bool,
@@ -70,7 +70,7 @@ pub struct NameTypeCount {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct BaseImportIssue {
+pub struct SqlImportIssue {
     pub code: String,
     pub message: String,
     pub taxon_id: Option<i64>,
@@ -80,7 +80,7 @@ pub struct BaseImportIssue {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct BaseImportValidationResult {
+pub struct SqlImportValidationResult {
     pub valid: bool,
     pub can_apply: bool,
     pub taxa_count: u64,
@@ -88,29 +88,29 @@ pub struct BaseImportValidationResult {
     pub normalization_changes: u64,
     pub total_warning_count: u64,
     pub total_error_count: u64,
-    pub warnings: Vec<BaseImportIssue>,
-    pub errors: Vec<BaseImportIssue>,
+    pub warnings: Vec<SqlImportIssue>,
+    pub errors: Vec<SqlImportIssue>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ValidateBaseImportResult {
-    pub execution: BaseImportExecutionResult,
-    pub validation: BaseImportValidationResult,
+pub struct ValidateSqlImportResult {
+    pub execution: SqlImportExecutionResult,
+    pub validation: SqlImportValidationResult,
     pub warnings: Vec<String>,
     pub can_apply: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct ValidatedBaseImportCandidate {
+struct ValidatedSqlImportCandidate {
     staging_fingerprint: String,
-    validation_result: BaseImportValidationResult,
+    validation_result: SqlImportValidationResult,
 }
 
-pub fn list_base_import_inputs(database: &Database) -> CoreResult<Vec<PersistentSqlInput>> {
-    sql_inputs::list_inputs(database, SqlInputScope::BaseImport)
+pub fn list_sql_import_inputs(database: &Database) -> CoreResult<Vec<PersistentSqlInput>> {
+    sql_inputs::list_inputs(database, SqlInputScope::SqlImport)
 }
 
-pub fn add_base_import_input(
+pub fn add_sql_import_input(
     database: &Database,
     request: &AddSqlInputRequest,
 ) -> CoreResult<AddSqlInputResult> {
@@ -118,7 +118,7 @@ pub fn add_base_import_input(
     let _guard = lock_workspace(&workspace_mutex)?;
     let workspace = workspace(database)?;
     let invalidation = ArtifactInvalidation::stage(&workspace)?;
-    match sql_inputs::add_input(database, SqlInputScope::BaseImport, request) {
+    match sql_inputs::add_input(database, SqlInputScope::SqlImport, request) {
         Ok(mut result) => {
             result.warnings.extend(invalidation.commit(database));
             Ok(result)
@@ -126,13 +126,13 @@ pub fn add_base_import_input(
         Err(error) => match invalidation.rollback() {
             Ok(()) => Err(error),
             Err(rollback_error) => Err(CoreError::Consistency(format!(
-                "{error}; failed base import artifact restore: {rollback_error}"
+                "{error}; failed SQL import artifact restore: {rollback_error}"
             ))),
         },
     }
 }
 
-pub fn remove_base_import_input(
+pub fn remove_sql_import_input(
     database: &Database,
     request: &RemoveSqlInputRequest,
 ) -> CoreResult<RemoveSqlInputResult> {
@@ -140,7 +140,7 @@ pub fn remove_base_import_input(
     let _guard = try_lock_workspace(&workspace_mutex)?;
     let workspace = workspace(database)?;
     let invalidation = ArtifactInvalidation::stage(&workspace)?;
-    match sql_inputs::remove_input(database, SqlInputScope::BaseImport, request) {
+    match sql_inputs::remove_input(database, SqlInputScope::SqlImport, request) {
         Ok(mut result) => {
             result.warnings.extend(invalidation.commit(database));
             Ok(result)
@@ -148,30 +148,30 @@ pub fn remove_base_import_input(
         Err(error) => match invalidation.rollback() {
             Ok(()) => Err(error),
             Err(rollback_error) => Err(CoreError::Consistency(format!(
-                "{error}; failed base import artifact restore: {rollback_error}"
+                "{error}; failed SQL import artifact restore: {rollback_error}"
             ))),
         },
     }
 }
 
-pub fn validate_base_import(
+pub fn validate_sql_import(
     database: &Database,
-    request: &ValidateBaseImportRequest,
-) -> CoreResult<ValidateBaseImportResult> {
-    validate_base_import_with_progress(database, request, &mut |_| {})
+    request: &ValidateSqlImportRequest,
+) -> CoreResult<ValidateSqlImportResult> {
+    validate_sql_import_with_progress(database, request, &mut |_| {})
 }
 
-pub fn validate_base_import_with_progress(
+pub fn validate_sql_import_with_progress(
     database: &Database,
-    request: &ValidateBaseImportRequest,
+    request: &ValidateSqlImportRequest,
     progress: &mut (dyn FnMut(OperationProgress) + Send),
-) -> CoreResult<ValidateBaseImportResult> {
+) -> CoreResult<ValidateSqlImportResult> {
     let workspace_mutex = workspace_mutex(database)?;
     let _guard = lock_workspace(&workspace_mutex)?;
     let workspace = workspace(database)?;
-    let execution = execute_base_import_sql_in_workspace(database, request, &workspace, progress)?;
-    let validation = validate_base_import_candidate_in_workspace(&workspace, progress)?;
-    Ok(ValidateBaseImportResult {
+    let execution = execute_sql_import_sql_in_workspace(database, request, &workspace, progress)?;
+    let validation = validate_sql_import_candidate_in_workspace(&workspace, progress)?;
+    Ok(ValidateSqlImportResult {
         warnings: execution.warnings.clone(),
         can_apply: validation.can_apply,
         execution,
@@ -179,16 +179,16 @@ pub fn validate_base_import_with_progress(
     })
 }
 
-fn execute_base_import_sql_in_workspace(
+fn execute_sql_import_sql_in_workspace(
     database: &Database,
-    request: &ValidateBaseImportRequest,
+    request: &ValidateSqlImportRequest,
     workspace: &Path,
     progress: &mut (dyn FnMut(OperationProgress) + Send),
-) -> CoreResult<BaseImportExecutionResult> {
+) -> CoreResult<SqlImportExecutionResult> {
     let sql = request.sql.trim();
     if sql.is_empty() {
         return Err(CoreError::InvalidArgument(
-            "base import sql is required".into(),
+            "SQL Import SQL is required".into(),
         ));
     }
     let invalidation = ArtifactInvalidation::stage(workspace)?;
@@ -199,12 +199,12 @@ fn execute_base_import_sql_in_workspace(
         report_progress(progress, PREPARING_INPUT_SOURCES, None, None, None, None);
         let mut connection = Connection::open_in_memory()?;
         connection.execute_batch("PRAGMA foreign_keys = ON")?;
-        let sources = sql_inputs::stored_sources(database, SqlInputScope::BaseImport)?;
+        let sources = sql_inputs::stored_sources(database, SqlInputScope::SqlImport)?;
         let delimiter = crate::general::get_csv_delimiter_byte(database)?;
         let attached = prepare_sources(&mut connection, &sources, delimiter)?;
-        let execution = execute_base_import_script(&connection, &sql, &staging_path, progress);
+        let execution = execute_sql_import_script(&connection, &sql, &staging_path, progress);
         report_progress(progress, BUILDING_STAGING_DATABASE, None, None, None, None);
-        let attachments = validate_base_import_attachments(&connection, &attached);
+        let attachments = validate_sql_import_attachments(&connection, &attached);
         let autocommit = unsafe { ffi::sqlite3_get_autocommit(connection.handle()) != 0 };
         if !autocommit {
             let _ = connection.execute_batch("ROLLBACK");
@@ -214,25 +214,25 @@ fn execute_base_import_sql_in_workspace(
             (Ok(messages), Ok(()), Ok(())) if autocommit => Ok(messages),
             (Ok(_), Err(error), _) | (Ok(_), Ok(()), Err(error)) => Err(error),
             (Ok(_), Ok(()), Ok(())) => Err(CoreError::InvalidArgument(
-                "base import sql left an unfinished transaction".into(),
+                "SQL Import SQL left an unfinished transaction".into(),
             )),
             (Err(error), _, _) => Err(error),
         }
     })();
     match execution {
         Ok(messages) => {
-            let mut result = BaseImportExecutionResult {
+            let mut result = SqlImportExecutionResult {
                 statements_executed: messages.len(),
                 messages,
                 script_saved: false,
                 warnings: invalidation.commit(database),
             };
             match database.connect_metadata().and_then(|connection| {
-                metadata::set_raw(&connection, MetadataKey::BaseImportSql, &request.sql)
+                metadata::set_raw(&connection, MetadataKey::SqlImportSql, &request.sql)
             }) {
                 Ok(()) => result.script_saved = true,
                 Err(error) => result.warnings.push(format!(
-                    "base import SQL committed, but the script could not be saved: {error}"
+                    "SQL import SQL committed, but the script could not be saved: {error}"
                 )),
             }
             Ok(result)
@@ -241,12 +241,12 @@ fn execute_base_import_sql_in_workspace(
     }
 }
 
-fn validate_base_import_candidate_in_workspace(
+fn validate_sql_import_candidate_in_workspace(
     workspace: &Path,
     progress: &mut (dyn FnMut(OperationProgress) + Send),
-) -> CoreResult<BaseImportValidationResult> {
+) -> CoreResult<SqlImportValidationResult> {
     let staging = workspace.join(STAGING_DATABASE);
-    let mut validation = BaseImportValidationResult {
+    let mut validation = SqlImportValidationResult {
         valid: false,
         can_apply: false,
         taxa_count: 0,
@@ -259,7 +259,7 @@ fn validate_base_import_candidate_in_workspace(
     };
     if !staging.is_file() {
         clear_validation_artifacts(&workspace)?;
-        return Err(CoreError::NotFound("base import staging database".into()));
+        return Err(CoreError::NotFound("SQL import staging database".into()));
     }
     let staging_fingerprint = workspace_fingerprint(&workspace)?;
     if let Some(candidate) = read_validation_state(&workspace)?
@@ -382,7 +382,7 @@ fn validate_base_import_candidate_in_workspace(
     if validation.total_error_count == 0 {
         let candidate_build = workspace.join(CANDIDATE_BUILD_DATABASE);
         remove_file_if_exists(&candidate_build)?;
-        let build = build_official_taxonomy(&staging, &candidate_build, "base-import", progress)
+        let build = build_official_taxonomy(&staging, &candidate_build, "sql-import", progress)
             .and_then(|_| {
                 report_progress(progress, VALIDATING_TAXONOMY, None, None, None, None);
                 validate_candidate_database(&candidate_build)
@@ -397,7 +397,7 @@ fn validate_base_import_candidate_in_workspace(
     }
     if validation.normalization_changes > 0 {
         validation.total_warning_count += 1;
-        validation.warnings.push(BaseImportIssue {
+        validation.warnings.push(SqlImportIssue {
             code: "canonical_normalization".into(),
             message: format!(
                 "{} names will change during canonical normalization",
@@ -414,7 +414,7 @@ fn validate_base_import_candidate_in_workspace(
     if validation.can_apply && workspace.join(CANDIDATE_DATABASE).is_file() {
         write_validation_state(
             &workspace,
-            &ValidatedBaseImportCandidate {
+            &ValidatedSqlImportCandidate {
                 staging_fingerprint,
                 validation_result: validation.clone(),
             },
@@ -425,42 +425,42 @@ fn validate_base_import_candidate_in_workspace(
 }
 
 #[cfg(test)]
-fn execute_base_import_sql(
+fn execute_sql_import_sql(
     database: &Database,
-    request: &ValidateBaseImportRequest,
-) -> CoreResult<BaseImportExecutionResult> {
+    request: &ValidateSqlImportRequest,
+) -> CoreResult<SqlImportExecutionResult> {
     let workspace_mutex = workspace_mutex(database)?;
     let _guard = lock_workspace(&workspace_mutex)?;
     let workspace = workspace(database)?;
-    execute_base_import_sql_in_workspace(database, request, &workspace, &mut |_| {})
+    execute_sql_import_sql_in_workspace(database, request, &workspace, &mut |_| {})
 }
 
 #[cfg(test)]
-fn validate_base_import_candidate(database: &Database) -> CoreResult<BaseImportValidationResult> {
+fn validate_sql_import_candidate(database: &Database) -> CoreResult<SqlImportValidationResult> {
     let workspace_mutex = workspace_mutex(database)?;
     let _guard = lock_workspace(&workspace_mutex)?;
     let workspace = workspace(database)?;
-    validate_base_import_candidate_in_workspace(&workspace, &mut |_| {})
+    validate_sql_import_candidate_in_workspace(&workspace, &mut |_| {})
 }
 
-pub fn apply_base_import(database: &Database) -> CoreResult<TaxonomyBaseReplaceResult> {
+pub fn apply_sql_import(database: &Database) -> CoreResult<TaxonomyImportResult> {
     let workspace_mutex = workspace_mutex(database)?;
     let _guard = lock_workspace(&workspace_mutex)?;
     let replacement_guard = database.try_taxonomy_replacement()?;
-    apply_base_import_with_guard(database, &replacement_guard)
+    apply_sql_import_with_guard(database, &replacement_guard)
 }
 
-fn apply_base_import_with_guard(
+fn apply_sql_import_with_guard(
     database: &Database,
     replacement_guard: &TaxonomyReplacementGuard<'_>,
-) -> CoreResult<TaxonomyBaseReplaceResult> {
+) -> CoreResult<TaxonomyImportResult> {
     let workspace = workspace(database)?;
     let candidate = read_validation_state(&workspace)?.ok_or_else(|| {
-        CoreError::InvalidArgument("base import must be validated before apply".into())
+        CoreError::InvalidArgument("SQL import must be validated before apply".into())
     })?;
     if !candidate.validation_result.can_apply {
         return Err(CoreError::InvalidArgument(format!(
-            "base import validation failed with {} errors",
+            "SQL import validation failed with {} errors",
             candidate.validation_result.total_error_count
         )));
     }
@@ -468,7 +468,7 @@ fn apply_base_import_with_guard(
     if fingerprint != candidate.staging_fingerprint {
         clear_validation_artifacts(&workspace)?;
         return Err(CoreError::InvalidArgument(
-            "base import candidate fingerprint is stale".into(),
+            "SQL import candidate fingerprint is stale".into(),
         ));
     }
     let candidate_path = workspace.join(CANDIDATE_DATABASE);
@@ -485,13 +485,13 @@ fn apply_base_import_with_guard(
     };
     database.replace_taxonomy_database_file(replacement_guard, &candidate_path)?;
     let warnings = cleanup_build_artifacts(database, &workspace);
-    Ok(TaxonomyBaseReplaceResult { metadata, warnings })
+    Ok(TaxonomyImportResult { metadata, warnings })
 }
 
-pub fn get_base_import_sql(database: &Database) -> CoreResult<String> {
+pub fn get_sql_import_sql(database: &Database) -> CoreResult<String> {
     Ok(
-        metadata::get_raw(&database.connect_metadata()?, MetadataKey::BaseImportSql)?
-            .unwrap_or_else(|| INITIAL_BASE_IMPORT_SQL.to_string()),
+        metadata::get_raw(&database.connect_metadata()?, MetadataKey::SqlImportSql)?
+            .unwrap_or_else(|| INITIAL_SQL_IMPORT_SQL.to_string()),
     )
 }
 
@@ -500,7 +500,7 @@ fn workspace_mutex(database: &Database) -> CoreResult<Arc<Mutex<()>>> {
     let mut locks = WORKSPACE_LOCKS
         .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
-        .map_err(|_| CoreError::Consistency("base import lock registry is poisoned".into()))?;
+        .map_err(|_| CoreError::Consistency("SQL import lock registry is poisoned".into()))?;
     Ok(locks
         .entry(path)
         .or_insert_with(|| Arc::new(Mutex::new(())))
@@ -510,17 +510,17 @@ fn workspace_mutex(database: &Database) -> CoreResult<Arc<Mutex<()>>> {
 fn lock_workspace(mutex: &Mutex<()>) -> CoreResult<std::sync::MutexGuard<'_, ()>> {
     mutex
         .lock()
-        .map_err(|_| CoreError::Consistency("base import workspace lock is poisoned".into()))
+        .map_err(|_| CoreError::Consistency("SQL import workspace lock is poisoned".into()))
 }
 
 fn try_lock_workspace(mutex: &Mutex<()>) -> CoreResult<std::sync::MutexGuard<'_, ()>> {
     match mutex.try_lock() {
         Ok(guard) => Ok(guard),
         Err(TryLockError::WouldBlock) => Err(CoreError::InvalidArgument(
-            "base import workspace is busy".into(),
+            "SQL import workspace is busy".into(),
         )),
         Err(TryLockError::Poisoned(_)) => Err(CoreError::Consistency(
-            "base import workspace lock is poisoned".into(),
+            "SQL import workspace lock is poisoned".into(),
         )),
     }
 }
@@ -530,12 +530,12 @@ fn workspace(database: &Database) -> CoreResult<PathBuf> {
         .metadata_path()
         .parent()
         .unwrap_or_else(|| Path::new("."))
-        .join("base-import-workspace");
+        .join("sql-import-workspace");
     fs::create_dir_all(&workspace)?;
     Ok(workspace)
 }
 
-fn read_validation_state(workspace: &Path) -> CoreResult<Option<ValidatedBaseImportCandidate>> {
+fn read_validation_state(workspace: &Path) -> CoreResult<Option<ValidatedSqlImportCandidate>> {
     let path = workspace.join(VALIDATION_STATE);
     if !path.is_file() {
         return Ok(None);
@@ -545,10 +545,7 @@ fn read_validation_state(workspace: &Path) -> CoreResult<Option<ValidatedBaseImp
         .map_err(|error| CoreError::Consistency(format!("invalid validation state: {error}")))
 }
 
-fn write_validation_state(
-    workspace: &Path,
-    state: &ValidatedBaseImportCandidate,
-) -> CoreResult<()> {
+fn write_validation_state(workspace: &Path, state: &ValidatedSqlImportCandidate) -> CoreResult<()> {
     let path = workspace.join(VALIDATION_STATE);
     let temporary = workspace.join(".validation.json.tmp");
     let bytes = serde_json::to_vec(state).map_err(|error| {
@@ -597,7 +594,7 @@ impl ArtifactInvalidation {
                 return match invalidation.rollback() {
                     Ok(()) => Err(error.into()),
                     Err(rollback_error) => Err(CoreError::Consistency(format!(
-                        "{error}; failed base import artifact restore: {rollback_error}"
+                        "{error}; failed SQL import artifact restore: {rollback_error}"
                     ))),
                 };
             }
@@ -619,7 +616,7 @@ impl ArtifactInvalidation {
         let mut warnings = Vec::new();
         for (_, staged) in self.paths {
             if let Some(warning) =
-                super::cleanup::remove_or_defer(database, &staged, "base import artifact")
+                super::cleanup::remove_or_defer(database, &staged, "SQL import artifact")
             {
                 warnings.push(warning);
             }
@@ -635,12 +632,12 @@ fn restore_invalidated_artifacts<T>(
 ) -> CoreResult<T> {
     if let Err(cleanup_error) = remove_file_if_exists(staging) {
         return Err(CoreError::Consistency(format!(
-            "{error}; failed base import staging cleanup: {cleanup_error}"
+            "{error}; failed SQL import staging cleanup: {cleanup_error}"
         )));
     }
     if let Err(rollback_error) = invalidation.rollback() {
         return Err(CoreError::Consistency(format!(
-            "{error}; failed base import artifact restore: {rollback_error}"
+            "{error}; failed SQL import artifact restore: {rollback_error}"
         )));
     }
     Err(error)
@@ -657,7 +654,7 @@ fn cleanup_build_artifacts(database: &Database, workspace: &Path) -> Vec<String>
         if let Some(warning) = super::cleanup::remove_or_defer(
             database,
             &workspace.join(filename),
-            "base import artifact",
+            "SQL import artifact",
         ) {
             warnings.push(warning);
         }
@@ -670,7 +667,7 @@ fn workspace_fingerprint(workspace: &Path) -> CoreResult<String> {
     let path = workspace.join(STAGING_DATABASE);
     if !path.is_file() {
         return Err(CoreError::NotFound(format!(
-            "base import file {}",
+            "SQL import file {}",
             path.display()
         )));
     }
@@ -722,7 +719,7 @@ fn validate_candidate_database(path: &Path) -> CoreResult<()> {
     Ok(())
 }
 
-fn candidate_metadata(path: &Path) -> CoreResult<TaxonomyBaseMetadata> {
+fn candidate_metadata(path: &Path) -> CoreResult<TaxonomyImportMetadata> {
     Connection::open_with_flags(
         path,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
@@ -735,7 +732,7 @@ fn candidate_metadata(path: &Path) -> CoreResult<TaxonomyBaseMetadata> {
         "#,
         [],
         |row| {
-            Ok(TaxonomyBaseMetadata {
+            Ok(TaxonomyImportMetadata {
                 source_path: row.get(0)?,
                 taxa_count: row.get(1)?,
                 taxon_names_count: row.get(2)?,
@@ -746,7 +743,7 @@ fn candidate_metadata(path: &Path) -> CoreResult<TaxonomyBaseMetadata> {
     .map_err(Into::into)
 }
 
-fn execute_base_import_script(
+fn execute_sql_import_script(
     connection: &Connection,
     sql: &str,
     staging_path: &str,
@@ -765,7 +762,7 @@ fn execute_base_import_script(
             Some(statement_index),
             Some(statement_total),
         );
-        connection.authorizer(Some(base_import_authorizer(staging_path.to_string())));
+        connection.authorizer(Some(sql_import_authorizer(staging_path.to_string())));
         let execution = unsafe { execute_statement_to_completion_raw(connection, &sql[offset..]) };
         connection.authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
         let execution = execution?;
@@ -808,7 +805,7 @@ fn count_sql_statements(sql: &str) -> CoreResult<u64> {
     Ok(statement_count)
 }
 
-fn validate_base_import_attachments(
+fn validate_sql_import_attachments(
     connection: &Connection,
     source_aliases: &[String],
 ) -> CoreResult<()> {
@@ -817,11 +814,11 @@ fn validate_base_import_attachments(
         .query_map([], |row| row.get::<_, String>(1))?
         .collect::<Result<Vec<_>, _>>()?;
     if let Some(alias) = attached.iter().find(|alias| {
-        !matches!(alias.as_str(), "main" | "temp" | "base")
+        !matches!(alias.as_str(), "main" | "temp" | "sql_import")
             && !source_aliases.iter().any(|source| source == *alias)
     }) {
         return Err(CoreError::InvalidArgument(format!(
-            "base import staging database must use the base alias, not {alias}"
+            "SQL Import staging database must use the sql_import alias, not {alias}"
         )));
     }
     Ok(())
@@ -829,12 +826,12 @@ fn validate_base_import_attachments(
 
 fn replace_staging_literal(sql: &str, staging_path: &str) -> String {
     sql.replace(
-        "'vividarium_base.db'",
+        "'vividarium_sql_import.db'",
         &format!("'{}'", staging_path.replace('\'', "''")),
     )
 }
 
-fn base_import_authorizer(
+fn sql_import_authorizer(
     staging_path: String,
 ) -> impl for<'a> FnMut(AuthContext<'a>) -> Authorization + Send + 'static {
     move |context| match context.action {
@@ -856,7 +853,7 @@ fn base_import_authorizer(
             }
         }
         AuthAction::Detach { database_name } => {
-            if database_name.eq_ignore_ascii_case("base") {
+            if database_name.eq_ignore_ascii_case("sql_import") {
                 Authorization::Allow
             } else {
                 Authorization::Deny
@@ -891,7 +888,7 @@ fn base_import_authorizer(
         | AuthAction::DropVtable { .. }
         | AuthAction::Reindex { .. }
         | AuthAction::Analyze { .. } => {
-            if context.database_name == Some("base") {
+            if context.database_name == Some("sql_import") {
                 Authorization::Allow
             } else {
                 Authorization::Deny
@@ -903,7 +900,7 @@ fn base_import_authorizer(
 
 fn validate_integrity(
     connection: &Connection,
-    validation: &mut BaseImportValidationResult,
+    validation: &mut SqlImportValidationResult,
 ) -> CoreResult<()> {
     let mut integrity = connection.prepare("PRAGMA integrity_check")?;
     for row in integrity.query_map([], |row| row.get::<_, String>(0))? {
@@ -917,7 +914,7 @@ fn validate_integrity(
 
 fn validate_staging_schema(
     connection: &Connection,
-    validation: &mut BaseImportValidationResult,
+    validation: &mut SqlImportValidationResult,
 ) -> CoreResult<()> {
     validate_table(
         connection,
@@ -1003,7 +1000,7 @@ fn validate_staging_schema(
 
 fn validate_table(
     connection: &Connection,
-    validation: &mut BaseImportValidationResult,
+    validation: &mut SqlImportValidationResult,
     table: &str,
     required: &[(&str, bool, bool, bool)],
 ) -> CoreResult<()> {
@@ -1081,7 +1078,7 @@ fn validate_table(
 
 fn validate_foreign_key(
     connection: &Connection,
-    validation: &mut BaseImportValidationResult,
+    validation: &mut SqlImportValidationResult,
     table: &str,
     from_column: &str,
     target_table: &str,
@@ -1124,7 +1121,7 @@ fn validate_foreign_key(
 
 fn validate_unique_columns(
     connection: &Connection,
-    validation: &mut BaseImportValidationResult,
+    validation: &mut SqlImportValidationResult,
     table: &str,
     required_columns: &[&str],
 ) -> CoreResult<()> {
@@ -1174,7 +1171,7 @@ fn build_official_taxonomy(
     destination: &Path,
     source_label: &str,
     progress: &mut (dyn FnMut(OperationProgress) + Send),
-) -> CoreResult<TaxonomyBaseMetadata> {
+) -> CoreResult<TaxonomyImportMetadata> {
     initialize_taxonomy_database_file(destination)?;
     let mut connection = Connection::open(destination)?;
     connection.execute_batch("PRAGMA foreign_keys = ON")?;
@@ -1274,7 +1271,7 @@ fn build_official_taxonomy(
         for (name_id, taxon_id, name_type, raw_name, authority_year, source) in names {
             let name = normalize_taxonomy_name(&raw_name).ok_or_else(|| {
                 CoreError::InvalidArgument(format!(
-                    "taxonomy base name {name_id} is empty after normalization"
+                    "SQL Import name {name_id} is empty after normalization"
                 ))
             })?;
             insert.execute(params![
@@ -1334,7 +1331,7 @@ fn build_official_taxonomy(
         "#,
         [],
         |row| {
-            Ok(TaxonomyBaseMetadata {
+            Ok(TaxonomyImportMetadata {
                 source_path: row.get(0)?,
                 taxa_count: row.get(1)?,
                 taxon_names_count: row.get(2)?,
@@ -1348,7 +1345,7 @@ fn build_official_taxonomy(
 }
 
 fn record_error(
-    validation: &mut BaseImportValidationResult,
+    validation: &mut SqlImportValidationResult,
     code: &str,
     message: &str,
     table: Option<&str>,
@@ -1356,7 +1353,7 @@ fn record_error(
 ) {
     validation.total_error_count += 1;
     if validation.errors.len() < MAX_ISSUE_SAMPLES {
-        validation.errors.push(BaseImportIssue {
+        validation.errors.push(SqlImportIssue {
             code: code.into(),
             message: message.into(),
             taxon_id: None,
@@ -1368,7 +1365,7 @@ fn record_error(
 }
 
 fn record_taxonomy_error(
-    validation: &mut BaseImportValidationResult,
+    validation: &mut SqlImportValidationResult,
     issue: TaxonomyValidationIssue,
 ) {
     record_taxon_error(
@@ -1383,7 +1380,7 @@ fn record_taxonomy_error(
 }
 
 fn record_taxon_error(
-    validation: &mut BaseImportValidationResult,
+    validation: &mut SqlImportValidationResult,
     code: &str,
     message: String,
     taxon_id: Option<i64>,
@@ -1393,7 +1390,7 @@ fn record_taxon_error(
 ) {
     validation.total_error_count += 1;
     if validation.errors.len() < MAX_ISSUE_SAMPLES {
-        validation.errors.push(BaseImportIssue {
+        validation.errors.push(SqlImportIssue {
             code: code.into(),
             message,
             taxon_id,
@@ -1423,7 +1420,7 @@ fn report_progress(
 
 fn report_validation_outcome(
     progress: &mut (dyn FnMut(OperationProgress) + Send),
-    validation: &BaseImportValidationResult,
+    validation: &SqlImportValidationResult,
 ) {
     report_progress(
         progress,
@@ -1447,5 +1444,5 @@ fn remove_file_if_exists(path: &Path) -> CoreResult<()> {
 }
 
 #[cfg(test)]
-#[path = "base_import/tests.rs"]
+#[path = "sql_import/tests.rs"]
 mod tests;

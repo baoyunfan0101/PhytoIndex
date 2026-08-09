@@ -55,7 +55,7 @@ import {
 import { getMapSettings, setMapSettings, type MapSettings } from "../../api/map";
 import { startPhotoMapping } from "../../api/mapping";
 import { waitForOperation } from "../../api/tasks";
-import { getTaxonomyBaseMetadata, type TaxonomyBaseMetadata } from "../../api/baseImport";
+import { getTaxonomyImportMetadata, type TaxonomyImportMetadata } from "../../api/taxonomyImport";
 import {
   getNamingHookSettings,
   getNamingHookTemplates,
@@ -79,7 +79,7 @@ import { selectDatabaseDestination, selectPhotoDirectory, selectSqliteDatabase }
 import { Button, IconButton, SectionHeader } from "../../shared/ui";
 import { CodeEditor } from "../../shared/CodeEditor";
 import { ResizablePanels } from "../../shared/ResizablePanels";
-import { BaseImportSettings } from "../taxonomy/BaseImportSettings";
+import { SqlImportSettings } from "../taxonomy/SqlImportSettings";
 import { DirectImportSettings } from "../taxonomy/DirectImportSettings";
 import { emitPhotoMutation } from "../photos/photoMutations";
 import { emitMetadataChange } from "../../shared/metadataChanges";
@@ -108,7 +108,7 @@ const settingsSections: Array<{
 ];
 
 export function SettingsView({
-  onBaseReplaced,
+  onTaxonomyImported,
   onSectionChange,
   onWorkspaceChanged,
   generalSettings,
@@ -119,7 +119,7 @@ export function SettingsView({
   generalSettings: GeneralSettingsValue;
   generalSettingsLoadError?: string;
   onGeneralSettingsChange: (settings: GeneralSettingsValue) => void;
-  onBaseReplaced?: () => void;
+  onTaxonomyImported?: () => void;
   onSectionChange: (section: SettingsSection) => void;
   onWorkspaceChanged?: (resetPhotoTabs: boolean) => void;
   section: SettingsSection;
@@ -199,8 +199,8 @@ export function SettingsView({
         )}
         {section === "Storage" && <StorageSettings />}
         {section === "Photo Libraries" && <PhotoLibrariesSettings onChanged={onWorkspaceChanged} />}
-        {(section === "Taxonomy Databases" || section === "SQL Import") && <BaseImportSettings onApplied={onBaseReplaced} />}
-        {section === "Direct Import" && <DirectImportSettings onApplied={onBaseReplaced} />}
+        {(section === "Taxonomy Databases" || section === "SQL Import") && <SqlImportSettings onApplied={onTaxonomyImported} />}
+        {section === "Direct Import" && <DirectImportSettings onApplied={onTaxonomyImported} />}
         {section === "Naming" && <NamingSettings />}
         {section === "Map" && <MapSettingsPanel />}
         {hookSection && <HooksSettings kind={section === "Filename Parser" ? "photo_filename" : "synonym_authority"} />}
@@ -379,13 +379,13 @@ function GeneralSettings({
 
 function StorageSettings() {
   const [locations, setLocations] = useState<DatabaseLocations | null>(null);
-  const [baseMetadata, setBaseMetadata] = useState<TaxonomyBaseMetadata | null>(null);
+  const [importMetadata, setImportMetadata] = useState<TaxonomyImportMetadata | null>(null);
   const [message, setMessage] = useState("");
   useEffect(() => {
-    void Promise.all([getDatabaseLocations(), getTaxonomyBaseMetadata()])
+    void Promise.all([getDatabaseLocations(), getTaxonomyImportMetadata()])
       .then(([nextLocations, nextMetadata]) => {
         setLocations(nextLocations);
-        setBaseMetadata(nextMetadata);
+        setImportMetadata(nextMetadata);
       })
       .catch((nextError) => setMessage(errorMessage(nextError)));
   }, []);
@@ -459,10 +459,10 @@ function StorageSettings() {
         action={<Button onClick={() => void changeDefaultDirectory()}><FolderCog size={13} />Change</Button>}
       />
       <h3>Taxonomy metadata</h3>
-      <StoragePath label="Current source" value={baseMetadata?.source_path ?? "Not imported"} />
-      <Setting label="Taxa" value={baseMetadata ? String(baseMetadata.taxa_count) : "-"} />
-      <Setting label="Names" value={baseMetadata ? String(baseMetadata.taxon_names_count) : "-"} />
-      <Setting label="Imported" value={baseMetadata?.imported_at ?? "-"} />
+      <StoragePath label="Current source" value={importMetadata?.source_path ?? "Not imported"} />
+      <Setting label="Taxa" value={importMetadata ? String(importMetadata.taxa_count) : "-"} />
+      <Setting label="Names" value={importMetadata ? String(importMetadata.taxon_names_count) : "-"} />
+      <Setting label="Imported" value={importMetadata?.imported_at ?? "-"} />
       <div className="editor-message">{message}</div>
     </div>
   );

@@ -3,7 +3,7 @@ import type { PersistentSqlInput } from "../../api/customSql";
 const reservedAliases = new Set([
   "main",
   "temp",
-  "base",
+  "sql_import",
   "metadata",
   "taxonomy",
   "active_photo_library",

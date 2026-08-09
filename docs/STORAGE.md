@@ -66,8 +66,8 @@ the desktop commands enforce this requirement. Taxonomy relocation cannot
 overlap another taxonomy replacement.
 
 Metadata and taxonomy storage remain available when the active photo library
-is offline. Pure taxonomy reads, updates, history, settings, and base database
-interfaces do not attach the photo library. Photo interfaces and cross-module
+is offline. Pure taxonomy reads, updates, history, settings, and taxonomy
+import interfaces do not attach the photo library. Photo interfaces and cross-module
 taxonomy/photo interfaces require the active library DB and return
 `CoreError::NotFound` when it is unavailable. The registration is retained,
 and no interface silently creates an empty replacement DB.

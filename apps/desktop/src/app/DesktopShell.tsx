@@ -164,7 +164,7 @@ export function DesktopShell({
   );
   const runningOperations = Object.values(operations).filter((operation) => operation.running);
   const taxonomyMutationLocked = runningOperations.some(
-    (operation) => operation.operation === "apply_base_import",
+    (operation) => operation.operation === "apply_sql_import" || operation.operation === "apply_direct_import",
   );
   const existingTabIds = useMemo(
     () => new Set(tabs.map((tab) => tab.id)),
@@ -582,7 +582,7 @@ export function DesktopShell({
                       void reloadLibraries();
                       if (resetPhotoTabs) resetPhotoWorkspace("Photo Library workspace changed");
                     }}
-                    onBaseReplaced={resetTaxonomyResources}
+                    onTaxonomyImported={resetTaxonomyResources}
                     generalSettings={generalSettings}
                     generalSettingsLoadError={generalSettingsLoadError}
                     onGeneralSettingsChange={onGeneralSettingsChange}
@@ -644,7 +644,7 @@ function TabBody({
   taxonomyMutationLocked,
   onCreateLibrary,
   onWorkspaceChanged,
-  onBaseReplaced,
+  onTaxonomyImported,
   generalSettings,
   generalSettingsLoadError,
   onGeneralSettingsChange,
@@ -661,7 +661,7 @@ function TabBody({
   taxonomyMutationLocked: boolean;
   onCreateLibrary: () => void;
   onWorkspaceChanged: (resetPhotoTabs: boolean) => void;
-  onBaseReplaced: () => void;
+  onTaxonomyImported: () => void;
   generalSettings: GeneralSettings;
   generalSettingsLoadError?: string;
   onGeneralSettingsChange: (settings: GeneralSettings) => void;
@@ -697,7 +697,7 @@ function TabBody({
   if (tab.kind === "formatted-update") return <FormattedUpdateView onStatus={onStatus} mutationDisabled={taxonomyMutationLocked} />;
   if (tab.kind === "custom-sql") return <CustomSqlView onStatus={onStatus} mutationDisabled={taxonomyMutationLocked} />;
   if (tab.kind === "taxonomy-history") return <OperationHistoryView domain="taxonomy" onStatus={onStatus} />;
-  if (tab.kind === "settings") return <SettingsView section={tab.settingsSection ?? "General"} onSectionChange={(section) => updateSettingsTab(tab.id, section)} onBaseReplaced={onBaseReplaced} onWorkspaceChanged={onWorkspaceChanged} generalSettings={generalSettings} generalSettingsLoadError={generalSettingsLoadError} onGeneralSettingsChange={onGeneralSettingsChange} />;
+  if (tab.kind === "settings") return <SettingsView section={tab.settingsSection ?? "General"} onSectionChange={(section) => updateSettingsTab(tab.id, section)} onTaxonomyImported={onTaxonomyImported} onWorkspaceChanged={onWorkspaceChanged} generalSettings={generalSettings} generalSettingsLoadError={generalSettingsLoadError} onGeneralSettingsChange={onGeneralSettingsChange} />;
   if (tab.kind === "photo-detail" && tab.photo) return <PhotoDetailView photo={tab.photo} />;
   if (tab.kind === "mapping-editor" && tab.photo) return <MappingEditor photo={tab.photo} onOpenTaxon={handlers.openTaxon} />;
   if (tab.kind === "search-photos" && tab.query) return <PhotoSet query={tab.query} handlers={handlers} />;

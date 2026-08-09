@@ -1,17 +1,18 @@
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, OpenFlags, OptionalExtension, Transaction, params};
 use serde::{Deserialize, Serialize};
 
 use super::formatted::validate_taxonomy;
+use super::sql::{SqlDataSource, SqlSourceSchema, inspect_sql_data_source};
 use super::sync;
 use crate::db::LOCAL_TAXON_ID_FLOOR;
 use crate::naming::normalize_taxonomy_name;
 use crate::{CoreError, CoreResult, Database};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct TaxonomyBaseMetadata {
+pub struct TaxonomyImportMetadata {
     pub source_path: String,
     pub taxa_count: i64,
     pub taxon_names_count: i64,
@@ -19,12 +20,20 @@ pub struct TaxonomyBaseMetadata {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct TaxonomyBaseReplaceResult {
-    pub metadata: TaxonomyBaseMetadata,
+pub struct TaxonomyImportResult {
+    pub metadata: TaxonomyImportMetadata,
     pub warnings: Vec<String>,
 }
 
-pub fn get_taxonomy_base_metadata(database: &Database) -> CoreResult<Option<TaxonomyBaseMetadata>> {
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DirectImportDatabase {
+    pub source_path: String,
+    pub schema: SqlSourceSchema,
+}
+
+pub fn get_taxonomy_import_metadata(
+    database: &Database,
+) -> CoreResult<Option<TaxonomyImportMetadata>> {
     let connection = database.connect_taxonomy_metadata_context()?;
     connection
         .query_row(
@@ -34,33 +43,42 @@ pub fn get_taxonomy_base_metadata(database: &Database) -> CoreResult<Option<Taxo
             WHERE metadata_id = 1
             "#,
             [],
-            taxonomy_base_metadata_row,
+            taxonomy_import_metadata_row,
         )
         .optional()
         .map_err(Into::into)
 }
 
-pub fn replace_taxonomy_base_database(
+pub fn inspect_direct_import_database(
     database: &Database,
     source_path: &Path,
-) -> CoreResult<TaxonomyBaseReplaceResult> {
+) -> CoreResult<DirectImportDatabase> {
+    let source_path = validated_direct_import_path(database, source_path)?;
+    let source_path_string = source_path_string(&source_path)?;
+    let schema = inspect_sql_data_source(
+        &SqlDataSource::Sqlite {
+            alias: "direct_import".into(),
+            path: source_path,
+        },
+        b',',
+    )?;
+    Ok(DirectImportDatabase {
+        source_path: source_path_string,
+        schema,
+    })
+}
+
+pub fn apply_direct_import(
+    database: &Database,
+    source_path: &Path,
+) -> CoreResult<TaxonomyImportResult> {
     let _guard = database.try_taxonomy_replacement()?;
-    let source_path = fs::canonicalize(source_path)?;
-    let target_path = fs::canonicalize(database.taxonomy_path()?)?;
-    if source_path == target_path {
-        return Err(CoreError::InvalidArgument(
-            "taxonomy base database must differ from the application database".into(),
-        ));
-    }
-    validate_base_database(&source_path)?;
-    let source_path = source_path
-        .to_str()
-        .ok_or_else(|| CoreError::InvalidArgument("taxonomy base path is not valid UTF-8".into()))?
-        .to_string();
+    let source_path = validated_direct_import_path(database, source_path)?;
+    let source_path = source_path_string(&source_path)?;
     let mut connection = database.connect_taxonomy_metadata_context()?;
-    connection.execute("ATTACH DATABASE ? AS taxonomy_base", [&source_path])?;
+    connection.execute("ATTACH DATABASE ? AS direct_import_source", [&source_path])?;
     let result = replace_from_attached_database(&mut connection, &source_path);
-    let detach_result = connection.execute_batch("DETACH DATABASE taxonomy_base");
+    let detach_result = connection.execute_batch("DETACH DATABASE direct_import_source");
     match (result, detach_result) {
         (Ok(result), Ok(())) => Ok(result),
         (Err(error), _) => Err(error),
@@ -68,10 +86,29 @@ pub fn replace_taxonomy_base_database(
     }
 }
 
+fn validated_direct_import_path(database: &Database, source_path: &Path) -> CoreResult<PathBuf> {
+    let source_path = fs::canonicalize(source_path)?;
+    let target_path = fs::canonicalize(database.taxonomy_path()?)?;
+    if source_path == target_path {
+        return Err(CoreError::InvalidArgument(
+            "direct import database must differ from the application database".into(),
+        ));
+    }
+    validate_direct_import_database(&source_path)?;
+    Ok(source_path)
+}
+
+fn source_path_string(source_path: &Path) -> CoreResult<String> {
+    source_path
+        .to_str()
+        .map(str::to_string)
+        .ok_or_else(|| CoreError::InvalidArgument("direct import path is not valid UTF-8".into()))
+}
+
 fn replace_from_attached_database(
     connection: &mut Connection,
     source_path: &str,
-) -> CoreResult<TaxonomyBaseReplaceResult> {
+) -> CoreResult<TaxonomyImportResult> {
     let transaction = connection.transaction()?;
     transaction.execute_batch(
         r#"
@@ -86,7 +123,7 @@ fn replace_from_attached_database(
 
         INSERT INTO taxa (taxon_id, parent_taxon_id, rank, geological_range)
         SELECT taxon_id, parent_taxon_id, rank, geological_range
-        FROM taxonomy_base.taxa
+        FROM direct_import_source.taxa
         ORDER BY rank, taxon_id;
         "#,
     )?;
@@ -119,10 +156,10 @@ fn replace_from_attached_database(
         WHERE metadata_id = 1
         "#,
         [],
-        taxonomy_base_metadata_row,
+        taxonomy_import_metadata_row,
     )?;
     transaction.commit()?;
-    Ok(TaxonomyBaseReplaceResult {
+    Ok(TaxonomyImportResult {
         metadata,
         warnings: Vec::new(),
     })
@@ -133,7 +170,7 @@ fn import_normalized_names(transaction: &Transaction<'_>) -> CoreResult<()> {
         let mut statement = transaction.prepare(
             r#"
             SELECT name_id, taxon_id, name_type, name, authority_year, source
-            FROM taxonomy_base.taxon_names
+            FROM direct_import_source.taxon_names
             ORDER BY name_id
             "#,
         )?;
@@ -160,7 +197,7 @@ fn import_normalized_names(transaction: &Transaction<'_>) -> CoreResult<()> {
     for (name_id, taxon_id, name_type, raw_name, authority_year, source) in names {
         let name = normalize_taxonomy_name(&raw_name).ok_or_else(|| {
             CoreError::InvalidArgument(format!(
-                "taxonomy base name {name_id} is empty after normalization"
+                "direct import name {name_id} is empty after normalization"
             ))
         })?;
         insert.execute(params![
@@ -199,7 +236,7 @@ fn set_local_taxon_id_floor(transaction: &Transaction<'_>) -> CoreResult<()> {
     Ok(())
 }
 
-fn validate_base_database(path: &Path) -> CoreResult<()> {
+fn validate_direct_import_database(path: &Path) -> CoreResult<()> {
     let connection = Connection::open_with_flags(
         path,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
@@ -243,7 +280,7 @@ fn require_table_columns(
         .optional()?;
     if object_type.as_deref() != Some("table") {
         return Err(CoreError::InvalidArgument(format!(
-            "taxonomy base database is missing table {table}"
+            "direct import database is missing table {table}"
         )));
     }
     let pragma = if include_hidden {
@@ -257,7 +294,7 @@ fn require_table_columns(
         .collect::<Result<Vec<_>, _>>()?;
     if columns != expected {
         return Err(CoreError::InvalidArgument(format!(
-            "taxonomy base table {table} has invalid columns"
+            "direct import table {table} has invalid columns"
         )));
     }
     Ok(())
@@ -280,14 +317,16 @@ fn require_column_declared_type(
         .find_map(|(name, declared_type)| (name == column).then_some(declared_type.as_str()));
     if !declared_type.is_some_and(|declared_type| declared_type.eq_ignore_ascii_case(expected)) {
         return Err(CoreError::InvalidArgument(format!(
-            "taxonomy base table {table} column {column} must use {expected}"
+            "direct import table {table} column {column} must use {expected}"
         )));
     }
     Ok(())
 }
 
-fn taxonomy_base_metadata_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaxonomyBaseMetadata> {
-    Ok(TaxonomyBaseMetadata {
+fn taxonomy_import_metadata_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<TaxonomyImportMetadata> {
+    Ok(TaxonomyImportMetadata {
         source_path: row.get(0)?,
         taxa_count: row.get(1)?,
         taxon_names_count: row.get(2)?,
@@ -296,5 +335,5 @@ fn taxonomy_base_metadata_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Taxon
 }
 
 #[cfg(test)]
-#[path = "base/tests.rs"]
+#[path = "direct_import/tests.rs"]
 mod tests;

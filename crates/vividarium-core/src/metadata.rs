@@ -6,7 +6,7 @@ use crate::{CoreError, CoreResult};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MetadataKey {
-    BaseImportSql,
+    SqlImportSql,
     CustomTaxonomySql,
     GeneralSettings,
     MapSettings,
@@ -24,7 +24,7 @@ pub(crate) enum MetadataKey {
 impl MetadataKey {
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
-            Self::BaseImportSql => "base_import_sql",
+            Self::SqlImportSql => "sql_import_sql",
             Self::CustomTaxonomySql => "custom_taxonomy_sql",
             Self::GeneralSettings => "general_settings",
             Self::MapSettings => "map_settings",

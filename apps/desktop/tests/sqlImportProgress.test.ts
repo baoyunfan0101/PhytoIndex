@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { describeBaseImportProgress, formatElapsed } from "../src/features/taxonomy/baseImportProgress.ts";
+import { describeSqlImportProgress, formatElapsed } from "../src/features/taxonomy/sqlImportProgress.ts";
 
 test("describes SQL statement progress without inventing a percentage", () => {
-  assert.equal(describeBaseImportProgress({
+  assert.equal(describeSqlImportProgress({
     stage: "executing_sql",
     current: null,
     total: null,
@@ -13,14 +13,14 @@ test("describes SQL statement progress without inventing a percentage", () => {
 });
 
 test("describes known row counts and phase-only progress", () => {
-  assert.equal(describeBaseImportProgress({
+  assert.equal(describeSqlImportProgress({
     stage: "normalizing_names",
     current: 120000,
     total: 850000,
     statement_index: null,
     statement_total: null,
   }), "Normalizing names: 120,000 / 850,000");
-  assert.equal(describeBaseImportProgress({
+  assert.equal(describeSqlImportProgress({
     stage: "validating_taxonomy",
     current: null,
     total: null,

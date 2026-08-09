@@ -42,20 +42,22 @@ Returns: managed input sources, SQL editor, execution messages, typed result
 sets, warnings, and full export for truncated read-only queries. CSV sources
 and exports use the application-wide CSV delimiter.
 
-### `BaseImportSettings({ onApplied })`
+### `SqlImportSettings({ onApplied })`
 
-Parameters: optional callback invoked after a base database is applied.
+Parameters: optional callback invoked after an SQL Import is applied.
 
-Returns: the base-import source registry, SQL workspace, validation issues,
+Returns: the SQL Import source registry, SQL workspace, validation issues,
 metadata, and apply controls.
 
 ### `DirectImportSettings({ onApplied })`
 
-Parameters: optional callback invoked after a direct SQLite base database is
-applied.
+Parameters: optional callback invoked after a Direct Import is applied.
 
-Returns: a native SQLite selection action, background import status, and the
-committed replacement result or validation error.
+Returns: a native SQLite selection action, a staged source card containing the
+validated path, tables, and columns, an explicit confirmation action,
+background import status, and the committed replacement result or validation
+error. Selecting a database only inspects it; replacement begins only after
+confirmation.
 
 Search results and taxon details, formatted input and result logs, SQL input
 sources and editors, and execution or validation outputs use adjustable panes

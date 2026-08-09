@@ -1,4 +1,4 @@
-ATTACH DATABASE 'vividarium_base.db' AS base;
+ATTACH DATABASE 'vividarium_sql_import.db' AS sql_import;
 PRAGMA foreign_keys = ON;
 BEGIN IMMEDIATE;
 
@@ -79,8 +79,8 @@ BEGIN IMMEDIATE;
 -- );
 -- ============================================================
 
--- Create taxonomy base db
-CREATE TABLE base.taxa (
+-- Create the SQL Import staging database
+CREATE TABLE sql_import.taxa (
     taxon_id INTEGER PRIMARY KEY AUTOINCREMENT
     ,parent_taxon_id INTEGER
     ,rank INTEGER NOT NULL
@@ -94,7 +94,7 @@ CREATE TABLE base.taxa (
         ON DELETE RESTRICT
 );
 
-CREATE TABLE base.taxon_names (
+CREATE TABLE sql_import.taxon_names (
     name_id INTEGER PRIMARY KEY AUTOINCREMENT
     ,taxon_id INTEGER NOT NULL
     ,name_type INTEGER NOT NULL
@@ -236,7 +236,7 @@ nearest_parent AS (
     WHERE priority = 1
 )
 
-INSERT INTO base.taxa (
+INSERT INTO sql_import.taxa (
     taxon_id
     ,parent_taxon_id
     ,rank
@@ -260,7 +260,7 @@ ORDER BY
 -- ============================================================
 
 -- Import scientific names
-INSERT INTO base.taxon_names (
+INSERT INTO sql_import.taxon_names (
     taxon_id
     ,name_type
     ,name
@@ -274,7 +274,7 @@ SELECT
     ,NULLIF(trim(source.authority_year), '')
     ,'biolib'
 FROM biolib.taxa AS source
-JOIN base.taxa AS retained
+JOIN sql_import.taxa AS retained
     ON source.id = retained.taxon_id
 WHERE source.scientific_name IS NOT NULL
     AND trim(source.scientific_name) <> ''
@@ -284,7 +284,7 @@ ORDER BY
 -- ============================================================
 
 -- Import synonyms
-INSERT INTO base.taxon_names (
+INSERT INTO sql_import.taxon_names (
     taxon_id
     ,name_type
     ,name
@@ -307,7 +307,7 @@ FROM (
         parent
         ,synonym
 ) AS synonym
-JOIN base.taxa AS retained
+JOIN sql_import.taxa AS retained
     ON synonym.parent = retained.taxon_id
 WHERE synonym IS NOT NULL
     AND trim(synonym) <> ''
@@ -332,13 +332,13 @@ WITH valid_chinese AS (
                 ,chinese.chinese_name
         ) AS priority -- Prefer the original accepted name; otherwise promote one remaining name.
     FROM biolib.chinese AS chinese
-    JOIN base.taxa AS retained
+    JOIN sql_import.taxa AS retained
         ON chinese.id = retained.taxon_id
     WHERE chinese.chinese_name IS NOT NULL
         AND trim(chinese.chinese_name) <> ''
 )
 
-INSERT INTO base.taxon_names (
+INSERT INTO sql_import.taxon_names (
     taxon_id
     ,name_type
     ,name
@@ -362,7 +362,7 @@ ORDER BY
 -- ============================================================
 
 -- Import English names
-INSERT INTO base.taxon_names (
+INSERT INTO sql_import.taxon_names (
     taxon_id
     ,name_type
     ,name
@@ -376,7 +376,7 @@ SELECT
     ,NULL
     ,'biolib'
 FROM biolib.taxa AS source
-JOIN base.taxa AS retained
+JOIN sql_import.taxa AS retained
     ON source.id = retained.taxon_id
 WHERE source.english_name IS NOT NULL
     AND trim(source.english_name) <> ''
@@ -386,4 +386,4 @@ ORDER BY
 -- ============================================================
 
 COMMIT;
-DETACH DATABASE base;
+DETACH DATABASE sql_import;

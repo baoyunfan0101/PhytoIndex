@@ -2,7 +2,35 @@ use super::*;
 use crate::taxonomy::{TaxonInputRow, apply_rows, get_taxon_detail, list_operations};
 
 #[test]
-fn replaces_taxonomy_preserves_base_ids_and_queues_all_photos() {
+fn inspects_path_and_tables_without_replacing_taxonomy() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = Database::open(directory.path().join("vividarium.db")).unwrap();
+    let old_taxon_ids = seed_old_taxonomy_tree(&database);
+    let source_path = directory.path().join("direct-import.db");
+    create_direct_import_database(&source_path);
+
+    let inspected = inspect_direct_import_database(&database, &source_path).unwrap();
+
+    assert_eq!(
+        inspected.source_path,
+        source_path.canonicalize().unwrap().to_str().unwrap()
+    );
+    assert_eq!(
+        inspected
+            .schema
+            .objects
+            .iter()
+            .map(|object| object.name.as_str())
+            .collect::<Vec<_>>(),
+        ["taxa", "taxon_names"]
+    );
+    for taxon_id in old_taxon_ids {
+        assert!(get_taxon_detail(&database, taxon_id).unwrap().is_some());
+    }
+}
+
+#[test]
+fn replaces_taxonomy_preserves_source_ids_and_queues_all_photos() {
     let directory = tempfile::tempdir().unwrap();
     let database = Database::open_test(directory.path().join("vividarium.db")).unwrap();
     let old_taxon_ids = seed_old_taxonomy_tree(&database);
@@ -57,9 +85,9 @@ fn replaces_taxonomy_preserves_base_ids_and_queues_all_photos() {
         .unwrap();
     drop(connection);
 
-    let source_path = directory.path().join("base.db");
-    create_base_database(&source_path);
-    let result = replace_taxonomy_base_database(&database, &source_path).unwrap();
+    let source_path = directory.path().join("direct-import.db");
+    create_direct_import_database(&source_path);
+    let result = apply_direct_import(&database, &source_path).unwrap();
     let sync = sync::synchronize_pending_photo_libraries(&database).unwrap();
 
     assert_eq!(result.metadata.taxa_count, 2);
@@ -108,14 +136,14 @@ fn replaces_taxonomy_preserves_base_ids_and_queues_all_photos() {
 }
 
 #[test]
-fn rejects_an_invalid_base_without_changing_taxonomy() {
+fn rejects_an_invalid_direct_import_without_changing_taxonomy() {
     let directory = tempfile::tempdir().unwrap();
     let database = Database::open(directory.path().join("vividarium.db")).unwrap();
     let taxon_ids = seed_old_taxonomy_tree(&database);
     let invalid_path = directory.path().join("invalid.db");
-    create_invalid_base_database(&invalid_path);
+    create_invalid_direct_import_database(&invalid_path);
 
-    let error = replace_taxonomy_base_database(&database, &invalid_path).unwrap_err();
+    let error = apply_direct_import(&database, &invalid_path).unwrap_err();
 
     assert!(
         error
@@ -131,13 +159,13 @@ fn rejects_an_invalid_base_without_changing_taxonomy() {
 }
 
 #[test]
-fn rejects_a_base_database_with_text_name_types() {
+fn rejects_a_direct_import_database_with_text_name_types() {
     let directory = tempfile::tempdir().unwrap();
     let database = Database::open(directory.path().join("vividarium.db")).unwrap();
-    let source_path = directory.path().join("base.db");
-    create_base_database_with_name_type(&source_path, "TEXT");
+    let source_path = directory.path().join("direct-import.db");
+    create_direct_import_database_with_name_type(&source_path, "TEXT");
 
-    let error = replace_taxonomy_base_database(&database, &source_path).unwrap_err();
+    let error = apply_direct_import(&database, &source_path).unwrap_err();
 
     assert!(
         error
@@ -176,11 +204,11 @@ fn seed_old_taxonomy_tree(database: &Database) -> [i64; 3] {
     ]
 }
 
-fn create_base_database(path: &Path) {
-    create_base_database_with_name_type(path, "INTEGER");
+fn create_direct_import_database(path: &Path) {
+    create_direct_import_database_with_name_type(path, "INTEGER");
 }
 
-fn create_base_database_with_name_type(path: &Path, name_type: &str) {
+fn create_direct_import_database_with_name_type(path: &Path, name_type: &str) {
     let connection = Connection::open(path).unwrap();
     connection
         .execute_batch(&format!(
@@ -218,7 +246,7 @@ fn create_base_database_with_name_type(path: &Path, name_type: &str) {
         .unwrap();
 }
 
-fn create_invalid_base_database(path: &Path) {
+fn create_invalid_direct_import_database(path: &Path) {
     let connection = Connection::open(path).unwrap();
     connection
         .execute_batch(

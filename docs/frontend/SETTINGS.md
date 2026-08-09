@@ -14,7 +14,7 @@ through one settings workbench.
 | `section` | `SettingsSection` | Currently displayed settings page. |
 | `onSectionChange` | `(section) => void` | Updates the settings page stored by the owning tab. |
 | `onWorkspaceChanged` | optional callback | Refreshes application state after Photo Library changes. |
-| `onBaseReplaced` | optional callback | Refreshes taxonomy and mapping state after replacement. |
+| `onTaxonomyImported` | optional callback | Refreshes taxonomy and mapping state after a completed import. |
 | `generalSettings` | `GeneralSettings` | Current application-wide settings. |
 | `onGeneralSettingsChange` | `(settings) => void` | Applies a committed General settings value to the application. |
 | `generalSettingsLoadError` | optional string | Reports a load failure while the default settings remain usable. |
@@ -66,11 +66,14 @@ the latest successful validation and replaces the taxonomy database through
 the background operation API.
 
 Direct Import selects one ready-to-use SQLite database from the configured
-default taxonomy directory. `Import` starts a `base_import` background
-operation and shows an in-page running state until it completes. Validation or
-replacement failure leaves the current taxonomy unchanged and appears in the
-page error state. Success refreshes taxonomy resources and schedules every
-registered Photo Library for remapping.
+default taxonomy directory. The first `Import` action only inspects and
+validates the selected file. The page then shows its normalized path, tables,
+and columns in the same form as SQL Import input sources. The current taxonomy
+remains unchanged until the user selects `Confirm import`, which starts a
+`direct_import` background operation and shows an in-page running state until
+it completes. Validation or replacement failure leaves the current taxonomy
+unchanged and appears in the page error state. Success refreshes taxonomy
+resources and schedules every registered Photo Library for remapping.
 
 ### Naming
 

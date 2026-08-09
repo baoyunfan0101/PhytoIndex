@@ -1,56 +1,77 @@
 import { DatabaseArrowUp, LoaderCircle } from "lucide-react";
 import { useState } from "react";
 import {
-  replaceTaxonomyBaseDatabase,
-  type TaxonomyBaseReplaceResult,
-} from "../../api/baseImport";
+  applyDirectImport,
+  inspectDirectImportDatabase,
+  type DirectImportDatabase,
+} from "../../api/directImport";
 import { errorMessage } from "../../api/common";
 import { selectSqliteDatabase } from "../../api/dialogs";
 import { getDatabaseLocations } from "../../api/storage";
 import { waitForOperation, type OperationState } from "../../api/tasks";
+import type { TaxonomyImportResult } from "../../api/taxonomyImport";
 import { Button, SectionHeader } from "../../shared/ui";
-import { formatBaseImportApplyMessage } from "./baseImportMessages";
+import { formatTaxonomyImportApplyMessage } from "./taxonomyImportMessages";
 import { emitTaxonomyMutation } from "./taxonomyMutations";
+import { SqlSourceSchemaObjects } from "./SqlInputList";
 
 export function DirectImportSettings({ onApplied }: { onApplied?: () => void }) {
+  const [database, setDatabase] = useState<DirectImportDatabase | null>(null);
   const [operation, setOperation] = useState<OperationState | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState<"" | "inspect" | "apply">("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
-  async function importDatabase() {
+  async function chooseDatabase() {
     setMessage("");
     setError("");
     try {
       const locations = await getDatabaseLocations();
       const sourcePath = await selectSqliteDatabase(locations.default_taxonomy_directory);
       if (!sourcePath) return;
+      setBusy("inspect");
+      setDatabase(await inspectDirectImportDatabase(sourcePath));
+    } catch (nextError) {
+      setDatabase(null);
+      setError(errorMessage(nextError));
+    } finally {
+      setBusy("");
+    }
+  }
 
-      setBusy(true);
-      const started = await replaceTaxonomyBaseDatabase(sourcePath);
+  async function confirmImport() {
+    if (!database) return;
+    setMessage("");
+    setError("");
+    setBusy("apply");
+    try {
+      const started = await applyDirectImport(database.source_path);
       setOperation(started);
       const completed = started.task_id
         ? await waitForOperation(started.module, started.task_id, setOperation)
         : started;
       if (completed.error) throw new Error(completed.error);
-      const result = completed.result as TaxonomyBaseReplaceResult | null;
+      const result = completed.result as TaxonomyImportResult | null;
       if (!result) throw new Error("Direct import completed without a replacement result");
 
       onApplied?.();
       emitTaxonomyMutation({ kind: "replacement" });
-      setMessage(formatBaseImportApplyMessage(result.warnings));
+      setDatabase(null);
+      setMessage(formatTaxonomyImportApplyMessage(result.warnings));
     } catch (nextError) {
       setMessage("");
       setError(errorMessage(nextError));
     } finally {
-      setBusy(false);
+      setBusy("");
       setOperation(null);
     }
   }
 
   const progressMessage = operation?.progress?.stage
     ?? operation?.message
-    ?? "Importing taxonomy database";
+    ?? "Applying direct import";
+
+  const sourceName = database?.source_path.split(/[\\/]/).pop() ?? "SQLite database";
 
   return (
     <div className="settings-section direct-import-settings">
@@ -58,25 +79,42 @@ export function DirectImportSettings({ onApplied }: { onApplied?: () => void }) 
         title="Direct Import"
         detail="Replace the current taxonomy with a ready-to-use SQLite database."
         actions={(
-          <Button variant="primary" disabled={busy} onClick={() => void importDatabase()}>
-            <DatabaseArrowUp size={13} />{busy ? "Importing..." : "Import"}
-          </Button>
+          <>
+            <Button disabled={Boolean(busy)} onClick={() => void chooseDatabase()}>
+              <DatabaseArrowUp size={13} />{busy === "inspect" ? "Inspecting..." : database ? "Choose another" : "Import"}
+            </Button>
+            <Button variant="primary" disabled={Boolean(busy) || !database} onClick={() => void confirmImport()}>
+              <DatabaseArrowUp size={13} />{busy === "apply" ? "Importing..." : "Confirm import"}
+            </Button>
+          </>
         )}
       />
-      <div className="direct-import-description">
-        <strong>Import a taxonomy database directly</strong>
-        <p>The selected SQLite database must contain valid taxa and taxon_names tables using the current schema.</p>
-        <p>A successful import replaces the current taxonomy, clears taxonomy history, and schedules every registered photo library for remapping.</p>
-      </div>
-      {busy ? (
-        <div className="base-import-progress" role="status" aria-live="polite">
+      {database ? (
+        <aside className="sql-sources direct-import-source-list">
+          <header className="sql-input-actions"><strong>Input sources</strong></header>
+          <section className="sql-source-card">
+            <header><span><b>{sourceName}</b><i>SQLITE</i></span></header>
+            <code title={database.source_path}>{database.source_path}</code>
+            <small className="available">Validated and ready to import</small>
+            <SqlSourceSchemaObjects schema={database.schema} />
+          </section>
+        </aside>
+      ) : (
+        <div className="direct-import-description">
+          <strong>Import a taxonomy database directly</strong>
+          <p>Select a SQLite database to inspect its path and tables before confirming the replacement.</p>
+          <p>The database must contain valid taxa and taxon_names tables using the current schema.</p>
+        </div>
+      )}
+      {busy === "apply" ? (
+        <div className="direct-import-progress" role="status" aria-live="polite">
           <LoaderCircle className="spin" size={15} />
           <strong>{progressMessage}</strong>
         </div>
       ) : error ? (
-        <div className="inline-error base-import-status" role="alert">{error}</div>
+        <div className="inline-error direct-import-status" role="alert">{error}</div>
       ) : message ? (
-        <div className="editor-message base-import-status">{message}</div>
+        <div className="editor-message direct-import-status">{message}</div>
       ) : null}
     </div>
   );

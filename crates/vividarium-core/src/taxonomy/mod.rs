@@ -5,14 +5,14 @@
 //! details.
 
 mod actions;
-mod base;
-mod base_import;
 mod cleanup;
+mod direct_import;
 mod formatted;
 mod operation_export;
 mod page;
 mod query;
 mod sql;
+mod sql_import;
 mod sql_inputs;
 mod sql_support;
 pub(crate) mod sync;
@@ -24,23 +24,17 @@ pub use actions::{
     TaxonNameMetadataInput, TaxonUpdateInput, delete_taxon, delete_taxon_name, promote_taxon_name,
     save_taxon_name_group, update_taxon,
 };
-pub use base::{
-    TaxonomyBaseMetadata, TaxonomyBaseReplaceResult, get_taxonomy_base_metadata,
-    replace_taxonomy_base_database,
-};
-pub use base_import::{
-    BaseImportExecutionResult, BaseImportIssue, BaseImportValidationResult, NameTypeCount,
-    ValidateBaseImportRequest, ValidateBaseImportResult, add_base_import_input, apply_base_import,
-    get_base_import_sql, list_base_import_inputs, remove_base_import_input, validate_base_import,
-    validate_base_import_with_progress,
+pub use direct_import::{
+    DirectImportDatabase, TaxonomyImportMetadata, TaxonomyImportResult, apply_direct_import,
+    get_taxonomy_import_metadata, inspect_direct_import_database,
 };
 pub use formatted::{
-    TaxonChange, TaxonChangeKind, TaxonInputRow, TaxonRank, TaxonRowOutcome, TaxonRowStatus,
-    PreparedTaxonomyUpdate, TaxonomyNameType, TaxonomyOperationResult, TaxonomyPreviewResult,
-    apply_prepared_rows, apply_rows, get_taxonomy_name_separator, list_operation_audit,
-    list_operations, parse_taxonomy_input_csv, prepare_rows, preview_rows, rollback_operation,
-    set_taxonomy_name_separator,
-    taxonomy_formatted_update_template, taxonomy_log_csv,
+    PreparedTaxonomyUpdate, TaxonChange, TaxonChangeKind, TaxonInputRow, TaxonRank,
+    TaxonRowOutcome, TaxonRowStatus, TaxonomyNameType, TaxonomyOperationResult,
+    TaxonomyPreviewResult, apply_prepared_rows, apply_rows, get_taxonomy_name_separator,
+    list_operation_audit, list_operations, parse_taxonomy_input_csv, prepare_rows, preview_rows,
+    rollback_operation, set_taxonomy_name_separator, taxonomy_formatted_update_template,
+    taxonomy_log_csv,
 };
 pub use operation_export::{
     export_all_replayable_inputs, export_operation_input, export_operations_input,
@@ -58,6 +52,12 @@ pub use sql::{
     SqlStatementMessage, SqlValue, add_custom_sql_input, execute_custom_taxonomy_sql,
     export_custom_taxonomy_query, get_custom_taxonomy_sql, list_custom_sql_inputs,
     remove_custom_sql_input,
+};
+pub use sql_import::{
+    NameTypeCount, SqlImportExecutionResult, SqlImportIssue, SqlImportValidationResult,
+    ValidateSqlImportRequest, ValidateSqlImportResult, add_sql_import_input, apply_sql_import,
+    get_sql_import_sql, list_sql_import_inputs, remove_sql_import_input, validate_sql_import,
+    validate_sql_import_with_progress,
 };
 pub use sql_inputs::{
     AddSqlInputRequest, AddSqlInputResult, PersistentSqlInput, RemoveSqlInputRequest,

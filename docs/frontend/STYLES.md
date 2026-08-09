@@ -12,7 +12,7 @@ theme, application shell, shared UI, and business-domain styles.
 | `shared.css` | Buttons, virtual collections, segmented controls, editor, modal, loading, and empty states. |
 | `photos.css` | Photo search, empty workspace, browsers, media, folder tree, detail view, map, and photo context menu. |
 | `mapping.css` | Mapping workspace, state badges, candidates, and editor layout. |
-| `taxonomy.css` | Taxon cards, taxonomy pages, formatted input, SQL results, and base import. |
+| `taxonomy.css` | Taxon cards, taxonomy pages, formatted input, SQL results, SQL Import, and Direct Import. |
 | `operations.css` | Operation summaries, audit rows, and history actions. |
 | `settings.css` | Settings navigation, storage, libraries, taxonomy databases, naming, map, and hook-test layouts. |
 

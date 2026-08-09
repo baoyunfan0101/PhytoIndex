@@ -3,10 +3,10 @@ use crate::taxonomy::{AddSqlInputRequest, RemoveSqlInputRequest, SqlInputKind};
 use crate::taxonomy::{TaxonInputRow, apply_rows, get_taxon_detail, list_operations};
 
 const SIMPLE_IMPORT_SQL: &str = r#"
-ATTACH DATABASE 'vividarium_base.db' AS base;
+ATTACH DATABASE 'vividarium_sql_import.db' AS sql_import;
 PRAGMA foreign_keys = ON;
 BEGIN IMMEDIATE;
-CREATE TABLE base.taxa (
+CREATE TABLE sql_import.taxa (
     taxon_id INTEGER PRIMARY KEY,
     parent_taxon_id INTEGER,
     rank INTEGER NOT NULL,
@@ -15,7 +15,7 @@ CREATE TABLE base.taxa (
     FOREIGN KEY (parent_taxon_id)
         REFERENCES taxa(taxon_id) ON DELETE RESTRICT
 );
-CREATE TABLE base.taxon_names (
+CREATE TABLE sql_import.taxon_names (
     name_id INTEGER PRIMARY KEY,
     taxon_id INTEGER NOT NULL,
     name_type INTEGER NOT NULL,
@@ -29,14 +29,14 @@ CREATE TABLE base.taxon_names (
     FOREIGN KEY (taxon_id)
         REFERENCES taxa(taxon_id) ON DELETE CASCADE
 );
-INSERT INTO base.taxa
+INSERT INTO sql_import.taxa
 SELECT CAST(taxon_id AS INTEGER), NULL, CAST(rank AS INTEGER), geological_range
 FROM source_taxa;
-INSERT INTO base.taxon_names
+INSERT INTO sql_import.taxon_names
 SELECT 1, CAST(taxon_id AS INTEGER), 1, name, NULL, NULL, 'test'
 FROM source_taxa;
 COMMIT;
-DETACH DATABASE base;
+DETACH DATABASE sql_import;
 "#;
 
 fn add_simple_input(directory: &tempfile::TempDir, database: &Database) {
@@ -46,7 +46,7 @@ fn add_simple_input(directory: &tempfile::TempDir, database: &Database) {
         "taxon_id,rank,name,geological_range\n101,1,Animalia,Recent\n",
     )
     .unwrap();
-    add_base_import_input(
+    add_sql_import_input(
         database,
         &AddSqlInputRequest {
             kind: SqlInputKind::Csv,
@@ -57,10 +57,10 @@ fn add_simple_input(directory: &tempfile::TempDir, database: &Database) {
     .unwrap();
 }
 
-fn execute_simple(database: &Database) -> BaseImportExecutionResult {
-    execute_base_import_sql(
+fn execute_simple(database: &Database) -> SqlImportExecutionResult {
+    execute_sql_import_sql(
         database,
-        &ValidateBaseImportRequest {
+        &ValidateSqlImportRequest {
             sql: SIMPLE_IMPORT_SQL.into(),
         },
     )
@@ -73,9 +73,9 @@ fn validate_executes_sql_and_builds_the_candidate_in_one_request() {
     let database = Database::open(directory.path().join("metadata.db")).unwrap();
     add_simple_input(&directory, &database);
 
-    let result = validate_base_import(
+    let result = validate_sql_import(
         &database,
-        &ValidateBaseImportRequest {
+        &ValidateSqlImportRequest {
             sql: SIMPLE_IMPORT_SQL.into(),
         },
     )
@@ -93,7 +93,7 @@ fn validate_executes_sql_and_builds_the_candidate_in_one_request() {
 }
 
 #[test]
-fn base_import_uses_the_configured_csv_delimiter() {
+fn sql_import_uses_the_configured_csv_delimiter() {
     let directory = tempfile::tempdir().unwrap();
     let database = Database::open(directory.path().join("metadata.db")).unwrap();
     crate::general::update_general_settings(
@@ -110,7 +110,7 @@ fn base_import_uses_the_configured_csv_delimiter() {
         "taxon_id;rank;name;geological_range\n101;1;Animalia;Recent\n",
     )
     .unwrap();
-    add_base_import_input(
+    add_sql_import_input(
         &database,
         &AddSqlInputRequest {
             kind: SqlInputKind::Csv,
@@ -119,9 +119,9 @@ fn base_import_uses_the_configured_csv_delimiter() {
         },
     )
     .unwrap();
-    let result = validate_base_import(
+    let result = validate_sql_import(
         &database,
-        &ValidateBaseImportRequest {
+        &ValidateSqlImportRequest {
             sql: SIMPLE_IMPORT_SQL.into(),
         },
     )
@@ -137,9 +137,9 @@ fn validate_reports_real_stages_and_sql_statement_progress() {
     add_simple_input(&directory, &database);
     let mut progress = Vec::new();
 
-    let result = validate_base_import_with_progress(
+    let result = validate_sql_import_with_progress(
         &database,
-        &ValidateBaseImportRequest {
+        &ValidateSqlImportRequest {
             sql: SIMPLE_IMPORT_SQL.into(),
         },
         &mut |event| progress.push(event),
@@ -201,9 +201,9 @@ fn validate_stops_after_sql_execution_failure() {
     let directory = tempfile::tempdir().unwrap();
     let database = Database::open(directory.path().join("metadata.db")).unwrap();
 
-    let error = validate_base_import(
+    let error = validate_sql_import(
         &database,
-        &ValidateBaseImportRequest {
+        &ValidateSqlImportRequest {
             sql: "SELECT * FROM missing_source;".into(),
         },
     )
@@ -236,9 +236,9 @@ fn persistent_inputs_and_successful_sql_survive_apply_and_reopen() {
     assert_eq!(execution.messages.len(), execution.statements_executed);
     assert!(execution.script_saved);
     assert!(execution.warnings.is_empty());
-    let validation = validate_base_import_candidate(&database).unwrap();
+    let validation = validate_sql_import_candidate(&database).unwrap();
     assert!(validation.can_apply, "{:?}", validation.errors);
-    let result = apply_base_import(&database).unwrap();
+    let result = apply_sql_import(&database).unwrap();
 
     assert_eq!(result.metadata.taxa_count, 1);
     assert!(result.warnings.is_empty());
@@ -259,8 +259,8 @@ fn persistent_inputs_and_successful_sql_survive_apply_and_reopen() {
             .items
             .is_empty()
     );
-    assert_eq!(list_base_import_inputs(&database).unwrap().len(), 1);
-    assert_eq!(get_base_import_sql(&database).unwrap(), SIMPLE_IMPORT_SQL);
+    assert_eq!(list_sql_import_inputs(&database).unwrap().len(), 1);
+    assert_eq!(get_sql_import_sql(&database).unwrap(), SIMPLE_IMPORT_SQL);
     let workspace = workspace(&database).unwrap();
     assert!(!workspace.join(STAGING_DATABASE).exists());
     assert!(!workspace.join(CANDIDATE_DATABASE).exists());
@@ -268,8 +268,8 @@ fn persistent_inputs_and_successful_sql_survive_apply_and_reopen() {
     drop(database);
 
     let database = Database::open(metadata_path).unwrap();
-    assert_eq!(list_base_import_inputs(&database).unwrap().len(), 1);
-    assert_eq!(get_base_import_sql(&database).unwrap(), SIMPLE_IMPORT_SQL);
+    assert_eq!(list_sql_import_inputs(&database).unwrap().len(), 1);
+    assert_eq!(get_sql_import_sql(&database).unwrap(), SIMPLE_IMPORT_SQL);
 }
 
 #[test]
@@ -278,23 +278,23 @@ fn execution_success_is_saved_even_when_validation_fails() {
     let database = Database::open(directory.path().join("metadata.db")).unwrap();
     add_simple_input(&directory, &database);
     let invalid_sql =
-        SIMPLE_IMPORT_SQL.replace("COMMIT;", "DELETE FROM base.taxon_names;\nCOMMIT;");
+        SIMPLE_IMPORT_SQL.replace("COMMIT;", "DELETE FROM sql_import.taxon_names;\nCOMMIT;");
 
-    execute_base_import_sql(
+    execute_sql_import_sql(
         &database,
-        &ValidateBaseImportRequest {
+        &ValidateSqlImportRequest {
             sql: invalid_sql.clone(),
         },
     )
     .unwrap();
-    let validation = validate_base_import_candidate(&database).unwrap();
+    let validation = validate_sql_import_candidate(&database).unwrap();
 
     assert!(!validation.valid);
     assert!(!validation.can_apply);
     assert_eq!(validation.errors[0].code, "invalid_sci_name_count");
     assert_eq!(validation.errors[0].taxon_id, Some(101));
-    assert!(apply_base_import(&database).is_err());
-    assert_eq!(get_base_import_sql(&database).unwrap(), invalid_sql);
+    assert!(apply_sql_import(&database).is_err());
+    assert_eq!(get_sql_import_sql(&database).unwrap(), invalid_sql);
 }
 
 #[test]
@@ -305,17 +305,17 @@ fn taxonomy_validation_failure_is_a_structured_result() {
     let invalid_sql = SIMPLE_IMPORT_SQL.replace(
         "COMMIT;",
         r#"
-INSERT INTO base.taxa (taxon_id, parent_taxon_id, rank)
+INSERT INTO sql_import.taxa (taxon_id, parent_taxon_id, rank)
 VALUES (202, 101, 1);
-INSERT INTO base.taxon_names (name_id, taxon_id, name_type, name)
+INSERT INTO sql_import.taxon_names (name_id, taxon_id, name_type, name)
 VALUES (2, 202, 1, 'Second kingdom');
 COMMIT;"#,
     );
 
     let mut progress = Vec::new();
-    let result = validate_base_import_with_progress(
+    let result = validate_sql_import_with_progress(
         &database,
-        &ValidateBaseImportRequest { sql: invalid_sql },
+        &ValidateSqlImportRequest { sql: invalid_sql },
         &mut |event| progress.push(event),
     )
     .unwrap();
@@ -347,14 +347,14 @@ fn normalized_name_conflicts_are_validation_results() {
     let invalid_sql = SIMPLE_IMPORT_SQL.replace(
         "COMMIT;",
         r#"
-INSERT INTO base.taxon_names (name_id, taxon_id, name_type, name)
+INSERT INTO sql_import.taxon_names (name_id, taxon_id, name_type, name)
 VALUES (2, 101, 2, 'Animalia  old'),
        (3, 101, 2, 'Animalia old');
 COMMIT;"#,
     );
 
     let result =
-        validate_base_import(&database, &ValidateBaseImportRequest { sql: invalid_sql }).unwrap();
+        validate_sql_import(&database, &ValidateSqlImportRequest { sql: invalid_sql }).unwrap();
 
     assert!(!result.validation.valid);
     assert_eq!(result.validation.errors[0].code, "duplicate_canonical_name");
@@ -368,16 +368,16 @@ fn failed_execution_does_not_replace_saved_sql() {
     add_simple_input(&directory, &database);
     execute_simple(&database);
 
-    let error = execute_base_import_sql(
+    let error = execute_sql_import_sql(
         &database,
-        &ValidateBaseImportRequest {
+        &ValidateSqlImportRequest {
             sql: "SELECT FROM".into(),
         },
     )
     .unwrap_err();
 
     assert!(!error.to_string().is_empty());
-    assert_eq!(get_base_import_sql(&database).unwrap(), SIMPLE_IMPORT_SQL);
+    assert_eq!(get_sql_import_sql(&database).unwrap(), SIMPLE_IMPORT_SQL);
 }
 
 #[test]
@@ -386,22 +386,22 @@ fn failed_execution_restores_existing_staging_and_validation() {
     let database = Database::open(directory.path().join("metadata.db")).unwrap();
     add_simple_input(&directory, &database);
     execute_simple(&database);
-    assert!(validate_base_import_candidate(&database).unwrap().can_apply);
+    assert!(validate_sql_import_candidate(&database).unwrap().can_apply);
 
-    execute_base_import_sql(
+    execute_sql_import_sql(
         &database,
-        &ValidateBaseImportRequest {
+        &ValidateSqlImportRequest {
             sql: "SELECT FROM".into(),
         },
     )
     .unwrap_err();
 
-    assert!(validate_base_import_candidate(&database).unwrap().can_apply);
-    assert_eq!(get_base_import_sql(&database).unwrap(), SIMPLE_IMPORT_SQL);
+    assert!(validate_sql_import_candidate(&database).unwrap().can_apply);
+    assert_eq!(get_sql_import_sql(&database).unwrap(), SIMPLE_IMPORT_SQL);
 }
 
 #[test]
-fn committed_base_import_sql_reports_script_save_failure_as_warning() {
+fn committed_sql_import_sql_reports_script_save_failure_as_warning() {
     let directory = tempfile::tempdir().unwrap();
     let database = Database::open(directory.path().join("metadata.db")).unwrap();
     add_simple_input(&directory, &database);
@@ -433,7 +433,7 @@ fn adding_input_returns_cleanup_warning_after_registry_commit() {
     let csv_path = directory.path().join("source.csv");
     fs::write(&csv_path, "taxon_id,name\n1,Animalia\n").unwrap();
 
-    let result = add_base_import_input(
+    let result = add_sql_import_input(
         &database,
         &AddSqlInputRequest {
             kind: SqlInputKind::Csv,
@@ -457,12 +457,12 @@ fn source_removal_invalidates_staging_validation_and_candidate() {
     let database = Database::open(directory.path().join("metadata.db")).unwrap();
     add_simple_input(&directory, &database);
     execute_simple(&database);
-    assert!(validate_base_import_candidate(&database).unwrap().can_apply);
+    assert!(validate_sql_import_candidate(&database).unwrap().can_apply);
     let workspace = workspace(&database).unwrap();
     assert!(workspace.join(STAGING_DATABASE).exists());
     assert!(workspace.join(CANDIDATE_DATABASE).exists());
 
-    let result = remove_base_import_input(
+    let result = remove_sql_import_input(
         &database,
         &RemoveSqlInputRequest {
             alias: "source_taxa".into(),
@@ -493,7 +493,7 @@ fn removing_input_returns_cleanup_warning_after_registry_commit() {
     fs::remove_file(&stored_path).unwrap();
     fs::create_dir(&stored_path).unwrap();
 
-    let result = remove_base_import_input(
+    let result = remove_sql_import_input(
         &database,
         &RemoveSqlInputRequest {
             alias: "source_taxa".into(),
@@ -514,7 +514,7 @@ fn source_removal_rejects_busy_workspace_and_missing_alias() {
     add_simple_input(&directory, &database);
     let workspace_mutex = workspace_mutex(&database).unwrap();
     let guard = lock_workspace(&workspace_mutex).unwrap();
-    let busy = remove_base_import_input(
+    let busy = remove_sql_import_input(
         &database,
         &RemoveSqlInputRequest {
             alias: "source_taxa".into(),
@@ -523,9 +523,9 @@ fn source_removal_rejects_busy_workspace_and_missing_alias() {
     .unwrap_err();
     assert!(busy.to_string().contains("workspace is busy"));
     drop(guard);
-    assert_eq!(list_base_import_inputs(&database).unwrap().len(), 1);
+    assert_eq!(list_sql_import_inputs(&database).unwrap().len(), 1);
 
-    let missing = remove_base_import_input(
+    let missing = remove_sql_import_input(
         &database,
         &RemoveSqlInputRequest {
             alias: "missing".into(),
@@ -533,7 +533,7 @@ fn source_removal_rejects_busy_workspace_and_missing_alias() {
     )
     .unwrap_err();
     assert!(missing.to_string().contains("SQL input missing"));
-    assert_eq!(list_base_import_inputs(&database).unwrap().len(), 1);
+    assert_eq!(list_sql_import_inputs(&database).unwrap().len(), 1);
 }
 
 #[test]
@@ -582,7 +582,7 @@ fn built_in_sql_reads_a_named_sqlite_input() {
         )
         .unwrap();
     drop(source);
-    add_base_import_input(
+    add_sql_import_input(
         &database,
         &AddSqlInputRequest {
             kind: SqlInputKind::Sqlite,
@@ -592,10 +592,10 @@ fn built_in_sql_reads_a_named_sqlite_input() {
     )
     .unwrap();
 
-    execute_base_import_sql(
+    execute_sql_import_sql(
         &database,
-        &ValidateBaseImportRequest {
-            sql: get_base_import_sql(&database).unwrap(),
+        &ValidateSqlImportRequest {
+            sql: get_sql_import_sql(&database).unwrap(),
         },
     )
     .unwrap();
@@ -619,18 +619,18 @@ fn built_in_sql_reads_a_named_sqlite_input() {
             (4, "Fallback alias B".into()),
         ]
     );
-    let validation = validate_base_import_candidate(&database).unwrap();
+    let validation = validate_sql_import_candidate(&database).unwrap();
     assert!(validation.can_apply, "{:?}", validation.errors);
     assert_eq!(validation.taxa_count, 2);
 }
 
 #[test]
-fn base_import_rejects_unregistered_attachments() {
+fn sql_import_rejects_unregistered_attachments() {
     let directory = tempfile::tempdir().unwrap();
     let database = Database::open(directory.path().join("metadata.db")).unwrap();
-    let error = execute_base_import_sql(
+    let error = execute_sql_import_sql(
         &database,
-        &ValidateBaseImportRequest {
+        &ValidateSqlImportRequest {
             sql: "ATTACH DATABASE 'other.db' AS other".into(),
         },
     )
@@ -644,7 +644,7 @@ fn external_staging_change_invalidates_apply() {
     let database = Database::open(directory.path().join("metadata.db")).unwrap();
     add_simple_input(&directory, &database);
     execute_simple(&database);
-    assert!(validate_base_import_candidate(&database).unwrap().can_apply);
+    assert!(validate_sql_import_candidate(&database).unwrap().can_apply);
     let workspace = workspace(&database).unwrap();
     Connection::open(workspace.join(STAGING_DATABASE))
         .unwrap()
@@ -654,7 +654,7 @@ fn external_staging_change_invalidates_apply() {
         )
         .unwrap();
 
-    let error = apply_base_import(&database).unwrap_err();
+    let error = apply_sql_import(&database).unwrap_err();
     assert!(error.to_string().contains("fingerprint is stale"));
     assert!(!workspace.join(CANDIDATE_DATABASE).exists());
 }
@@ -665,11 +665,11 @@ fn apply_returns_cleanup_warning_after_taxonomy_replacement() {
     let database = Database::open(directory.path().join("metadata.db")).unwrap();
     add_simple_input(&directory, &database);
     execute_simple(&database);
-    assert!(validate_base_import_candidate(&database).unwrap().can_apply);
+    assert!(validate_sql_import_candidate(&database).unwrap().can_apply);
     let workspace = workspace(&database).unwrap();
     fs::create_dir(workspace.join(CANDIDATE_BUILD_DATABASE)).unwrap();
 
-    let result = apply_base_import(&database).unwrap();
+    let result = apply_sql_import(&database).unwrap();
 
     assert_eq!(result.metadata.taxa_count, 1);
     assert_eq!(result.warnings.len(), 1);

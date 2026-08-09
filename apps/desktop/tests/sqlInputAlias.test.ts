@@ -19,6 +19,7 @@ test("suggests an editable SQL alias from the selected filename", () => {
 test("avoids existing and reserved SQL aliases", () => {
   assert.equal(suggestedSqlInputAlias("/data/source.db", [input("source")]), "source_2");
   assert.equal(suggestedSqlInputAlias("/data/main.db", []), "main_2");
+  assert.equal(suggestedSqlInputAlias("/data/sql_import.db", []), "sql_import_2");
 });
 
 test("validates edited SQL aliases before import", () => {

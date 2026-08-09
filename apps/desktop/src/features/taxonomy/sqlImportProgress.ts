@@ -13,7 +13,7 @@ const stageLabels: Record<string, string> = {
   operational_failure: "Validation could not be completed",
 };
 
-export function describeBaseImportProgress(progress: OperationProgress | null): string {
+export function describeSqlImportProgress(progress: OperationProgress | null): string {
   if (!progress) return "Preparing input sources";
   const label = stageLabels[progress.stage] ?? progress.stage.replace(/_/g, " ");
   if (

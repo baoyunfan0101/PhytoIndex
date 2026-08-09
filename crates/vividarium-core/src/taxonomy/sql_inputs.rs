@@ -55,21 +55,21 @@ pub struct RemoveSqlInputResult {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SqlInputScope {
     CustomSql,
-    BaseImport,
+    SqlImport,
 }
 
 impl SqlInputScope {
     const fn code(self) -> i64 {
         match self {
             Self::CustomSql => 1,
-            Self::BaseImport => 2,
+            Self::SqlImport => 2,
         }
     }
 
     const fn directory(self) -> &'static str {
         match self {
             Self::CustomSql => "custom-sql",
-            Self::BaseImport => "base-import",
+            Self::SqlImport => "sql-import",
         }
     }
 }
@@ -310,7 +310,7 @@ fn validate_alias(alias: &str) -> CoreResult<()> {
     }
     if matches!(
         alias.to_ascii_lowercase().as_str(),
-        "main" | "temp" | "base" | "metadata" | "taxonomy" | "active_photo_library"
+        "main" | "temp" | "sql_import" | "metadata" | "taxonomy" | "active_photo_library"
     ) {
         return Err(CoreError::InvalidArgument(format!(
             "reserved SQL input alias: {alias}"
@@ -445,7 +445,7 @@ mod tests {
 
         add_input(
             &database,
-            SqlInputScope::BaseImport,
+            SqlInputScope::SqlImport,
             &AddSqlInputRequest {
                 kind: SqlInputKind::Sqlite,
                 alias: "source".into(),
@@ -456,7 +456,7 @@ mod tests {
         assert!(
             add_input(
                 &database,
-                SqlInputScope::BaseImport,
+                SqlInputScope::SqlImport,
                 &AddSqlInputRequest {
                     kind: SqlInputKind::Csv,
                     alias: "source".into(),
@@ -466,7 +466,7 @@ mod tests {
             .is_err()
         );
         assert_eq!(
-            fs::read_dir(input_directory(&database, SqlInputScope::BaseImport))
+            fs::read_dir(input_directory(&database, SqlInputScope::SqlImport))
                 .unwrap()
                 .count(),
             1

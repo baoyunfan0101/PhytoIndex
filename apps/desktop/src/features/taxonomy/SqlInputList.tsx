@@ -1,7 +1,7 @@
 import { DatabasePlus, FilePlusCorner, LoaderCircle, Table2, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { selectCsvFile, selectSqliteDatabase } from "../../api/dialogs";
-import type { PersistentSqlInput } from "../../api/customSql";
+import type { PersistentSqlInput, SqlSourceSchema } from "../../api/customSql";
 import { Button, IconButton, Modal } from "../../shared/ui";
 import { sqlInputAliasError, suggestedSqlInputAlias } from "./sqlInputAlias";
 
@@ -67,7 +67,7 @@ export function SqlInputList({
       {inputs.map((input) => {
         const removing = operation === `Removing ${input.alias}`;
         return (
-          <section className="base-source" key={input.alias} aria-busy={removing}>
+          <section className="sql-source-card" key={input.alias} aria-busy={removing}>
             <header>
               <span><b>{input.alias}</b><i>{input.kind.toUpperCase()}</i></span>
               <IconButton
@@ -84,14 +84,7 @@ export function SqlInputList({
             <small className={input.available ? "available" : "unavailable"}>
               {input.available ? "Stored copy available" : "Stored copy unavailable"}
             </small>
-            {input.schema.objects.map((object) => (
-              <details key={`${input.alias}:${object.name}`}>
-                <summary><Table2 size={12} />{object.name}</summary>
-                {object.columns.map((column) => (
-                  <span key={column.name}>{column.name}<i>{column.declared_type ?? "untyped"}</i></span>
-                ))}
-              </details>
-            ))}
+            <SqlSourceSchemaObjects schema={input.schema} />
           </section>
         );
       })}
@@ -135,4 +128,15 @@ export function SqlInputList({
       )}
     </aside>
   );
+}
+
+export function SqlSourceSchemaObjects({ schema }: { schema: SqlSourceSchema }) {
+  return schema.objects.map((object) => (
+    <details key={`${object.object_type}:${object.name}`}>
+      <summary><Table2 size={12} />{object.name}</summary>
+      {object.columns.map((column) => (
+        <span key={column.name}>{column.name}<i>{column.declared_type ?? "untyped"}</i></span>
+      ))}
+    </details>
+  ));
 }

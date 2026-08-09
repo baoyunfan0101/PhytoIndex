@@ -1,16 +1,16 @@
 import { LoaderCircle, Send, ShieldCheck } from "lucide-react";
 import { useEffect, useState } from "react";
 import {
-  addBaseImportInput,
-  applyBaseImport,
-  getBaseImportSql,
-  listBaseImportInputs,
-  removeBaseImportInput,
-  startBaseImportValidation,
-  type BaseImportValidationResult,
-  type TaxonomyBaseReplaceResult,
-  type ValidateBaseImportResult,
-} from "../../api/baseImport";
+  addSqlImportInput,
+  applySqlImport,
+  getSqlImportSql,
+  listSqlImportInputs,
+  removeSqlImportInput,
+  startSqlImportValidation,
+  type SqlImportValidationResult,
+  type ValidateSqlImportResult,
+} from "../../api/sqlImport";
+import type { TaxonomyImportResult } from "../../api/taxonomyImport";
 import type { PersistentSqlInput } from "../../api/customSql";
 import { errorMessage } from "../../api/common";
 import { waitForOperation } from "../../api/tasks";
@@ -19,13 +19,13 @@ import { ResizablePanels } from "../../shared/ResizablePanels";
 import { Button, Modal, SectionHeader, VirtualList } from "../../shared/ui";
 import { SqlInputList } from "./SqlInputList";
 import { emitTaxonomyMutation } from "./taxonomyMutations";
-import { formatBaseImportApplyMessage } from "./baseImportMessages";
+import { formatTaxonomyImportApplyMessage } from "./taxonomyImportMessages";
 import { resolveSqlWorkbenchLoads } from "./sqlWorkbenchLoading";
 
-export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
+export function SqlImportSettings({ onApplied }: { onApplied?: () => void }) {
   const [inputs, setInputs] = useState<PersistentSqlInput[]>([]);
   const [sql, setSql] = useState("");
-  const [validation, setValidation] = useState<BaseImportValidationResult | null>(null);
+  const [validation, setValidation] = useState<SqlImportValidationResult | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState("");
   const [message, setMessage] = useState("");
@@ -33,7 +33,7 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
   const [loadingWorkbench, setLoadingWorkbench] = useState(true);
 
   useEffect(() => {
-    void Promise.allSettled([getBaseImportSql(), listBaseImportInputs()])
+    void Promise.allSettled([getSqlImportSql(), listSqlImportInputs()])
       .then(([sqlResult, inputsResult]) => {
         const loaded = resolveSqlWorkbenchLoads(sqlResult, inputsResult);
         if (loaded.sql !== undefined) setSql(loaded.sql);
@@ -48,7 +48,7 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
     setMessage("");
     setError("");
     try {
-      const result = await addBaseImportInput(kind, alias, path);
+      const result = await addSqlImportInput(kind, alias, path);
       setInputs(result.inputs);
       setValidation(null);
       setMessage(result.warnings.length > 0 ? result.warnings.join(" ") : "Data source added.");
@@ -60,18 +60,18 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
   }
 
   async function validate() {
-    setBusy("Validating base import");
+    setBusy("Validating SQL import");
     setMessage("");
     setError("");
     setValidation(null);
     try {
-      const started = await startBaseImportValidation(sql);
+      const started = await startSqlImportValidation(sql);
       const completed = started.task_id
-        ? await waitForOperation("base_import", started.task_id)
+        ? await waitForOperation("sql_import", started.task_id)
         : started;
       if (completed.error) throw new Error(completed.error);
-      const result = completed.result as ValidateBaseImportResult | null;
-      if (!result) throw new Error("Base import validation completed without a result");
+      const result = completed.result as ValidateSqlImportResult | null;
+      if (!result) throw new Error("SQL import validation completed without a result");
       setValidation(result.validation);
       const saveStatus = result.execution.script_saved ? "SQL saved." : "SQL was not saved.";
       setMessage([
@@ -90,20 +90,20 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
   }
 
   async function apply() {
-    setBusy("Applying base import");
+    setBusy("Applying SQL import");
     setMessage("");
     setError("");
     try {
-      const operation = await applyBaseImport();
+      const operation = await applySqlImport();
       const completed = await waitForOperation(operation.module, operation.task_id);
       if (completed.error) throw new Error(completed.error);
-      const result = completed.result as TaxonomyBaseReplaceResult | null;
-      if (!result) throw new Error("Base import completed without a replacement result");
+      const result = completed.result as TaxonomyImportResult | null;
+      if (!result) throw new Error("SQL import completed without a replacement result");
       setValidation(null);
       setConfirming(false);
       onApplied?.();
       emitTaxonomyMutation({ kind: "replacement" });
-      setMessage(formatBaseImportApplyMessage(result.warnings));
+      setMessage(formatTaxonomyImportApplyMessage(result.warnings));
     } catch (nextError) {
       setMessage("");
       setError(errorMessage(nextError));
@@ -123,7 +123,7 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
     setMessage("");
     setError("");
     try {
-      const result = await removeBaseImportInput(input.alias);
+      const result = await removeSqlImportInput(input.alias);
       setInputs(result.inputs);
       setValidation(null);
       setMessage(result.warnings.length > 0 ? result.warnings.join(" ") : "Data source removed.");
@@ -137,36 +137,36 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
   const primary = (
     <div className="sql-workbench-primary">
       <ResizablePanels
-        className="base-import-workbench"
+        className="sql-import-workbench"
         initialSize={250}
         minFirst={180}
         minSecond={320}
         separatorLabel="Resize Input sources"
-        stateKey="base-import.inputs"
+        stateKey="sql-import.inputs"
         first={<SqlInputList inputs={inputs} busy={Boolean(busy) || loadingWorkbench} operation={busy} onAdd={addInput} onRemove={removeInput} />}
-        second={(<div className="base-import-editor">
-          <CodeEditor language="sql" ariaLabel="Base import SQL" value={sql} onChange={(value) => {
+        second={(<div className="sql-import-editor">
+          <CodeEditor language="sql" ariaLabel="SQL import SQL" value={sql} onChange={(value) => {
             setSql(value);
             setValidation(null);
           }} />
         </div>)}
       />
       {error ? (
-        <div className="inline-error base-import-status" role="alert">{error}</div>
+        <div className="inline-error sql-import-status" role="alert">{error}</div>
       ) : loadingWorkbench ? (
-        <div className="base-import-progress" role="status" aria-live="polite">
+        <div className="sql-import-progress" role="status" aria-live="polite">
           <LoaderCircle className="spin" size={15} />
           <strong>Loading taxonomy database workspace...</strong>
         </div>
       ) : message ? (
-        <div className="editor-message base-import-status">{message}</div>
+        <div className="editor-message sql-import-status">{message}</div>
       ) : null}
     </div>
   );
 
   const output = validation ? (
-    <div className="base-validation">
-      <div className="base-metadata-grid">
+    <div className="sql-import-validation">
+      <div className="sql-import-metadata-grid">
         <Metric label="Candidate taxa" value={String(validation.taxa_count)} />
         <Metric label="Normalization changes" value={String(validation.normalization_changes)} />
         <Metric label="Warnings" value={String(validation.total_warning_count)} />
@@ -191,14 +191,14 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
   ) : null;
 
   return (
-    <div className="base-import-settings">
+    <div className="sql-import-settings">
       <SectionHeader
         title="SQL Import"
         detail="Build, validate, and apply a replacement taxonomy database."
         actions={(
           <>
             <Button disabled={Boolean(busy) || loadingWorkbench || !sql.trim()} onClick={() => void validate()}>
-              <ShieldCheck size={13} />{busy === "Validating base import" ? "Validating..." : "Validate"}
+              <ShieldCheck size={13} />{busy === "Validating SQL import" ? "Validating..." : "Validate"}
             </Button>
             <Button variant="primary" disabled={Boolean(busy) || loadingWorkbench || !validation?.can_apply} onClick={() => setConfirming(true)}>
               <Send size={13} />Apply
@@ -214,20 +214,20 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
           minFirst={250}
           minSecond={150}
           separatorLabel="Resize validation output"
-          stateKey="base-import.output"
+          stateKey="sql-import.output"
           first={primary}
           second={output}
         />
       ) : primary}
       {confirming && (
         <Modal
-          title="Apply base import"
+          title="Apply SQL import"
           onClose={() => !busy && setConfirming(false)}
           actions={(
             <>
               <Button disabled={Boolean(busy)} onClick={() => setConfirming(false)}>Cancel</Button>
               <Button variant="primary" disabled={Boolean(busy)} onClick={() => void apply()}>
-                {busy === "Applying base import" ? "Applying..." : "Replace taxonomy"}
+                {busy === "Applying SQL import" ? "Applying..." : "Replace taxonomy"}
               </Button>
             </>
           )}
@@ -244,7 +244,7 @@ function Metric({ label, value }: { label: string; value: string }) {
   return <div><span>{label}</span><strong title={value}>{value}</strong></div>;
 }
 
-function issueContext(issue: BaseImportValidationResult["errors"][number]): string {
+function issueContext(issue: SqlImportValidationResult["errors"][number]): string {
   const context = [];
   if (issue.taxon_id !== null) context.push(`Taxon ${issue.taxon_id}`);
   if (issue.related_taxon_id !== null) context.push(`Related taxon ${issue.related_taxon_id}`);

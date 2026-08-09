@@ -23,18 +23,6 @@
 .general-checkbox-row input[type="checkbox"] { justify-self: auto; }
 .setting-row { display: grid; grid-template-columns: 220px 1fr; gap: 20px; padding: 12px; border-bottom: 1px solid var(--line); }
 .setting-row span { color: var(--muted); }
-.base-database-action {
-  display: grid;
-  grid-template-columns: minmax(220px, 1fr) auto auto;
-  gap: 8px;
-  align-items: center;
-  margin: 16px 12px;
-  padding: 14px;
-  border: 1px solid var(--line);
-  background: var(--panel);
-}
-.base-database-action > div { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
-.base-database-action span { overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
 .priority-list { margin: 0 12px; border: 1px solid var(--line); }
 .priority-list > div { display: grid; height: 34px; grid-template-columns: 32px 1fr 30px 30px; align-items: center; border-bottom: 1px solid var(--line); }
 .priority-list b { color: var(--quiet); text-align: center; }

@@ -14,7 +14,9 @@ owns one backend domain, its request types, and response types.
 | `taxonomy` | Taxon views, search, suggestions, children, taxon photos, formatted input, staged preview tokens, and prepared apply. |
 | `operations` | Photo and taxonomy operation summaries, audit pages, rollback, and single or selected-operation CSV exports to an absolute destination path. |
 | `customSql` | Custom SQL execution, result sets, managed SQL inputs, and full-query export. |
-| `baseImport` | SQL base-import workspace, validation, apply, direct SQLite replacement, metadata, and managed inputs. |
+| `sqlImport` | SQL Import workspace, validation, apply, and managed inputs. |
+| `directImport` | Direct Import database inspection and confirmed replacement. |
+| `taxonomyImport` | Shared taxonomy import metadata and result types. |
 | `general` | Application-wide theme, workspace, search, taxon-tree display, and CSV delimiter settings. |
 | `storage` | Database locations, Taxonomy Database selection, Photo Library registration, and file-manager opening for displayed storage paths. |
 | `settings` | Naming settings, Rhai hooks, hook tests, and taxonomy name separator. |
@@ -44,11 +46,13 @@ Mutating calls return the committed backend result or an operation handle.
 Feature code uses the returned state as authoritative and presents warnings
 without converting a committed operation into a failure.
 
-Base Import validation returns a `base_import` operation handle. Its structured
+SQL Import validation returns a `sql_import` operation handle. Its structured
 progress contains a stage and optional row counts or SQL statement indexes.
 The completed result distinguishes a valid candidate from structured taxonomy
 validation issues; execution failures remain operation errors.
-Direct SQLite replacement also returns a `base_import` operation handle. Its
-completed result is `TaxonomyBaseReplaceResult`; schema, integrity, and
-taxonomy validation failures are operation errors and leave the current
-taxonomy unchanged.
+Direct Import first calls `inspect_direct_import_database`, which performs a
+read-only validation and returns the normalized path plus table and column
+metadata. It does not replace the current taxonomy. Only the subsequent
+`apply_direct_import` call starts a `direct_import` operation. Its completed
+result is `TaxonomyImportResult`; schema, integrity, and taxonomy validation
+failures are operation errors and leave the current taxonomy unchanged.

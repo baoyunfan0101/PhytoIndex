@@ -191,7 +191,7 @@ synchronization.
 
 ## Custom SQL
 
-Custom SQL and Base Import use persistent SQL inputs. `SqlInputKind` is `csv`
+Custom SQL and SQL Import use persistent SQL inputs. `SqlInputKind` is `csv`
 or `sqlite`. SQLite inputs are read through `alias.object`; CSV inputs are
 read as a table named by the alias. Aliases must be valid SQLite identifiers
 and cannot use reserved database names. CSV source inspection and loading use
@@ -205,7 +205,7 @@ the application-wide CSV delimiter.
 | `PersistentSqlInput` | `kind`, `alias`, `original_path`, `available`, `schema` | Registered source, managed-copy availability, and inspected schema. |
 | `RemoveSqlInputResult` | `inputs`, `warnings` | Authoritative remaining sources and noncritical cleanup warnings. |
 
-Custom SQL and Base Import keep separate source registries. Sources persist
+Custom SQL and SQL Import keep separate source registries. Sources persist
 across database reopen until explicitly removed. Once registry removal
 commits, managed-file cleanup errors are warnings and do not change success.
 
@@ -261,49 +261,49 @@ application-wide delimiter.
 Desktop source removal, SQL execution, and query export commands execute file
 and database work on blocking workers and resolve asynchronously.
 
-## Base database
+## Taxonomy imports
 
-`TaxonomyBaseMetadata` contains `source_path`, `taxa_count`,
+`TaxonomyImportMetadata` contains `source_path`, `taxa_count`,
 `taxon_names_count`, and `imported_at`.
-`TaxonomyBaseReplaceResult` contains the resulting `metadata` and noncritical
+`TaxonomyImportResult` contains the resulting `metadata` and noncritical
 cleanup `warnings`.
 
-### Base import types
+### SQL Import types
 
 | Type | Fields |
 | --- | --- |
-| `ValidateBaseImportRequest` | `sql` |
-| `BaseImportExecutionResult` | `statements_executed`, `messages`, `script_saved`, `warnings` |
+| `ValidateSqlImportRequest` | `sql` |
+| `SqlImportExecutionResult` | `statements_executed`, `messages`, `script_saved`, `warnings` |
 | `NameTypeCount` | `name_type`, `count` |
-| `BaseImportIssue` | `code`, `message`, `taxon_id`, `related_taxon_id`, `table`, `row_identifier` |
-| `BaseImportValidationResult` | `valid`, `can_apply`, `taxa_count`, `name_counts`, `normalization_changes`, `total_warning_count`, `total_error_count`, `warnings`, `errors` |
-| `ValidateBaseImportResult` | `execution`, `validation`, `warnings`, `can_apply` |
+| `SqlImportIssue` | `code`, `message`, `taxon_id`, `related_taxon_id`, `table`, `row_identifier` |
+| `SqlImportValidationResult` | `valid`, `can_apply`, `taxa_count`, `name_counts`, `normalization_changes`, `total_warning_count`, `total_error_count`, `warnings`, `errors` |
+| `ValidateSqlImportResult` | `execution`, `validation`, `warnings`, `can_apply` |
 
 Validation returns at most 100 warning and error samples while the total count
 fields remain authoritative.
 
-### Base import interfaces
+### SQL Import interfaces
 
 | Function | Parameters after `database` | Return |
 | --- | --- | --- |
-| `get_base_import_sql` | none | Last successful SQL, or the initial built-in script `String` |
-| `list_base_import_inputs` | none | `Vec<PersistentSqlInput>` |
-| `add_base_import_input` | `request: &AddSqlInputRequest` | `AddSqlInputResult` |
-| `remove_base_import_input` | `request: &RemoveSqlInputRequest` | `RemoveSqlInputResult` |
-| `validate_base_import` | `request: &ValidateBaseImportRequest` | `ValidateBaseImportResult` |
-| `validate_base_import_with_progress` | `request: &ValidateBaseImportRequest`, `progress: &mut FnMut(OperationProgress)` | `ValidateBaseImportResult` |
-| `apply_base_import` | none | `TaxonomyBaseReplaceResult` |
+| `get_sql_import_sql` | none | Last successful SQL, or the initial built-in script `String` |
+| `list_sql_import_inputs` | none | `Vec<PersistentSqlInput>` |
+| `add_sql_import_input` | `request: &AddSqlInputRequest` | `AddSqlInputResult` |
+| `remove_sql_import_input` | `request: &RemoveSqlInputRequest` | `RemoveSqlInputResult` |
+| `validate_sql_import` | `request: &ValidateSqlImportRequest` | `ValidateSqlImportResult` |
+| `validate_sql_import_with_progress` | `request: &ValidateSqlImportRequest`, `progress: &mut FnMut(OperationProgress)` | `ValidateSqlImportResult` |
+| `apply_sql_import` | none | `TaxonomyImportResult` |
 
-Base Import has one fixed workspace. Persistent inputs and the last successful
+SQL Import has one fixed workspace. Persistent inputs and the last successful
 SQL outlive tabs, application restarts, and successful Apply. Adding or
 removing an input, validating new SQL, or recreating staging
 invalidates the prior staging-dependent candidate and validation state.
 Removal is rejected while another operation holds the workspace lock.
 
-Validate first executes Base Import SQL, which can read the isolated source
+Validate first executes SQL Import SQL, which can read the isolated source
 and can attach only the
-backend-selected `vividarium_base.db` path with the `base` alias. It may create
-and mutate staging objects only in `base`; the execution result never creates
+backend-selected `vividarium_sql_import.db` path with the `sql_import` alias. It may create
+and mutate staging objects only in `sql_import`; the execution result never creates
 a taxonomy operation or returns Custom SQL result sets. It reports only
 per-statement messages or a syntax/runtime error. After a fully successful
 script commits, script persistence is attempted separately. Save failure is
@@ -325,33 +325,49 @@ name normalization, candidate taxa and names, taxonomy validation, and the
 terminal validation result. Missing counts mean that only the stage is known;
 they do not represent a percentage.
 
-`apply_base_import` accepts only the latest successfully validated candidate.
+`apply_sql_import` accepts only the latest successfully validated candidate.
 Successful replacement assigns a new taxonomy identity, clears taxonomy
 history, and marks every registered photo library for a full remap. It removes
 staging, candidate, and validation artifacts while retaining inputs and SQL.
 Post-commit cleanup failures are warnings and are queued for later retry. A
 failed validation or replacement leaves the current taxonomy unchanged.
 
-### Direct base database replacement
+### Direct Import types
+
+| Type | Fields |
+| --- | --- |
+| `DirectImportDatabase` | `source_path`, `schema` |
+
+`schema` is a `SqlSourceSchema` containing the inspection alias and every
+visible table or view with its columns.
+
+### Direct Import interfaces
 
 | Function | Parameters after `database` | Return |
 | --- | --- | --- |
-| `get_taxonomy_base_metadata` | none | `Option<TaxonomyBaseMetadata>` |
-| `replace_taxonomy_base_database` | `source_path: &Path` | `TaxonomyBaseReplaceResult` |
+| `get_taxonomy_import_metadata` | none | `Option<TaxonomyImportMetadata>` |
+| `inspect_direct_import_database` | `source_path: &Path` | `DirectImportDatabase` |
+| `apply_direct_import` | `source_path: &Path` | `TaxonomyImportResult` |
 
 The supplied SQLite file must contain valid `taxa` and `taxon_names` data
 using the current schema. Imported names pass through the shared canonical
-normalizer. Successful replacement creates a new taxonomy identity, clears
+normalizer. `inspect_direct_import_database` validates the file, rejects the
+active taxonomy database as an input, and returns its canonical path and
+schema without changing application data. `apply_direct_import` repeats
+validation so a file changed after inspection cannot bypass the checks.
+Successful replacement creates a new taxonomy identity, clears
 taxonomy user history, and causes every registered photo library to rebuild
 mapping state when synchronized. Immediate synchronization and mapping of the
 active photo library are best-effort follow-up work; no active library or an
 unavailable library does not change a successful replacement result.
 
-The desktop `replace_taxonomy_base_database` command accepts
-`source_path: String` and returns a `base_import` `OperationState`. It validates
-and replaces the database on a blocking worker, returns validation or file
-failures through the completed operation error, and schedules taxonomy/photo
-synchronization only after replacement commits.
+The desktop `inspect_direct_import_database` command accepts
+`source_path: String`, runs on a blocking worker, and returns
+`DirectImportDatabase` directly. The desktop `apply_direct_import` command
+accepts `source_path: String` and returns a `direct_import` `OperationState`.
+It validates and replaces the database on a blocking worker, returns validation
+or file failures through the completed operation error, and schedules
+taxonomy/photo synchronization only after replacement commits.
 
 ## Photo-library synchronization
 

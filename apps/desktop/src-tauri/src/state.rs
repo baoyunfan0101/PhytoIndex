@@ -176,7 +176,7 @@ pub struct OperationManager {
 
 impl OperationManager {
     fn new() -> Self {
-        let states = ["photos", "mapping", "base_import"]
+        let states = ["photos", "mapping", "sql_import", "direct_import"]
             .into_iter()
             .map(|module| (module.to_string(), idle_state(module)))
             .collect();
@@ -343,7 +343,13 @@ fn idle_state(module: &str) -> OperationState {
 
 fn blocked_by(states: &BTreeMap<String, OperationState>, module: &str) -> Option<String> {
     states.iter().find_map(|(other, state)| {
-        (state.running && (module == other || module == "mapping" || other == "mapping"))
+        let taxonomy_import_conflict = matches!(module, "sql_import" | "direct_import")
+            && matches!(other.as_str(), "sql_import" | "direct_import");
+        (state.running
+            && (module == other
+                || module == "mapping"
+                || other == "mapping"
+                || taxonomy_import_conflict))
             .then(|| other.clone())
     })
 }
@@ -375,9 +381,9 @@ mod tests {
         let manager = OperationManager::new();
         {
             let mut states = manager.states.lock().unwrap();
-            let state = states.get_mut("base_import").unwrap();
+            let state = states.get_mut("sql_import").unwrap();
             state.task_id = Some("validate-1".into());
-            state.operation = Some("validate_base_import".into());
+            state.operation = Some("validate_sql_import".into());
             state.running = true;
         }
         let progress = OperationProgress {
@@ -389,7 +395,7 @@ mod tests {
         };
 
         let state = manager
-            .update_progress("base_import", "validate-1", &progress, true)
+            .update_progress("sql_import", "validate-1", &progress, true)
             .unwrap();
 
         assert_eq!(state.message, "executing_sql");
@@ -399,13 +405,30 @@ mod tests {
     }
 
     #[test]
-    fn a_base_import_operation_blocks_another_base_import_operation() {
+    fn a_sql_import_operation_blocks_another_sql_import_operation() {
         let mut states = OperationManager::new().status();
-        states.get_mut("base_import").unwrap().running = true;
+        states.get_mut("sql_import").unwrap().running = true;
 
         assert_eq!(
-            blocked_by(&states, "base_import").as_deref(),
-            Some("base_import")
+            blocked_by(&states, "sql_import").as_deref(),
+            Some("sql_import")
+        );
+    }
+
+    #[test]
+    fn sql_and_direct_import_operations_block_each_other() {
+        let mut states = OperationManager::new().status();
+        states.get_mut("sql_import").unwrap().running = true;
+        assert_eq!(
+            blocked_by(&states, "direct_import").as_deref(),
+            Some("sql_import")
+        );
+
+        states.get_mut("sql_import").unwrap().running = false;
+        states.get_mut("direct_import").unwrap().running = true;
+        assert_eq!(
+            blocked_by(&states, "sql_import").as_deref(),
+            Some("direct_import")
         );
     }
 
