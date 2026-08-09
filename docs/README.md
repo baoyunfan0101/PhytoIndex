@@ -1,4 +1,16 @@
-# Backend API Documentation
+# Vividarium Documentation
+
+## Start here
+
+| Guide | Purpose |
+| --- | --- |
+| [Project README](../README.md) | User-facing overview, installation, quick start, data sources, privacy, and development commands. |
+| [Architecture](ARCHITECTURE.md) | Frontend, desktop adapter, core service, storage, and mutation boundaries. |
+| [Desktop Frontend](DESKTOP.md) | Index of React application and feature-domain contracts. |
+| [Building and Releasing](BUILDING.md) | Local packages, signing variables, verification, and GitHub release workflow. |
+| [Changelog](../CHANGELOG.md) | Release-level added, changed, fixed, and removed behavior. |
+
+## Backend API contracts
 
 The Rust backend is exposed through `vividarium_core`. Public interfaces are
 grouped by domain:
@@ -16,10 +28,6 @@ grouped by domain:
 | `error` | `CoreError` and the `CoreResult<T>` return type used by core interfaces. |
 
 Desktop updater commands are documented in [UPDATING.md](UPDATING.md).
-Desktop frontend domains and their public component contracts are documented
-in [DESKTOP.md](DESKTOP.md).
-Build and release procedures are documented separately in
-[BUILDING.md](BUILDING.md).
 
 Backend API documents describe only public models and callable interfaces.
 Implementation files, private helpers, database connection composition, and

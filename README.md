@@ -1,146 +1,169 @@
+<div align="center">
+
+<img src="assets/branding/vividarium-logo.svg" alt="Vividarium" width="112" height="112">
+
 # Vividarium
 
-Vividarium is a local-first desktop application for indexing biological photos, managing a taxonomy knowledge base, and mapping photos to taxa.
+### A local-first desktop workbench for biological photo libraries and taxonomy
 
-Current development version: `v3.0.0`
+[![Release](https://img.shields.io/github/v/release/baoyunfan0101/Vividarium?display_name=tag&sort=semver&label=version)](https://github.com/baoyunfan0101/Vividarium/releases)
+[![Downloads](https://img.shields.io/github/downloads/baoyunfan0101/Vividarium/total)](https://github.com/baoyunfan0101/Vividarium/releases/latest)
+[![Platform](https://img.shields.io/badge/platform-macOS%20Apple%20Silicon%20%7C%20Windows%20x64-lightgrey)](https://github.com/baoyunfan0101/Vividarium/releases)
+[![Built with Tauri](https://img.shields.io/badge/built%20with-Tauri%202-orange)](https://tauri.app/)
+[![License](https://img.shields.io/github/license/baoyunfan0101/Vividarium)](LICENSE)
 
-Vividarium is a Tauri 2 desktop application. The user interface uses React and TypeScript, while application services, SQLite access, file scanning, and imports run in Rust.
+[Download](https://github.com/baoyunfan0101/Vividarium/releases/latest) | [Changelog](CHANGELOG.md) | [Documentation](docs/README.md)
 
-## Supported Platforms
+</div>
 
-| Platform | Minimum system | Release artifact | First launch |
+## Why Vividarium?
+
+Biological photo collections often combine three different kinds of information: files on disk, taxonomy data, and names encoded in filenames. Keeping those sources aligned becomes difficult as a collection grows, taxonomy changes, or several photo libraries need to share one knowledge base.
+
+Vividarium brings that work into one native desktop application:
+
+- **Photo libraries** - register independent libraries, browse folders and thumbnails, inspect metadata, and keep original files local.
+- **Taxonomy workbench** - search and navigate taxa, edit name groups, run formatted updates, or replace a taxonomy through SQL Import or Direct Import.
+- **Photo-to-taxon mapping** - match configurable filename fields against scientific, Chinese, and English names, review ambiguous results, and override mappings explicitly.
+- **Consistent rename tools** - rename one photo or a directory selection from accepted taxonomy names with audit history and rollback.
+- **Large-library navigation** - cursor-paged lists, virtualized views, resizable workbenches, keyboard navigation, and map browsing for geotagged photos.
+- **Local-first operation** - SQLite databases, thumbnails, metadata, and operation history remain on the user's computer.
+
+## Highlights
+
+### Browse and inspect photos
+
+- Folder tree, photographed taxon tree, global search, taxon Photo Sets, and MapLibre map.
+- Synchronized list, thumbnail grid, and full-image selection.
+- Copyable EXIF and file metadata, native file-manager actions, and shared photo context menus.
+
+### Build and maintain taxonomy
+
+- Scientific, synonym, Chinese, and English name groups with authority, source, and geological range metadata.
+- Search by accepted names or aliases with autocomplete and hierarchy navigation.
+- Preview-first formatted updates, prepared apply, configurable CSV delimiter, and concise rule help.
+- Readable Custom SQL plus staged SQL Import and validated Direct Import workflows.
+
+### Review every mutation
+
+- Rename History and Taxonomy History with selection, formatted audit JSON, CSV export, replayable taxonomy input export, and rollback.
+- Background-operation status for long-running imports, mapping, refresh, and update work.
+- Tab-scoped status messages so completed work remains visible when returning to a tab.
+
+## Download and Installation
+
+Download the latest packages from [GitHub Releases](https://github.com/baoyunfan0101/Vividarium/releases/latest).
+
+| Platform | Requirement | Package | First launch |
 | --- | --- | --- | --- |
-| macOS Apple Silicon | macOS 11 | `Vividarium_3.0.0_aarch64.dmg` | Allow the app in Privacy and Security |
-| Windows x64 | Windows 10 or 11 | `Vividarium_3.0.0_x64-setup.exe` | Confirm the SmartScreen warning |
+| macOS Apple Silicon | macOS 11 or newer | `Vividarium_<version>_aarch64.dmg` | Open Privacy and Security and allow Vividarium after the first blocked launch. |
+| Windows x64 | Windows 10 or 11 | `Vividarium_<version>_x64-setup.exe` | Confirm the SmartScreen warning. WebView2 is installed if missing. |
 
-Release builds do not require Python, Node.js, Rust, a database server, or other development tools on the destination computer. Windows downloads WebView2 during installation only when the runtime is missing.
+Release packages do not require Python, Node.js, Rust, SQLite, or a separate database server on the destination computer. Current macOS and Windows packages are not notarized or signed with a paid platform certificate, so the operating system may request manual trust confirmation.
 
-Packages and signed in-app updates are available from [GitHub Releases](https://github.com/baoyunfan0101/Vividarium/releases).
+## Quick Start
 
-## Features
+1. Open Vividarium and create or register a Photo Library.
+2. Open **Settings > Taxonomy Databases** and populate the taxonomy with SQL Import or a compatible Direct Import database.
+3. Configure filename matching under **Settings > Naming**.
+4. Refresh the relevant photo folders and review the Mapping workspace.
+5. Use Folders, Taxon Tree, Search, or Map to browse the indexed collection.
 
-- Register multiple independent photo libraries and activate one at a time.
-- Replace taxonomy data through SQL Import or Direct Import and apply structured taxonomy updates.
-- Map indexed photos to taxa through configurable six-field filename matching.
-- Browse large photo collections with cursor-based pagination.
-- Browse and search the photographed taxonomy tree.
-- Display GPS-enabled photos on a MapLibre map with OpenStreetMap or Tianditu tiles.
-- Export taxonomy rebase inputs and photo rename audit operations as UTF-8 CSV files.
-- Keep photos, thumbnails, and the SQLite database on the local computer.
+Vividarium does not copy or upload original photos while indexing. Actions explicitly labeled Rename do rename files on disk and record the operation in Rename History.
 
-## Architecture
+## Taxonomy Data Sources
+
+Vividarium does not bundle or redistribute a taxonomy dataset. You can build a knowledge base from your own licensed sources and transform it through SQL Import, or import a SQLite database that already follows the Vividarium taxonomy schema.
+
+For a concrete data-acquisition reference, see [BioLib Peeker](https://github.com/baoyunfan0101/biolib-peeker). It is a separate personal project that crawls and organizes BioLib taxa and synonyms into source datasets. Its output is useful as an input reference, but it is **not** a ready-made Vividarium Direct Import database; adapt it through SQL Import or another schema conversion step first.
+
+Always follow the source website's terms, licensing, rate limits, and redistribution rules. BioLib Peeker is not affiliated with or endorsed by BioLib, and neither project grants rights to third-party taxonomy data.
+
+## Map Providers
+
+OpenStreetMap is available without configuration. Tianditu can be selected under **Settings > Map** when OpenStreetMap tiles are unavailable. Tianditu requires a browser-side application token (`tk`); Vividarium stores it in local application metadata and masks it in the interface.
+
+## Privacy and Storage
+
+- Original photos remain in the selected Photo Library directories.
+- Metadata, taxonomy, registered libraries, settings, and history are stored in local SQLite databases.
+- Vividarium has no account system and no application cloud sync.
+- Network access is used only for selected map tiles, update checks, and links that the user explicitly opens.
+
+Database schema version `2` is required. Databases with another schema version are rejected; no migration interface is provided.
+
+<details>
+<summary><strong>Architecture</strong></summary>
+
+Vividarium uses React and TypeScript for the desktop UI, Tauri 2 for the native adapter, and a Tauri-independent Rust core for SQLite and domain services.
 
 ```text
-apps/
-  desktop/
-    src/                    React and TypeScript user interface
-    src-tauri/              Tauri adapter, IPC commands, and platform config
-crates/
-  vividarium-core/          Rust domain services, SQLite, scanning, and imports
-docs/
-  README.md                 Backend API module index
-  BUILDING.md               Local and GitHub release instructions
-  MAP.md                    Map query and settings backend API
-  MAPPING.md                Photo-to-taxon mapping backend API
-  NAMING.md                 Name normalization and Rhai hook backend API
-  OPERATIONS.md             Shared operation and audit backend API
-  PHOTOS.md                 Photos library backend API
-  STORAGE.md                Database locations and library registry API
-  TAXONOMY.md               Taxonomy knowledge base backend API
-  UPDATING.md               Application update backend API
-scripts/
-  build-macos.sh            Apple Silicon DMG build
-  build-windows.ps1         Windows x64 NSIS build
-.github/workflows/
-  release.yml               Two-platform GitHub release pipeline
-Cargo.toml                  Rust workspace and release profile
+React feature domains
+        |
+Typed frontend API wrappers
+        |
+Tauri command adapters
+        |
+vividarium-core domain services
+        |
+Local metadata, taxonomy, and photo-library SQLite databases
 ```
 
-The React application calls typed Rust commands through Tauri IPC. Original photos and generated thumbnails are served through a private `vividarium://` protocol. The core crate does not depend on Tauri, so its services can be tested separately from the desktop shell.
+See [Architecture](docs/ARCHITECTURE.md), [Desktop Frontend](docs/DESKTOP.md), and the [Backend API index](docs/README.md).
 
-See [docs/README.md](docs/README.md) for the public backend module index.
+</details>
 
-See [docs/TAXONOMY.md](docs/TAXONOMY.md) for the public taxonomy knowledge base backend models, Rust APIs, and Tauri commands.
+<details>
+<summary><strong>Development</strong></summary>
 
-See [docs/PHOTOS.md](docs/PHOTOS.md) for the public photo-library backend API.
-
-See [docs/MAPPING.md](docs/MAPPING.md) for automatic photo-to-taxon mapping and photographed-taxonomy browsing.
-
-See [docs/STORAGE.md](docs/STORAGE.md) for metadata, taxonomy, and photo library database location APIs.
-
-See [docs/OPERATIONS.md](docs/OPERATIONS.md) for the shared photo and taxonomy operation history contract.
-
-See [docs/NAMING.md](docs/NAMING.md) for canonical name normalization, Rhai hooks, and project hook tests.
-
-See [docs/MAP.md](docs/MAP.md) for map-photo pagination and map-provider settings.
-
-See [docs/UPDATING.md](docs/UPDATING.md) for the application update backend commands, models, and release endpoint.
-
-## Development
-
-Prerequisites:
+### Prerequisites
 
 - Rust 1.85 or newer
 - Node.js 20 or newer and npm
 - Tauri 2 platform prerequisites
 - Tauri CLI 2
 
-Install the Tauri CLI and frontend dependencies:
+### Run locally
 
 ```bash
 cargo install tauri-cli --version "^2.0" --locked
 cd apps/desktop
 npm ci
-```
-
-Run the desktop application:
-
-```bash
-cd apps/desktop
 cargo tauri dev
 ```
 
-Development builds store application data in the repository `data/` directory. Set `VIVIDARIUM_DATA_DIR` to override that location.
+Development builds store application data in the repository `data/` directory. Set `VIVIDARIUM_DATA_DIR` to use another location.
 
-## Map Providers
-
-OpenStreetMap is available without configuration. Tianditu can be selected in `Admin > Map` for networks where OpenStreetMap tiles are unavailable. Tianditu requires a browser-side application token (`tk`) from the Tianditu developer platform. The token is stored in local application metadata, masked in the interface, and must not be committed to the repository.
-
-## Test
+### Verify
 
 ```bash
-cargo test --workspace
+cargo test --workspace --locked
 
 cd apps/desktop
+npm run test:desktop
 npm run build
 ```
 
-## Build and Release
-
-Build the Apple Silicon DMG on macOS:
+### Build release packages
 
 ```bash
 ./scripts/build-macos.sh
 ```
 
-Build the Windows x64 installer from PowerShell on Windows:
+On Windows PowerShell:
 
 ```powershell
 .\scripts\build-windows.ps1
 ```
 
-The repository also includes a GitHub Actions workflow that builds both platforms and creates a GitHub release. See [docs/BUILDING.md](docs/BUILDING.md) for prerequisites, package locations, verification, first-launch instructions, and the complete release procedure.
+See [Building and Releasing](docs/BUILDING.md) for signing variables, artifact locations, and the complete release procedure.
 
-## Data Compatibility
+</details>
 
-Release builds use the operating system application-data directory. The metadata, taxonomy, and photo library databases all use schema version `2`. Databases with any other schema version are incompatible and rejected; no migration interface is provided.
+## Contributing
 
-The permanent application identifier is:
-
-```text
-io.github.baoyunfan0101.vividarium
-```
+Bug reports, documentation corrections, and focused pull requests are welcome. Please run the Rust workspace tests, desktop tests, and production frontend build before submitting a change.
 
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE) Copyright (c) Yunfan Bao.

@@ -103,6 +103,9 @@ and project GitHub link. Email and GitHub links open through their system
 applications with exact URL scopes. It checks GitHub Releases for application
 updates and installs an available update through the desktop updater.
 
+`AboutSettings` owns contact-link errors and updater state independently from
+the main Settings workbench.
+
 ## Metadata notification
 
 `emitMetadataChange(change)` publishes a committed metadata update.

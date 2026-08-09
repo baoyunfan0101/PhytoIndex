@@ -4,6 +4,9 @@ The desktop frontend is a React application organized around user-facing
 domains. Each domain owns its pages, interactions, and domain-specific UI.
 The application shell composes those domains into tabs and global navigation.
 
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the complete frontend, Tauri
+adapter, core service, and storage layering.
+
 ## Domain guide
 
 | Domain | Frontend use |

@@ -24,6 +24,7 @@ owns one backend domain, its request types, and response types.
 | `tasks` | Background operation status and completion waiting. |
 | `updater` | Application version, update check, and installation. |
 | `dialogs` | Native file, directory, and destination selection. |
+| `external` | Project and author contact constants plus scoped system URL opening. |
 | `common` | Cursor page shape, error text, byte formatting, and browser CSV download. |
 
 ## Call contract
@@ -45,6 +46,10 @@ complete.
 Mutating calls return the committed backend result or an operation handle.
 Feature code uses the returned state as authoritative and presents warnings
 without converting a committed operation into a failure.
+
+External links call the Tauri opener only in the desktop runtime. The desktop
+capability limits URL opening to the exact project repository and author email
+values; browser development uses the browser's ordinary external navigation.
 
 SQL Import validation returns a `sql_import` operation handle. Its structured
 progress contains a stage and optional row counts or SQL statement indexes.

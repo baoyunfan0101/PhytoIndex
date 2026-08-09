@@ -25,10 +25,13 @@ Parameters:
 - `refreshKey`: optional external invalidation value.
 
 Returns: current mapping details, persisted Ambiguous candidates, taxonomy
-search, and controls to open a result in Taxonomy, clear, assign, replace, or
-automatically remap. The taxonomy search receives the larger default share of
-the vertical editor split, and its result controls use immediate hover and
-pressed states without animation.
+search, and controls to clear, assign, replace, or automatically remap. Current
+mapping and search results use the same taxon-card structure. Selecting any
+non-action area of a search result opens that taxon in Taxonomy; its compact
+Map button changes the photo mapping without triggering navigation. The
+taxonomy search receives the larger default share of the vertical editor
+split, and its result rows use the same immediate hover and pressed states as
+Taxonomy Search.
 
 The Mapping workspace exposes independent dividers between the photo list,
 preview, and editor. The standalone editor also separates its photo from the

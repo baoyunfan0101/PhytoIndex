@@ -42,7 +42,7 @@ Returns: an expandable photographed-taxonomy tree and photo stage.
 
 ### `PhotoMapView(props)`
 
-Parameters include `handlers` and an optional refresh key.
+Parameters include `handlers` and the owning tab's active state.
 
 Returns: a viewport-driven MapLibre page. The first open fits the aggregate
 coordinates of all geotagged photos; the tab then retains its center and zoom.
