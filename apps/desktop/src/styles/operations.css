@@ -82,8 +82,6 @@
 }
 
 .operation-summary-row {
-  position: relative;
-  isolation: isolate;
   display: flex;
   width: 100%;
   height: 100%;
@@ -93,24 +91,13 @@
   background: var(--panel);
 }
 
-.operation-summary-row::before {
-  position: absolute;
-  z-index: 0;
-  inset: 0;
-  content: "";
-  background: transparent;
-  pointer-events: none;
-}
-
-.operation-summary-row:hover::before,
-.operation-summary-row.selected::before {
+.operation-summary-row:hover,
+.operation-summary-row.selected {
   background: var(--hover);
 }
 
 .operation-summary-row > .operation-select,
 .operation-summary-row > .operation-summary-main {
-  position: relative;
-  z-index: 1;
   background: transparent;
 }
 
@@ -135,9 +122,9 @@
   transition: none;
 }
 
-.operation-summary-main:hover,
-.operation-summary-main:active {
-  background: transparent;
+button.operation-summary-main:hover:not(:disabled),
+button.operation-summary-main:active:not(:disabled) {
+  background-color: transparent;
   filter: none;
   transform: none;
 }
@@ -216,6 +203,7 @@
   flex: 1;
   border: 1px solid var(--line);
   border-radius: 3px;
+  background: var(--code);
 }
 
 .audit-json-editor .cm-scroller { overflow: visible; }
