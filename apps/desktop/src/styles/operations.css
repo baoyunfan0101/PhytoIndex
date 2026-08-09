@@ -96,6 +96,13 @@
   background: var(--hover);
 }
 
+.operation-summary-row:hover > .operation-select,
+.operation-summary-row:hover > .operation-summary-main,
+.operation-summary-row.selected > .operation-select,
+.operation-summary-row.selected > .operation-summary-main {
+  background: var(--hover);
+}
+
 .operation-summary-main {
   display: grid;
   min-width: 0;
@@ -181,6 +188,8 @@
 .audit-json-grid section {
   display: grid;
   min-width: 0;
+  align-self: stretch;
+  grid-template-rows: auto 180px;
   gap: 5px;
 }
 
@@ -191,20 +200,10 @@
   text-transform: uppercase;
 }
 
-.audit-json-grid pre {
-  box-sizing: border-box;
-  min-height: 124px;
-  max-height: 360px;
-  margin: 0;
-  padding: 9px;
-  overflow: auto;
+.audit-json-editor {
+  height: 180px;
   border: 1px solid var(--line);
   border-radius: 3px;
-  color: var(--blue);
-  background: var(--code);
-  font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
 }
 
 .history-load-status,

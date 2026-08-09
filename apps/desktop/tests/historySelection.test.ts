@@ -5,6 +5,7 @@ import {
   canExportReplayableInput,
   canRollbackOperations,
   formatAuditJson,
+  getReplayableOperations,
   getRollbackOrder,
   getSelectedOperations,
 } from "../src/features/operations/historySelection.ts";
@@ -50,12 +51,21 @@ test("requires every selected operation to support an action", () => {
   assert.equal(canExportReplayableInput([operation(1), operation(2)]), true);
   assert.equal(
     canExportReplayableInput([operation(1), operation(2, { has_formatted_input: false })]),
-    false,
+    true,
+  );
+  assert.equal(canExportReplayableInput([operation(2, { has_formatted_input: false })]), false);
+  assert.deepEqual(
+    getReplayableOperations([
+      operation(1),
+      operation(2, { has_formatted_input: false }),
+      operation(3),
+    ]).map((item) => item.operation_id),
+    [1, 3],
   );
 });
 
 test("formats audit state as readable indented JSON", () => {
-  assert.equal(formatAuditJson(null), "-");
+  assert.equal(formatAuditJson(null), "null");
   assert.equal(formatAuditJson({ name: "Canis", nested: { id: 4 } }), [
     "{",
     "  \"name\": \"Canis\",",

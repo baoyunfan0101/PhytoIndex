@@ -17,10 +17,14 @@ export function canRollbackOperations(operations: OperationSummary[]): boolean {
 }
 
 export function canExportReplayableInput(operations: OperationSummary[]): boolean {
-  return operations.length > 0 && operations.every((operation) => operation.has_formatted_input);
+  return getReplayableOperations(operations).length > 0;
+}
+
+export function getReplayableOperations(operations: OperationSummary[]): OperationSummary[] {
+  return operations.filter((operation) => operation.has_formatted_input);
 }
 
 export function formatAuditJson(value: unknown): string {
-  if (value === null || value === undefined) return "-";
+  if (value === null || value === undefined) return "null";
   return JSON.stringify(value, null, 2);
 }

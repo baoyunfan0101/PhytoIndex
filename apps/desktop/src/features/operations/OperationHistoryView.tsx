@@ -18,6 +18,7 @@ import {
 } from "../../api/operations";
 import { errorMessage } from "../../api/common";
 import { selectCsvDestination } from "../../api/dialogs";
+import { CodeEditor } from "../../shared/CodeEditor";
 import { Button, EmptyState, IconButton, VirtualList } from "../../shared/ui";
 import { useCursorPage } from "../../shared/useCursorPage";
 import { useViewState } from "../../shared/viewState";
@@ -27,6 +28,7 @@ import {
   canExportReplayableInput,
   canRollbackOperations,
   formatAuditJson,
+  getReplayableOperations,
   getRollbackOrder,
   getSelectedOperations,
 } from "./historySelection";
@@ -118,11 +120,12 @@ export function OperationHistoryView({
     setBusy("input");
     setError("");
     try {
+      const replayableOperations = getReplayableOperations(checkedOperations);
       await exportTaxonomyOperationsInput(
-        checkedOperations.map((operation) => operation.operation_id),
+        replayableOperations.map((operation) => operation.operation_id),
         destination,
       );
-      onStatus(`Replayable input exported to ${destination}`);
+      onStatus(`${replayableOperations.length} replayable operation${replayableOperations.length === 1 ? "" : "s"} exported to ${destination}`);
     } catch (nextError) {
       setError(errorMessage(nextError));
     } finally {
@@ -474,11 +477,27 @@ function AuditRow({ row }: { row: OperationAuditRow }) {
       <div className="audit-json-grid">
         <section>
           <b>Before</b>
-          <pre>{formatAuditJson(row.before_json)}</pre>
+          <CodeEditor
+            ariaLabel={`Operation ${row.operation_id} audit ${row.sequence} before JSON`}
+            className="audit-json-editor"
+            height={180}
+            language="json"
+            onChange={() => undefined}
+            readOnly
+            value={formatAuditJson(row.before_json)}
+          />
         </section>
         <section>
           <b>After</b>
-          <pre>{formatAuditJson(row.after_json)}</pre>
+          <CodeEditor
+            ariaLabel={`Operation ${row.operation_id} audit ${row.sequence} after JSON`}
+            className="audit-json-editor"
+            height={180}
+            language="json"
+            onChange={() => undefined}
+            readOnly
+            value={formatAuditJson(row.after_json)}
+          />
         </section>
       </div>
     </article>
