@@ -1,4 +1,4 @@
-import { FilePenLine, FolderOpen, Link, RefreshCw, type LucideIcon } from "lucide-react";
+import { FileInput, FilePenLine, FolderOpen, RefreshCw, type LucideIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import {
   openPhotoDirectoryInFileManager,
@@ -109,13 +109,13 @@ export function DirectoryContextMenu({
         />
         <div className="context-separator" role="separator" />
         <MenuButton
-          icon={Link}
+          icon={FileInput}
           label="Rename files from taxonomy"
           disabled={Boolean(busy)}
           onClick={() => void run("Renaming", () => renameDirectoryPhotos(false))}
         />
         <MenuButton
-          icon={Link}
+          icon={FileInput}
           label="Rename files recursively from taxonomy"
           disabled={Boolean(busy)}
           onClick={() => void run("Renaming", () => renameDirectoryPhotos(true))}
