@@ -98,9 +98,10 @@ unchanged. Saving persists the source and tests atomically.
 
 ### About
 
-Shows the product name, application version, database schema, author, and
-project GitHub link. It checks GitHub Releases for application updates and
-installs an available update through the desktop updater.
+Shows the product name, application version, database schema, author, email,
+and project GitHub link. Email and GitHub links open through their system
+applications with exact URL scopes. It checks GitHub Releases for application
+updates and installs an available update through the desktop updater.
 
 ## Metadata notification
 

@@ -15,6 +15,7 @@ pub fn run() {
         .menu(native_menu::build)
         .on_menu_event(native_menu::handle)
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let state = AppState::new(paths::data_dir(app.handle())?)?;

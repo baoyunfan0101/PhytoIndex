@@ -86,7 +86,8 @@ or closes every tab. Management actions select the corresponding Settings
 section; closing all tabs renders `EmptyWorkspace`.
 
 The native About menu action opens `NativeAboutOverlay`, which returns only
-the product name, software version, author, and GitHub link.
+the product name, software version, author, email, and GitHub link. External
+links use the system opener and report failures inside the overlay.
 
 Submitting a global photo query always starts a fresh search, including when a
 tab for the same normalized query is already open. The existing tab is focused

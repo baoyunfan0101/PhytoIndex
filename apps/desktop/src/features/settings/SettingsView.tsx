@@ -53,6 +53,12 @@ import {
   type PhotoLibraryWorkspace,
 } from "../../api/storage";
 import { getMapSettings, setMapSettings, type MapSettings } from "../../api/map";
+import {
+  authorEmail,
+  authorEmailUrl,
+  openExternalUrl,
+  projectRepositoryUrl,
+} from "../../api/external";
 import { startPhotoMapping } from "../../api/mapping";
 import { waitForOperation } from "../../api/tasks";
 import { getTaxonomyImportMetadata, type TaxonomyImportMetadata } from "../../api/taxonomyImport";
@@ -590,6 +596,7 @@ function AboutSettings() {
   const [updateBusy, setUpdateBusy] = useState(false);
   const [updateMessage, setUpdateMessage] = useState("Updates are delivered from GitHub Releases.");
   const [updateError, setUpdateError] = useState("");
+  const [linkError, setLinkError] = useState("");
 
   useEffect(() => { void getAppVersion().then(setVersion); }, []);
 
@@ -624,6 +631,12 @@ function AboutSettings() {
     }
   }
 
+  function openLink(event: React.MouseEvent<HTMLAnchorElement>, url: string) {
+    event.preventDefault();
+    setLinkError("");
+    void openExternalUrl(url).catch((nextError) => setLinkError(errorMessage(nextError)));
+  }
+
   return (
     <div className="settings-section">
       <SectionHeader title="About" detail="View application, version, update, author, and project information." />
@@ -633,9 +646,14 @@ function AboutSettings() {
         <Setting label="Database schema" value="2" />
         <Setting label="Author" value="Yunfan Bao" />
         <div className="setting-row">
-          <span>GitHub</span>
-          <a href="https://github.com/baoyunfan0101/Vividarium" target="_blank" rel="noreferrer">github.com/baoyunfan0101/Vividarium</a>
+          <span>Email</span>
+          <a href={authorEmailUrl} onClick={(event) => openLink(event, authorEmailUrl)}>{authorEmail}</a>
         </div>
+        <div className="setting-row">
+          <span>GitHub</span>
+          <a href={projectRepositoryUrl} onClick={(event) => openLink(event, projectRepositoryUrl)}>github.com/baoyunfan0101/Vividarium</a>
+        </div>
+        {linkError && <div className="inline-error" role="alert">{linkError}</div>}
         <div className="about-update">
           <div><strong>Software update</strong><span>{updateMessage}</span></div>
           {availableUpdate ? (
