@@ -92,6 +92,10 @@ pub enum WorkspaceSettingsSection {
     PhotoLibraries,
     #[serde(rename = "Taxonomy Databases")]
     TaxonomyDatabases,
+    #[serde(rename = "SQL Import")]
+    SqlImport,
+    #[serde(rename = "Direct Import")]
+    DirectImport,
     Naming,
     Map,
     #[serde(rename = "Filename Parser")]
@@ -365,7 +369,7 @@ mod tests {
                 query: None,
                 taxon_id: None,
                 photo_id: None,
-                settings_section: Some(WorkspaceSettingsSection::General),
+                settings_section: Some(WorkspaceSettingsSection::DirectImport),
             }],
             active_tab: Some("settings".to_string()),
         };

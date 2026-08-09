@@ -22,7 +22,8 @@ through one settings workbench.
 Returns the complete Settings workbench.
 
 `SettingsSection` includes General, Storage, Photo Libraries, Taxonomy
-Databases, Naming, Map, Filename Parser, Synonym Splitter, and About.
+Databases, SQL Import, Direct Import, Naming, Map, Filename Parser, Synonym
+Splitter, and About.
 
 ## Pages
 
@@ -54,14 +55,22 @@ own photo browsing or mapping behavior.
 
 ### Taxonomy Databases
 
-Accepts persistent CSV and SQLite input sources plus SQL. `Validate` executes
-the SQL and builds a candidate database through one background operation. The
-page displays its current stage, real counts when available, and elapsed time.
-The completed report shows each validation message once and keeps Apply
-disabled for invalid taxonomy data. SQL, SQLite, file, and candidate-build
-failures use the page error state. `Apply` is enabled only for the latest
-successful validation and replaces the taxonomy database through the
-background operation API.
+Expands to SQL Import and Direct Import pages.
+
+SQL Import accepts persistent CSV and SQLite input sources plus SQL. `Validate`
+executes the SQL and builds a candidate database through one background
+operation. The completed report shows each validation message once and keeps
+Apply disabled for invalid taxonomy data. SQL, SQLite, file, and
+candidate-build failures use the page error state. `Apply` is enabled only for
+the latest successful validation and replaces the taxonomy database through
+the background operation API.
+
+Direct Import selects one ready-to-use SQLite database from the configured
+default taxonomy directory. `Import` starts a `base_import` background
+operation and shows an in-page running state until it completes. Validation or
+replacement failure leaves the current taxonomy unchanged and appears in the
+page error state. Success refreshes taxonomy resources and schedules every
+registered Photo Library for remapping.
 
 ### Naming
 

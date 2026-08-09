@@ -36,6 +36,8 @@ export type WorkspaceSettingsSection =
   | "Storage"
   | "Photo Libraries"
   | "Taxonomy Databases"
+  | "SQL Import"
+  | "Direct Import"
   | "Naming"
   | "Map"
   | "Filename Parser"

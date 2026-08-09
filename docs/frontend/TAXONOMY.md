@@ -49,6 +49,14 @@ Parameters: optional callback invoked after a base database is applied.
 Returns: the base-import source registry, SQL workspace, validation issues,
 metadata, and apply controls.
 
+### `DirectImportSettings({ onApplied })`
+
+Parameters: optional callback invoked after a direct SQLite base database is
+applied.
+
+Returns: a native SQLite selection action, background import status, and the
+committed replacement result or validation error.
+
 Search results and taxon details, formatted input and result logs, SQL input
 sources and editors, and execution or validation outputs use adjustable panes
 with minimum sizes appropriate to their controls.

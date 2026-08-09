@@ -193,7 +193,7 @@ export function BaseImportSettings({ onApplied }: { onApplied?: () => void }) {
   return (
     <div className="base-import-settings">
       <SectionHeader
-        title="Taxonomy Databases"
+        title="SQL Import"
         detail="Build, validate, and apply a replacement taxonomy database."
         actions={(
           <>

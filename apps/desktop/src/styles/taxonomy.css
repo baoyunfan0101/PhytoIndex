@@ -192,6 +192,8 @@
 .base-import-status { min-height: 30px; }
 .base-import-progress { display: flex; min-height: 34px; align-items: center; gap: 8px; padding: 6px 9px; border-top: 1px solid var(--line); background: var(--panel-2); }
 .base-import-progress span { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+.direct-import-description { display: grid; gap: 8px; margin: 16px 12px; padding: 14px; border: 1px solid var(--line); background: var(--panel); }
+.direct-import-description p { margin: 0; color: var(--muted); line-height: 1.5; }
 .base-validation { display: grid; width: 100%; height: 100%; min-height: 0; grid-template-rows: auto auto minmax(100px, 1fr); overflow: hidden; }
 .validation-counts { display: flex; flex-wrap: wrap; gap: 8px; padding: 7px; border-bottom: 1px solid var(--line); }
 .validation-counts span { padding: 3px 6px; border-radius: 3px; background: var(--panel-2); }

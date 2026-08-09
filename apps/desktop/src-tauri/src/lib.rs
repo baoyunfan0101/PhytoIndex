@@ -120,6 +120,7 @@ pub fn run() {
             commands::remove_base_import_input,
             commands::start_base_import_validation,
             commands::apply_base_import,
+            commands::replace_taxonomy_base_database,
             commands::get_mapping_metadata,
             commands::search_photo_taxa,
             commands::suggest_photo_taxa,

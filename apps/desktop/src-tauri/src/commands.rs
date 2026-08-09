@@ -1221,6 +1221,31 @@ pub fn apply_base_import(
         })
 }
 
+#[tauri::command]
+pub fn replace_taxonomy_base_database(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    source_path: String,
+) -> CommandResult<OperationState> {
+    let database = state.database.clone();
+    let background_state = state.inner().clone();
+    let sync_app = app.clone();
+    state.operations.start(
+        app,
+        "base_import",
+        "replace_taxonomy_base_database",
+        move |progress| {
+            progress(0, None, "Validating direct import database");
+            let result =
+                taxonomy::replace_taxonomy_base_database(&database, Path::new(&source_path))
+                    .map_err(error)?;
+            progress(1, Some(1), "Taxonomy database imported");
+            schedule_taxonomy_sync(sync_app, &background_state);
+            serde_json::to_value(result).map_err(error)
+        },
+    )
+}
+
 fn schedule_taxonomy_sync(app: AppHandle, state: &AppState) {
     if !state.taxonomy_sync.request() {
         return;

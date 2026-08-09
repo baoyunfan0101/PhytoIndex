@@ -14,7 +14,7 @@ owns one backend domain, its request types, and response types.
 | `taxonomy` | Taxon views, search, suggestions, children, taxon photos, formatted input, staged preview tokens, and prepared apply. |
 | `operations` | Photo and taxonomy operation summaries, audit pages, rollback, and single or selected-operation CSV exports to an absolute destination path. |
 | `customSql` | Custom SQL execution, result sets, managed SQL inputs, and full-query export. |
-| `baseImport` | Base-import workspace, validation, apply, metadata, and managed inputs. |
+| `baseImport` | SQL base-import workspace, validation, apply, direct SQLite replacement, metadata, and managed inputs. |
 | `general` | Application-wide theme, workspace, search, taxon-tree display, and CSV delimiter settings. |
 | `storage` | Database locations, Taxonomy Database selection, Photo Library registration, and file-manager opening for displayed storage paths. |
 | `settings` | Naming settings, Rhai hooks, hook tests, and taxonomy name separator. |
@@ -48,3 +48,7 @@ Base Import validation returns a `base_import` operation handle. Its structured
 progress contains a stage and optional row counts or SQL statement indexes.
 The completed result distinguishes a valid candidate from structured taxonomy
 validation issues; execution failures remain operation errors.
+Direct SQLite replacement also returns a `base_import` operation handle. Its
+completed result is `TaxonomyBaseReplaceResult`; schema, integrity, and
+taxonomy validation failures are operation errors and leave the current
+taxonomy unchanged.

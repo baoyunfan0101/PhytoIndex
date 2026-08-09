@@ -95,5 +95,20 @@ export const applyBaseImport = () => call<OperationState>("apply_base_import", u
   } satisfies TaxonomyBaseReplaceResult;
   return operation;
 });
+export const replaceTaxonomyBaseDatabase = (sourcePath: string) =>
+  call<OperationState>("replace_taxonomy_base_database", { sourcePath }, () => {
+    const operation = demoOperation("base_import", "Taxonomy database imported");
+    operation.operation = "replace_taxonomy_base_database";
+    operation.result = {
+      metadata: {
+        source_path: sourcePath,
+        taxa_count: 125000,
+        taxon_names_count: 185000,
+        imported_at: new Date().toISOString(),
+      },
+      warnings: [],
+    } satisfies TaxonomyBaseReplaceResult;
+    return operation;
+  });
 export const getTaxonomyBaseMetadata = () =>
   call<TaxonomyBaseMetadata | null>("get_taxonomy_base_metadata", undefined, () => null);

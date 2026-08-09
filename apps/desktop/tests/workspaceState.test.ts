@@ -64,7 +64,7 @@ function savedState(): WorkspaceState {
 
 test("serializes opened tabs and the active tab without transient UI", () => {
   const tabs: AppTab[] = [
-    { id: "settings", kind: "settings", title: "Settings", settingsSection: "Map" },
+    { id: "settings", kind: "settings", title: "Settings", settingsSection: "Direct Import" },
     { id: "photo:7", kind: "photo-detail", title: photo.filename, photo },
   ];
   assert.deepEqual(serializeWorkspaceState(tabs, "photo:7"), {
@@ -76,7 +76,7 @@ test("serializes opened tabs and the active tab without transient UI", () => {
         query: null,
         taxon_id: null,
         photo_id: null,
-        settings_section: "Map",
+        settings_section: "Direct Import",
       },
       {
         id: "photo:7",

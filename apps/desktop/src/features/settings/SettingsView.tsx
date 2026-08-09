@@ -21,7 +21,7 @@ import {
   Trash2,
   type LucideIcon,
 } from "lucide-react";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   updateGeneralSettings,
   type GeneralSettings as GeneralSettingsValue,
@@ -80,6 +80,7 @@ import { Button, IconButton, SectionHeader } from "../../shared/ui";
 import { CodeEditor } from "../../shared/CodeEditor";
 import { ResizablePanels } from "../../shared/ResizablePanels";
 import { BaseImportSettings } from "../taxonomy/BaseImportSettings";
+import { DirectImportSettings } from "../taxonomy/DirectImportSettings";
 import { emitPhotoMutation } from "../photos/photoMutations";
 import { emitMetadataChange } from "../../shared/metadataChanges";
 import {
@@ -124,11 +125,19 @@ export function SettingsView({
   section: SettingsSection;
 }) {
   const hookSection = section === "Filename Parser" || section === "Synonym Splitter";
+  const taxonomyDatabaseSection = section === "Taxonomy Databases"
+    || section === "SQL Import"
+    || section === "Direct Import";
   const [hooksExpanded, setHooksExpanded] = useState(hookSection);
+  const [taxonomyDatabasesExpanded, setTaxonomyDatabasesExpanded] = useState(taxonomyDatabaseSection);
 
   useEffect(() => {
     if (hookSection) setHooksExpanded(true);
   }, [hookSection]);
+
+  useEffect(() => {
+    if (taxonomyDatabaseSection) setTaxonomyDatabasesExpanded(true);
+  }, [taxonomyDatabaseSection]);
 
   return (
     <ResizablePanels
@@ -139,7 +148,26 @@ export function SettingsView({
       separatorLabel="Resize Settings navigation"
       stateKey="settings.navigation"
       first={(<aside className="settings-nav">
-        {settingsSections.map(({ id, icon: Icon }) => (
+        {settingsSections.map(({ id, icon: Icon }) => id === "Taxonomy Databases" ? (
+          <Fragment key={id}>
+            <button className={taxonomyDatabaseSection ? "active" : ""} type="button" onClick={() => setTaxonomyDatabasesExpanded((current) => !current)}>
+              <Icon size={14} />{id}
+              {taxonomyDatabasesExpanded ? <ChevronDown className="settings-nav-chevron" size={13} /> : <ChevronRight className="settings-nav-chevron" size={13} />}
+            </button>
+            {taxonomyDatabasesExpanded && (
+              <div className="settings-subnav">
+                {(["SQL Import", "Direct Import"] as const).map((id) => {
+                  const active = section === id || (id === "SQL Import" && section === "Taxonomy Databases");
+                  return (
+                    <button className={active ? "active" : ""} type="button" key={id} onClick={() => onSectionChange(id)}>
+                      {id}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </Fragment>
+        ) : (
           <button className={section === id ? "active" : ""} type="button" key={id} onClick={() => onSectionChange(id)}>
             <Icon size={14} />{id}
           </button>
@@ -171,7 +199,8 @@ export function SettingsView({
         )}
         {section === "Storage" && <StorageSettings />}
         {section === "Photo Libraries" && <PhotoLibrariesSettings onChanged={onWorkspaceChanged} />}
-        {section === "Taxonomy Databases" && <BaseImportSettings onApplied={onBaseReplaced} />}
+        {(section === "Taxonomy Databases" || section === "SQL Import") && <BaseImportSettings onApplied={onBaseReplaced} />}
+        {section === "Direct Import" && <DirectImportSettings onApplied={onBaseReplaced} />}
         {section === "Naming" && <NamingSettings />}
         {section === "Map" && <MapSettingsPanel />}
         {hookSection && <HooksSettings kind={section === "Filename Parser" ? "photo_filename" : "synonym_authority"} />}

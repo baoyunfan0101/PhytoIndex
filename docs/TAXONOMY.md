@@ -347,6 +347,12 @@ mapping state when synchronized. Immediate synchronization and mapping of the
 active photo library are best-effort follow-up work; no active library or an
 unavailable library does not change a successful replacement result.
 
+The desktop `replace_taxonomy_base_database` command accepts
+`source_path: String` and returns a `base_import` `OperationState`. It validates
+and replaces the database on a blocking worker, returns validation or file
+failures through the completed operation error, and schedules taxonomy/photo
+synchronization only after replacement commits.
+
 ## Photo-library synchronization
 
 `TaxonomySyncResult` contains `library_uuid`, `sync_id`,
