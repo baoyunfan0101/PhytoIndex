@@ -87,3 +87,8 @@ section; closing all tabs renders `EmptyWorkspace`.
 
 The native About menu action opens `NativeAboutOverlay`, which returns only
 the product name, software version, author, and GitHub link.
+
+Submitting a global photo query always starts a fresh search, including when a
+tab for the same normalized query is already open. The existing tab is focused
+and its transient refresh key advances; the refresh key is not persisted in
+workspace state.

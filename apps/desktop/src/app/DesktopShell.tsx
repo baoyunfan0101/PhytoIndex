@@ -322,6 +322,15 @@ export function DesktopShell({
         setTabs((current) => current.map((item) => item.id === existing.id
           ? { ...item, settingsSection: tab.settingsSection }
           : item));
+      } else if (tab.kind === "search-photos" && tab.query !== undefined) {
+        setTabs((current) => current.map((item) => item.id === existing.id
+          ? {
+            ...item,
+            title: tab.title,
+            query: tab.query,
+            refreshKey: (item.refreshKey ?? 0) + 1,
+          }
+          : item));
       }
       focusTab(existing.id);
       return;
@@ -728,7 +737,7 @@ function TabBody({
   if (tab.kind === "settings") return <SettingsView section={tab.settingsSection ?? "General"} onSectionChange={(section) => updateSettingsTab(tab.id, section)} onTaxonomyImported={onTaxonomyImported} onWorkspaceChanged={onWorkspaceChanged} generalSettings={generalSettings} generalSettingsLoadError={generalSettingsLoadError} onGeneralSettingsChange={onGeneralSettingsChange} />;
   if (tab.kind === "photo-detail" && tab.photo) return <PhotoDetailView photo={tab.photo} />;
   if (tab.kind === "mapping-editor" && tab.photo) return <MappingEditor photo={tab.photo} onOpenTaxon={handlers.openTaxon} />;
-  if (tab.kind === "search-photos" && tab.query) return <PhotoSet query={tab.query} handlers={handlers} />;
+  if (tab.kind === "search-photos" && tab.query) return <PhotoSet query={tab.query} refreshKey={tab.refreshKey} handlers={handlers} />;
   if (tab.kind === "taxon-photos" && tab.taxonId !== undefined) return <PhotoSet taxonId={tab.taxonId} handlers={handlers} />;
   return null;
 }

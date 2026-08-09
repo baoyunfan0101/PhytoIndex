@@ -61,6 +61,10 @@ Every newly discovered, changed, or unqueued indexed photo is queued for automat
 | `search_photos` | `query: &str`, `cursor: Option<&str>`, `limit: usize` | `PhotoPage<Photo>` | Search filename and current mapped taxon, then deduplicate by photo. |
 
 Blank search text returns an empty page.
+General search uses the complete ranked taxonomy candidate relation before
+expanding matched taxa to descendant photos, unions those photos with filename
+matches, deduplicates by `photo_id`, and applies the page limit to the final
+photo set.
 The desktop `search_photos` command executes the database lookup on a blocking
 worker and resolves asynchronously.
 

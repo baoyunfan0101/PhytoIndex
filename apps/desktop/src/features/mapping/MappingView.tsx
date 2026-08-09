@@ -136,6 +136,7 @@ export function MappingView({
         first={(<aside className="mapping-photo-list">
           <VirtualList
             items={page.items}
+            resetKey={`${status}:${normalizedQuery}`}
             activeIndex={activeIndex}
             rowHeight={28}
             itemKey={(item) => item.photo.photo_id}

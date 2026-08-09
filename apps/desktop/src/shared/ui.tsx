@@ -19,6 +19,7 @@ import {
   type UIEvent,
 } from "react";
 import { useViewState } from "./viewState";
+import { clampVirtualScrollTop } from "./virtualScroll";
 import { nextGridIndex } from "./virtualGridNavigation";
 
 export type IconComponent = LucideIcon;
@@ -88,6 +89,7 @@ export function VirtualList<T>({
   onNearEnd,
   onContextMenu,
   onTypeSelect,
+  resetKey,
   stateKey,
 }: {
   items: T[];
@@ -105,9 +107,11 @@ export function VirtualList<T>({
   onNearEnd?: () => void;
   onContextMenu?: (event: MouseEvent<HTMLDivElement>) => void;
   onTypeSelect?: (query: string, shouldCycle: boolean) => void;
+  resetKey?: string | number | boolean | null;
   stateKey?: string;
 }) {
   const viewportRef = useRef<HTMLDivElement>(null);
+  const previousResetKey = useRef(resetKey);
   const typeBuffer = useRef("");
   const typeUpdatedAt = useRef(0);
   const typeTimer = useRef<number | null>(null);
@@ -135,6 +139,19 @@ export function VirtualList<T>({
     });
     return () => window.cancelAnimationFrame(frame);
   }, [focusWhen]);
+
+  useEffect(() => {
+    const element = viewportRef.current;
+    if (!element) return;
+    const reset = !Object.is(previousResetKey.current, resetKey);
+    previousResetKey.current = resetKey;
+    const nextScrollTop = reset
+      ? 0
+      : clampVirtualScrollTop(scrollTop, items.length, rowHeight, element.clientHeight);
+    if (nextScrollTop === scrollTop && element.scrollTop === nextScrollTop) return;
+    element.scrollTop = nextScrollTop;
+    setScrollTop(nextScrollTop);
+  }, [height, items.length, resetKey, rowHeight, scrollTop, setScrollTop]);
 
   const start = Math.max(0, Math.floor(scrollTop / rowHeight) - overscan);
   const end = Math.min(items.length, Math.ceil((scrollTop + height) / rowHeight) + overscan);

@@ -19,7 +19,9 @@ pause. Arrow keys select a suggestion, and Enter or a pointer selection
 submits the full search. A pointer action outside the search closes
 suggestions. Suggestion rows show available scientific, Chinese, and English
 names followed by rank. Submitted searches show a centered searching status
-until results resolve.
+until results resolve. Every formal submission starts a fresh request even
+when the normalized query is unchanged, and the result list returns to its
+first row for the new response.
 
 ### `FormattedUpdateView({ onStatus, mutationDisabled })`
 

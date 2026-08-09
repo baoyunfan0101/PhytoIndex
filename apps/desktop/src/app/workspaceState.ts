@@ -10,6 +10,7 @@ export type AppTab = {
   kind: WorkspaceTab["kind"];
   title: string;
   query?: string;
+  refreshKey?: number;
   taxonId?: number;
   photo?: Photo;
   settingsSection?: WorkspaceSettingsSection;

@@ -16,10 +16,12 @@ virtual list or grid with a shared photo stage.
 
 ### `PhotoSet(props)`
 
-Parameters: either a search `query` or a `taxonId`, plus
-`PhotoOpenHandlers`.
+Parameters: either a search `query` with an optional transient `refreshKey`, or
+a `taxonId`, plus `PhotoOpenHandlers`.
 
-Returns: a cursor-backed `PhotoBrowser` for global search or one taxon.
+Returns: a cursor-backed `PhotoBrowser` for global search or one taxon. A
+changed search refresh key clears the saved page and reloads from the first
+result.
 
 Photo Browser list and media panes, Folder and photographed-taxonomy tree and
 preview panes, and Photo Detail media and metadata panes are adjustable within

@@ -75,6 +75,11 @@ states search filename only.
 | `get_photo_taxon_node` | `taxon_id: Option<i64>`, `show_empty: bool` | `PhotoTaxonNode` | Load one photo taxonomy node or the virtual root. |
 | `browse_photo_taxon` | `taxon_id: Option<i64>`, `show_empty: bool`, `cursor: Option<&str>`, `limit: usize` | `PhotoPage<PhotoTaxonItem>` | Browse direct child taxa followed by directly mapped photos. |
 
+Photo-taxon search and suggestions use the same complete ranked taxonomy
+candidate relation as taxonomy search, then filter to taxa with current photo
+usage. Pagination continues across match levels; a prefix result does not
+suppress substring or fuzzy results on later pages.
+
 The desktop `suggest_photo_taxa` command executes the database lookup on a
 blocking worker and resolves asynchronously.
 

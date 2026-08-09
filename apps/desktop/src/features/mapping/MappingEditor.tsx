@@ -170,6 +170,7 @@ export function MappingEditor({
       </label>
       <VirtualList
         stateKey="mapping-editor.results"
+        resetKey={query.trim()}
         className="mapping-search-results"
         items={taxonomySearch.results}
         rowHeight={58}

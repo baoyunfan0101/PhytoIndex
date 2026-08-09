@@ -72,7 +72,11 @@ the compact autocomplete type with the same taxon identity fields.
 
 Both interfaces use the same canonical normalization and ranked order:
 exact, full prefix, word prefix, substring, then fuzzy. Blank input returns
-an empty vector. These taxonomy-only interfaces remain available when the
+an empty vector. Candidates from every eligible match level are combined
+before one best matching name is selected per `taxon_id`; distinct taxa are
+then globally ranked and the requested limit is applied. A stronger match
+therefore ranks first without suppressing lower-tier matches that fit within
+the final limit. These taxonomy-only interfaces remain available when the
 active photo library is offline. The desktop `search_taxa` and `suggest_taxa`
 commands execute database lookups on blocking workers and resolve
 asynchronously. The desktop `get_taxon_detail` command uses the same execution

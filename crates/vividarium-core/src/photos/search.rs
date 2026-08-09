@@ -403,4 +403,98 @@ mod tests {
 
         assert_eq!(page.items[0].photo_id, 15001);
     }
+
+    #[test]
+    fn shared_taxonomy_search_keeps_cjk_prefix_and_substring_matches() {
+        let (_directory, database) = database();
+        database
+            .connect()
+            .unwrap()
+            .execute_batch(
+                r#"
+                INSERT INTO taxa (taxon_id, parent_taxon_id, rank) VALUES
+                    (301, NULL, 4),
+                    (302, NULL, 4),
+                    (303, NULL, 4),
+                    (304, NULL, 4),
+                    (305, NULL, 4),
+                    (306, NULL, 4),
+                    (307, NULL, 4);
+                INSERT INTO taxon_names (taxon_id, name_type, name) VALUES
+                    (301, 1, 'Shared fixture 301'), (301, 3, '香科科属'),
+                    (302, 1, 'Shared fixture 302'), (302, 3, '山地香科科'),
+                    (303, 1, 'Shared fixture 303'), (303, 3, '蒜味香科科'),
+                    (304, 1, 'Shared fixture 304'), (304, 3, '高山香科科'),
+                    (305, 1, 'Shared fixture 305'), (305, 3, '石地香科科'),
+                    (306, 1, 'Shared fixture 306'), (306, 3, '林地香科科'),
+                    (307, 1, 'Shared fixture 307'), (307, 3, '河谷香科科');
+                INSERT INTO photos (
+                    photo_id, directory_id, filename, file_size, modified_at_ns
+                ) VALUES
+                    (301, 1, 'shared-301.jpg', 1, 1),
+                    (302, 1, 'shared-302.jpg', 1, 1),
+                    (303, 1, 'shared-303.jpg', 1, 1),
+                    (304, 1, 'shared-304.jpg', 1, 1),
+                    (305, 1, 'shared-305.jpg', 1, 1),
+                    (306, 1, 'shared-306.jpg', 1, 1),
+                    (307, 1, 'shared-307.jpg', 1, 1);
+                INSERT INTO photo_taxon_mapping (photo_id, taxon_id, status) VALUES
+                    (301, 301, 'matched'),
+                    (302, 302, 'matched'),
+                    (303, 303, 'matched'),
+                    (304, 304, 'matched'),
+                    (305, 305, 'matched'),
+                    (306, 306, 'matched'),
+                    (307, 307, 'matched');
+                INSERT INTO photo_taxon_usage (
+                    taxon_id, direct_photo_count, subtree_photo_count
+                ) VALUES
+                    (301, 1, 1),
+                    (302, 1, 1),
+                    (303, 1, 1),
+                    (304, 1, 1),
+                    (305, 1, 1),
+                    (306, 1, 1),
+                    (307, 1, 1);
+                "#,
+            )
+            .unwrap();
+
+        let photos = search_photos(&database, "香科科", None, 20).unwrap();
+        assert_eq!(photos.items.len(), 7);
+
+        let taxa = crate::mapping::search_photo_taxa(&database, "香科科", None, 20).unwrap();
+        assert_eq!(taxa.items.len(), 7);
+        assert_eq!(taxa.items[0].taxon_id, 301);
+
+        let mapped = crate::mapping::search_photos_by_mapping_status(
+            &database,
+            crate::mapping::PhotoMappingListStatus::Matched,
+            "香科科",
+            None,
+            20,
+        )
+        .unwrap();
+        assert_eq!(mapped.items.len(), 7);
+
+        let first = crate::mapping::search_photo_taxa(&database, "香科科", None, 3).unwrap();
+        assert_eq!(first.items.len(), 3);
+        assert_eq!(first.items[0].taxon_id, 301);
+        assert!(first.next_cursor.is_some());
+        let second =
+            crate::mapping::search_photo_taxa(&database, "香科科", first.next_cursor.as_deref(), 3)
+                .unwrap();
+        let third = crate::mapping::search_photo_taxa(
+            &database,
+            "香科科",
+            second.next_cursor.as_deref(),
+            3,
+        )
+        .unwrap();
+        assert_eq!(
+            first.items.len() + second.items.len() + third.items.len(),
+            7
+        );
+        assert!(third.next_cursor.is_none());
+    }
 }

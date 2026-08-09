@@ -847,4 +847,130 @@ mod tests {
             ]
         );
     }
+
+    #[test]
+    fn cjk_prefix_does_not_suppress_substring_taxa() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = Database::open(directory.path().join("test.db")).unwrap();
+        let connection = database.connect_taxonomy_metadata_context().unwrap();
+        connection
+            .execute_batch(
+                r#"
+                INSERT INTO taxa (taxon_id, parent_taxon_id, rank) VALUES
+                    (101, NULL, 4),
+                    (102, NULL, 4),
+                    (103, NULL, 4),
+                    (104, NULL, 4),
+                    (105, NULL, 4),
+                    (106, NULL, 4),
+                    (107, NULL, 4);
+                INSERT INTO taxon_names (taxon_id, name_type, name) VALUES
+                    (101, 1, 'Fixture taxon 101'), (101, 3, '香科科属'),
+                    (102, 1, 'Fixture taxon 102'), (102, 3, '山地香科科'),
+                    (103, 1, 'Fixture taxon 103'), (103, 3, '蒜味香科科'),
+                    (104, 1, 'Fixture taxon 104'), (104, 3, '高山香科科'),
+                    (105, 1, 'Fixture taxon 105'), (105, 3, '石地香科科'),
+                    (106, 1, 'Fixture taxon 106'), (106, 3, '林地香科科'),
+                    (107, 1, 'Fixture taxon 107'), (107, 3, '河谷香科科');
+                "#,
+            )
+            .unwrap();
+
+        let raw_counts = connection
+            .query_row(
+                r#"
+                SELECT COUNT(*), COUNT(DISTINCT taxon_id)
+                FROM taxon_names
+                WHERE normalized_name LIKE '%香科科%'
+                "#,
+                [],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .unwrap();
+        assert_eq!(raw_counts, (7, 7));
+        let fts_counts = connection
+            .query_row(
+                r#"
+                SELECT COUNT(*), COUNT(DISTINCT taxon_names.taxon_id)
+                FROM taxon_names_fts
+                JOIN taxon_names ON taxon_names.name_id = taxon_names_fts.rowid
+                WHERE taxon_names_fts MATCH '"香科科"'
+                "#,
+                [],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .unwrap();
+        assert_eq!(fts_counts, (7, 7));
+        register_search_functions(&connection).unwrap();
+        let relation = build_taxon_search_relation(&SearchQuery::new("香科科"));
+        let counts_sql = format!(
+            r#"
+            WITH {}
+            SELECT
+                (SELECT COUNT(*) FROM search_name_candidates),
+                (SELECT COUNT(*) FROM ranked_taxa)
+            "#,
+            relation.cte_sql
+        );
+        let pipeline_counts = connection
+            .query_row(&counts_sql, params_from_iter(relation.params), |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+            })
+            .unwrap();
+        assert_eq!(pipeline_counts, (7, 7));
+
+        let results = search_taxa(&database, "香科科", 20).unwrap();
+
+        assert_eq!(results.len(), 7);
+        assert_eq!(results[0].taxon_id, 101);
+        assert_eq!(results[0].names.zh_name.as_deref(), Some("香科科属"));
+        assert_eq!(
+            results
+                .iter()
+                .map(|result| result.taxon_id)
+                .collect::<HashSet<_>>()
+                .len(),
+            7
+        );
+
+        let limited = search_taxa(&database, "香科科", 3).unwrap();
+        assert_eq!(limited.len(), 3);
+        assert_eq!(limited[0].taxon_id, 101);
+
+        let suggestions = suggest_taxa(&database, "香科科", 20).unwrap();
+        assert_eq!(suggestions.len(), 7);
+        assert_eq!(suggestions[0].taxon_id, 101);
+    }
+
+    #[test]
+    fn matching_names_are_deduplicated_only_within_each_taxon() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = Database::open(directory.path().join("test.db")).unwrap();
+        database
+            .connect_taxonomy_metadata_context()
+            .unwrap()
+            .execute_batch(
+                r#"
+                INSERT INTO taxa (taxon_id, parent_taxon_id, rank) VALUES
+                    (201, NULL, 4),
+                    (202, NULL, 4);
+                INSERT INTO taxon_names (taxon_id, name_type, name) VALUES
+                    (201, 1, 'Canis'),
+                    (201, 2, 'Canis familiaris'),
+                    (202, 1, 'Canis lupus');
+                "#,
+            )
+            .unwrap();
+
+        let results = search_taxa(&database, "Canis", 20).unwrap();
+
+        assert_eq!(
+            results
+                .iter()
+                .map(|result| result.taxon_id)
+                .collect::<Vec<_>>(),
+            vec![201, 202]
+        );
+        assert_eq!(results[0].matches.len(), 2);
+    }
 }

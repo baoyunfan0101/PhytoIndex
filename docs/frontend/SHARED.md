@@ -9,7 +9,9 @@ does not own business data or import feature modules.
 
 `VirtualList<T>` and `VirtualGrid<T>` render windowed collections. Their
 parameters include items, dimensions, a stable item key, a renderer, and an
-optional end-of-list callback.
+optional end-of-list callback. `VirtualList` clamps persisted scroll state when
+the collection shrinks; consumers may provide `resetKey` to return to the first
+row when a query or filter changes.
 
 `SectionHeader`, `EmptyState`, `Modal`, `Segmented`, `Disclosure`, and `Busy`
 provide domain-neutral presentation. `CodeEditor` provides the common SQL and

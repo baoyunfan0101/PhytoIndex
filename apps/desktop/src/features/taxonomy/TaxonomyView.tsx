@@ -105,6 +105,7 @@ export function TaxonomySearchView({
     if (!normalized) return;
     setQuery(normalized);
     setSubmittedQuery(normalized);
+    setRefreshKey((current) => current + 1);
     setSelectedRootTaxonId(null);
     setHierarchyPositions({});
     setSelectedSuggestionIndex(-1);
@@ -121,6 +122,7 @@ export function TaxonomySearchView({
     <aside className="taxonomy-results">
       <VirtualList
         stateKey="taxonomy-search.results-list"
+        resetKey={`${submittedQuery}:${refreshKey}`}
         items={taxonomySearch.results}
         rowHeight={60}
         itemKey={(item) => item.taxon_id}

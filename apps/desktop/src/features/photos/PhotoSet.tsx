@@ -7,10 +7,12 @@ import type { PhotoOpenHandlers } from "./PhotoInteraction";
 export function PhotoSet({
   query,
   taxonId,
+  refreshKey,
   handlers,
 }: {
   query?: string;
   taxonId?: number;
+  refreshKey?: number;
   handlers: PhotoOpenHandlers;
 }) {
   const params = query !== undefined
@@ -18,7 +20,7 @@ export function PhotoSet({
     : { kind: "taxon" as const, taxonId: taxonId! };
   const page = useCursorPage({
     params,
-    resetKey: query !== undefined ? `search:${query}` : `taxon:${taxonId}`,
+    resetKey: query !== undefined ? `search:${query}:${refreshKey ?? 0}` : `taxon:${taxonId}`,
     stateKey: "photo-set.page",
     loadPage: (next, cursor) => next.kind === "search"
       ? searchPhotos(next.query, cursor)
