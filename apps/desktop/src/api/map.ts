@@ -10,6 +10,13 @@ export const getMapSettings = () =>
   call<MapSettings>("get_map_settings", undefined, () => ({ provider: "osm", tianditu_token: null }));
 export const setMapSettings = (settings: MapSettings) =>
   call<MapSettings>("set_map_settings", { settings }, () => settings);
+export const getMapPhotoBounds = () =>
+  call<MapBounds | null>("get_map_photo_bounds", undefined, () => ({
+    west: 116.25,
+    south: 39.75,
+    east: 116.81,
+    north: 40.63,
+  }));
 export const listMapPhotos = (bounds: MapBounds | null = null, cursor: string | null = null, limit = 500) =>
   call<Page<MapPhoto>>("list_map_photos", { bounds, cursor, limit }, () => {
     const offset = cursor ? Number(cursor) : 0;

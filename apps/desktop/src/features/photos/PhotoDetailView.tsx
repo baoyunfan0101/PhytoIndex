@@ -11,13 +11,19 @@ import { PhotoStage } from "./PhotoMedia";
 import { formatPhotoModifiedAt } from "./photoFormatting";
 import { useViewState } from "../../shared/viewState";
 import { ResizablePanels } from "../../shared/ResizablePanels";
+import { usePhotoInteraction, type PhotoOpenHandlers } from "./PhotoInteraction";
 
-export function PhotoDetailView({ photo }: { photo: Photo }) {
+export function PhotoDetailView({ photo, handlers }: { photo: Photo; handlers: PhotoOpenHandlers }) {
   const [metadata, setMetadata] = useViewState<PhotoMetadata | null>("photo-detail.metadata", null);
   const [detailScrollTop, setDetailScrollTop] = useViewState("photo-detail.scroll-top", 0);
   const [error, setError] = useState("");
   const [copied, setCopied] = useState("");
   const detailRef = useRef<HTMLDListElement>(null);
+  const interaction = usePhotoInteraction({
+    photos: [photo],
+    handlers,
+    stateKey: "photo-detail.interaction",
+  });
 
   useEffect(() => {
     let active = true;
@@ -54,7 +60,7 @@ export function PhotoDetailView({ photo }: { photo: Photo }) {
         minSecond={300}
         separatorLabel="Resize photo and details"
         stateKey="photo-detail.columns"
-        first={<PhotoStage photo={photo} compact />}
+        first={<PhotoStage photo={photo} compact onContextMenu={interaction.openContextMenu} />}
         second={(<div className="photo-detail-sidebar">
           {!metadata && !error ? <Busy label="Loading details" /> : (
           <dl
@@ -76,6 +82,7 @@ export function PhotoDetailView({ photo }: { photo: Photo }) {
         {error && <div className="inline-error">{error}</div>}
         </div>)}
       />
+      {interaction.contextMenu}
     </div>
   );
 }

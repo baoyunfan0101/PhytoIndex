@@ -44,17 +44,23 @@ Returns: an expandable photographed-taxonomy tree and photo stage.
 
 Parameters include `handlers` and an optional refresh key.
 
-Returns: a viewport-driven MapLibre page. Map requests use the visible bounds
-and backend cursor; only returned markers are mounted.
+Returns: a viewport-driven MapLibre page. The first open fits the aggregate
+coordinates of all geotagged photos; the tab then retains its center and zoom.
+Map requests use the visible bounds and backend cursor, and only returned
+markers are mounted. Selecting a marker reuses one bottom-right thumbnail and
+filename preview. Selecting another marker replaces its contents, selecting
+the map closes it, and selecting the preview opens Photo Detail.
 
-### `PhotoDetailView({ photo })`
+### `PhotoDetailView({ photo, handlers })`
 
 Parameters: one `Photo`.
 
 Returns: a photo stage and copyable file and EXIF metadata. The heading shows
 the filename followed by file size, a middle dot, and the modified time from
-the supplied `Photo`; the page does not request mapping data. Width, height,
-longitude, and latitude are separate detail rows.
+the supplied `Photo`; the page does not request mapping data on load. Width,
+height, longitude, and latitude are separate detail rows. The photo stage
+exposes the shared photo context menu, which loads mapping state on demand when
+opened.
 
 ### `PhotoStage` and `PhotoThumb`
 

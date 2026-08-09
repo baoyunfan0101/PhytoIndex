@@ -140,6 +140,7 @@ pub fn run() {
             commands::search_photos_by_mapping_status,
             commands::get_map_settings,
             commands::set_map_settings,
+            commands::get_map_photo_bounds,
             commands::list_map_photos,
             commands::get_app_version,
             commands::check_app_update,

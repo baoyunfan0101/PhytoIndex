@@ -237,8 +237,10 @@
 .map-view { position: relative; width: 100%; height: 100%; }
 .map-canvas { position: absolute; inset: 0; }
 .map-photo-marker { width: 15px; height: 15px; padding: 0; border: 2px solid #fff; border-radius: 50%; background: var(--accent); box-shadow: 0 1px 5px #0009; }
-.map-photo-float { position: absolute; z-index: 5; right: 18px; bottom: 22px; width: min(420px, 38vw); height: min(360px, 48vh); overflow: hidden; border: 1px solid var(--line-strong); border-radius: 5px; background: #181818; box-shadow: 0 12px 34px #000b; }
-.map-photo-float .photo-stage { height: calc(100% - 36px); }
+.map-photo-preview { position: absolute; z-index: 5; right: 18px; bottom: 18px; display: grid; width: min(300px, 34vw); padding: 0; overflow: hidden; border: 1px solid var(--line-strong); border-radius: 5px; color: var(--text); text-align: left; background: #181818; box-shadow: 0 12px 34px #000b; }
+.map-photo-preview:hover { border-color: var(--accent-bright); background: #181818; filter: none; transform: none; }
+.map-photo-preview img { display: block; width: 100%; height: min(190px, 24vh); object-fit: cover; }
+.map-photo-preview span { min-width: 0; padding: 9px 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .map-count { position: absolute; z-index: 4; bottom: 12px; left: 12px; padding: 5px 8px; border-radius: 3px; background: #181818dd; }
 
 .context-menu {

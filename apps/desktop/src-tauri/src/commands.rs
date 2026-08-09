@@ -1530,6 +1530,11 @@ pub fn set_map_settings(
 }
 
 #[tauri::command]
+pub fn get_map_photo_bounds(state: State<'_, AppState>) -> CommandResult<Option<MapBounds>> {
+    map::get_map_photo_bounds(&state.database).map_err(error)
+}
+
+#[tauri::command]
 pub fn list_map_photos(
     state: State<'_, AppState>,
     bounds: Option<MapBounds>,

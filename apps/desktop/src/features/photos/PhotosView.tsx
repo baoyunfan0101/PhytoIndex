@@ -12,9 +12,10 @@ import {
   type PhotoDirectoryItem,
   type PhotoLibrary,
   type Photo,
+  photoUrl,
 } from "../../api/photos";
 import { errorMessage } from "../../api/common";
-import { getMapSettings, listMapPhotos, type MapBounds, type MapPhoto } from "../../api/map";
+import { getMapPhotoBounds, getMapSettings, listMapPhotos, type MapBounds, type MapPhoto } from "../../api/map";
 import { browsePhotoTaxon, type PhotoTaxonItem, type PhotoTaxonUsage } from "../../api/mapping";
 import type { TaxonTreeNameParts } from "../../api/general";
 import { waitForOperation } from "../../api/tasks";
@@ -668,6 +669,11 @@ export function PhotoMapView({
   const markers = useRef(new Map<number, maplibregl.Marker>());
   const [mapReady, setMapReady] = useState(false);
   const [bounds, setBounds] = useState<MapBounds | null>(null);
+  const [savedViewport, setSavedViewport] = useViewState<{
+    longitude: number;
+    latitude: number;
+    zoom: number;
+  } | null>("map.viewport", null);
   const boundsKey = bounds
     ? `${bounds.west}:${bounds.south}:${bounds.east}:${bounds.north}`
     : "no-bounds";
@@ -682,6 +688,7 @@ export function PhotoMapView({
     photos,
     handlers,
     selectFirst: false,
+    stateKey: "map.interaction",
   });
   useDeferredPhotoMutation(active, () => {
     void page.reload();
@@ -689,30 +696,47 @@ export function PhotoMapView({
 
   useEffect(() => {
     let disposed = false;
-    getMapSettings().then((settings) => {
+    if (!active || map.current) return;
+    Promise.all([
+      getMapSettings().catch(() => ({ provider: "osm" as const, tianditu_token: null })),
+      savedViewport ? Promise.resolve(null) : getMapPhotoBounds().catch(() => null),
+    ]).then(([settings, photoBounds]) => {
       if (disposed || !container.current) return;
       const rasterUrl = settings.provider === "tianditu" && settings.tianditu_token
         ? `https://t0.tianditu.gov.cn/vec_w/wmts?tk=${settings.tianditu_token}&service=wmts&request=gettile&version=1.0.0&layer=vec&style=default&tilematrixset=w&format=tiles&tilematrix={z}&tilerow={y}&tilecol={x}`
         : "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
       const next = new maplibregl.Map({
         container: container.current,
-        center: [0, 20],
-        zoom: 1.5,
+        ...(savedViewport
+          ? { center: [savedViewport.longitude, savedViewport.latitude] as [number, number], zoom: savedViewport.zoom }
+          : photoBounds
+            ? {
+                bounds: [[photoBounds.west, photoBounds.south], [photoBounds.east, photoBounds.north]] as [[number, number], [number, number]],
+                fitBoundsOptions: { padding: 64, maxZoom: 13 },
+              }
+            : { center: [0, 20] as [number, number], zoom: 1.5 }),
         style: { version: 8, sources: { tiles: { type: "raster", tiles: [rasterUrl], tileSize: 256 } }, layers: [{ id: "tiles", type: "raster", source: "tiles" }] },
       });
       map.current = next;
-      const updateBounds = () => setBounds(readMapBounds(next.getBounds()));
+      const updateViewport = () => {
+        const center = next.getCenter();
+        setSavedViewport({ longitude: center.lng, latitude: center.lat, zoom: next.getZoom() });
+        setBounds(readMapBounds(next.getBounds()));
+      };
       setMapReady(true);
-      updateBounds();
-      next.on("load", updateBounds);
-      next.on("moveend", updateBounds);
+      updateViewport();
+      next.on("load", updateViewport);
+      next.on("moveend", updateViewport);
     });
     return () => {
       disposed = true;
-      map.current?.remove();
-      map.current = null;
-      markers.current.clear();
     };
+  }, [active]);
+
+  useEffect(() => () => {
+    map.current?.remove();
+    map.current = null;
+    markers.current.clear();
   }, []);
 
   useEffect(() => {
@@ -735,7 +759,10 @@ export function PhotoMapView({
       marker.className = "map-photo-marker";
       marker.type = "button";
       marker.title = item.photo.filename;
-      marker.addEventListener("click", () => interaction.selectPhoto(item.photo));
+      marker.addEventListener("click", (event) => {
+        event.stopPropagation();
+        interaction.selectPhoto(item.photo);
+      });
       markers.current.set(
         item.photo.photo_id,
         new maplibregl.Marker({ element: marker })
@@ -750,14 +777,29 @@ export function PhotoMapView({
   }, [page.hasMore, page.loadMore, page.loading]);
 
   return (
-    <div className="map-view">
+    <div
+      className="map-view"
+      onClick={(event) => {
+        const target = event.target as Element;
+        if (!target.closest(".map-photo-preview") && !target.closest(".map-photo-marker")) {
+          interaction.clearSelection();
+        }
+      }}
+    >
       <div className="map-canvas" ref={container} />
       {interaction.selected && (
-        <div className="map-photo-float">
-          <PhotoStage photo={interaction.selected} compact onContextMenu={interaction.openContextMenu} />
-        </div>
+        <button
+          className="map-photo-preview"
+          type="button"
+          aria-label={`Open details for ${interaction.selected.filename}`}
+          onClick={() => handlers.openDetails(interaction.selected!)}
+          onContextMenu={(event) => interaction.openContextMenu(event, interaction.selected!)}
+        >
+          <img src={photoUrl(interaction.selected, true)} alt="" draggable={false} />
+          <span>{interaction.selected.filename}</span>
+        </button>
       )}
-      <span className="map-count">{page.items.length} geotagged photos{page.loading ? " loading" : ""}</span>
+      <span className="map-count">{page.items.length} photos in view{page.loading ? " loading" : ""}</span>
       {interaction.contextMenu}
     </div>
   );
