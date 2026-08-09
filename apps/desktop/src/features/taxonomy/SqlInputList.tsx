@@ -61,7 +61,7 @@ export function SqlInputList({
   }
 
   return (
-    <aside className="sql-sources">
+    <aside className={`sql-sources sql-source-sidebar ${expandedGroup ? `${expandedGroup}-expanded` : "groups-collapsed"}`}>
       <div className={`sql-source-group${expandedGroup === "inputs" ? " expanded" : ""}`}>
         <header className="sql-source-group-header">
           <button

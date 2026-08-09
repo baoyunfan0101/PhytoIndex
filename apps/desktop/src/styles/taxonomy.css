@@ -138,18 +138,24 @@
   display: flex;
   min-height: 0;
   flex-direction: column;
-  overflow: hidden;
+  gap: 5px;
+  padding: 9px;
+  overflow: auto;
   border-right: 1px solid var(--line);
   background: var(--panel);
 }
-.sql-source-group { display: flex; min-height: 0; flex: 0 0 auto; flex-direction: column; border-bottom: 1px solid var(--line); }
-.sql-source-group.expanded { flex: 1 1 0; }
-.sql-source-group-header { display: flex; min-height: 31px; align-items: center; background: var(--panel-2); }
-.sql-source-group-header > button { display: flex; min-width: 0; flex: 1; align-items: center; gap: 4px; align-self: stretch; padding: 0 7px; border: 0; text-align: left; background: transparent; }
-.sql-source-group-header strong { overflow: hidden; font-size: 11px; letter-spacing: .035em; text-overflow: ellipsis; text-transform: uppercase; white-space: nowrap; }
-.sql-source-group-actions { display: flex; align-items: center; gap: 2px; padding-right: 4px; }
-.sql-source-group-body { display: flex; min-height: 0; flex: 1; flex-direction: column; gap: 5px; padding: 6px; overflow: auto; }
-.sql-source-empty { padding: 3px 2px; color: var(--quiet); }
+.sql-source-sidebar { display: grid; height: 100%; grid-template-rows: minmax(0, 1fr) auto; gap: 0; overflow: hidden; }
+.sql-source-sidebar.tables-expanded { grid-template-rows: auto minmax(0, 1fr); }
+.sql-source-sidebar.groups-collapsed { align-content: start; grid-template-rows: auto auto; }
+.sql-source-group { display: grid; min-height: 0; grid-template-rows: auto; overflow: hidden; }
+.sql-source-group.expanded { grid-template-rows: auto minmax(0, 1fr); }
+.sql-source-group-header { display: flex; min-height: 25px; align-items: center; }
+.sql-source-group-header > button { display: flex; min-width: 0; flex: 1; align-items: center; gap: 4px; align-self: stretch; padding: 0; border: 0; color: inherit; font: inherit; text-align: left; transition: none; background: transparent; }
+.sql-source-group-header > button:active { transform: none; }
+.sql-source-group-header strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sql-source-group-actions { display: flex; align-items: center; gap: 2px; }
+.sql-source-group-body { display: flex; min-height: 0; flex-direction: column; gap: 5px; padding-top: 5px; overflow: auto; }
+.sql-source-empty { color: var(--quiet); }
 .sql-input-actions { display: flex; align-items: center; gap: 4px; }
 .sql-input-actions strong { margin-right: auto; }
 .sql-sources section { border: 1px solid var(--line); }
