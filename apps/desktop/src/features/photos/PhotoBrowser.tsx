@@ -27,7 +27,7 @@ export function PhotoBrowser({
   handlers: PhotoOpenHandlers;
 }) {
   const photos = page.items;
-  const [mode, setMode] = usePhotoDisplayMode("photo-browser.display-mode");
+  const [mode, setMode] = usePhotoDisplayMode();
   const interaction = usePhotoInteraction({
     photos,
     handlers,
@@ -77,6 +77,7 @@ export function PhotoBrowser({
             stateKey="photo-browser.list"
             items={photos}
             activeIndex={activeIndex}
+            focusWhen={mode === "thumbnails"}
             rowHeight={28}
             itemKey={(photo) => photo.photo_id}
             onNearEnd={() => void page.loadMore()}

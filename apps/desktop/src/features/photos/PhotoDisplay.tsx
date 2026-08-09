@@ -1,14 +1,13 @@
 import { Image as ImageIcon, LayoutGrid } from "lucide-react";
-import { useEffect, type MouseEvent } from "react";
+import { useEffect, useState, type MouseEvent } from "react";
 import type { Photo } from "../../api/photos";
 import { IconButton, VirtualGrid } from "../../shared/ui";
-import { useViewState } from "../../shared/viewState";
 import { PhotoStage, PhotoThumb } from "./PhotoMedia";
 
 export type PhotoDisplayMode = "thumbnails" | "image";
 
-export function usePhotoDisplayMode(stateKey: string) {
-  const [mode, setMode] = useViewState<PhotoDisplayMode>(stateKey, "thumbnails");
+export function usePhotoDisplayMode() {
+  const [mode, setMode] = useState<PhotoDisplayMode>("thumbnails");
 
   useEffect(() => {
     if (mode !== "image") return;

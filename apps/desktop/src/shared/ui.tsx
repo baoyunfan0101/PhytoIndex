@@ -75,6 +75,7 @@ export function IconButton({
 export function VirtualList<T>({
   items,
   activeIndex = null,
+  focusWhen = false,
   rowHeight = 42,
   className = "",
   overscan = 8,
@@ -90,6 +91,7 @@ export function VirtualList<T>({
 }: {
   items: T[];
   activeIndex?: number | null;
+  focusWhen?: boolean;
   rowHeight?: number;
   className?: string;
   overscan?: number;
@@ -123,6 +125,14 @@ export function VirtualList<T>({
     observer.observe(element);
     return () => observer.disconnect();
   }, []);
+
+  useEffect(() => {
+    if (!focusWhen) return;
+    const frame = window.requestAnimationFrame(() => {
+      viewportRef.current?.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [focusWhen]);
 
   const start = Math.max(0, Math.floor(scrollTop / rowHeight) - overscan);
   const end = Math.min(items.length, Math.ceil((scrollTop + height) / rowHeight) + overscan);

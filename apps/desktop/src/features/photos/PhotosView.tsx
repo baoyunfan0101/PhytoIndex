@@ -172,7 +172,7 @@ export function FolderPhotosView({
     selectFirst: false,
     stateKey: "folders.interaction",
   });
-  const [displayMode, setDisplayMode] = usePhotoDisplayMode("folders.photo-display-mode");
+  const [displayMode, setDisplayMode] = usePhotoDisplayMode();
   const resolvedActiveRowKey = activeRowKey ?? (interaction.selectedId === null ? null : `p:${interaction.selectedId}`);
   const activeRowIndex = rows.findIndex((row) => directoryTreeRowKey(row) === resolvedActiveRowKey);
   usePhotoMutation(() => {
@@ -305,6 +305,7 @@ export function FolderPhotosView({
             stateKey="folders.list"
             items={rows}
             activeIndex={activeRowIndex}
+            focusWhen={displayMode === "thumbnails"}
             rowHeight={28}
             itemKey={directoryTreeRowKey}
             onActivateActive={activateDirectoryRow}
@@ -439,7 +440,7 @@ export function TaxonPhotosView({
     selectFirst: false,
     stateKey: "photo-taxonomy.interaction",
   });
-  const [displayMode, setDisplayMode] = usePhotoDisplayMode("photo-taxonomy.photo-display-mode");
+  const [displayMode, setDisplayMode] = usePhotoDisplayMode();
   const resolvedActiveRowKey = activeRowKey ?? (interaction.selectedId === null ? null : `p:${interaction.selectedId}`);
   const activeRowIndex = rows.findIndex((row) => taxonTreeRowKey(row) === resolvedActiveRowKey);
   usePhotoMutation(() => {
@@ -552,6 +553,7 @@ export function TaxonPhotosView({
             stateKey="photo-taxonomy.list"
             items={rows}
             activeIndex={activeRowIndex}
+            focusWhen={displayMode === "thumbnails"}
             rowHeight={28}
             itemKey={taxonTreeRowKey}
             onActivateActive={activateTaxonRow}
