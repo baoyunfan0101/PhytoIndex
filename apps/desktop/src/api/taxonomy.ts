@@ -120,6 +120,7 @@ export type TaxonRowOutcome = {
   }>;
 };
 export type TaxonomyPreviewResult = { delimiter: string; encoding: string; rows: TaxonRowOutcome[] };
+export type FormattedUpdatePreviewResult = TaxonomyPreviewResult & { preview_id: string };
 export type TaxonomyOperationResult = TaxonomyPreviewResult & {
   operation_id: number;
   total_rows: number;
@@ -742,28 +743,46 @@ export const getTaxonomyTemplate = () =>
   call<string>("get_taxonomy_formatted_update_template", undefined, () => "kingdom|order|family|genus|species|authority_year|synonyms|zh_name|zh_alias|en_name|en_alias|geological_range|source\n");
 export const parseTaxonomyCsv = (input: string) =>
   call<TaxonInputRow[]>("parse_taxonomy_input_csv", { input }, () => parseDemoTaxonomyCsv(input));
+
+let demoFormattedUpdatePreview: {
+  previewId: string;
+  result: TaxonomyPreviewResult;
+} | null = null;
+
 export const previewTaxonomyRows = (rows: TaxonInputRow[]) =>
-  call<TaxonomyPreviewResult>("preview_taxonomy_rows", { rows }, () => ({
-    delimiter: "|",
-    encoding: "UTF-8",
-    rows: rows.map((row, index) => ({
-      row_number: index + 1,
-      operation_types: ["new_name"],
-      message: "Ready to apply",
-      target: null,
-      parent: null,
-      candidates: [],
-      changes: [{ kind: "append_name", field: "species", old_value: null, new_value: row.species ?? null }],
-    })),
-  }));
-export const applyTaxonomyRows = (rows: TaxonInputRow[]) =>
-  call<TaxonomyOperationResult>("apply_taxonomy_rows", { rows }, async () => ({
-    ...(await previewTaxonomyRows(rows)),
-    operation_id: 100,
-    total_rows: rows.length,
-    succeeded_rows: rows.length,
-    failed_rows: 0,
-  }));
+  call<FormattedUpdatePreviewResult>("preview_taxonomy_rows", { rows }, () => {
+    const previewId = `demo-preview-${Date.now()}`;
+    const result: TaxonomyPreviewResult = {
+      delimiter: "|",
+      encoding: "UTF-8",
+      rows: rows.map((row, index) => ({
+        row_number: index + 1,
+        operation_types: ["new_name"],
+        message: "Ready to apply",
+        target: null,
+        parent: null,
+        candidates: [],
+        changes: [{ kind: "append_name", field: "species", old_value: null, new_value: row.species ?? null }],
+      })),
+    };
+    demoFormattedUpdatePreview = { previewId, result };
+    return { ...result, preview_id: previewId };
+  });
+export const applyTaxonomyRows = (previewId: string) =>
+  call<TaxonomyOperationResult>("apply_taxonomy_rows", { previewId }, () => {
+    if (demoFormattedUpdatePreview?.previewId !== previewId) {
+      throw new Error("Formatted update preview is no longer current; preview again");
+    }
+    const result = demoFormattedUpdatePreview.result;
+    demoFormattedUpdatePreview = null;
+    return {
+      ...result,
+      operation_id: 100,
+      total_rows: result.rows.length,
+      succeeded_rows: result.rows.length,
+      failed_rows: 0,
+    };
+  });
 
 function parseDemoTaxonomyCsv(input: string): TaxonInputRow[] {
   const lines = input.trim().split(/\r?\n/);

@@ -9,7 +9,8 @@ use chrono::Local;
 use serde_json::Value;
 use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
-use vividarium_core::{Database, OperationProgress, OperationState, OperationsStatus};
+use vividarium_core::taxonomy::{PreparedTaxonomyUpdate, TaxonomyPreviewResult};
+use vividarium_core::{CoreError, Database, OperationProgress, OperationState, OperationsStatus};
 
 static GLOBAL_STATE: OnceLock<AppState> = OnceLock::new();
 const PROGRESS_EVENT_INTERVAL: Duration = Duration::from_millis(100);
@@ -57,6 +58,13 @@ pub struct AppState {
     pub thumbnail_dir: PathBuf,
     pub operations: OperationManager,
     pub taxonomy_sync: DeferredWork,
+    formatted_update_preview: Arc<Mutex<Option<StagedFormattedUpdate>>>,
+}
+
+#[derive(Debug)]
+struct StagedFormattedUpdate {
+    preview_id: String,
+    prepared: PreparedTaxonomyUpdate,
 }
 
 impl AppState {
@@ -71,7 +79,50 @@ impl AppState {
             thumbnail_dir,
             operations: OperationManager::new(),
             taxonomy_sync: DeferredWork::new(),
+            formatted_update_preview: Arc::new(Mutex::new(None)),
         })
+    }
+
+    pub fn replace_formatted_update_preview(
+        &self,
+        prepared: PreparedTaxonomyUpdate,
+    ) -> Result<(String, TaxonomyPreviewResult), CoreError> {
+        let preview_id = Uuid::new_v4().to_string();
+        let preview = prepared.preview_result().clone();
+        let mut current = self.formatted_update_preview.lock().map_err(|_| {
+            CoreError::Consistency("formatted update preview lock is poisoned".into())
+        })?;
+        *current = Some(StagedFormattedUpdate {
+            preview_id: preview_id.clone(),
+            prepared,
+        });
+        Ok((preview_id, preview))
+    }
+
+    pub fn take_formatted_update_preview(
+        &self,
+        preview_id: &str,
+    ) -> Result<PreparedTaxonomyUpdate, CoreError> {
+        let mut current = self.formatted_update_preview.lock().map_err(|_| {
+            CoreError::Consistency("formatted update preview lock is poisoned".into())
+        })?;
+        if current.as_ref().map(|value| value.preview_id.as_str()) != Some(preview_id) {
+            return Err(CoreError::InvalidArgument(
+                "formatted update preview is no longer current; preview again".into(),
+            ));
+        }
+        current
+            .take()
+            .map(|value| value.prepared)
+            .ok_or_else(|| CoreError::Consistency("formatted update preview disappeared".into()))
+    }
+
+    pub fn clear_formatted_update_preview(&self) -> Result<(), CoreError> {
+        let mut current = self.formatted_update_preview.lock().map_err(|_| {
+            CoreError::Consistency("formatted update preview lock is poisoned".into())
+        })?;
+        *current = None;
+        Ok(())
     }
 }
 

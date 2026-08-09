@@ -272,18 +272,58 @@ pub struct TaxonomyOperationResult {
     pub rows: Vec<TaxonRowOutcome>,
 }
 
+#[derive(Debug)]
+pub struct PreparedTaxonomyUpdate {
+    rows: Vec<TaxonInputRow>,
+    preview: TaxonomyPreviewResult,
+    changeset_blob: Vec<u8>,
+    revision: TaxonomyRevision,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TaxonomyRevision {
+    taxonomy_identity: String,
+    latest_operation_id: i64,
+    operation_count: i64,
+}
+
+impl PreparedTaxonomyUpdate {
+    pub fn preview_result(&self) -> &TaxonomyPreviewResult {
+        &self.preview
+    }
+}
+
 pub fn preview_rows(
     database: &Database,
     rows: &[TaxonInputRow],
 ) -> CoreResult<TaxonomyPreviewResult> {
+    Ok(prepare_rows(database, rows)?.preview)
+}
+
+pub fn prepare_rows(
+    database: &Database,
+    rows: &[TaxonInputRow],
+) -> CoreResult<PreparedTaxonomyUpdate> {
+    let _guard = database.try_taxonomy_mutation()?;
     let mut connection = database.connect_taxonomy_metadata_context()?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let revision = taxonomy_revision(&transaction)?;
+    let mut session = start_taxonomy_session(&transaction)?;
     let outcomes = process_rows(&transaction, rows)?;
+    validate_taxonomy(&transaction)?;
+    let mut changeset_blob = Vec::new();
+    session.changeset_strm(&mut changeset_blob)?;
+    drop(session);
     transaction.rollback()?;
-    Ok(TaxonomyPreviewResult {
-        delimiter: "|".into(),
-        encoding: "UTF-8".into(),
-        rows: outcomes,
+    Ok(PreparedTaxonomyUpdate {
+        rows: rows.to_vec(),
+        preview: TaxonomyPreviewResult {
+            delimiter: "|".into(),
+            encoding: "UTF-8".into(),
+            rows: outcomes,
+        },
+        changeset_blob,
+        revision,
     })
 }
 
@@ -301,6 +341,53 @@ pub fn apply_rows(
     session.changeset_strm(&mut changeset_blob)?;
     drop(session);
 
+    let result = store_applied_rows(&transaction, rows, outcomes, changeset_blob)?;
+    transaction.commit()?;
+    Ok(result)
+}
+
+pub fn apply_prepared_rows(
+    database: &Database,
+    prepared: PreparedTaxonomyUpdate,
+) -> CoreResult<TaxonomyOperationResult> {
+    let _guard = database.try_taxonomy_mutation()?;
+    let mut connection = database.connect_taxonomy_metadata_context()?;
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    if taxonomy_revision(&transaction)? != prepared.revision {
+        return Err(CoreError::InvalidArgument(
+            "formatted update preview is stale; preview again".into(),
+        ));
+    }
+    if !prepared.changeset_blob.is_empty() {
+        transaction
+            .apply_strm(
+                &mut Cursor::new(&prepared.changeset_blob),
+                Some(is_taxonomy_session_table),
+                |_, _| ConflictAction::SQLITE_CHANGESET_ABORT,
+            )
+            .map_err(|_| {
+                CoreError::InvalidArgument(
+                    "formatted update preview is stale; preview again".into(),
+                )
+            })?;
+    }
+    validate_taxonomy(&transaction)?;
+    let result = store_applied_rows(
+        &transaction,
+        &prepared.rows,
+        prepared.preview.rows,
+        prepared.changeset_blob,
+    )?;
+    transaction.commit()?;
+    Ok(result)
+}
+
+fn store_applied_rows(
+    transaction: &Transaction<'_>,
+    rows: &[TaxonInputRow],
+    outcomes: Vec<TaxonRowOutcome>,
+    changeset_blob: Vec<u8>,
+) -> CoreResult<TaxonomyOperationResult> {
     let stored_input = rows
         .iter()
         .cloned()
@@ -314,7 +401,7 @@ pub fn apply_rows(
         .filter(|row| row.operation_types.iter().any(|value| value.is_failure()))
         .count();
     let operation_id = operations::insert_operation(
-        &transaction,
+        transaction,
         NewOperation {
             kind: "taxonomy_update",
             source: "formatted_update",
@@ -356,11 +443,32 @@ pub fn apply_rows(
         ])?;
     }
     drop(insert_input);
-    insert_operation_audit(&transaction, operation_id, &result.rows)?;
-    let affected_taxon_ids = affected_taxon_ids_from_changeset(&transaction, &changeset_blob)?;
-    super::sync::record_event(&transaction, Some(operation_id), affected_taxon_ids, false)?;
-    transaction.commit()?;
+    insert_operation_audit(transaction, operation_id, &result.rows)?;
+    let affected_taxon_ids = affected_taxon_ids_from_changeset(transaction, &changeset_blob)?;
+    super::sync::record_event(transaction, Some(operation_id), affected_taxon_ids, false)?;
     Ok(result)
+}
+
+fn taxonomy_revision(connection: &Connection) -> CoreResult<TaxonomyRevision> {
+    connection
+        .query_row(
+            r#"
+            SELECT taxonomy_identity,
+                   (SELECT COALESCE(MAX(operation_id), 0) FROM operations),
+                   (SELECT COUNT(*) FROM operations)
+            FROM taxonomy_identity
+            WHERE identity_id = 1
+            "#,
+            [],
+            |row| {
+                Ok(TaxonomyRevision {
+                    taxonomy_identity: row.get(0)?,
+                    latest_operation_id: row.get(1)?,
+                    operation_count: row.get(2)?,
+                })
+            },
+        )
+        .map_err(Into::into)
 }
 
 fn insert_operation_audit(

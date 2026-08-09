@@ -36,9 +36,10 @@ pub use base_import::{
 };
 pub use formatted::{
     TaxonChange, TaxonChangeKind, TaxonInputRow, TaxonRank, TaxonRowOutcome, TaxonRowStatus,
-    TaxonomyNameType, TaxonomyOperationResult, TaxonomyPreviewResult, apply_rows,
-    get_taxonomy_name_separator, list_operation_audit, list_operations, parse_taxonomy_input_csv,
-    preview_rows, rollback_operation, set_taxonomy_name_separator,
+    PreparedTaxonomyUpdate, TaxonomyNameType, TaxonomyOperationResult, TaxonomyPreviewResult,
+    apply_prepared_rows, apply_rows, get_taxonomy_name_separator, list_operation_audit,
+    list_operations, parse_taxonomy_input_csv, prepare_rows, preview_rows, rollback_operation,
+    set_taxonomy_name_separator,
     taxonomy_formatted_update_template, taxonomy_log_csv,
 };
 pub use operation_export::{

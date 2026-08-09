@@ -315,6 +315,74 @@ fn preview_rolls_back_and_apply_is_revertible() {
 }
 
 #[test]
+fn prepared_preview_applies_the_cached_changeset() {
+    let (_directory, database) = database();
+    let input = TaxonInputRow {
+        kingdom: Some("Animalia".into()),
+        synonyms: vec!["Metazoa".into()],
+        ..TaxonInputRow::default()
+    };
+    let prepared = prepare_rows(&database, std::slice::from_ref(&input)).unwrap();
+    let preview = prepared.preview_result().clone();
+    assert_eq!(preview.rows[0].operation_types, vec![TaxonRowStatus::NewTaxon, TaxonRowStatus::NewName]);
+    assert!(
+        database
+            .connect_taxonomy_metadata_context()
+            .unwrap()
+            .query_row("SELECT NOT EXISTS(SELECT 1 FROM taxa)", [], |row| row.get::<_, bool>(0))
+            .unwrap()
+    );
+
+    let applied = apply_prepared_rows(&database, prepared).unwrap();
+    assert_eq!(applied.rows, preview.rows);
+    assert_eq!(applied.succeeded_rows, 1);
+    assert_eq!(
+        database
+            .connect_taxonomy_metadata_context()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM taxon_names", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        2
+    );
+}
+
+#[test]
+fn prepared_preview_rejects_a_changed_taxonomy_revision() {
+    let (_directory, database) = database();
+    let prepared = prepare_rows(
+        &database,
+        &[TaxonInputRow {
+            kingdom: Some("Animalia".into()),
+            ..TaxonInputRow::default()
+        }],
+    )
+    .unwrap();
+    apply_rows(
+        &database,
+        &[TaxonInputRow {
+            kingdom: Some("Plantae".into()),
+            ..TaxonInputRow::default()
+        }],
+    )
+    .unwrap();
+
+    let error = apply_prepared_rows(&database, prepared).unwrap_err();
+    assert!(error.to_string().contains("preview is stale"));
+    assert_eq!(
+        database
+            .connect_taxonomy_metadata_context()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM taxon_names WHERE name = 'Animalia'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
 fn one_row_reports_every_change_type() {
     let (_directory, database) = database();
     apply_rows(

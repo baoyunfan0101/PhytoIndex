@@ -21,13 +21,17 @@ suggestions. Suggestion rows show available scientific, Chinese, and English
 names followed by rank. Submitted searches show a centered searching status
 until results resolve.
 
-### `FormattedUpdateView({ mutationDisabled })`
+### `FormattedUpdateView({ onStatus, mutationDisabled })`
 
-Parameters: optional mutation guard.
+Parameters: a status callback and optional mutation guard.
 
 Returns: CSV upload and template actions, an editable formatted-input table,
-preview, apply, and row-level result logs. The current taxonomy name separator
-is loaded from Settings metadata.
+preview, apply, and row-level result logs. Preview stores a backend candidate
+and enables Apply. Apply consumes that candidate and directly commits its
+precomputed changeset. Editing rows, importing another file, changing the name
+separator, or receiving another taxonomy mutation clears the preview and
+disables Apply until Preview succeeds again. The current taxonomy name
+separator is loaded from Settings metadata.
 
 ### `CustomSqlView(props)`
 

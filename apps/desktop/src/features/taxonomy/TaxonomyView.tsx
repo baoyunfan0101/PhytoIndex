@@ -1,5 +1,6 @@
 import {
   Download,
+  Eye,
   FileUp,
   Play,
   Search,
@@ -262,6 +263,8 @@ export function FormattedUpdateView({
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState<FormattedBusy>("");
   const [separator, setSeparator] = useState(";");
+  const [previewId, setPreviewId] = useState<string | null>(null);
+  const previewIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     getTaxonomyNameSeparator()
@@ -269,12 +272,16 @@ export function FormattedUpdateView({
       .catch((nextError) => report(errorMessage(nextError)));
   }, []);
   useMetadataChange((change) => {
-    if (change.key === "taxonomy_name_separator") setSeparator(change.value);
+    if (change.key !== "taxonomy_name_separator") return;
+    setSeparator(change.value);
+    invalidatePreview();
   });
   useTaxonomyMutation((mutation) => {
-    if (mutation.kind !== "replacement") return;
-    setOutcomes([]);
-    report("Previous preview cleared because the taxonomy database was replaced.");
+    if (mutation.kind !== "replacement" && previewIdRef.current === null) return;
+    invalidatePreview();
+    report(mutation.kind === "replacement"
+      ? "Previous preview cleared because the taxonomy database was replaced."
+      : "Previous preview cleared because the taxonomy changed.");
   });
 
   function report(nextMessage: string) {
@@ -282,9 +289,20 @@ export function FormattedUpdateView({
     onStatus(nextMessage);
   }
 
+  function setCurrentPreview(nextPreviewId: string | null) {
+    previewIdRef.current = nextPreviewId;
+    setPreviewId(nextPreviewId);
+  }
+
+  function invalidatePreview() {
+    setCurrentPreview(null);
+    setOutcomes([]);
+    setMessage("");
+  }
+
   async function importFile(file: File) {
     setBusy("import");
-    setMessage("");
+    invalidatePreview();
     try {
       setRows(await parseTaxonomyCsv(await file.text()));
       setOutcomes([]);
@@ -310,6 +328,7 @@ export function FormattedUpdateView({
   }
 
   function updateRow(index: number, field: keyof TaxonInputRow, value: string) {
+    invalidatePreview();
     setRows((current) => current.map((row, rowIndex) => rowIndex === index ? {
       ...row,
       [field]: ["synonyms", "zh_alias", "en_alias"].includes(field)
@@ -320,23 +339,37 @@ export function FormattedUpdateView({
 
   function deleteRow(index: number) {
     if (index === 0) return;
+    invalidatePreview();
     setRows((current) => current.filter((_, rowIndex) => rowIndex !== index));
   }
 
-  async function run(kind: "preview" | "apply") {
-    setBusy(kind);
+  async function preview() {
+    setBusy("preview");
     setMessage("");
+    setCurrentPreview(null);
     try {
-      if (kind === "preview") {
-        const result = await previewTaxonomyRows(rows);
-        setOutcomes(result.rows);
-        report(`${result.rows.length} rows previewed`);
-      } else {
-        const result = await applyTaxonomyRows(rows);
-        setOutcomes(result.rows);
-        report(`${result.succeeded_rows} succeeded, ${result.failed_rows} failed`);
-        emitTaxonomyMutation();
-      }
+      const result = await previewTaxonomyRows(rows);
+      setOutcomes(result.rows);
+      setCurrentPreview(result.preview_id);
+      report(`${result.rows.length} rows previewed`);
+    } catch (nextError) {
+      report(errorMessage(nextError));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function apply() {
+    if (previewId === null) return;
+    const currentPreviewId = previewId;
+    setBusy("apply");
+    setMessage("");
+    setCurrentPreview(null);
+    try {
+      const result = await applyTaxonomyRows(currentPreviewId);
+      setOutcomes(result.rows);
+      report(`${result.succeeded_rows} succeeded, ${result.failed_rows} failed`);
+      emitTaxonomyMutation();
     } catch (nextError) {
       report(errorMessage(nextError));
     } finally {
@@ -353,8 +386,8 @@ export function FormattedUpdateView({
             if (file) void importFile(file);
           }} /></label>
           <Button disabled={Boolean(busy)} onClick={() => void downloadTemplate()}><Download size={13} />{busy === "template" ? "Loading..." : "Template"}</Button>
-          <Button disabled={Boolean(busy)} onClick={() => void run("preview")}>{busy === "preview" ? "Previewing..." : "Preview"}</Button>
-          <Button variant="primary" disabled={Boolean(busy) || mutationDisabled} onClick={() => void run("apply")}><Play size={13} />{busy === "apply" ? "Applying..." : "Apply"}</Button>
+          <Button disabled={Boolean(busy)} onClick={() => void preview()}><Eye size={13} />{busy === "preview" ? "Previewing..." : "Preview"}</Button>
+          <Button variant="primary" disabled={Boolean(busy) || mutationDisabled || previewId === null} onClick={() => void apply()}><Play size={13} />{busy === "apply" ? "Applying..." : "Apply"}</Button>
         </>
       } />
       <ResizablePanels
@@ -386,10 +419,13 @@ export function FormattedUpdateView({
             </div>
           )}
         />
-        <Button className="table-add-row" variant="ghost" disabled={Boolean(busy)} onClick={() => setRows((current) => [...current, {}])}>+ Add row</Button>
+        <Button className="table-add-row" variant="ghost" disabled={Boolean(busy)} onClick={() => {
+          invalidatePreview();
+          setRows((current) => [...current, {}]);
+        }}>+ Add row</Button>
         </div>)}
         second={(<div className="formatted-log">
-        <SectionHeader title="Result log" detail={message || "Preview and apply return the same log format"} />
+        <SectionHeader title="Result log" detail={message || "Preview is required before apply"} />
         <VirtualList
           items={outcomes}
           rowHeight={64}

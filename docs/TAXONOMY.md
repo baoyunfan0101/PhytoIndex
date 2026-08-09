@@ -134,14 +134,26 @@ and the same ordered row log.
 | `taxonomy_formatted_update_template` | no `database` parameter | UTF-8 pipe-delimited header `String` |
 | `parse_taxonomy_input_csv` | `input: &str` | `Vec<TaxonInputRow>` |
 | `preview_rows` | `rows: &[TaxonInputRow]` | `TaxonomyPreviewResult` |
+| `prepare_rows` | `rows: &[TaxonInputRow]` | `PreparedTaxonomyUpdate` |
 | `apply_rows` | `rows: &[TaxonInputRow]` | `TaxonomyOperationResult` |
+| `apply_prepared_rows` | `prepared: PreparedTaxonomyUpdate` | `TaxonomyOperationResult` |
 | `taxonomy_log_csv` | no `database`; `rows: &[TaxonRowOutcome]` | UTF-8 pipe-delimited CSV `String` |
 | `get_taxonomy_name_separator` | none | `String` |
 | `set_taxonomy_name_separator` | `separator: &str` | `()` |
 
-Preview evaluates the same changes as apply and leaves no stored taxonomy or
-operation changes. The desktop parse, preview, and apply commands execute
-database work on blocking workers and resolve asynchronously.
+`prepare_rows` evaluates and validates the update in a rolled-back transaction,
+retaining its inputs, row outcomes, taxonomy changeset, taxonomy identity, and
+operation revision in one in-memory candidate. `apply_prepared_rows` rejects a
+stale revision and otherwise applies that precomputed changeset before writing
+the operation, audit, replayable input, and synchronization event. It does not
+reprocess the formatted rows.
+
+The desktop `preview_taxonomy_rows` command replaces the prior in-memory
+candidate and returns `preview_id`, `delimiter`, `encoding`, and `rows`.
+`apply_taxonomy_rows` accepts only that `preview_id`; the candidate is consumed
+by the attempt, so another apply or an apply after editing requires a new
+preview. Both commands execute database work on blocking workers and resolve
+asynchronously.
 
 ## Direct UI changes
 

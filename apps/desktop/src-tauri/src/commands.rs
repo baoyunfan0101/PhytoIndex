@@ -52,6 +52,25 @@ pub struct PhotoLibraryWorkspace {
     pub database_available: bool,
 }
 
+#[derive(Debug, Serialize)]
+pub struct FormattedUpdatePreviewResult {
+    pub preview_id: String,
+    pub delimiter: String,
+    pub encoding: String,
+    pub rows: Vec<TaxonRowOutcome>,
+}
+
+impl FormattedUpdatePreviewResult {
+    fn new(preview_id: String, preview: TaxonomyPreviewResult) -> Self {
+        Self {
+            preview_id,
+            delimiter: preview.delimiter,
+            encoding: preview.encoding,
+            rows: preview.rows,
+        }
+    }
+}
+
 #[tauri::command]
 pub fn get_app_version(app: AppHandle) -> String {
     app.package_info().version.to_string()
@@ -882,24 +901,32 @@ pub async fn export_custom_taxonomy_query(
 pub async fn preview_taxonomy_rows(
     state: State<'_, AppState>,
     rows: Vec<TaxonInputRow>,
-) -> CommandResult<TaxonomyPreviewResult> {
+) -> CommandResult<FormattedUpdatePreviewResult> {
+    state.clear_formatted_update_preview().map_err(error)?;
     let database = state.database.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        taxonomy::preview_rows(&database, &rows).map_err(error)
+    let prepared = tauri::async_runtime::spawn_blocking(move || {
+        taxonomy::prepare_rows(&database, &rows).map_err(error)
     })
     .await
-    .map_err(error)?
+    .map_err(error)??;
+    let (preview_id, preview) = state
+        .replace_formatted_update_preview(prepared)
+        .map_err(error)?;
+    Ok(FormattedUpdatePreviewResult::new(preview_id, preview))
 }
 
 #[tauri::command]
 pub async fn apply_taxonomy_rows(
     app: AppHandle,
     state: State<'_, AppState>,
-    rows: Vec<TaxonInputRow>,
+    preview_id: String,
 ) -> CommandResult<TaxonomyOperationResult> {
+    let prepared = state
+        .take_formatted_update_preview(&preview_id)
+        .map_err(error)?;
     let database = state.database.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
-        taxonomy::apply_rows(&database, &rows).map_err(error)
+        taxonomy::apply_prepared_rows(&database, prepared).map_err(error)
     })
     .await
     .map_err(error)??;
