@@ -34,7 +34,9 @@ precomputed changeset. Editing rows, importing another file, changing the name
 separator or CSV delimiter, or receiving another taxonomy mutation clears the
 preview and disables Apply until Preview succeeds again. The current taxonomy
 name separator is loaded from Settings metadata. CSV uploads and downloaded
-templates use the application-wide CSV delimiter.
+templates use the application-wide CSV delimiter. The leading Help action
+opens a compact summary of species-to-genus normalization, lowest-rank
+matching, ancestor disambiguation, and strict-parent recursive creation.
 
 ### `CustomSqlView(props)`
 
@@ -47,6 +49,8 @@ and All accessible tables shows only the complete readable internal `main`
 taxonomy schema. Uploaded sources remain exclusively in Input sources. The
 expanded group body scrolls independently.
 CSV sources and exports use the application-wide CSV delimiter.
+The leading Help action opens the integer mappings for `taxa.rank` and
+`taxon_names.name_type`.
 
 ### `SqlImportSettings({ onApplied })`
 
@@ -58,7 +62,8 @@ exclusive groups and scrolling behavior as Custom SQL. All accessible tables
 shows only the current internal taxonomy schema, which SQL Import can read
 through the `taxonomy` alias. Uploaded sources and the `sql_import` staging
 schema appear only in Input sources, so neither is duplicated in All
-accessible tables.
+accessible tables. Its leading Help action shows the same taxonomy integer
+code mappings as Custom SQL.
 
 ### `DirectImportSettings({ onApplied })`
 

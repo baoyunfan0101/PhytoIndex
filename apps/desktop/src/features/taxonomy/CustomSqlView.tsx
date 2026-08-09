@@ -1,4 +1,4 @@
-import { Download, Play } from "lucide-react";
+import { CircleQuestionMark, Download, Play } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import {
   addCustomSqlInput,
@@ -20,6 +20,7 @@ import { CodeEditor } from "../../shared/CodeEditor";
 import { ResizablePanels } from "../../shared/ResizablePanels";
 import { Busy, Button, EmptyState, SectionHeader, VirtualList } from "../../shared/ui";
 import { SqlInputList } from "./SqlInputList";
+import { SqlEnumHelpModal } from "./TaxonomyHelpModal";
 import { canExportFullQuery } from "./sqlResults";
 import { resolveSqlWorkbenchLoads } from "./sqlWorkbenchLoading";
 import { emitTaxonomyMutation } from "./taxonomyMutations";
@@ -38,6 +39,7 @@ export function CustomSqlView({
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [loadingWorkbench, setLoadingWorkbench] = useState(true);
+  const [helpOpen, setHelpOpen] = useState(false);
 
   useEffect(() => {
     void Promise.allSettled([
@@ -176,9 +178,12 @@ export function CustomSqlView({
         title="Custom SQL"
         detail="Execute typed SQL against taxonomy and file-path data sources"
         actions={(
-          <Button variant="primary" disabled={Boolean(busy) || loadingWorkbench || !sql.trim() || mutationDisabled} onClick={() => void execute()}>
-            <Play size={13} />{busy === "Executing SQL" ? "Running..." : "Run"}
-          </Button>
+          <>
+            <Button onClick={() => setHelpOpen(true)}><CircleQuestionMark size={13} />Help</Button>
+            <Button variant="primary" disabled={Boolean(busy) || loadingWorkbench || !sql.trim() || mutationDisabled} onClick={() => void execute()}>
+              <Play size={13} />{busy === "Executing SQL" ? "Running..." : "Run"}
+            </Button>
+          </>
         )}
       />
       {output ? (
@@ -194,6 +199,7 @@ export function CustomSqlView({
           second={output}
         />
       ) : primary}
+      {helpOpen && <SqlEnumHelpModal onClose={() => setHelpOpen(false)} />}
     </div>
   );
 }

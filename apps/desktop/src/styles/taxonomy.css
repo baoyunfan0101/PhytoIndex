@@ -121,6 +121,15 @@
 .file-button { position: relative; overflow: hidden; }
 .file-button.disabled { opacity: .55; pointer-events: none; }
 .file-button input { position: absolute; inset: 0; opacity: 0; }
+.taxonomy-help { display: grid; gap: 10px; padding: 2px; }
+.taxonomy-help-code-group { display: grid; gap: 6px; }
+.taxonomy-help-code-group > strong { font-size: 12px; }
+.taxonomy-help-code-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-top: 1px solid var(--line); border-left: 1px solid var(--line); }
+.taxonomy-help-code-grid > div { display: grid; min-width: 0; grid-template-columns: 28px minmax(0, 1fr); gap: 6px; padding: 6px 7px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.taxonomy-help-code-grid span { overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
+.taxonomy-help-steps { display: grid; gap: 9px; margin: 0; padding: 4px 8px 4px 26px; line-height: 1.45; }
+.taxonomy-help-steps li { padding-left: 2px; }
+.taxonomy-help-steps strong { color: var(--text); }
 
 .custom-sql-view, .sql-import-settings {
   display: grid;

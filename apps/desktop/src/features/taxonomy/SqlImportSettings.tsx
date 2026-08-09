@@ -1,4 +1,4 @@
-import { LoaderCircle, Send, ShieldCheck } from "lucide-react";
+import { CircleQuestionMark, LoaderCircle, Send, ShieldCheck } from "lucide-react";
 import { useEffect, useState } from "react";
 import {
   addSqlImportInput,
@@ -20,6 +20,7 @@ import { CodeEditor } from "../../shared/CodeEditor";
 import { ResizablePanels } from "../../shared/ResizablePanels";
 import { Button, Modal, SectionHeader, VirtualList } from "../../shared/ui";
 import { SqlInputList } from "./SqlInputList";
+import { SqlEnumHelpModal } from "./TaxonomyHelpModal";
 import { emitTaxonomyMutation } from "./taxonomyMutations";
 import { formatTaxonomyImportApplyMessage } from "./taxonomyImportMessages";
 import { resolveSqlWorkbenchLoads } from "./sqlWorkbenchLoading";
@@ -35,6 +36,7 @@ export function SqlImportSettings({ onApplied }: { onApplied?: () => void }) {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [loadingWorkbench, setLoadingWorkbench] = useState(true);
+  const [helpOpen, setHelpOpen] = useState(false);
 
   useEffect(() => {
     void Promise.allSettled([
@@ -218,6 +220,7 @@ export function SqlImportSettings({ onApplied }: { onApplied?: () => void }) {
         detail="Build, validate, and apply a replacement taxonomy database."
         actions={(
           <>
+            <Button onClick={() => setHelpOpen(true)}><CircleQuestionMark size={13} />Help</Button>
             <Button disabled={Boolean(busy) || loadingWorkbench || !sql.trim()} onClick={() => void validate()}>
               <ShieldCheck size={13} />{busy === "Validating SQL import" ? "Validating..." : "Validate"}
             </Button>
@@ -240,6 +243,7 @@ export function SqlImportSettings({ onApplied }: { onApplied?: () => void }) {
           second={output}
         />
       ) : primary}
+      {helpOpen && <SqlEnumHelpModal onClose={() => setHelpOpen(false)} />}
       {confirming && (
         <Modal
           title="Apply SQL import"

@@ -1,4 +1,5 @@
 import {
+  CircleQuestionMark,
   Download,
   Eye,
   FileUp,
@@ -28,6 +29,7 @@ import { moveSuggestionSelection } from "../../shared/suggestionNavigation";
 import { SearchSuggestions, suggestionLabel } from "../photos/search/SearchSuggestions";
 import { useTaxonSuggestions } from "./useTaxonSuggestions";
 import { TaxonomyHierarchyPage } from "./TaxonomyHierarchyPage";
+import { FormattedUpdateHelpModal } from "./TaxonomyHelpModal";
 import {
   currentTaxonForRoot,
   reconcileSelectedRoot,
@@ -266,6 +268,7 @@ export function FormattedUpdateView({
   const [busy, setBusy] = useState<FormattedBusy>("");
   const [separator, setSeparator] = useState(";");
   const [previewId, setPreviewId] = useState<string | null>(null);
+  const [helpOpen, setHelpOpen] = useState(false);
   const previewIdRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -385,6 +388,7 @@ export function FormattedUpdateView({
     <div className="formatted-view">
       <SectionHeader title="Formatted update" detail="UTF-8 CSV input or direct table editing." actions={
         <>
+          <Button onClick={() => setHelpOpen(true)}><CircleQuestionMark size={13} />Help</Button>
           <label className={`button button-secondary file-button${busy ? " disabled" : ""}`}><FileUp size={13} />{busy === "import" ? "Importing..." : "Upload CSV"}<input disabled={Boolean(busy)} type="file" accept=".csv,text/csv" onChange={(event) => {
             const file = event.target.files?.[0];
             if (file) void importFile(file);
@@ -394,6 +398,7 @@ export function FormattedUpdateView({
           <Button variant="primary" disabled={Boolean(busy) || mutationDisabled || previewId === null} onClick={() => void apply()}><Play size={13} />{busy === "apply" ? "Applying..." : "Apply"}</Button>
         </>
       } />
+      {helpOpen && <FormattedUpdateHelpModal onClose={() => setHelpOpen(false)} />}
       <ResizablePanels
         className="formatted-split"
         direction="vertical"
