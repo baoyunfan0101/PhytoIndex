@@ -154,7 +154,7 @@ pub fn open_photo_library(
         .map_err(error)?
         .ok_or_else(|| "opened photo library is not active".to_string())?
         .library_uuid;
-    let operation = start_initial_photo_index(app.clone(), &state, &library_uuid)?;
+    let operation = start_photo_library_index(app.clone(), &state, &library_uuid)?;
     schedule_taxonomy_sync(app, &state);
     Ok(PhotoLibraryActivation { library, operation })
 }
@@ -212,7 +212,7 @@ pub fn register_photo_library(
             display_name.as_deref(),
         )
         .map_err(error)?;
-    let operation = start_initial_photo_index(app.clone(), &state, &library.library_uuid)?;
+    let operation = start_photo_library_index(app.clone(), &state, &library.library_uuid)?;
     schedule_taxonomy_sync(app, &state);
     Ok(PhotoLibraryActivation { library, operation })
 }
@@ -229,7 +229,7 @@ pub fn switch_photo_library(
         .database
         .switch_photo_library(&library_uuid)
         .map_err(error)?;
-    let operation = start_initial_photo_index(app.clone(), &state, &library.library_uuid)?;
+    let operation = start_photo_library_index(app.clone(), &state, &library.library_uuid)?;
     schedule_taxonomy_sync(app, &state);
     Ok(PhotoLibraryActivation { library, operation })
 }
@@ -255,7 +255,7 @@ pub fn rebind_photo_library_root(
         .as_deref()
         == Some(library_uuid.as_str())
     {
-        let operation = start_initial_photo_index(app.clone(), &state, &library_uuid)?;
+        let operation = start_photo_library_index(app.clone(), &state, &library_uuid)?;
         schedule_taxonomy_sync(app, &state);
         operation
     } else {
@@ -285,7 +285,7 @@ pub fn rebind_photo_library_database(
         .as_deref()
         == Some(library_uuid.as_str())
     {
-        start_initial_photo_index(app.clone(), &state, &library_uuid)?
+        start_photo_library_index(app.clone(), &state, &library_uuid)?
     } else {
         None
     };
@@ -394,19 +394,24 @@ pub fn set_default_photo_library_database_directory(
 }
 
 #[tauri::command]
-pub fn browse_photo_directory(
+pub async fn browse_photo_directory(
     state: State<'_, AppState>,
     directory_id: i64,
     cursor: Option<String>,
     limit: Option<usize>,
 ) -> CommandResult<PhotoPage<PhotoDirectoryItem>> {
-    photos::browse_directory(
-        &state.database,
-        directory_id,
-        cursor.as_deref(),
-        limit.unwrap_or(50),
-    )
-    .map_err(error)
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        photos::browse_directory(
+            &database,
+            directory_id,
+            cursor.as_deref(),
+            limit.unwrap_or(50),
+        )
+        .map_err(error)
+    })
+    .await
+    .map_err(error)?
 }
 
 #[tauri::command]
@@ -430,10 +435,20 @@ pub fn refresh_photo_directory(
         .start(app, "photos", "refresh", move |progress| {
             progress(0, None, "Refreshing directory");
             let refresh = photos::refresh_directory(&database, directory_id).map_err(error)?;
+            let library = database
+                .active_photo_library()
+                .map_err(error)?
+                .ok_or_else(|| "no active photo library is registered".to_string())?;
+            let metadata = photos::index_photo_metadata_for_library(
+                &database,
+                &library.library_uuid,
+                progress,
+            )
+            .map_err(error)?;
             taxonomy::synchronize_pending_photo_libraries(&database).map_err(error)?;
             let mapping =
                 mapping::process_pending_photo_matches(&database, progress).map_err(error)?;
-            Ok(json!({ "refresh": refresh, "mapping": mapping }))
+            Ok(json!({ "refresh": refresh, "metadata": metadata, "mapping": mapping }))
         })?;
     Ok(json!({ "operation": operation }))
 }
@@ -757,19 +772,19 @@ pub async fn search_photos(
 }
 
 #[tauri::command]
-pub fn search_photos_by_filename(
+pub async fn search_photos_by_filename(
     state: State<'_, AppState>,
     query: String,
     cursor: Option<String>,
     limit: Option<usize>,
 ) -> CommandResult<PhotoPage<Photo>> {
-    photos::search_photos_by_filename(
-        &state.database,
-        &query,
-        cursor.as_deref(),
-        limit.unwrap_or(50),
-    )
-    .map_err(error)
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        photos::search_photos_by_filename(&database, &query, cursor.as_deref(), limit.unwrap_or(50))
+            .map_err(error)
+    })
+    .await
+    .map_err(error)?
 }
 
 #[tauri::command]
@@ -799,11 +814,16 @@ pub fn open_photo_directory_in_file_manager(
 }
 
 #[tauri::command]
-pub fn get_photo_metadata(
+pub async fn get_photo_metadata(
     state: State<'_, AppState>,
     photo_id: i64,
 ) -> CommandResult<PhotoMetadata> {
-    photos::get_photo_metadata(&state.database, photo_id).map_err(error)
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        photos::get_photo_metadata(&database, photo_id).map_err(error)
+    })
+    .await
+    .map_err(error)?
 }
 
 #[tauri::command]
@@ -1381,22 +1401,33 @@ pub fn apply_direct_import(
     )
 }
 
-fn start_initial_photo_index(
+fn start_photo_library_index(
     app: AppHandle,
     state: &AppState,
     library_uuid: &str,
 ) -> CommandResult<Option<OperationState>> {
-    if photos::is_initial_index_complete(&state.database, library_uuid).map_err(error)? {
+    let filesystem_complete =
+        photos::is_initial_index_complete(&state.database, library_uuid).map_err(error)?;
+    let metadata_pending =
+        photos::has_pending_photo_metadata(&state.database, library_uuid).map_err(error)?;
+    if filesystem_complete && !metadata_pending {
         return Ok(None);
     }
     let database = state.database.clone();
     let library_uuid = library_uuid.to_string();
     state
         .operations
-        .start(app, "photos", "initial_index", move |progress| {
-            let result = photos::initial_index_photo_library(&database, &library_uuid, progress)
-                .map_err(error)?;
-            serde_json::to_value(result).map_err(error)
+        .start(app, "photos", "photo_library_index", move |progress| {
+            let filesystem = if filesystem_complete {
+                None
+            } else {
+                photos::initial_index_photo_library(&database, &library_uuid, progress)
+                    .map_err(error)?
+            };
+            let metadata =
+                photos::index_photo_metadata_for_library(&database, &library_uuid, progress)
+                    .map_err(error)?;
+            Ok(json!({ "filesystem": filesystem, "metadata": metadata }))
         })
         .map(Some)
 }
@@ -1405,7 +1436,7 @@ pub(crate) fn resume_active_photo_library_work(app: AppHandle, state: &AppState)
     let Some(library) = state.database.active_photo_library().ok().flatten() else {
         return;
     };
-    let _ = start_initial_photo_index(app.clone(), state, &library.library_uuid);
+    let _ = start_photo_library_index(app.clone(), state, &library.library_uuid);
     schedule_taxonomy_sync(app, state);
 }
 
@@ -1515,10 +1546,10 @@ fn ensure_photo_workspace_activation_allowed(state: &AppState) -> CommandResult<
     let blocker = state
         .operations
         .status()
-        .into_iter()
-        .find_map(|(module, operation)| {
-            (operation.running && matches!(module.as_str(), "photos" | "mapping"))
-                .then_some(operation.operation.unwrap_or(module))
+        .into_values()
+        .find_map(|operation| {
+            (operation.running && matches!(operation.module.as_str(), "photos" | "mapping"))
+                .then_some(operation.operation.unwrap_or(operation.module))
         });
     match blocker {
         Some(operation) => Err(format!(
@@ -1605,19 +1636,19 @@ pub fn remap_photo(
 }
 
 #[tauri::command]
-pub fn list_taxon_photos(
+pub async fn list_taxon_photos(
     state: State<'_, AppState>,
     taxon_id: i64,
     cursor: Option<String>,
     limit: Option<usize>,
 ) -> CommandResult<PhotoPage<Photo>> {
-    mapping::list_taxon_photos(
-        &state.database,
-        taxon_id,
-        cursor.as_deref(),
-        limit.unwrap_or(50),
-    )
-    .map_err(error)
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        mapping::list_taxon_photos(&database, taxon_id, cursor.as_deref(), limit.unwrap_or(50))
+            .map_err(error)
+    })
+    .await
+    .map_err(error)?
 }
 
 #[tauri::command]
@@ -1631,21 +1662,26 @@ pub fn get_photo_taxon_node(
 }
 
 #[tauri::command]
-pub fn browse_photo_taxon(
+pub async fn browse_photo_taxon(
     state: State<'_, AppState>,
     taxon_id: Option<i64>,
     show_empty: Option<bool>,
     cursor: Option<String>,
     limit: Option<usize>,
 ) -> CommandResult<PhotoPage<PhotoTaxonItem>> {
-    mapping::browse_photo_taxon(
-        &state.database,
-        taxon_id,
-        show_empty.unwrap_or(false),
-        cursor.as_deref(),
-        limit.unwrap_or(50),
-    )
-    .map_err(error)
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        mapping::browse_photo_taxon(
+            &database,
+            taxon_id,
+            show_empty.unwrap_or(false),
+            cursor.as_deref(),
+            limit.unwrap_or(50),
+        )
+        .map_err(error)
+    })
+    .await
+    .map_err(error)?
 }
 
 #[tauri::command]

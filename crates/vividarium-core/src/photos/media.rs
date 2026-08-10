@@ -2,15 +2,29 @@ use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use chrono::NaiveDateTime;
 use exif::{In, Reader as ExifReader, Tag, Value};
 use rusqlite::{Connection, OptionalExtension, params};
+use serde::{Deserialize, Serialize};
 
-use super::{PHOTO_WRITE_LOCK, library_root, load_directory, safe_directory_path, safe_file_path};
+use super::{
+    PHOTO_WRITE_LOCK, ProgressCallback, library_root, load_directory, safe_directory_path,
+    safe_file_path,
+};
 use crate::db::{Database, photo_from_row};
 use crate::error::{CoreError, CoreResult};
 use crate::models::{Photo, PhotoLibraryRegistration, PhotoMetadata};
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PhotoMetadataIndexResult {
+    pub total: u64,
+    pub previously_indexed: u64,
+    pub indexed: u64,
+}
+
+static THUMBNAIL_GENERATION_LOCK: Mutex<()> = Mutex::new(());
 
 pub fn photo_file_path(database: &Database, photo_id: i64) -> CoreResult<PathBuf> {
     let library = active_library(database)?;
@@ -47,9 +61,6 @@ pub fn photo_directory_path(database: &Database, directory_id: i64) -> CoreResul
 }
 
 pub fn get_photo_metadata(database: &Database, photo_id: i64) -> CoreResult<PhotoMetadata> {
-    let _guard = PHOTO_WRITE_LOCK
-        .lock()
-        .map_err(|_| CoreError::InvalidArgument("photo workspace lock is poisoned".into()))?;
     let library = active_library(database)?;
     let connection = database.connect_photo_library_registration(&library)?;
     if let Some(metadata) = connection
@@ -63,20 +74,121 @@ pub fn get_photo_metadata(database: &Database, photo_id: i64) -> CoreResult<Phot
         return Ok(metadata);
     }
     let path = photo_file_path_from_connection(&connection, photo_id)?;
+    drop(connection);
     let metadata = read_file_metadata(photo_id, &path);
+    let _guard = PHOTO_WRITE_LOCK
+        .lock()
+        .map_err(|_| CoreError::InvalidArgument("photo workspace lock is poisoned".into()))?;
+    let connection = database.connect_photo_library_registration(&library)?;
+    if let Some(existing) = connection
+        .query_row(
+            "SELECT * FROM photo_metadata WHERE photo_id = ?",
+            [photo_id],
+            metadata_from_row,
+        )
+        .optional()?
+    {
+        return Ok(existing);
+    }
+    insert_metadata(&connection, &metadata)?;
+    Ok(metadata)
+}
+
+pub fn index_photo_metadata_for_library(
+    database: &Database,
+    library_uuid: &str,
+    progress: &mut ProgressCallback<'_>,
+) -> CoreResult<PhotoMetadataIndexResult> {
+    const BATCH_SIZE: usize = 64;
+    let library = database.photo_library(library_uuid)?;
+    let connection = database.connect_photo_library_registration(&library)?;
+    let total = connection.query_row("SELECT COUNT(*) FROM photos", [], |row| {
+        row.get::<_, u64>(0)
+    })?;
+    let previously_indexed =
+        connection.query_row("SELECT COUNT(*) FROM photo_metadata", [], |row| {
+            row.get::<_, u64>(0)
+        })?;
+    drop(connection);
+    let mut current = previously_indexed;
+    progress(current, Some(total), "Reading photo metadata");
+
+    loop {
+        let connection = database.connect_photo_library_registration(&library)?;
+        let photo_ids = {
+            let mut statement = connection.prepare(
+                r#"
+                SELECT photos.photo_id
+                FROM photos
+                LEFT JOIN photo_metadata USING (photo_id)
+                WHERE photo_metadata.photo_id IS NULL
+                ORDER BY photos.photo_id
+                LIMIT ?
+                "#,
+            )?;
+            let rows = statement.query_map([BATCH_SIZE as i64], |row| row.get::<_, i64>(0))?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        };
+        drop(connection);
+        if photo_ids.is_empty() {
+            break;
+        }
+
+        let mut batch = Vec::with_capacity(photo_ids.len());
+        for photo_id in photo_ids {
+            let path = photo_file_path_for_library(database, library_uuid, photo_id)?;
+            batch.push(read_file_metadata(photo_id, &path));
+        }
+        let batch_len = batch.len() as u64;
+        let _guard = PHOTO_WRITE_LOCK
+            .lock()
+            .map_err(|_| CoreError::InvalidArgument("photo workspace lock is poisoned".into()))?;
+        let mut connection = database.connect_photo_library_registration(&library)?;
+        let transaction = connection.transaction()?;
+        for metadata in &batch {
+            insert_metadata(&transaction, metadata)?;
+        }
+        transaction.commit()?;
+        drop(connection);
+        drop(_guard);
+        current = current.saturating_add(batch_len).min(total);
+        progress(current, Some(total), "Reading photo metadata");
+        std::thread::yield_now();
+    }
+
+    Ok(PhotoMetadataIndexResult {
+        total,
+        previously_indexed,
+        indexed: current.saturating_sub(previously_indexed),
+    })
+}
+
+pub fn has_pending_photo_metadata(database: &Database, library_uuid: &str) -> CoreResult<bool> {
+    let library = database.photo_library(library_uuid)?;
+    let connection = database.connect_photo_library_registration(&library)?;
+    connection
+        .query_row(
+            r#"
+            SELECT EXISTS (
+                SELECT 1
+                FROM photos
+                LEFT JOIN photo_metadata USING (photo_id)
+                WHERE photo_metadata.photo_id IS NULL
+            )
+            "#,
+            [],
+            |row| row.get(0),
+        )
+        .map_err(Into::into)
+}
+
+fn insert_metadata(connection: &Connection, metadata: &PhotoMetadata) -> CoreResult<()> {
     connection.execute(
         r#"
         INSERT INTO photo_metadata (
             photo_id, captured_at, camera, width, height, longitude, latitude, exif_json
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(photo_id) DO UPDATE SET
-            captured_at = excluded.captured_at,
-            camera = excluded.camera,
-            width = excluded.width,
-            height = excluded.height,
-            longitude = excluded.longitude,
-            latitude = excluded.latitude,
-            exif_json = excluded.exif_json
+        ON CONFLICT(photo_id) DO NOTHING
         "#,
         params![
             metadata.photo_id,
@@ -89,7 +201,7 @@ pub fn get_photo_metadata(database: &Database, photo_id: i64) -> CoreResult<Phot
             metadata.exif_json,
         ],
     )?;
-    Ok(metadata)
+    Ok(())
 }
 
 pub fn get_or_create_thumbnail(
@@ -107,9 +219,6 @@ pub fn get_or_create_thumbnail_for_library(
     photo_id: i64,
     thumbnail_root: &Path,
 ) -> CoreResult<PathBuf> {
-    let _guard = PHOTO_WRITE_LOCK
-        .lock()
-        .map_err(|_| CoreError::InvalidArgument("photo workspace lock is poisoned".into()))?;
     let library = database.photo_library(library_uuid)?;
     let connection = database.connect_photo_library_registration(&library)?;
     let photo = get_photo_from_connection(&connection, photo_id)?
@@ -127,9 +236,20 @@ pub fn get_or_create_thumbnail_for_library(
         "photo_{}_{}_{}.webp",
         photo.photo_id, photo.modified_at_ns, photo.file_size
     ));
-    image::open(&source)?
-        .thumbnail(256, 256)
-        .save_with_format(&output, image::ImageFormat::WebP)?;
+    drop(connection);
+    let thumbnail_guard = THUMBNAIL_GENERATION_LOCK
+        .lock()
+        .map_err(|_| CoreError::InvalidArgument("thumbnail generation lock is poisoned".into()))?;
+    if !output.is_file() {
+        image::open(&source)?
+            .thumbnail(256, 256)
+            .save_with_format(&output, image::ImageFormat::WebP)?;
+    }
+    drop(thumbnail_guard);
+    let _guard = PHOTO_WRITE_LOCK
+        .lock()
+        .map_err(|_| CoreError::InvalidArgument("photo workspace lock is poisoned".into()))?;
+    let connection = database.connect_photo_library_registration(&library)?;
     connection.execute(
         "UPDATE photos SET thumbnail_path = ? WHERE photo_id = ?",
         params![output.to_string_lossy(), photo_id],

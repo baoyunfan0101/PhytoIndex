@@ -107,6 +107,39 @@ fn initial_index_is_durable_and_does_not_generate_thumbnails() {
 }
 
 #[test]
+fn metadata_index_skips_completed_photos_and_reports_progress() {
+    let data = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    image::RgbImage::from_pixel(8, 6, image::Rgb([10, 20, 30]))
+        .save(root.path().join("first.bmp"))
+        .unwrap();
+    let database = Database::open(data.path().join("vividarium.db")).unwrap();
+    open_library(&database, root.path().to_str().unwrap()).unwrap();
+    let library = database.active_photo_library().unwrap().unwrap();
+    let mut progress = |_: u64, _: Option<u64>, _: &str| {};
+    initial_index_photo_library(&database, &library.library_uuid, &mut progress).unwrap();
+    assert!(has_pending_photo_metadata(&database, &library.library_uuid).unwrap());
+
+    let mut updates = Vec::new();
+    let first = index_photo_metadata_for_library(
+        &database,
+        &library.library_uuid,
+        &mut |current, total, stage| updates.push((current, total, stage.to_string())),
+    )
+    .unwrap();
+    assert_eq!(first.total, 1);
+    assert_eq!(first.previously_indexed, 0);
+    assert_eq!(first.indexed, 1);
+    assert_eq!(updates.last().map(|value| value.0), Some(1));
+    assert!(!has_pending_photo_metadata(&database, &library.library_uuid).unwrap());
+
+    let second =
+        index_photo_metadata_for_library(&database, &library.library_uuid, &mut progress).unwrap();
+    assert_eq!(second.previously_indexed, 1);
+    assert_eq!(second.indexed, 0);
+}
+
+#[test]
 fn failed_initial_index_remains_retryable() {
     let data = tempfile::tempdir().unwrap();
     let root = tempfile::tempdir().unwrap();

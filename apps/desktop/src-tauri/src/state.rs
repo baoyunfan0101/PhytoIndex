@@ -184,12 +184,8 @@ pub struct OperationManager {
 
 impl OperationManager {
     fn new() -> Self {
-        let states = ["photos", "mapping", "sql_import", "direct_import"]
-            .into_iter()
-            .map(|module| (module.to_string(), idle_state(module)))
-            .collect();
         Self {
-            states: Arc::new(Mutex::new(states)),
+            states: Arc::new(Mutex::new(OperationsStatus::new())),
         }
     }
 
@@ -258,7 +254,7 @@ impl OperationManager {
                 result: None,
                 error: None,
             };
-            states.insert(module.into(), state.clone());
+            states.insert(task_id.clone(), state.clone());
             state
         };
         let manager = self.clone();
@@ -270,14 +266,13 @@ impl OperationManager {
             let mut progress = move |progress: OperationProgress| {
                 let processed = progress.current.unwrap_or(0);
                 let emit = throttle.should_emit(processed, progress.total, &progress.stage);
-                let current =
-                    progress_manager.update_progress(module, &progress_task_id, &progress, emit);
+                let current = progress_manager.update_progress(&progress_task_id, &progress, emit);
                 if let Some(current) = current {
                     let _ = progress_app.emit("operation-progress", current);
                 }
             };
             let result = callback(&mut progress);
-            let finished = manager.finish(module, &task_id, result);
+            let finished = manager.finish(&task_id, result);
             if let Some(finished) = finished {
                 let _ = app.emit("operation-progress", finished);
             }
@@ -287,14 +282,13 @@ impl OperationManager {
 
     fn update_progress(
         &self,
-        module: &str,
         task_id: &str,
         progress: &OperationProgress,
         snapshot: bool,
     ) -> Option<OperationState> {
         let mut states = self.states.lock().ok()?;
-        let state = states.get_mut(module)?;
-        if state.task_id.as_deref() != Some(task_id) || !state.running {
+        let state = states.get_mut(task_id)?;
+        if !state.running {
             return None;
         }
         state.processed = progress.current.unwrap_or(0);
@@ -304,17 +298,9 @@ impl OperationManager {
         snapshot.then(|| state.clone())
     }
 
-    fn finish(
-        &self,
-        module: &str,
-        task_id: &str,
-        result: Result<Value, String>,
-    ) -> Option<OperationState> {
+    fn finish(&self, task_id: &str, result: Result<Value, String>) -> Option<OperationState> {
         let mut states = self.states.lock().ok()?;
-        let state = states.get_mut(module)?;
-        if state.task_id.as_deref() != Some(task_id) {
-            return None;
-        }
+        let state = states.get_mut(task_id)?;
         state.running = false;
         state.finished_at = Some(now());
         match result {
@@ -328,37 +314,39 @@ impl OperationManager {
                 state.error = Some(error);
             }
         }
-        Some(state.clone())
+        let finished = state.clone();
+        trim_finished_operations(&mut states, 50);
+        Some(finished)
     }
 }
 
-fn idle_state(module: &str) -> OperationState {
-    OperationState {
-        module: module.into(),
-        task_id: None,
-        operation: None,
-        running: false,
-        started_at: None,
-        finished_at: None,
-        message: "idle".into(),
-        processed: 0,
-        total: None,
-        progress: None,
-        result: None,
-        error: None,
+fn trim_finished_operations(states: &mut OperationsStatus, limit: usize) {
+    let mut finished = states
+        .iter()
+        .filter(|(_, state)| !state.running)
+        .map(|(task_id, state)| (task_id.clone(), state.finished_at.clone()))
+        .collect::<Vec<_>>();
+    if finished.len() <= limit {
+        return;
+    }
+    finished.sort_by(|left, right| left.1.cmp(&right.1));
+    let remove_count = finished.len() - limit;
+    for (task_id, _) in finished.into_iter().take(remove_count) {
+        states.remove(&task_id);
     }
 }
 
 fn blocked_by(states: &BTreeMap<String, OperationState>, module: &str) -> Option<String> {
-    states.iter().find_map(|(other, state)| {
+    states.values().find_map(|state| {
+        let other = state.module.as_str();
         let taxonomy_import_conflict = matches!(module, "sql_import" | "direct_import")
-            && matches!(other.as_str(), "sql_import" | "direct_import");
+            && matches!(other, "sql_import" | "direct_import");
         (state.running
             && (module == other
                 || module == "mapping"
                 || other == "mapping"
                 || taxonomy_import_conflict))
-            .then(|| other.clone())
+            .then(|| other.to_string())
     })
 }
 
@@ -389,10 +377,23 @@ mod tests {
         let manager = OperationManager::new();
         {
             let mut states = manager.states.lock().unwrap();
-            let state = states.get_mut("sql_import").unwrap();
-            state.task_id = Some("validate-1".into());
-            state.operation = Some("validate_sql_import".into());
-            state.running = true;
+            states.insert(
+                "validate-1".into(),
+                OperationState {
+                    module: "sql_import".into(),
+                    task_id: Some("validate-1".into()),
+                    operation: Some("validate_sql_import".into()),
+                    running: true,
+                    started_at: Some(now()),
+                    finished_at: None,
+                    message: "running".into(),
+                    processed: 0,
+                    total: None,
+                    progress: None,
+                    result: None,
+                    error: None,
+                },
+            );
         }
         let progress = OperationProgress {
             stage: "executing_sql".into(),
@@ -403,7 +404,7 @@ mod tests {
         };
 
         let state = manager
-            .update_progress("sql_import", "validate-1", &progress, true)
+            .update_progress("validate-1", &progress, true)
             .unwrap();
 
         assert_eq!(state.message, "executing_sql");
@@ -414,8 +415,8 @@ mod tests {
 
     #[test]
     fn a_sql_import_operation_blocks_another_sql_import_operation() {
-        let mut states = OperationManager::new().status();
-        states.get_mut("sql_import").unwrap().running = true;
+        let mut states = OperationsStatus::new();
+        states.insert("task-1".into(), running_state("sql_import"));
 
         assert_eq!(
             blocked_by(&states, "sql_import").as_deref(),
@@ -425,19 +426,36 @@ mod tests {
 
     #[test]
     fn sql_and_direct_import_operations_block_each_other() {
-        let mut states = OperationManager::new().status();
-        states.get_mut("sql_import").unwrap().running = true;
+        let mut states = OperationsStatus::new();
+        states.insert("task-1".into(), running_state("sql_import"));
         assert_eq!(
             blocked_by(&states, "direct_import").as_deref(),
             Some("sql_import")
         );
 
-        states.get_mut("sql_import").unwrap().running = false;
-        states.get_mut("direct_import").unwrap().running = true;
+        states.get_mut("task-1").unwrap().running = false;
+        states.insert("task-2".into(), running_state("direct_import"));
         assert_eq!(
             blocked_by(&states, "sql_import").as_deref(),
             Some("direct_import")
         );
+    }
+
+    fn running_state(module: &str) -> OperationState {
+        OperationState {
+            module: module.into(),
+            task_id: Some(format!("{module}-task")),
+            operation: Some("test".into()),
+            running: true,
+            started_at: Some(now()),
+            finished_at: None,
+            message: "running".into(),
+            processed: 0,
+            total: None,
+            progress: None,
+            result: None,
+            error: None,
+        }
     }
 
     #[test]

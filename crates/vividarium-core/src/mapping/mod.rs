@@ -212,6 +212,7 @@ pub fn process_pending_photo_matches(
         transaction.commit()?;
         processed += photo_ids.len();
         progress(processed as u64, Some(total as u64), "Matching photo names");
+        std::thread::yield_now();
     }
     let connection = database.connect()?;
     let queued = connection.query_row("SELECT COUNT(*) FROM photo_mapping_queue", [], |row| {

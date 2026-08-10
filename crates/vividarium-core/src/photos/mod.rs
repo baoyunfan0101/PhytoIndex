@@ -2,7 +2,7 @@
 //!
 //! Photo-to-taxon behavior is exposed separately through [`crate::mapping`].
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
@@ -28,7 +28,8 @@ mod page;
 mod search;
 
 pub use media::{
-    get_or_create_thumbnail, get_or_create_thumbnail_for_library, get_photo_metadata,
+    PhotoMetadataIndexResult, get_or_create_thumbnail, get_or_create_thumbnail_for_library,
+    get_photo_metadata, has_pending_photo_metadata, index_photo_metadata_for_library,
     photo_directory_path, photo_file_path, photo_file_path_for_library, rebase_thumbnail_paths,
 };
 pub use naming::{
@@ -67,7 +68,6 @@ pub type ProgressCallback<'a> = dyn FnMut(u64, Option<u64>, &str) + Send + 'a;
 #[derive(Debug)]
 struct ScannedDirectory {
     name: String,
-    contents: ScannedDirectoryContents,
 }
 
 #[derive(Debug)]
@@ -76,7 +76,7 @@ struct ScannedDirectoryContents {
     photos: Vec<ScannedPhoto>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct ScannedPhoto {
     filename: String,
     file_size: i64,
@@ -121,6 +121,18 @@ struct DirectoryRefreshStats {
     directories_inserted: usize,
     directories_deleted: usize,
     changed_photo_ids: Vec<i64>,
+}
+
+impl DirectoryRefreshStats {
+    fn merge(&mut self, mut other: Self) {
+        self.inserted += other.inserted;
+        self.unchanged += other.unchanged;
+        self.updated += other.updated;
+        self.deleted += other.deleted;
+        self.directories_inserted += other.directories_inserted;
+        self.directories_deleted += other.directories_deleted;
+        self.changed_photo_ids.append(&mut other.changed_photo_ids);
+    }
 }
 
 pub fn open_library(database: &Database, root: &str) -> CoreResult<PhotoLibrary> {
@@ -186,9 +198,6 @@ pub fn initial_index_photo_library(
     library_uuid: &str,
     progress: &mut ProgressCallback<'_>,
 ) -> CoreResult<Option<PhotoSyncResult>> {
-    let _guard = PHOTO_WRITE_LOCK
-        .lock()
-        .map_err(|_| CoreError::InvalidArgument("photo workspace lock is poisoned".into()))?;
     let library = database.photo_library(library_uuid)?;
     let connection = database.connect_photo_library_registration(&library)?;
     ensure_photo_library_index_state(&connection)?;
@@ -395,9 +404,6 @@ pub fn browse_directory(
 }
 
 pub fn refresh_directory(database: &Database, directory_id: i64) -> CoreResult<PhotoSyncResult> {
-    let _guard = PHOTO_WRITE_LOCK
-        .lock()
-        .map_err(|_| CoreError::InvalidArgument("photo workspace lock is poisoned".into()))?;
     let library = database.active_photo_library()?.ok_or_else(|| {
         CoreError::InvalidArgument("no active photo library is registered".into())
     })?;
@@ -418,19 +424,74 @@ fn refresh_directory_for_library(
         .ok_or_else(|| CoreError::NotFound(format!("photo directory {directory_id}")))?;
     let root = library_root(&connection)?;
     let path = safe_directory_path(&root, &directory.relative_path)?;
-    progress(0, None, "Scanning photo library");
+    progress(0, None, "Discovering photos");
     let mut processed = 0;
-    let scanned = scan_directory_with_progress(&path, &mut processed, progress)?;
+    let mut stats = DirectoryRefreshStats::default();
+    let mut pending = VecDeque::from([(directory, path)]);
     drop(connection);
 
-    progress(processed, None, "Updating photo index");
-    let mut connection = database.connect_photo_library_registration(library)?;
-    let transaction = connection.transaction()?;
-    let mut stats = DirectoryRefreshStats::default();
-    refresh_directory_tree(&transaction, &directory, scanned, &mut stats)?;
-    mapping::queue_photo_ids(&transaction, &stats.changed_photo_ids, "refresh")?;
+    while let Some((directory, path)) = pending.pop_front() {
+        let scanned = scan_directory(&path, &mut processed, progress)?;
+        progress(processed, None, "Updating photo index");
+        let scanned_photo_names = scanned
+            .photos
+            .iter()
+            .map(|value| value.filename.as_str())
+            .collect::<HashSet<_>>();
+        let _guard = lock_photo_workspace()?;
+        let mut connection = database.connect_photo_library_registration(library)?;
+        let transaction = connection.transaction()?;
+        let mut directory_stats = DirectoryRefreshStats::default();
+        let children = refresh_directory_structure(
+            &transaction,
+            &directory,
+            scanned.directories,
+            &scanned_photo_names,
+            &mut directory_stats,
+        )?;
+        transaction.commit()?;
+        drop(connection);
+        drop(_guard);
+
+        let connection = database.connect_photo_library_registration(library)?;
+        let existing_photos = direct_photos(&connection, directory.directory_id)?;
+        let photos_with_mapping_state =
+            direct_photos_with_mapping_state(&connection, directory.directory_id)?;
+        drop(connection);
+        for photo_batch in scanned.photos.chunks(256) {
+            let _guard = lock_photo_workspace()?;
+            let mut connection = database.connect_photo_library_registration(library)?;
+            let transaction = connection.transaction()?;
+            let mut batch_stats = DirectoryRefreshStats::default();
+            refresh_directory_photos(
+                &transaction,
+                directory.directory_id,
+                photo_batch.to_vec(),
+                &existing_photos,
+                &photos_with_mapping_state,
+                &mut batch_stats,
+            )?;
+            mapping::queue_photo_ids(&transaction, &batch_stats.changed_photo_ids, "refresh")?;
+            transaction.commit()?;
+            drop(connection);
+            drop(_guard);
+            batch_stats.changed_photo_ids.clear();
+            directory_stats.merge(batch_stats);
+            std::thread::yield_now();
+        }
+        for child in children {
+            let child_path =
+                safe_directory_path(&PathBuf::from(&library.root_path), &child.relative_path)?;
+            pending.push_back((child, child_path));
+        }
+        stats.merge(directory_stats);
+        std::thread::yield_now();
+    }
+
     if complete_initial_index {
-        transaction.execute(
+        let _guard = lock_photo_workspace()?;
+        let connection = database.connect_photo_library_registration(library)?;
+        connection.execute(
             r#"
             UPDATE photo_library_index_state
             SET initial_index_complete = 1,
@@ -440,7 +501,6 @@ fn refresh_directory_for_library(
             [],
         )?;
     }
-    transaction.commit()?;
     if complete_initial_index {
         progress(processed, Some(processed), "Initial photo index complete");
     }
@@ -455,25 +515,18 @@ fn refresh_directory_for_library(
     })
 }
 
-fn refresh_directory_tree(
+fn refresh_directory_structure(
     transaction: &Transaction<'_>,
     directory: &PhotoDirectory,
-    scanned: ScannedDirectoryContents,
+    scanned_directories: Vec<ScannedDirectory>,
+    scanned_photo_names: &HashSet<&str>,
     stats: &mut DirectoryRefreshStats,
-) -> CoreResult<()> {
+) -> CoreResult<Vec<PhotoDirectory>> {
     let existing_directories = direct_directories(transaction, directory.directory_id)?;
     let existing_photos = direct_photos(transaction, directory.directory_id)?;
-    let photos_with_mapping_state =
-        direct_photos_with_mapping_state(transaction, directory.directory_id)?;
-    let scanned_directory_names = scanned
-        .directories
+    let scanned_directory_names = scanned_directories
         .iter()
         .map(|value| value.name.as_str())
-        .collect::<HashSet<_>>();
-    let scanned_photo_names = scanned
-        .photos
-        .iter()
-        .map(|value| value.filename.as_str())
         .collect::<HashSet<_>>();
     let removed_directory_ids = existing_directories
         .iter()
@@ -501,8 +554,9 @@ fn refresh_directory_tree(
     stats.directories_deleted += removed_directory_count;
     stats.deleted += removed_subtree_photo_count + removed_photo_ids.len();
 
-    for entry in scanned.directories {
-        let ScannedDirectory { name, contents } = entry;
+    let mut children = Vec::new();
+    for entry in scanned_directories {
+        let ScannedDirectory { name } = entry;
         let child = if let Some(existing) = existing_directories.get(&name) {
             existing.clone()
         } else {
@@ -519,17 +573,10 @@ fn refresh_directory_tree(
                 relative_path,
             }
         };
-        refresh_directory_tree(transaction, &child, contents, stats)?;
+        children.push(child);
     }
 
-    refresh_directory_photos(
-        transaction,
-        directory.directory_id,
-        scanned.photos,
-        &existing_photos,
-        &photos_with_mapping_state,
-        stats,
-    )
+    Ok(children)
 }
 
 fn refresh_directory_photos(
@@ -1149,10 +1196,10 @@ fn direct_directories(
 }
 
 fn direct_photos(
-    transaction: &Transaction<'_>,
+    connection: &rusqlite::Connection,
     directory_id: i64,
 ) -> CoreResult<HashMap<String, Photo>> {
-    let mut statement = transaction.prepare(&photo_select("WHERE photos.directory_id = ?"))?;
+    let mut statement = connection.prepare(&photo_select("WHERE photos.directory_id = ?"))?;
     let rows = statement.query_map([directory_id], photo_from_row)?;
     Ok(rows
         .collect::<Result<Vec<_>, _>>()?
@@ -1162,10 +1209,10 @@ fn direct_photos(
 }
 
 fn direct_photos_with_mapping_state(
-    transaction: &Transaction<'_>,
+    connection: &rusqlite::Connection,
     directory_id: i64,
 ) -> CoreResult<HashSet<i64>> {
-    let mut statement = transaction.prepare(
+    let mut statement = connection.prepare(
         r#"
         SELECT photos.photo_id
         FROM photos
@@ -1199,7 +1246,7 @@ fn insert_photo(transaction: &Transaction<'_>, photo: &NewPhoto) -> CoreResult<i
     Ok(transaction.last_insert_rowid())
 }
 
-fn scan_directory_with_progress(
+fn scan_directory(
     path: &Path,
     processed: &mut u64,
     progress: &mut ProgressCallback<'_>,
@@ -1217,10 +1264,7 @@ fn scan_directory_with_progress(
             .into_string()
             .map_err(|_| CoreError::InvalidArgument("photo path is not valid UTF-8".into()))?;
         if file_type.is_dir() {
-            directories.push(ScannedDirectory {
-                contents: scan_directory_with_progress(&entry.path(), processed, progress)?,
-                name,
-            });
+            directories.push(ScannedDirectory { name });
         } else if file_type.is_file() && is_image_filename(&name) {
             let metadata = entry.metadata()?;
             photos.push(ScannedPhoto {
