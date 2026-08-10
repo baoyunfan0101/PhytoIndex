@@ -208,17 +208,6 @@ fn cleanup_dispatched_events(
     Ok(())
 }
 
-pub(crate) fn synchronize_photo_library(
-    database: &Database,
-    library: &PhotoLibraryRegistration,
-) -> CoreResult<TaxonomySyncResult> {
-    let _guard = SYNC_LOCK
-        .lock()
-        .map_err(|_| CoreError::Consistency("taxonomy sync lock is poisoned".into()))?;
-    dispatch_pending_events_unlocked(database)?;
-    synchronize_photo_library_unlocked(database, library)
-}
-
 fn synchronize_photo_library_unlocked(
     database: &Database,
     library: &PhotoLibraryRegistration,

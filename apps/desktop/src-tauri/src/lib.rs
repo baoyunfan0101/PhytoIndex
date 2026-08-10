@@ -21,8 +21,9 @@ pub fn run() {
             let state = AppState::new(paths::data_dir(app.handle())?)?;
             state::set_global(state.clone())
                 .map_err(|_| std::io::Error::other("application state already initialized"))?;
-            app.manage(state);
+            app.manage(state.clone());
             app.manage(updater::PendingAppUpdate::default());
+            commands::resume_active_photo_library_work(app.handle().clone(), &state);
             Ok(())
         })
         .register_uri_scheme_protocol("vividarium", |_context, request| media::handle(request))

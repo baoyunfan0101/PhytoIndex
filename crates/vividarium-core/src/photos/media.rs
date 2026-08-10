@@ -5,26 +5,41 @@ use std::path::{Path, PathBuf};
 
 use chrono::NaiveDateTime;
 use exif::{In, Reader as ExifReader, Tag, Value};
-use rusqlite::{OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, params};
 
-use super::{get_photo, library_root, load_directory, safe_directory_path, safe_file_path};
-use crate::db::Database;
+use super::{PHOTO_WRITE_LOCK, library_root, load_directory, safe_directory_path, safe_file_path};
+use crate::db::{Database, photo_from_row};
 use crate::error::{CoreError, CoreResult};
-use crate::models::PhotoMetadata;
+use crate::models::{Photo, PhotoLibraryRegistration, PhotoMetadata};
 
 pub fn photo_file_path(database: &Database, photo_id: i64) -> CoreResult<PathBuf> {
-    let photo = get_photo(database, photo_id)?
+    let library = active_library(database)?;
+    photo_file_path_for_library(database, &library.library_uuid, photo_id)
+}
+
+pub fn photo_file_path_for_library(
+    database: &Database,
+    library_uuid: &str,
+    photo_id: i64,
+) -> CoreResult<PathBuf> {
+    let library = database.photo_library(library_uuid)?;
+    let connection = database.connect_photo_library_registration(&library)?;
+    photo_file_path_from_connection(&connection, photo_id)
+}
+
+fn photo_file_path_from_connection(connection: &Connection, photo_id: i64) -> CoreResult<PathBuf> {
+    let photo = get_photo_from_connection(connection, photo_id)?
         .ok_or_else(|| CoreError::NotFound(format!("photo {photo_id}")))?;
-    let connection = database.connect()?;
-    let root = library_root(&connection)?;
-    let directory = load_directory(&connection, photo.directory_id)?
+    let root = library_root(connection)?;
+    let directory = load_directory(connection, photo.directory_id)?
         .ok_or_else(|| CoreError::NotFound(format!("photo directory {}", photo.directory_id)))?;
     let directory = safe_directory_path(&root, &directory.relative_path)?;
     safe_file_path(&root, &directory.join(photo.filename))
 }
 
 pub fn photo_directory_path(database: &Database, directory_id: i64) -> CoreResult<PathBuf> {
-    let connection = database.connect()?;
+    let library = active_library(database)?;
+    let connection = database.connect_photo_library_registration(&library)?;
     let root = library_root(&connection)?;
     let directory = load_directory(&connection, directory_id)?
         .ok_or_else(|| CoreError::NotFound(format!("photo directory {directory_id}")))?;
@@ -32,7 +47,11 @@ pub fn photo_directory_path(database: &Database, directory_id: i64) -> CoreResul
 }
 
 pub fn get_photo_metadata(database: &Database, photo_id: i64) -> CoreResult<PhotoMetadata> {
-    let connection = database.connect()?;
+    let _guard = PHOTO_WRITE_LOCK
+        .lock()
+        .map_err(|_| CoreError::InvalidArgument("photo workspace lock is poisoned".into()))?;
+    let library = active_library(database)?;
+    let connection = database.connect_photo_library_registration(&library)?;
     if let Some(metadata) = connection
         .query_row(
             "SELECT * FROM photo_metadata WHERE photo_id = ?",
@@ -43,10 +62,8 @@ pub fn get_photo_metadata(database: &Database, photo_id: i64) -> CoreResult<Phot
     {
         return Ok(metadata);
     }
-    drop(connection);
-    let path = photo_file_path(database, photo_id)?;
+    let path = photo_file_path_from_connection(&connection, photo_id)?;
     let metadata = read_file_metadata(photo_id, &path);
-    let connection = database.connect()?;
     connection.execute(
         r#"
         INSERT INTO photo_metadata (
@@ -80,24 +97,39 @@ pub fn get_or_create_thumbnail(
     photo_id: i64,
     thumbnail_root: &Path,
 ) -> CoreResult<PathBuf> {
-    let photo = get_photo(database, photo_id)?
+    let library = active_library(database)?;
+    get_or_create_thumbnail_for_library(database, &library.library_uuid, photo_id, thumbnail_root)
+}
+
+pub fn get_or_create_thumbnail_for_library(
+    database: &Database,
+    library_uuid: &str,
+    photo_id: i64,
+    thumbnail_root: &Path,
+) -> CoreResult<PathBuf> {
+    let _guard = PHOTO_WRITE_LOCK
+        .lock()
+        .map_err(|_| CoreError::InvalidArgument("photo workspace lock is poisoned".into()))?;
+    let library = database.photo_library(library_uuid)?;
+    let connection = database.connect_photo_library_registration(&library)?;
+    let photo = get_photo_from_connection(&connection, photo_id)?
         .ok_or_else(|| CoreError::NotFound(format!("photo {photo_id}")))?;
+    let library_thumbnail_root = thumbnail_root.join(library_uuid);
     if let Some(existing) = &photo.thumbnail_path {
         let path = PathBuf::from(existing);
-        if path.is_file() {
+        if path.starts_with(&library_thumbnail_root) && path.is_file() {
             return Ok(path);
         }
     }
-    let source = photo_file_path(database, photo_id)?;
-    fs::create_dir_all(thumbnail_root)?;
-    let output = thumbnail_root.join(format!(
+    let source = photo_file_path_from_connection(&connection, photo_id)?;
+    fs::create_dir_all(&library_thumbnail_root)?;
+    let output = library_thumbnail_root.join(format!(
         "photo_{}_{}_{}.webp",
         photo.photo_id, photo.modified_at_ns, photo.file_size
     ));
     image::open(&source)?
         .thumbnail(256, 256)
         .save_with_format(&output, image::ImageFormat::WebP)?;
-    let connection = database.connect()?;
     connection.execute(
         "UPDATE photos SET thumbnail_path = ? WHERE photo_id = ?",
         params![output.to_string_lossy(), photo_id],
@@ -106,7 +138,9 @@ pub fn get_or_create_thumbnail(
 }
 
 pub fn rebase_thumbnail_paths(database: &Database, thumbnail_root: &Path) -> CoreResult<usize> {
-    let mut connection = database.connect()?;
+    let library = active_library(database)?;
+    let library_thumbnail_root = thumbnail_root.join(&library.library_uuid);
+    let mut connection = database.connect_photo_library_registration(&library)?;
     let transaction = connection.transaction()?;
     let paths = {
         let mut statement = transaction.prepare(
@@ -122,17 +156,40 @@ pub fn rebase_thumbnail_paths(database: &Database, thumbnail_root: &Path) -> Cor
         let Some(filename) = Path::new(&current).file_name() else {
             continue;
         };
-        let candidate = thumbnail_root.join(filename);
+        let candidate = library_thumbnail_root.join(filename);
         if candidate.is_file() && candidate.as_path() != Path::new(&current) {
             transaction.execute(
                 "UPDATE photos SET thumbnail_path = ? WHERE photo_id = ?",
                 params![candidate.to_string_lossy(), photo_id],
             )?;
             updated += 1;
+        } else if !Path::new(&current).starts_with(&library_thumbnail_root) {
+            transaction.execute(
+                "UPDATE photos SET thumbnail_path = NULL WHERE photo_id = ?",
+                [photo_id],
+            )?;
+            updated += 1;
         }
     }
     transaction.commit()?;
     Ok(updated)
+}
+
+fn active_library(database: &Database) -> CoreResult<PhotoLibraryRegistration> {
+    database
+        .active_photo_library()?
+        .ok_or_else(|| CoreError::InvalidArgument("no active photo library is registered".into()))
+}
+
+fn get_photo_from_connection(connection: &Connection, photo_id: i64) -> CoreResult<Option<Photo>> {
+    connection
+        .query_row(
+            &super::photo_select("WHERE photos.photo_id = ?"),
+            [photo_id],
+            photo_from_row,
+        )
+        .optional()
+        .map_err(Into::into)
 }
 
 fn metadata_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PhotoMetadata> {

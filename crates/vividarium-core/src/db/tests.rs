@@ -375,6 +375,49 @@ fn renames_a_photo_library_registration() {
 }
 
 #[test]
+fn removes_an_active_photo_library_registration_without_storage_access() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("photos");
+    fs::create_dir_all(&root).unwrap();
+    let database_path = directory.path().join("library.db");
+    let database = Database::open(directory.path().join("metadata.db")).unwrap();
+    let library = database
+        .register_photo_library(&root, &database_path, Some("Library"))
+        .unwrap();
+
+    fs::remove_file(&database_path).unwrap();
+    fs::remove_dir(&root).unwrap();
+    database
+        .remove_photo_library(&library.library_uuid)
+        .unwrap();
+
+    assert_eq!(database.active_photo_library().unwrap(), None);
+    assert!(database.list_photo_libraries().unwrap().is_empty());
+    assert!(!database_path.exists());
+    assert!(!root.exists());
+}
+
+#[test]
+fn removing_an_active_registration_preserves_its_files() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("photos");
+    fs::create_dir_all(&root).unwrap();
+    let database_path = directory.path().join("library.db");
+    let database = Database::open(directory.path().join("metadata.db")).unwrap();
+    let library = database
+        .register_photo_library(&root, &database_path, Some("Library"))
+        .unwrap();
+
+    database
+        .remove_photo_library(&library.library_uuid)
+        .unwrap();
+
+    assert_eq!(database.active_photo_library().unwrap(), None);
+    assert!(root.is_dir());
+    assert!(database_path.is_file());
+}
+
+#[test]
 fn registering_a_stale_library_queues_a_full_remap() {
     let directory = tempfile::tempdir().unwrap();
     let database = Database::open(directory.path().join("metadata.db")).unwrap();
@@ -438,6 +481,7 @@ fn registering_a_stale_library_queues_a_full_remap() {
     let registered = database
         .register_photo_library(&root, &library_path, Some("Stale"))
         .unwrap();
+    crate::taxonomy::sync::synchronize_pending_photo_libraries(&database).unwrap();
 
     assert_eq!(registered.library_uuid, library_uuid);
     let connection = database.connect().unwrap();

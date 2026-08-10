@@ -1,6 +1,142 @@
 use super::*;
 
 #[test]
+fn thumbnails_are_isolated_between_photo_libraries() {
+    use std::fs::{FileTimes, OpenOptions};
+    use std::time::{Duration, UNIX_EPOCH};
+
+    let data = tempfile::tempdir().unwrap();
+    let root_a = tempfile::tempdir().unwrap();
+    let root_b = tempfile::tempdir().unwrap();
+    let photo_a = root_a.path().join("same.bmp");
+    let photo_b = root_b.path().join("same.bmp");
+    image::RgbImage::from_pixel(4, 4, image::Rgb([255, 0, 0]))
+        .save(&photo_a)
+        .unwrap();
+    image::RgbImage::from_pixel(4, 4, image::Rgb([0, 0, 255]))
+        .save(&photo_b)
+        .unwrap();
+    let times = FileTimes::new().set_modified(UNIX_EPOCH + Duration::from_secs(1_700_000_000));
+    OpenOptions::new()
+        .write(true)
+        .open(&photo_a)
+        .unwrap()
+        .set_times(times)
+        .unwrap();
+    OpenOptions::new()
+        .write(true)
+        .open(&photo_b)
+        .unwrap()
+        .set_times(times)
+        .unwrap();
+
+    let database = Database::open(data.path().join("vividarium.db")).unwrap();
+    let thumbnail_root = data.path().join("thumbnails");
+    open_library(&database, root_a.path().to_str().unwrap()).unwrap();
+    let library_a = database.active_photo_library().unwrap().unwrap();
+    let mut progress = |_: u64, _: Option<u64>, _: &str| {};
+    initial_index_photo_library(&database, &library_a.library_uuid, &mut progress).unwrap();
+    let indexed_a = list_photos(&database).unwrap().remove(0);
+    let thumbnail_a = get_or_create_thumbnail_for_library(
+        &database,
+        &library_a.library_uuid,
+        indexed_a.photo_id,
+        &thumbnail_root,
+    )
+    .unwrap();
+
+    open_library(&database, root_b.path().to_str().unwrap()).unwrap();
+    let library_b = database.active_photo_library().unwrap().unwrap();
+    initial_index_photo_library(&database, &library_b.library_uuid, &mut progress).unwrap();
+    let indexed_b = list_photos(&database).unwrap().remove(0);
+    let thumbnail_b = get_or_create_thumbnail_for_library(
+        &database,
+        &library_b.library_uuid,
+        indexed_b.photo_id,
+        &thumbnail_root,
+    )
+    .unwrap();
+
+    assert_eq!(indexed_a.photo_id, indexed_b.photo_id);
+    assert_eq!(indexed_a.file_size, indexed_b.file_size);
+    assert_eq!(indexed_a.modified_at_ns, indexed_b.modified_at_ns);
+    assert_ne!(thumbnail_a, thumbnail_b);
+    assert!(thumbnail_a.starts_with(thumbnail_root.join(&library_a.library_uuid)));
+    assert!(thumbnail_b.starts_with(thumbnail_root.join(&library_b.library_uuid)));
+    assert_ne!(
+        fs::read(thumbnail_a).unwrap(),
+        fs::read(thumbnail_b).unwrap()
+    );
+}
+
+#[test]
+fn initial_index_is_durable_and_does_not_generate_thumbnails() {
+    let data = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    fs::write(root.path().join("first.jpg"), b"first").unwrap();
+    let database = Database::open(data.path().join("vividarium.db")).unwrap();
+    open_library(&database, root.path().to_str().unwrap()).unwrap();
+    let library = database.active_photo_library().unwrap().unwrap();
+    assert!(!is_initial_index_complete(&database, &library.library_uuid).unwrap());
+    let mut updates = Vec::new();
+    let indexed = {
+        let mut progress = |current, total, message: &str| {
+            updates.push((current, total, message.to_string()));
+        };
+        initial_index_photo_library(&database, &library.library_uuid, &mut progress)
+            .unwrap()
+            .unwrap()
+    };
+
+    assert_eq!(indexed.inserted, 1);
+    assert!(is_initial_index_complete(&database, &library.library_uuid).unwrap());
+    assert_eq!(list_photos(&database).unwrap()[0].thumbnail_path, None);
+    assert_eq!(
+        updates.last().map(|update| update.2.as_str()),
+        Some("Initial photo index complete")
+    );
+
+    fs::write(root.path().join("later.jpg"), b"later").unwrap();
+    let mut progress = |_: u64, _: Option<u64>, _: &str| {};
+    assert!(
+        initial_index_photo_library(&database, &library.library_uuid, &mut progress)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(get_photo_count(&database).unwrap(), 1);
+}
+
+#[test]
+fn failed_initial_index_remains_retryable() {
+    let data = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let database = Database::open(data.path().join("vividarium.db")).unwrap();
+    open_library(&database, root.path().to_str().unwrap()).unwrap();
+    let library = database.active_photo_library().unwrap().unwrap();
+    root.close().unwrap();
+    let mut progress = |_: u64, _: Option<u64>, _: &str| {};
+
+    assert!(initial_index_photo_library(&database, &library.library_uuid, &mut progress).is_err());
+    assert!(!is_initial_index_complete(&database, &library.library_uuid).unwrap());
+}
+
+#[test]
+fn legacy_library_without_an_index_marker_requires_one_incremental_scan() {
+    let data = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let database = Database::open(data.path().join("vividarium.db")).unwrap();
+    open_library(&database, root.path().to_str().unwrap()).unwrap();
+    let library = database.active_photo_library().unwrap().unwrap();
+    database
+        .connect()
+        .unwrap()
+        .execute("DROP TABLE photo_library_index_state", [])
+        .unwrap();
+
+    assert!(!is_initial_index_complete(&database, &library.library_uuid).unwrap());
+}
+
+#[test]
 fn opens_and_refreshes_the_requested_directory_subtree() {
     let data = tempfile::tempdir().unwrap();
     let root = tempfile::tempdir().unwrap();

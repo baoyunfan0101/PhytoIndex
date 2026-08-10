@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use chrono::Local;
@@ -58,6 +58,7 @@ pub struct AppState {
     pub thumbnail_dir: PathBuf,
     pub operations: OperationManager,
     pub taxonomy_sync: DeferredWork,
+    photo_library_lifecycle: Arc<Mutex<()>>,
     formatted_update_preview: Arc<Mutex<Option<StagedFormattedUpdate>>>,
 }
 
@@ -79,8 +80,15 @@ impl AppState {
             thumbnail_dir,
             operations: OperationManager::new(),
             taxonomy_sync: DeferredWork::new(),
+            photo_library_lifecycle: Arc::new(Mutex::new(())),
             formatted_update_preview: Arc::new(Mutex::new(None)),
         })
+    }
+
+    pub fn lock_photo_library_lifecycle(&self) -> Result<MutexGuard<'_, ()>, String> {
+        self.photo_library_lifecycle
+            .lock()
+            .map_err(|_| "photo library lifecycle lock is poisoned".to_string())
     }
 
     pub fn replace_formatted_update_preview(
