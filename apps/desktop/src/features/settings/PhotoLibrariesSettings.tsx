@@ -1,8 +1,8 @@
 import {
   DatabaseBackup,
+  FolderInput,
   FolderOpen,
   FolderSync,
-  Move,
   Pencil,
   RefreshCcw,
   Trash2,
@@ -205,7 +205,7 @@ export function PhotoLibrariesSettings({
               })}><DatabaseBackup size={12} />{busyLibraryUuid === library.library_uuid && busy === "Rebinding Photo Library database" ? "Rebinding..." : "Rebind DB"}</Button>
               <Button size="small" disabled={Boolean(busy) || mutationLocked || !library.database_available} title={mutationLockTitle} onClick={() => void selectDatabaseDestination(library.db_path).then((path) => {
                 if (path) return mutate("Moving Photo Library database", () => relocatePhotoLibraryDatabase(library.library_uuid, path), library.active, library.library_uuid);
-              })}><Move size={12} />{busyLibraryUuid === library.library_uuid && busy === "Moving Photo Library database" ? "Moving..." : "Move DB"}</Button>
+              })}><FolderInput size={12} />{busyLibraryUuid === library.library_uuid && busy === "Moving Photo Library database" ? "Moving..." : "Move DB"}</Button>
               <Button
                 size="small"
                 disabled={Boolean(busy) || mutationLocked}
