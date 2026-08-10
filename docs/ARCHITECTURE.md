@@ -53,10 +53,12 @@ errors to IPC strings, and delegate business behavior to `vividarium-core`.
 
 Long-running work is registered with the desktop operation coordinator and is
 reported through structured progress. Its task-keyed status map is the single
-source for the bottom-right Background UI. Photo Library lifecycle changes and
-photo or mapping task startup share one coordinator lock, while each task runs
-on a blocking worker in bounded database batches and yields between batches.
-Foreground queries remain ordinary asynchronous commands. Native paths,
+source for the bottom-right Background UI. `BackgroundTaskScheduler` identifies
+photo work by `(kind, scope)`, coalesces duplicate queued or running work, and
+runs Photo Scan, Metadata Index, and Photo Mapping through one conservative
+worker. Each stage uses bounded database batches and yields between batches.
+Photo Library lifecycle changes and task startup share one coordinator lock;
+foreground queries remain ordinary asynchronous commands. Native paths,
 dialogs, the private
 `vividarium://` media protocol, updates, and system application opening remain
 outside the core crate.
@@ -103,7 +105,8 @@ that identity so independently numbered photos cannot share cached content.
 2. The Tauri command delegates to a core domain service or schedules a
    background operation.
 3. The core commits one transaction and records audit state when applicable.
-4. The desktop publishes completion or structured progress.
+4. The desktop publishes queued, running, progress, completed, or failed state
+   through `operation-progress`.
 5. The frontend emits a domain mutation notification and refreshes only
    affected views.
 

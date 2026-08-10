@@ -57,6 +57,11 @@ markers are mounted. Selecting a marker reuses one bottom-right thumbnail and
 filename preview. Selecting another marker replaces its contents, selecting
 the map closes it, and selecting the preview opens Photo Detail.
 
+Metadata progress invalidations are coalesced into periodic page reloads. While
+the user has not dragged or zoomed the map, newly discovered GPS bounds may
+refit the initial viewport. The first manual map interaction disables automatic
+refitting so background work cannot move the user's chosen view.
+
 ### `PhotoDetailView({ photo, handlers })`
 
 Parameters: one `Photo`.

@@ -68,7 +68,9 @@ Returns: the latest `OperationsStatus` plus observer state used by the shell.
 The status is keyed by task identity, so one module can retain distinct task
 records while Background remains the single source of truth. The observer
 publishes incremental photo/index/metadata invalidations and successful
-completion invalidations, including tasks that finish between polls.
+completion invalidations. It registers `operation-progress` before relying on
+live updates and fetches a status snapshot only for startup, window-focus or
+visibility recovery; Background progress does not use a fixed polling loop.
 
 ### `useNativeMenu(handler)`
 
@@ -92,9 +94,9 @@ The native About menu action opens `NativeAboutOverlay`, which returns only
 the product name, software version, author, email, and GitHub link. External
 links use the system opener and report failures inside the overlay.
 
-Photo Library activation follows its returned indexing operation without
-waiting. Existing photo data remains browseable while filesystem, metadata,
-and mapping stages run in Background. Folder, Taxon Tree, and Map show a small
+Photo Library activation records its returned indexing operation without
+waiting. Existing photo data remains browseable while Photo Scan, Metadata
+Index, and Photo Mapping run in Background. Folder, Taxon Tree, and Map show a small
 incomplete-data notice when their results are still being filled; they are not
 covered or disabled. Progress invalidates only affected cursor pages and Map
 continues adding newly discovered geotagged photos. Foreground pagination and

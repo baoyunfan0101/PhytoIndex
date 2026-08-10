@@ -67,14 +67,15 @@ changes while photo or mapping work is running. Taxonomy relocation cannot
 overlap another taxonomy replacement.
 
 The desktop open, register, switch, and rebind commands return a
-`PhotoLibraryActivation<T>` containing the selected library and an optional
-`photos/photo_library_index` operation. A new library has a durable incomplete
-marker. Its first activation immediately exposes existing database content and
-starts a background pipeline for filesystem discovery and photo metadata.
-Directory updates use short transactions, metadata uses bounded batches, and
-photo mapping follows through the same operation coordinator. Failed or
-interrupted work remains retryable. Existing index and metadata rows are
-skipped, and indexing never generates thumbnails.
+`PhotoLibraryActivation<T>` containing the selected library and the first
+background operation. Activation immediately exposes existing database content
+and enqueues `photos/photo_scan`, `photos/metadata_index`, then
+`mapping/photo_mapping` for that library UUID. Scan reconciles filesystem
+changes even after the durable initial pass is complete. Directory updates use
+short transactions, metadata uses bounded batches, and duplicate task keys are
+coalesced by the shared scheduler. Failed or interrupted work remains retryable.
+Unchanged index rows and existing metadata are skipped, and indexing never
+generates thumbnails.
 
 Metadata and taxonomy storage remain available when the active photo library
 is offline. Pure taxonomy reads, updates, history, settings, and taxonomy

@@ -52,14 +52,17 @@ child directories before photos.
 | `refresh_directory` | `directory_id: i64` | `PhotoSyncResult` | Reconcile the requested directory and every descendant directory. |
 | `is_initial_index_complete` | `library_uuid: &str` | `bool` | Return the durable first-index state for one registered library. |
 | `initial_index_photo_library` | `library_uuid: &str`, progress callback | `Option<PhotoSyncResult>` | Recursively reconcile one captured registration and mark it complete only after success. Return `None` when it is already complete. |
+| `scan_photo_library` | `library_uuid: &str`, progress callback | `PhotoSyncResult` | Incrementally reconcile the complete registered root; also completes the durable initial-index marker when needed. |
 | `has_pending_photo_metadata` | `library_uuid: &str` | `bool` | Report whether indexed photos still need metadata extraction. |
 | `index_photo_metadata_for_library` | `library_uuid: &str`, progress callback | `PhotoMetadataIndexResult` | Extract missing metadata in bounded batches and skip completed rows. |
 
 Every newly discovered, changed, or unqueued indexed photo is queued for automatic mapping.
 Filesystem indexing performs the same incremental comparison as Refresh.
 Directories are scanned without holding the photo write lock and committed one
-directory at a time. Metadata is extracted separately in bounded background
-batches. Neither phase requests or creates thumbnails.
+directory and at most 256 photo rows at a time. Metadata is extracted separately
+in batches of 64, committed in short transactions, and shares the same cache as
+foreground `get_photo_metadata`. Both loops yield between batches. Neither phase
+requests or creates thumbnails.
 
 ### Search interfaces
 

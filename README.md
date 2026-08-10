@@ -108,7 +108,7 @@ Release packages do not require Python, Node.js, Rust, SQLite, or a separate dat
 1. Open Vividarium and create or register a Photo Library.
 2. Open **Settings > Taxonomy Databases** and populate the taxonomy with SQL Import or a compatible Direct Import database.
 3. Configure filename matching under **Settings > Naming**.
-4. Let the first background index and mapping pass finish, then review the Mapping workspace. Later filesystem changes can be reconciled with Refresh.
+4. Let the first background index and mapping pass finish, then review the Mapping workspace. Reopening a library or using Refresh reconciles later filesystem changes.
 5. Use Folders, Taxon Tree, Search, or Map to browse the indexed collection.
 
 Vividarium does not copy or upload original photos while indexing. Filesystem and metadata work runs in bounded background batches, and the initial index does not pre-generate the library's thumbnails. Lists and grids load cursor pages on demand; thumbnails are created only near the visible area. Actions explicitly labeled Rename do rename files on disk and record the operation in Rename History.
