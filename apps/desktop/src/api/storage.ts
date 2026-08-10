@@ -1,5 +1,6 @@
 import { call } from "./client";
 import type { PhotoLibrary } from "./photos";
+import type { OperationState } from "./tasks";
 
 export type DatabaseLocations = {
   metadata_database: string;
@@ -20,6 +21,10 @@ export type PhotoLibraryWorkspace = PhotoLibraryRegistration & {
   root_available: boolean;
   database_available: boolean;
 };
+export type PhotoLibraryActivation<T> = {
+  library: T;
+  operation: OperationState | null;
+};
 
 const demoLibrary = (): PhotoLibraryWorkspace => ({
   library_uuid: "demo-library",
@@ -33,33 +38,56 @@ const demoLibrary = (): PhotoLibraryWorkspace => ({
 });
 
 export const openPhotoLibrary = (root: string) =>
-  call<PhotoLibrary>("open_photo_library", { root }, () => ({ root_path: root, root_directory_id: 1 }));
+  call<PhotoLibraryActivation<PhotoLibrary>>("open_photo_library", { root }, () => ({
+    library: { root_path: root, root_directory_id: 1 },
+    operation: null,
+  }));
 export const getDatabaseLocations = () =>
   call<DatabaseLocations>("get_database_locations", undefined, getDemoDatabaseLocations);
 export const listPhotoLibraries = () =>
   call<PhotoLibraryWorkspace[]>("list_photo_libraries", undefined, () => [demoLibrary()]);
 export const registerPhotoLibrary = (rootPath: string, databasePath: string, displayName: string | null) =>
-  call<PhotoLibraryRegistration>("register_photo_library", { rootPath, databasePath, displayName }, () => ({
-    library_uuid: crypto.randomUUID(),
-    display_name: displayName || "Photo Library",
-    root_path: rootPath,
-    db_path: databasePath,
-    last_opened_at: new Date().toISOString(),
-  }));
+  call<PhotoLibraryActivation<PhotoLibraryRegistration>>(
+    "register_photo_library",
+    { rootPath, databasePath, displayName },
+    () => ({
+      library: {
+        library_uuid: crypto.randomUUID(),
+        display_name: displayName || "Photo Library",
+        root_path: rootPath,
+        db_path: databasePath,
+        last_opened_at: new Date().toISOString(),
+      },
+      operation: null,
+    }),
+  );
 export const switchPhotoLibrary = (libraryUuid: string) =>
-  call<PhotoLibraryRegistration>("switch_photo_library", { libraryUuid }, () => ({ ...demoLibrary(), library_uuid: libraryUuid }));
+  call<PhotoLibraryActivation<PhotoLibraryRegistration>>("switch_photo_library", { libraryUuid }, () => ({
+    library: { ...demoLibrary(), library_uuid: libraryUuid },
+    operation: null,
+  }));
 export const renamePhotoLibrary = (libraryUuid: string, displayName: string) =>
   call<PhotoLibraryRegistration>("rename_photo_library", { libraryUuid, displayName }, () => ({
     ...demoLibrary(), library_uuid: libraryUuid, display_name: displayName,
   }));
 export const rebindPhotoLibraryRoot = (libraryUuid: string, rootPath: string) =>
-  call<PhotoLibraryRegistration>("rebind_photo_library_root", { libraryUuid, rootPath }, () => ({
-    ...demoLibrary(), library_uuid: libraryUuid, root_path: rootPath,
-  }));
+  call<PhotoLibraryActivation<PhotoLibraryRegistration>>(
+    "rebind_photo_library_root",
+    { libraryUuid, rootPath },
+    () => ({
+      library: { ...demoLibrary(), library_uuid: libraryUuid, root_path: rootPath },
+      operation: null,
+    }),
+  );
 export const rebindPhotoLibraryDatabase = (libraryUuid: string, databasePath: string) =>
-  call<PhotoLibraryRegistration>("rebind_photo_library_database", { libraryUuid, databasePath }, () => ({
-    ...demoLibrary(), library_uuid: libraryUuid, db_path: databasePath,
-  }));
+  call<PhotoLibraryActivation<PhotoLibraryRegistration>>(
+    "rebind_photo_library_database",
+    { libraryUuid, databasePath },
+    () => ({
+      library: { ...demoLibrary(), library_uuid: libraryUuid, db_path: databasePath },
+      operation: null,
+    }),
+  );
 export const relocatePhotoLibraryDatabase = (libraryUuid: string, databasePath: string) =>
   call<PhotoLibraryRegistration>("relocate_photo_library_database", { libraryUuid, databasePath }, () => ({
     ...demoLibrary(), library_uuid: libraryUuid, db_path: databasePath,

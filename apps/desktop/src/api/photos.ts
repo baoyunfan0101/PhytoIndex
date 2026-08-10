@@ -1,6 +1,7 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { call, desktopRuntime } from "./client";
 import type { Page } from "./common";
+import { photoCacheIdentity } from "./photoCacheIdentity";
 import { demoOperation, type OperationState } from "./tasks";
 
 export type Photo = {
@@ -24,18 +25,12 @@ export type PhotoMetadata = {
   exif_json: string | null;
 };
 
-export type PhotoRenameRowStatus = "applied" | "no_change" | "failed";
-export type PhotoRenameRowOutcome = {
-  row_number: number;
-  photo_id: number;
+export type PhotoRenameOperationSummary = {
   operation_id: number | null;
-  status: PhotoRenameRowStatus;
-  message: string;
-  photo: Photo | null;
-};
-export type PhotoRenameOperationResult = {
-  operation_id: number | null;
-  rows: PhotoRenameRowOutcome[];
+  total: number;
+  applied: number;
+  no_change: number;
+  failed: number;
 };
 
 export type PhotoLibrary = { root_path: string; root_directory_id: number };
@@ -66,7 +61,7 @@ export const demoPhotos: Photo[] = Array.from({ length: 96 }, (_, index) => {
   };
 });
 
-export function photoUrl(photo: Photo, thumbnail = false): string {
+export function photoUrl(photo: Photo, thumbnail = false, libraryUuid: string | null = null): string {
   if (!desktopRuntime) {
     const hue = (photo.photo_id * 43) % 360;
     const label = photo.filename.replace(/\.[^.]+$/, "").split("_").join(" ");
@@ -74,7 +69,9 @@ export function photoUrl(photo: Photo, thumbnail = false): string {
     return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
   }
   const resource = thumbnail ? "thumbnail" : "photo";
-  return `${convertFileSrc(`${resource}/${photo.photo_id}`, "vividarium")}?v=${photo.modified_at_ns}:${photo.file_size}`;
+  const version = encodeURIComponent(photoCacheIdentity(photo, libraryUuid));
+  const library = libraryUuid || "unregistered";
+  return `${convertFileSrc(`${resource}/${library}/${photo.photo_id}`, "vividarium")}?v=${version}`;
 }
 
 export const getPhotoLibrary = () =>
@@ -144,11 +141,23 @@ export const renamePhotoDirectory = (directoryId: number, newName: string) =>
   }));
 export const renamePhotoFromTaxon = (photoId: number) =>
   call<Photo>("rename_photo_from_taxon", { photoId }, () => getPhoto(photoId));
+export const renamePhotosFromTaxa = (photoIds: number[]) =>
+  call<{ operation: OperationState }>("rename_photos_from_taxa", { photoIds }, () => ({
+    operation: {
+      ...demoOperation("photos", "Rename complete"),
+      result: { operation_id: null, total: 0, applied: 0, no_change: 0, failed: 0 },
+    },
+  }));
 export const renamePhotosInDirectoryFromTaxa = (directoryId: number, includeDescendants = true) =>
-  call<PhotoRenameOperationResult>(
+  call<{ operation: OperationState }>(
     "rename_photos_in_directory_from_taxa",
     { directoryId, includeDescendants },
-    () => ({ operation_id: null, rows: [] }),
+    () => ({
+      operation: {
+        ...demoOperation("photos", "Rename complete"),
+        result: { operation_id: null, total: 0, applied: 0, no_change: 0, failed: 0 },
+      },
+    }),
   );
 export const revealPhotoInFileManager = (photoId: number) =>
   call<void>("reveal_photo_in_file_manager", { photoId }, () => undefined);

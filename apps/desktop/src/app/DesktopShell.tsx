@@ -25,6 +25,7 @@ import {
   saveWorkspaceState,
   type GeneralSettings,
 } from "../api/general";
+import { waitForOperation, type OperationState } from "../api/tasks";
 import {
   getPhoto,
   type Photo,
@@ -46,6 +47,8 @@ import {
   recordNavigation,
 } from "./navigationHistory";
 import { PhotoDetailView } from "../features/photos/PhotoDetailView";
+import { PhotoOperationOverlay } from "../features/photos/PhotoOperationOverlay";
+import { PhotoLibraryIdentityProvider } from "../features/photos/PhotoLibraryIdentity";
 import { PhotoSet } from "../features/photos/PhotoSet";
 import { EmptyWorkspace } from "../features/photos/search/EmptyWorkspace";
 import { GlobalSearchOverlay } from "../features/photos/search/GlobalSearchOverlay";
@@ -171,6 +174,7 @@ export function DesktopShell({
     loadRecentSearches(undefined, generalSettings.recent_searches_limit)
   ));
   const [tabStatuses, setTabStatuses] = useState<TabStatusMap>({});
+  const [startedPhotoOperation, setStartedPhotoOperation] = useState<OperationState | null>(null);
   const emptySearchInputRef = useRef<HTMLInputElement>(null);
   const operationsMenuRef = useRef<HTMLDivElement>(null);
   const activeIdRef = useRef<string | null>(null);
@@ -185,6 +189,23 @@ export function DesktopShell({
     activeLibrary?.root_available && activeLibrary.database_available,
   );
   const runningOperations = Object.values(operations).filter((operation) => operation.running);
+  const photoLibraryOperation = startedPhotoOperation?.running
+    ? startedPhotoOperation
+    : operations.photos?.running
+      ? operations.photos
+      : operations.mapping?.running
+        ? operations.mapping
+        : null;
+  const photoOperationError = operations.photos?.error
+    ? operations.photos.operation === "initial_index"
+      ? `Photo Library indexing failed: ${operations.photos.error}. Retry the active library in Settings or reopen it.`
+      : `Photo operation failed: ${operations.photos.error}`
+    : operations.mapping?.error
+      ? `Photo mapping failed: ${operations.mapping.error}`
+      : "";
+  const photoLibraryOperationError = operations.photos?.operation === "initial_index" && operations.photos.error
+    ? `Photo Library indexing failed: ${operations.photos.error}. Retry the active library or reopen it.`
+    : "";
   const taxonomyMutationLocked = runningOperations.some(
     (operation) => operation.operation === "apply_sql_import" || operation.operation === "apply_direct_import",
   );
@@ -203,6 +224,31 @@ export function DesktopShell({
   const reportActiveStatus = useCallback((message: string) => {
     const tabId = activeIdRef.current;
     if (tabId !== null) reportTabStatus(tabId, message);
+  }, [reportTabStatus]);
+
+  const followPhotoOperation = useCallback((operation: OperationState | null) => {
+    if (!operation?.task_id) return;
+    const reportingTabId = activeIdRef.current;
+    setStartedPhotoOperation(operation);
+    void waitForOperation("photos", operation.task_id, setStartedPhotoOperation)
+      .then((finished) => {
+        setStartedPhotoOperation((current) => (
+          current?.task_id === operation.task_id ? null : current
+        ));
+        if (finished.error) {
+          if (reportingTabId !== null) {
+            reportTabStatus(reportingTabId, `Photo Library task failed: ${finished.error}. Retry it in Settings or reopen it.`);
+          }
+        } else {
+          emitPhotoMutation({ photoId: null, kind: "photo" });
+        }
+      })
+      .catch((nextError) => {
+        setStartedPhotoOperation((current) => (
+          current?.task_id === operation.task_id ? null : current
+        ));
+        if (reportingTabId !== null) reportTabStatus(reportingTabId, String(nextError));
+      });
   }, [reportTabStatus]);
 
   usePhotoMutation((mutation) => {
@@ -302,6 +348,38 @@ export function DesktopShell({
       active?.id ?? null,
     ));
   }, [active?.id, existingTabIds]);
+
+  useEffect(() => {
+    if (!photoOperationError) return;
+    setTabStatuses((current) => tabs.reduce(
+      (next, tab) => photoTabKinds.has(tab.kind)
+        ? updateTabStatus(next, tab.id, photoOperationError)
+        : next,
+      current,
+    ));
+  }, [photoOperationError, tabs]);
+
+  useEffect(() => {
+    const operation = operations.photos;
+    if (!operation?.task_id || operation.running || operation.error) return;
+    setTabStatuses((current) => Object.fromEntries(Object.entries(current).map(([tabId, message]) => [
+      tabId,
+      message.startsWith("Photo operation failed:")
+        || message.startsWith("Photo Library task failed:")
+        || message.startsWith("Photo Library indexing failed:")
+        ? "Photo Library ready"
+        : message,
+    ])));
+  }, [operations.photos?.error, operations.photos?.running, operations.photos?.task_id]);
+
+  useEffect(() => {
+    const operation = operations.mapping;
+    if (!operation?.task_id || operation.running || operation.error) return;
+    setTabStatuses((current) => Object.fromEntries(Object.entries(current).map(([tabId, message]) => [
+      tabId,
+      message.startsWith("Photo mapping failed:") ? "Photo Library ready" : message,
+    ])));
+  }, [operations.mapping?.error, operations.mapping?.running, operations.mapping?.task_id]);
 
   useEffect(() => {
     if (!operationsOpen) return;
@@ -455,15 +533,18 @@ export function DesktopShell({
     }
   }
 
-  async function createLibrary() {
+  async function createLibrary(): Promise<boolean> {
     const selected = await selectPhotoDirectory();
-    if (!selected) return;
+    if (!selected) return false;
     try {
-      await openPhotoLibrary(selected);
+      const activation = await openPhotoLibrary(selected);
+      followPhotoOperation(activation.operation);
       await reloadLibraries();
       resetPhotoWorkspace("Photo Library opened");
+      return true;
     } catch (nextError) {
       reportActiveStatus(String(nextError));
+      return false;
     }
   }
 
@@ -602,29 +683,37 @@ export function DesktopShell({
                 aria-hidden={!isActive}
                 key={tab.id}
               >
-                <ViewStateProvider store={viewState}>
-                  <TabBody
-                    active={isActive}
-                    tab={tab}
-                    handlers={handlers}
-                    onTabStatus={reportTabStatus}
-                    openTab={openTab}
-                    updateTaxonTab={updateTaxonTab}
-                    updateSettingsTab={updateSettingsTab}
-                    workspaceAvailable={workspaceAvailable}
-                    activeLibrary={activeLibrary}
-                    taxonomyMutationLocked={taxonomyMutationLocked}
-                    onCreateLibrary={() => void createLibrary()}
-                    onWorkspaceChanged={(resetPhotoTabs) => {
-                      void reloadLibraries();
-                      if (resetPhotoTabs) resetPhotoWorkspace("Photo Library workspace changed");
-                    }}
-                    onTaxonomyImported={resetTaxonomyResources}
-                    generalSettings={generalSettings}
-                    generalSettingsLoadError={generalSettingsLoadError}
-                    onGeneralSettingsChange={onGeneralSettingsChange}
-                  />
-                </ViewStateProvider>
+                <PhotoLibraryIdentityProvider libraryUuid={activeLibrary?.library_uuid ?? null}>
+                  <ViewStateProvider store={viewState}>
+                    <TabBody
+                      active={isActive}
+                      tab={tab}
+                      handlers={handlers}
+                      onTabStatus={reportTabStatus}
+                      openTab={openTab}
+                      updateTaxonTab={updateTaxonTab}
+                      updateSettingsTab={updateSettingsTab}
+                      workspaceAvailable={workspaceAvailable}
+                      activeLibrary={activeLibrary}
+                      taxonomyMutationLocked={taxonomyMutationLocked}
+                      onOpenPhotoLibrary={createLibrary}
+                      onPhotoOperationStarted={followPhotoOperation}
+                      photoLibraryOperation={photoLibraryOperation}
+                      photoLibraryOperationError={photoLibraryOperationError}
+                      onWorkspaceChanged={async (resetPhotoTabs) => {
+                        await reloadLibraries();
+                        if (resetPhotoTabs) resetPhotoWorkspace("Photo Library workspace changed");
+                      }}
+                      onTaxonomyImported={resetTaxonomyResources}
+                      generalSettings={generalSettings}
+                      generalSettingsLoadError={generalSettingsLoadError}
+                      onGeneralSettingsChange={onGeneralSettingsChange}
+                    />
+                    {photoTabKinds.has(tab.kind) && photoLibraryOperation && (
+                      <PhotoOperationOverlay operation={photoLibraryOperation} />
+                    )}
+                  </ViewStateProvider>
+                </PhotoLibraryIdentityProvider>
               </section>
             );
           })}
@@ -679,7 +768,10 @@ function TabBody({
   workspaceAvailable,
   activeLibrary,
   taxonomyMutationLocked,
-  onCreateLibrary,
+  onOpenPhotoLibrary,
+  onPhotoOperationStarted,
+  photoLibraryOperation,
+  photoLibraryOperationError,
   onWorkspaceChanged,
   onTaxonomyImported,
   generalSettings,
@@ -696,8 +788,11 @@ function TabBody({
   workspaceAvailable: boolean;
   activeLibrary: PhotoLibraryWorkspace | null;
   taxonomyMutationLocked: boolean;
-  onCreateLibrary: () => void;
-  onWorkspaceChanged: (resetPhotoTabs: boolean) => void;
+  onOpenPhotoLibrary: () => Promise<boolean>;
+  onPhotoOperationStarted: (operation: OperationState | null) => void;
+  photoLibraryOperation: OperationState | null;
+  photoLibraryOperationError: string;
+  onWorkspaceChanged: (resetPhotoTabs: boolean) => Promise<void>;
   onTaxonomyImported: () => void;
   generalSettings: GeneralSettings;
   generalSettingsLoadError?: string;
@@ -717,7 +812,7 @@ function TabBody({
         icon={Database}
         action={(
           <div className="empty-state-actions">
-            {!activeLibrary && <Button variant="primary" onClick={onCreateLibrary}>Create or open</Button>}
+            {!activeLibrary && <Button variant="primary" onClick={() => void onOpenPhotoLibrary()}>Create or open</Button>}
             <Button onClick={() => openTab({ id: "settings", kind: "settings", title: "Settings", settingsSection: "Photo Libraries" }, true)}>Manage libraries</Button>
           </div>
         )}
@@ -734,7 +829,7 @@ function TabBody({
   if (tab.kind === "formatted-update") return <FormattedUpdateView onStatus={onStatus} mutationDisabled={taxonomyMutationLocked} />;
   if (tab.kind === "custom-sql") return <CustomSqlView onStatus={onStatus} mutationDisabled={taxonomyMutationLocked} />;
   if (tab.kind === "taxonomy-history") return <OperationHistoryView domain="taxonomy" onStatus={onStatus} />;
-  if (tab.kind === "settings") return <SettingsView section={tab.settingsSection ?? "General"} onSectionChange={(section) => updateSettingsTab(tab.id, section)} onTaxonomyImported={onTaxonomyImported} onWorkspaceChanged={onWorkspaceChanged} generalSettings={generalSettings} generalSettingsLoadError={generalSettingsLoadError} onGeneralSettingsChange={onGeneralSettingsChange} />;
+  if (tab.kind === "settings") return <SettingsView section={tab.settingsSection ?? "General"} onSectionChange={(section) => updateSettingsTab(tab.id, section)} onTaxonomyImported={onTaxonomyImported} onWorkspaceChanged={onWorkspaceChanged} onOpenPhotoLibrary={onOpenPhotoLibrary} onPhotoOperationStarted={onPhotoOperationStarted} photoLibraryOperation={photoLibraryOperation} photoLibraryOperationError={photoLibraryOperationError} generalSettings={generalSettings} generalSettingsLoadError={generalSettingsLoadError} onGeneralSettingsChange={onGeneralSettingsChange} />;
   if (tab.kind === "photo-detail" && tab.photo) return <PhotoDetailView photo={tab.photo} handlers={handlers} />;
   if (tab.kind === "mapping-editor" && tab.photo) return <MappingEditor photo={tab.photo} onOpenTaxon={handlers.openTaxon} />;
   if (tab.kind === "search-photos" && tab.query) return <PhotoSet query={tab.query} refreshKey={tab.refreshKey} handlers={handlers} />;

@@ -9,6 +9,7 @@ import {
   type WheelEvent,
 } from "react";
 import { photoUrl, type Photo } from "../../api/photos";
+import { usePhotoLibraryIdentity } from "./PhotoLibraryIdentity";
 
 type Size = { width: number; height: number };
 type Pan = { x: number; y: number };
@@ -23,6 +24,7 @@ export function PhotoStage({
   compact?: boolean;
   onContextMenu?: (event: MouseEvent, photo: Photo) => void;
 }) {
+  const libraryUuid = usePhotoLibraryIdentity();
   const containerRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ pointerId: number; x: number; y: number; panX: number; panY: number } | null>(null);
   const viewRef = useRef({
@@ -179,7 +181,7 @@ export function PhotoStage({
         <img
           key={photo.photo_id}
           className="photo-stage-image"
-          src={photoUrl(photo)}
+          src={photoUrl(photo, false, libraryUuid)}
           alt={photo.filename}
           draggable={false}
           onLoad={handleImageLoad}
@@ -240,6 +242,7 @@ export function PhotoThumb({
   onDoubleClick?: () => void;
   onContextMenu?: (event: MouseEvent) => void;
 }) {
+  const libraryUuid = usePhotoLibraryIdentity();
   return (
     <button
       className={`photo-thumb${selected ? " selected" : ""}`}
@@ -252,7 +255,7 @@ export function PhotoThumb({
         onContextMenu?.(event);
       }}
     >
-      <img src={photoUrl(photo, true)} alt="" loading="lazy" draggable={false} />
+      <img src={photoUrl(photo, true, libraryUuid)} alt="" loading="lazy" draggable={false} />
     </button>
   );
 }

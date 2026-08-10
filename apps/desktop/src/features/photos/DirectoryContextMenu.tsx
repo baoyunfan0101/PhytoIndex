@@ -5,10 +5,12 @@ import {
   renamePhotoDirectory,
   renamePhotosInDirectoryFromTaxa,
   type PhotoDirectory,
-  type PhotoRenameOperationResult,
+  type PhotoRenameOperationSummary,
 } from "../../api/photos";
 import { errorMessage } from "../../api/common";
+import { waitForOperation } from "../../api/tasks";
 import { Button, Modal } from "../../shared/ui";
+import { photoRenameSummaryFromOperation } from "./photoOperation";
 
 export function DirectoryContextMenu({
   directory,
@@ -26,7 +28,7 @@ export function DirectoryContextMenu({
   onClose: () => void;
   onRefresh: (directory: PhotoDirectory) => Promise<void>;
   onDirectoryRenamed: (directory: PhotoDirectory) => Promise<void> | void;
-  onRenamed: (result: PhotoRenameOperationResult) => Promise<void> | void;
+  onRenamed: () => Promise<void> | void;
   onStatus: (message: string, busy?: boolean) => void;
 }) {
   const menuRef = useRef<HTMLDivElement>(null);
@@ -72,9 +74,17 @@ export function DirectoryContextMenu({
 
   async function renameDirectoryPhotos(includeDescendants: boolean) {
     onStatus(includeDescendants ? "Renaming directory photos recursively" : "Renaming directory photos", true);
-    const result = await renamePhotosInDirectoryFromTaxa(directory.directory_id, includeDescendants);
+    const started = await renamePhotosInDirectoryFromTaxa(directory.directory_id, includeDescendants);
+    const completed = started.operation.task_id
+      ? await waitForOperation(
+        "photos",
+        started.operation.task_id,
+        (operation) => onStatus(operation.message, true),
+      )
+      : started.operation;
+    const result = photoRenameSummaryFromOperation(completed);
     onStatus(summarizeRenameResult(result));
-    await onRenamed(result);
+    await onRenamed();
   }
 
   async function renameDirectoryOnly() {
@@ -93,7 +103,7 @@ export function DirectoryContextMenu({
       >
         <MenuButton
           icon={RefreshCw}
-          label="Refresh folder"
+          label={busy === "Refreshing" ? "Refreshing..." : "Refresh folder"}
           disabled={Boolean(busy)}
           onClick={() => void run("Refreshing", () => onRefresh(directory))}
         />
@@ -110,20 +120,20 @@ export function DirectoryContextMenu({
         <div className="context-separator" role="separator" />
         <MenuButton
           icon={FileInput}
-          label="Rename files from taxonomy"
+          label={busy === "Renaming files" ? "Renaming..." : "Rename files from taxonomy"}
           disabled={Boolean(busy)}
-          onClick={() => void run("Renaming", () => renameDirectoryPhotos(false))}
+          onClick={() => void run("Renaming files", () => renameDirectoryPhotos(false))}
         />
         <MenuButton
           icon={FileInput}
-          label="Rename files recursively from taxonomy"
+          label={busy === "Renaming recursively" ? "Renaming..." : "Rename files recursively from taxonomy"}
           disabled={Boolean(busy)}
-          onClick={() => void run("Renaming", () => renameDirectoryPhotos(true))}
+          onClick={() => void run("Renaming recursively", () => renameDirectoryPhotos(true))}
         />
         <div className="context-separator" role="separator" />
         <MenuButton
           icon={FolderOpen}
-          label="Open in Finder / Explorer"
+          label={busy === "Opening" ? "Opening..." : "Open in Finder / Explorer"}
           disabled={Boolean(busy)}
           onClick={() => void run("Opening", () => openPhotoDirectoryInFileManager(directory.directory_id))}
         />
@@ -140,9 +150,9 @@ export function DirectoryContextMenu({
               <Button
                 variant="primary"
                 disabled={!newName.trim() || Boolean(busy)}
-                onClick={() => void run("Renaming", renameDirectoryOnly)}
+                onClick={() => void run("Renaming folder", renameDirectoryOnly)}
               >
-                Rename
+                {busy === "Renaming folder" ? "Renaming..." : "Rename"}
               </Button>
             </>
           }
@@ -177,15 +187,12 @@ function MenuButton({
   );
 }
 
-function summarizeRenameResult(result: PhotoRenameOperationResult) {
-  if (result.rows.length === 0) return "No matched photos to rename";
-  const applied = result.rows.filter((row) => row.status === "applied").length;
-  const noChange = result.rows.filter((row) => row.status === "no_change").length;
-  const failed = result.rows.filter((row) => row.status === "failed").length;
+function summarizeRenameResult(result: PhotoRenameOperationSummary) {
+  if (result.total === 0) return "No matched photos to rename";
   return [
-    applied > 0 ? formatCount(applied, "renamed") : "",
-    noChange > 0 ? formatCount(noChange, "unchanged") : "",
-    failed > 0 ? formatCount(failed, "failed") : "",
+    result.applied > 0 ? formatCount(result.applied, "renamed") : "",
+    result.no_change > 0 ? formatCount(result.no_change, "unchanged") : "",
+    result.failed > 0 ? formatCount(result.failed, "failed") : "",
   ].filter(Boolean).join(", ");
 }
 

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { getOperationsStatus, type OperationsStatus } from "../api/tasks";
 import { emitPhotoMutation } from "../features/photos/photoMutations";
+import { observedSuccessfulCompletion } from "./operationTransitions";
 
 export function useOperationObserver() {
   const [operations, setOperations] = useState<OperationsStatus>({});
@@ -15,8 +16,13 @@ export function useOperationObserver() {
         if (!active) return;
         const priorMapping = previous.current.mapping;
         const nextMapping = next.mapping;
-        if (priorMapping?.running && nextMapping && !nextMapping.running && !nextMapping.error) {
+        if (observedSuccessfulCompletion(priorMapping, nextMapping)) {
           emitPhotoMutation({ photoId: null, kind: "mapping" });
+        }
+        const priorPhotos = previous.current.photos;
+        const nextPhotos = next.photos;
+        if (observedSuccessfulCompletion(priorPhotos, nextPhotos)) {
+          emitPhotoMutation({ photoId: null, kind: "photo" });
         }
         previous.current = next;
         setOperations(next);

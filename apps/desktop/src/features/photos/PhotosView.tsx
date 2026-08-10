@@ -22,6 +22,7 @@ import { waitForOperation } from "../../api/tasks";
 import { EmptyState, IconButton, SectionHeader, VirtualList } from "../../shared/ui";
 import { DirectoryContextMenu } from "./DirectoryContextMenu";
 import { PhotoStage } from "./PhotoMedia";
+import { usePhotoLibraryIdentity } from "./PhotoLibraryIdentity";
 import { PhotoDisplay, PhotoDisplayToggle, usePhotoActivation, usePhotoDisplayMode } from "./PhotoDisplay";
 import { usePhotoInteraction, type PhotoOpenHandlers } from "./PhotoInteraction";
 import { TaxonContextMenu } from "./TaxonContextMenu";
@@ -402,10 +403,7 @@ export function FolderPhotosView({
             await Promise.all([page.reload(), tree.reloadExpanded()]);
             emitPhotoMutation({ photoId: null, kind: "photo" });
           }}
-          onRenamed={(result) => {
-            const photoIds = result.rows.map((row) => row.photo_id);
-            if (photoIds.length > 0) emitPhotoMutation({ photoId: null, photoIds, kind: "photo" });
-          }}
+          onRenamed={() => emitPhotoMutation({ photoId: null, kind: "photo" })}
           onStatus={onStatus}
         />
       )}
@@ -664,6 +662,7 @@ export function PhotoMapView({
   active: boolean;
   handlers: PhotoOpenHandlers;
 }) {
+  const libraryUuid = usePhotoLibraryIdentity();
   const container = useRef<HTMLDivElement>(null);
   const map = useRef<MapLibreMap | null>(null);
   const markers = useRef(new Map<number, maplibregl.Marker>());
@@ -795,7 +794,7 @@ export function PhotoMapView({
           onClick={() => handlers.openDetails(interaction.selected!)}
           onContextMenu={(event) => interaction.openContextMenu(event, interaction.selected!)}
         >
-          <img src={photoUrl(interaction.selected, true)} alt="" draggable={false} />
+          <img src={photoUrl(interaction.selected, true, libraryUuid)} alt="" draggable={false} />
           <span>{interaction.selected.filename}</span>
         </button>
       )}
