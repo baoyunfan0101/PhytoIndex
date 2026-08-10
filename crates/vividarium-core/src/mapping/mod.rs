@@ -225,6 +225,17 @@ pub fn process_pending_photo_matches(
     })
 }
 
+pub fn has_pending_photo_matches(database: &Database) -> CoreResult<bool> {
+    let connection = database.connect()?;
+    connection
+        .query_row(
+            "SELECT EXISTS (SELECT 1 FROM photo_mapping_queue)",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(Into::into)
+}
+
 pub(crate) fn remap_photo_ids(
     transaction: &Transaction<'_>,
     photo_ids: &[i64],

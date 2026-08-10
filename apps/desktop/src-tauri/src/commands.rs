@@ -35,7 +35,7 @@ use vividarium_core::taxonomy::{
 };
 use vividarium_core::{mapping, naming, photos, taxonomy};
 
-use crate::state::AppState;
+use crate::state::{AppState, BackgroundTaskKey, BackgroundTaskKind};
 use crate::updater::{AppUpdateEvent, AppUpdateInfo, PendingAppUpdate};
 
 pub mod map;
@@ -154,8 +154,7 @@ pub fn open_photo_library(
         .map_err(error)?
         .ok_or_else(|| "opened photo library is not active".to_string())?
         .library_uuid;
-    let operation = start_photo_library_index(app.clone(), &state, &library_uuid)?;
-    schedule_taxonomy_sync(app, &state);
+    let operation = start_photo_library_pipeline(app, &state, &library_uuid)?;
     Ok(PhotoLibraryActivation { library, operation })
 }
 
@@ -212,8 +211,7 @@ pub fn register_photo_library(
             display_name.as_deref(),
         )
         .map_err(error)?;
-    let operation = start_photo_library_index(app.clone(), &state, &library.library_uuid)?;
-    schedule_taxonomy_sync(app, &state);
+    let operation = start_photo_library_pipeline(app, &state, &library.library_uuid)?;
     Ok(PhotoLibraryActivation { library, operation })
 }
 
@@ -229,8 +227,7 @@ pub fn switch_photo_library(
         .database
         .switch_photo_library(&library_uuid)
         .map_err(error)?;
-    let operation = start_photo_library_index(app.clone(), &state, &library.library_uuid)?;
-    schedule_taxonomy_sync(app, &state);
+    let operation = start_photo_library_pipeline(app, &state, &library.library_uuid)?;
     Ok(PhotoLibraryActivation { library, operation })
 }
 
@@ -255,9 +252,7 @@ pub fn rebind_photo_library_root(
         .as_deref()
         == Some(library_uuid.as_str())
     {
-        let operation = start_photo_library_index(app.clone(), &state, &library_uuid)?;
-        schedule_taxonomy_sync(app, &state);
-        operation
+        start_photo_library_pipeline(app, &state, &library_uuid)?
     } else {
         None
     };
@@ -285,11 +280,10 @@ pub fn rebind_photo_library_database(
         .as_deref()
         == Some(library_uuid.as_str())
     {
-        start_photo_library_index(app.clone(), &state, &library_uuid)?
+        start_photo_library_pipeline(app, &state, &library_uuid)?
     } else {
         None
     };
-    schedule_taxonomy_sync(app, &state);
     Ok(PhotoLibraryActivation { library, operation })
 }
 
@@ -429,42 +423,86 @@ pub fn refresh_photo_directory(
     directory_id: i64,
 ) -> CommandResult<Value> {
     let _lifecycle = state.lock_photo_library_lifecycle()?;
+    let library = state
+        .database
+        .active_photo_library()
+        .map_err(error)?
+        .ok_or_else(|| "no active photo library is registered".to_string())?;
     let database = state.database.clone();
-    let operation = state
-        .operations
-        .start(app, "photos", "refresh", move |progress| {
+    let operation = state.background_tasks.enqueue(
+        app.clone(),
+        BackgroundTaskKey::new(
+            BackgroundTaskKind::PhotoScan,
+            format!("{}:directory:{directory_id}", library.library_uuid),
+        ),
+        "photos",
+        "photo_scan",
+        true,
+        move |progress| {
             progress(0, None, "Refreshing directory");
             let refresh = photos::refresh_directory(&database, directory_id).map_err(error)?;
-            let library = database
-                .active_photo_library()
-                .map_err(error)?
-                .ok_or_else(|| "no active photo library is registered".to_string())?;
-            let metadata = photos::index_photo_metadata_for_library(
-                &database,
-                &library.library_uuid,
+            serde_json::to_value(refresh).map_err(error)
+        },
+    )?;
+    let metadata_database = state.database.clone();
+    let metadata_scope = library.library_uuid.clone();
+    state.background_tasks.enqueue(
+        app.clone(),
+        BackgroundTaskKey::new(BackgroundTaskKind::MetadataIndex, &metadata_scope),
+        "photos",
+        "metadata_index",
+        true,
+        move |progress| {
+            let result = photos::index_photo_metadata_for_library(
+                &metadata_database,
+                &metadata_scope,
                 progress,
             )
             .map_err(error)?;
-            taxonomy::synchronize_pending_photo_libraries(&database).map_err(error)?;
-            let mapping =
-                mapping::process_pending_photo_matches(&database, progress).map_err(error)?;
-            Ok(json!({ "refresh": refresh, "metadata": metadata, "mapping": mapping }))
-        })?;
+            serde_json::to_value(result).map_err(error)
+        },
+    )?;
+    let mapping_database = state.database.clone();
+    let mapping_scope = library.library_uuid.clone();
+    state.background_tasks.enqueue(
+        app,
+        BackgroundTaskKey::new(BackgroundTaskKind::PhotoMapping, &mapping_scope),
+        "mapping",
+        "photo_mapping",
+        true,
+        move |progress| {
+            taxonomy::synchronize_pending_photo_libraries(&mapping_database).map_err(error)?;
+            let result = mapping::process_pending_photo_matches(&mapping_database, progress)
+                .map_err(error)?;
+            serde_json::to_value(result).map_err(error)
+        },
+    )?;
     Ok(json!({ "operation": operation }))
 }
 
 #[tauri::command]
 pub fn start_photo_mapping(app: AppHandle, state: State<'_, AppState>) -> CommandResult<Value> {
     let _lifecycle = state.lock_photo_library_lifecycle()?;
+    let scope = state
+        .database
+        .active_photo_library()
+        .map_err(error)?
+        .map(|library| library.library_uuid)
+        .unwrap_or_else(|| "taxonomy".into());
     let database = state.database.clone();
-    let operation = state
-        .operations
-        .start(app, "mapping", "match", move |progress| {
+    let operation = state.background_tasks.enqueue(
+        app,
+        BackgroundTaskKey::new(BackgroundTaskKind::PhotoMapping, scope),
+        "mapping",
+        "photo_mapping",
+        true,
+        move |progress| {
             taxonomy::synchronize_pending_photo_libraries(&database).map_err(error)?;
             let result =
                 mapping::process_pending_photo_matches(&database, progress).map_err(error)?;
             serde_json::to_value(result).map_err(error)
-        })?;
+        },
+    )?;
     Ok(json!({ "operation": operation }))
 }
 
@@ -1401,113 +1439,108 @@ pub fn apply_direct_import(
     )
 }
 
-fn start_photo_library_index(
+fn start_photo_library_pipeline(
     app: AppHandle,
     state: &AppState,
     library_uuid: &str,
 ) -> CommandResult<Option<OperationState>> {
-    let filesystem_complete =
-        photos::is_initial_index_complete(&state.database, library_uuid).map_err(error)?;
-    let metadata_pending =
-        photos::has_pending_photo_metadata(&state.database, library_uuid).map_err(error)?;
-    if filesystem_complete && !metadata_pending {
-        return Ok(None);
-    }
-    let database = state.database.clone();
-    let library_uuid = library_uuid.to_string();
-    state
-        .operations
-        .start(app, "photos", "photo_library_index", move |progress| {
-            let filesystem = if filesystem_complete {
-                None
-            } else {
-                photos::initial_index_photo_library(&database, &library_uuid, progress)
-                    .map_err(error)?
-            };
-            let metadata =
-                photos::index_photo_metadata_for_library(&database, &library_uuid, progress)
-                    .map_err(error)?;
-            Ok(json!({ "filesystem": filesystem, "metadata": metadata }))
-        })
-        .map(Some)
+    let scan_database = state.database.clone();
+    let scan_scope = library_uuid.to_string();
+    let scan = state.background_tasks.enqueue(
+        app.clone(),
+        BackgroundTaskKey::new(BackgroundTaskKind::PhotoScan, &scan_scope),
+        "photos",
+        "photo_scan",
+        false,
+        move |progress| {
+            let result =
+                photos::scan_photo_library(&scan_database, &scan_scope, progress).map_err(error)?;
+            serde_json::to_value(result).map_err(error)
+        },
+    )?;
+    let metadata_database = state.database.clone();
+    let metadata_scope = library_uuid.to_string();
+    state.background_tasks.enqueue(
+        app.clone(),
+        BackgroundTaskKey::new(BackgroundTaskKind::MetadataIndex, &metadata_scope),
+        "photos",
+        "metadata_index",
+        false,
+        move |progress| {
+            let result = photos::index_photo_metadata_for_library(
+                &metadata_database,
+                &metadata_scope,
+                progress,
+            )
+            .map_err(error)?;
+            serde_json::to_value(result).map_err(error)
+        },
+    )?;
+    let mapping_database = state.database.clone();
+    let mapping_scope = library_uuid.to_string();
+    state.background_tasks.enqueue(
+        app,
+        BackgroundTaskKey::new(BackgroundTaskKind::PhotoMapping, &mapping_scope),
+        "mapping",
+        "photo_mapping",
+        false,
+        move |progress| {
+            taxonomy::synchronize_pending_photo_libraries(&mapping_database).map_err(error)?;
+            let result = mapping::process_pending_photo_matches(&mapping_database, progress)
+                .map_err(error)?;
+            serde_json::to_value(result).map_err(error)
+        },
+    )?;
+    Ok(Some(scan))
 }
 
 pub(crate) fn resume_active_photo_library_work(app: AppHandle, state: &AppState) {
     let Some(library) = state.database.active_photo_library().ok().flatten() else {
         return;
     };
-    let _ = start_photo_library_index(app.clone(), state, &library.library_uuid);
-    schedule_taxonomy_sync(app, state);
+    let _ = start_photo_library_pipeline(app, state, &library.library_uuid);
 }
 
 fn schedule_taxonomy_sync(app: AppHandle, state: &AppState) {
-    if !state.taxonomy_sync.request() {
-        return;
-    }
-    let state = state.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        loop {
-            if !state.taxonomy_sync.take_request() {
-                if state.taxonomy_sync.release_or_continue() {
-                    continue;
-                }
-                break;
-            }
-            while state
-                .operations
-                .status()
-                .values()
-                .any(|operation| operation.running)
-            {
-                std::thread::sleep(std::time::Duration::from_millis(100));
-            }
-            let lifecycle = match state.lock_photo_library_lifecycle() {
-                Ok(lifecycle) => lifecycle,
-                Err(_) => {
-                    state.taxonomy_sync.request();
-                    std::thread::sleep(std::time::Duration::from_millis(100));
-                    continue;
-                }
-            };
-            let database = state.database.clone();
-            let operation =
-                state
-                    .operations
-                    .start(app.clone(), "mapping", "taxonomy_sync", move |progress| {
-                        progress(0, None, "Synchronizing taxonomy changes");
-                        let sync = taxonomy::synchronize_pending_photo_libraries(&database)
-                            .map_err(error)?;
-                        let active_library = database.active_photo_library().map_err(error)?;
-                        let mapping = if active_library
-                            .as_ref()
-                            .is_some_and(|library| Path::new(&library.db_path).is_file())
-                        {
-                            Some(
-                                mapping::process_pending_photo_matches(&database, progress)
-                                    .map_err(error)?,
-                            )
-                        } else {
-                            progress(0, Some(0), "No active Photo Library");
-                            None
-                        };
-                        Ok(json!({ "sync": sync, "mapping": mapping }))
-                    });
-            drop(lifecycle);
-            let task_id = match operation {
-                Ok(operation) => operation.task_id,
-                Err(_) => {
-                    state.taxonomy_sync.request();
-                    std::thread::sleep(std::time::Duration::from_millis(100));
-                    continue;
-                }
-            };
-            while state.operations.status().values().any(|operation| {
-                operation.running && operation.task_id.as_deref() == task_id.as_deref()
-            }) {
-                std::thread::sleep(std::time::Duration::from_millis(100));
-            }
+    let active_library = state.database.active_photo_library().ok().flatten();
+    if let Some(library) = active_library.as_ref() {
+        let scan_pending =
+            photos::is_initial_index_complete(&state.database, &library.library_uuid)
+                .is_ok_and(|complete| !complete);
+        let mapping_pending = mapping::has_pending_photo_matches(&state.database).unwrap_or(true);
+        let sync_pending =
+            taxonomy::has_pending_photo_library_sync(&state.database, &library.library_uuid)
+                .unwrap_or(true);
+        if !scan_pending && !mapping_pending && !sync_pending {
+            return;
         }
-    });
+    }
+    let scope = active_library
+        .map(|library| library.library_uuid)
+        .unwrap_or_else(|| "taxonomy".into());
+    let database = state.database.clone();
+    let _ = state.background_tasks.enqueue(
+        app,
+        BackgroundTaskKey::new(BackgroundTaskKind::PhotoMapping, &scope),
+        "mapping",
+        "photo_mapping",
+        true,
+        move |progress| {
+            progress(0, None, "Synchronizing taxonomy changes");
+            let sync = taxonomy::synchronize_pending_photo_libraries(&database).map_err(error)?;
+            let active_library = database.active_photo_library().map_err(error)?;
+            let mapping = if active_library
+                .as_ref()
+                .is_some_and(|library| Path::new(&library.db_path).is_file())
+            {
+                Some(mapping::process_pending_photo_matches(&database, progress).map_err(error)?)
+            } else {
+                progress(0, Some(0), "No active Photo Library");
+                None
+            };
+            Ok(json!({ "sync": sync, "mapping": mapping }))
+        },
+    );
 }
 
 fn audit_writer(destination_path: &str) -> CommandResult<BufWriter<File>> {
@@ -1529,7 +1562,7 @@ fn ensure_database_relocation_allowed(state: &AppState) -> CommandResult<()> {
         .operations
         .status()
         .into_values()
-        .filter(|operation| operation.running)
+        .filter(|operation| operation.is_active())
         .filter_map(|operation| operation.operation)
         .collect::<Vec<_>>();
     if running.is_empty() {
@@ -1548,7 +1581,7 @@ fn ensure_photo_workspace_activation_allowed(state: &AppState) -> CommandResult<
         .status()
         .into_values()
         .find_map(|operation| {
-            (operation.running && matches!(operation.module.as_str(), "photos" | "mapping"))
+            (operation.is_active() && matches!(operation.module.as_str(), "photos" | "mapping"))
                 .then_some(operation.operation.unwrap_or(operation.module))
         });
     match blocker {

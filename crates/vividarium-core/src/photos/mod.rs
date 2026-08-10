@@ -222,6 +222,32 @@ pub fn initial_index_photo_library(
     refresh_directory_for_library(database, &library, root_directory_id, true, progress).map(Some)
 }
 
+pub fn scan_photo_library(
+    database: &Database,
+    library_uuid: &str,
+    progress: &mut ProgressCallback<'_>,
+) -> CoreResult<PhotoSyncResult> {
+    let library = database.photo_library(library_uuid)?;
+    let connection = database.connect_photo_library_registration(&library)?;
+    ensure_photo_library_index_state(&connection)?;
+    let complete = connection.query_row(
+        r#"
+        SELECT initial_index_complete
+        FROM photo_library_index_state
+        WHERE state_id = 1
+        "#,
+        [],
+        |row| row.get::<_, bool>(0),
+    )?;
+    let root_directory_id = connection.query_row(
+        "SELECT directory_id FROM photo_directories WHERE relative_path = ''",
+        [],
+        |row| row.get(0),
+    )?;
+    drop(connection);
+    refresh_directory_for_library(database, &library, root_directory_id, !complete, progress)
+}
+
 pub fn get_photo_count(database: &Database) -> CoreResult<i64> {
     if database.active_photo_library()?.is_none() {
         return Ok(0);

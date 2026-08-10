@@ -107,6 +107,35 @@ fn initial_index_is_durable_and_does_not_generate_thumbnails() {
 }
 
 #[test]
+fn repeat_photo_scan_skips_unchanged_files_and_queues_new_or_changed_files() {
+    let data = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    fs::write(root.path().join("first.jpg"), b"first").unwrap();
+    let database = Database::open(data.path().join("vividarium.db")).unwrap();
+    open_library(&database, root.path().to_str().unwrap()).unwrap();
+    let library = database.active_photo_library().unwrap().unwrap();
+    let mut progress = |_: u64, _: Option<u64>, _: &str| {};
+
+    let initial = scan_photo_library(&database, &library.library_uuid, &mut progress).unwrap();
+    assert_eq!(initial.inserted, 1);
+    crate::mapping::process_pending_photo_matches(&database, &mut progress).unwrap();
+    assert!(!crate::mapping::has_pending_photo_matches(&database).unwrap());
+
+    let unchanged = scan_photo_library(&database, &library.library_uuid, &mut progress).unwrap();
+    assert_eq!(unchanged.unchanged, 1);
+    assert_eq!(unchanged.inserted, 0);
+    assert_eq!(unchanged.updated, 0);
+    assert!(!crate::mapping::has_pending_photo_matches(&database).unwrap());
+
+    fs::write(root.path().join("first.jpg"), b"first changed").unwrap();
+    fs::write(root.path().join("second.jpg"), b"second").unwrap();
+    let changed = scan_photo_library(&database, &library.library_uuid, &mut progress).unwrap();
+    assert_eq!(changed.inserted, 1);
+    assert_eq!(changed.updated, 1);
+    assert!(crate::mapping::has_pending_photo_matches(&database).unwrap());
+}
+
+#[test]
 fn metadata_index_skips_completed_photos_and_reports_progress() {
     let data = tempfile::tempdir().unwrap();
     let root = tempfile::tempdir().unwrap();
@@ -137,6 +166,76 @@ fn metadata_index_skips_completed_photos_and_reports_progress() {
         index_photo_metadata_for_library(&database, &library.library_uuid, &mut progress).unwrap();
     assert_eq!(second.previously_indexed, 1);
     assert_eq!(second.indexed, 0);
+
+    image::RgbImage::from_pixel(10, 7, image::Rgb([30, 20, 10]))
+        .save(root.path().join("first.bmp"))
+        .unwrap();
+    let root_id = get_library(&database).unwrap().unwrap().root_directory_id;
+    let refreshed = refresh_directory(&database, root_id).unwrap();
+    assert_eq!(refreshed.updated, 1);
+    assert!(has_pending_photo_metadata(&database, &library.library_uuid).unwrap());
+    let changed =
+        index_photo_metadata_for_library(&database, &library.library_uuid, &mut progress).unwrap();
+    assert_eq!(changed.indexed, 1);
+    let photo_id = list_photos(&database).unwrap()[0].photo_id;
+    assert_eq!(
+        get_photo_metadata(&database, photo_id).unwrap().width,
+        Some(10)
+    );
+}
+
+#[test]
+fn background_metadata_makes_gps_photo_queryable_without_opening_details() {
+    let data = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    write_gps_tiff(&root.path().join("located.tif"));
+    let database = Database::open(data.path().join("vividarium.db")).unwrap();
+    open_library(&database, root.path().to_str().unwrap()).unwrap();
+    let library = database.active_photo_library().unwrap().unwrap();
+    let mut progress = |_: u64, _: Option<u64>, _: &str| {};
+    initial_index_photo_library(&database, &library.library_uuid, &mut progress).unwrap();
+
+    assert!(
+        crate::map::list_map_photos(&database, None, None, 10)
+            .unwrap()
+            .items
+            .is_empty()
+    );
+    index_photo_metadata_for_library(&database, &library.library_uuid, &mut progress).unwrap();
+    let located = crate::map::list_map_photos(&database, None, None, 10).unwrap();
+    assert_eq!(located.items.len(), 1);
+    assert!((located.items[0].latitude - 39.9).abs() < 0.000_1);
+    assert!((located.items[0].longitude - (116.0 + 23.0 / 60.0)).abs() < 0.000_1);
+}
+
+fn write_gps_tiff(path: &std::path::Path) {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"II");
+    bytes.extend_from_slice(&42_u16.to_le_bytes());
+    bytes.extend_from_slice(&8_u32.to_le_bytes());
+    bytes.extend_from_slice(&3_u16.to_le_bytes());
+    tiff_entry(&mut bytes, 0x0100, 4, 1, 1);
+    tiff_entry(&mut bytes, 0x0101, 4, 1, 1);
+    tiff_entry(&mut bytes, 0x8825, 4, 1, 50);
+    bytes.extend_from_slice(&0_u32.to_le_bytes());
+    bytes.extend_from_slice(&4_u16.to_le_bytes());
+    tiff_entry(&mut bytes, 1, 2, 2, u32::from_le_bytes(*b"N\0\0\0"));
+    tiff_entry(&mut bytes, 2, 5, 3, 104);
+    tiff_entry(&mut bytes, 3, 2, 2, u32::from_le_bytes(*b"E\0\0\0"));
+    tiff_entry(&mut bytes, 4, 5, 3, 128);
+    bytes.extend_from_slice(&0_u32.to_le_bytes());
+    for value in [39_u32, 54, 0, 116, 23, 0] {
+        bytes.extend_from_slice(&value.to_le_bytes());
+        bytes.extend_from_slice(&1_u32.to_le_bytes());
+    }
+    fs::write(path, bytes).unwrap();
+}
+
+fn tiff_entry(bytes: &mut Vec<u8>, tag: u16, field_type: u16, count: u32, value: u32) {
+    bytes.extend_from_slice(&tag.to_le_bytes());
+    bytes.extend_from_slice(&field_type.to_le_bytes());
+    bytes.extend_from_slice(&count.to_le_bytes());
+    bytes.extend_from_slice(&value.to_le_bytes());
 }
 
 #[test]
