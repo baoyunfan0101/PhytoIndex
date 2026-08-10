@@ -11,11 +11,15 @@ function operation(overrides: Partial<OperationState> = {}): OperationState {
   return {
     module: "photos",
     task_id: "task-1",
+    task_kind: "photo_scan",
+    task_scope: "library-a",
+    state: "running",
     operation: "initial_index",
     running: true,
     started_at: "2026-08-09 22:00:00",
     finished_at: null,
     message: "Indexing Photo Library",
+    completed: 0,
     processed: 0,
     total: null,
     progress: null,
@@ -69,24 +73,43 @@ test("photo media cache identity includes the active Photo Library", () => {
   );
 });
 
-test("a photo operation completed entirely between polls still invalidates photo views", () => {
-  const idle = operation({ task_id: null, operation: null, running: false });
+test("a photo operation completed between recovery snapshots still invalidates photo views", () => {
+  const idle = operation({ task_id: null, operation: null, state: "completed", running: false });
   const completed = operation({
+    state: "completed",
     running: false,
     finished_at: "2026-08-09 22:00:01",
     message: "completed",
   });
   assert.equal(observedSuccessfulCompletion(idle, completed), true);
   assert.equal(observedSuccessfulCompletion(completed, completed), false);
-  assert.equal(observedSuccessfulCompletion(idle, { ...completed, error: "failed" }), false);
+  assert.equal(observedSuccessfulCompletion(idle, { ...completed, state: "failed", error: "failed" }), false);
 });
 
 test("background status resolves exact tasks without collapsing module history", () => {
-  const older = operation({ task_id: "task-1", running: false });
+  const older = operation({ task_id: "task-1", state: "completed", running: false });
   const newer = operation({ task_id: "task-2", started_at: "2026-08-09 22:01:00" });
   const operations = { "task-1": older, "task-2": newer };
   assert.equal(operationByTaskId(operations, "task-1"), older);
   assert.equal(latestOperationForModule(operations, "photos"), newer);
+});
+
+test("an active queued task is preferred over completed module history", () => {
+  const completed = operation({
+    task_id: "task-complete",
+    state: "completed",
+    running: false,
+    started_at: "2026-08-09 22:02:00",
+    finished_at: "2026-08-09 22:03:00",
+  });
+  const queued = operation({
+    task_id: "task-queued",
+    state: "queued",
+    running: false,
+    started_at: null,
+    finished_at: null,
+  });
+  assert.equal(latestOperationForModule({ completed, queued }, "photos"), queued);
 });
 
 test("reads the completed bulk rename result from the photo operation", () => {

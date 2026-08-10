@@ -15,7 +15,12 @@ export function latestOperationForModule(
 ): OperationState | undefined {
   return Object.values(operations)
     .filter((operation) => operation.module === module)
-    .sort((left, right) => (
-      right.started_at ?? ""
-    ).localeCompare(left.started_at ?? ""))[0];
+    .sort((left, right) => {
+      const leftActive = left.state === "queued" || left.state === "running";
+      const rightActive = right.state === "queued" || right.state === "running";
+      if (leftActive !== rightActive) return leftActive ? -1 : 1;
+      return (
+        right.started_at ?? right.finished_at ?? ""
+      ).localeCompare(left.started_at ?? left.finished_at ?? "");
+    })[0];
 }

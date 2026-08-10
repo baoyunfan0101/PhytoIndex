@@ -4,6 +4,6 @@ export function observedSuccessfulCompletion(
   previous: OperationState | undefined,
   current: OperationState | undefined,
 ): boolean {
-  if (!current?.task_id || current.running || current.error) return false;
-  return previous?.task_id !== current.task_id || Boolean(previous.running);
+  if (!current?.task_id || current.state !== "completed" || current.error) return false;
+  return previous?.task_id !== current.task_id || previous.state !== "completed";
 }

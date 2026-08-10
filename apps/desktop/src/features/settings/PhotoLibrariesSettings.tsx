@@ -43,7 +43,9 @@ export function PhotoLibrariesSettings({
   const [busy, setBusy] = useState("");
   const [busyLibraryUuid, setBusyLibraryUuid] = useState<string | null>(null);
   const [message, setMessage] = useState("");
-  const mutationLocked = Boolean(blockingOperation?.running);
+  const mutationLocked = Boolean(
+    blockingOperation && ["queued", "running"].includes(blockingOperation.state),
+  );
   const mutationLockTitle = mutationLocked
     ? `Unavailable while ${blockingOperation?.message || "Photo Library work is running"}`
     : undefined;

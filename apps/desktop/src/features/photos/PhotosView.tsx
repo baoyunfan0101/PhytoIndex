@@ -675,6 +675,7 @@ export function PhotoMapView({
   const container = useRef<HTMLDivElement>(null);
   const map = useRef<MapLibreMap | null>(null);
   const markers = useRef(new Map<number, maplibregl.Marker>());
+  const refitTimer = useRef(0);
   const [mapReady, setMapReady] = useState(false);
   const [bounds, setBounds] = useState<MapBounds | null>(null);
   const [savedViewport, setSavedViewport] = useViewState<{
@@ -682,6 +683,12 @@ export function PhotoMapView({
     latitude: number;
     zoom: number;
   } | null>("map.viewport", null);
+  const [userControlledViewport, setUserControlledViewport] = useViewState(
+    "map.user-controlled-viewport",
+    false,
+  );
+  const userControlledViewportRef = useRef(userControlledViewport);
+  userControlledViewportRef.current = userControlledViewport;
   const boundsKey = bounds
     ? `${bounds.west}:${bounds.south}:${bounds.east}:${bounds.north}`
     : "no-bounds";
@@ -699,7 +706,20 @@ export function PhotoMapView({
     stateKey: "map.interaction",
   });
   useDeferredPhotoMutation(active, () => {
-    void page.reload();
+    if (refitTimer.current) return;
+    refitTimer.current = window.setTimeout(() => {
+      refitTimer.current = 0;
+      void page.reload();
+      if (!userControlledViewportRef.current) {
+        void getMapPhotoBounds().then((photoBounds) => {
+          if (!photoBounds || userControlledViewportRef.current || !map.current) return;
+          map.current.fitBounds(
+            [[photoBounds.west, photoBounds.south], [photoBounds.east, photoBounds.north]],
+            { padding: 64, maxZoom: 13 },
+          );
+        }).catch(() => undefined);
+      }
+    }, 350);
   }, (mutation) => mutation.kind === "photo" || mutation.kind === "metadata");
 
   useEffect(() => {
@@ -707,7 +727,9 @@ export function PhotoMapView({
     if (!active || map.current) return;
     Promise.all([
       getMapSettings().catch(() => ({ provider: "osm" as const, tianditu_token: null })),
-      savedViewport ? Promise.resolve(null) : getMapPhotoBounds().catch(() => null),
+      userControlledViewport && savedViewport
+        ? Promise.resolve(null)
+        : getMapPhotoBounds().catch(() => null),
     ]).then(([settings, photoBounds]) => {
       if (disposed || !container.current) return;
       const rasterUrl = settings.provider === "tianditu" && settings.tianditu_token
@@ -715,7 +737,7 @@ export function PhotoMapView({
         : "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
       const next = new maplibregl.Map({
         container: container.current,
-        ...(savedViewport
+        ...(userControlledViewport && savedViewport
           ? { center: [savedViewport.longitude, savedViewport.latitude] as [number, number], zoom: savedViewport.zoom }
           : photoBounds
             ? {
@@ -733,8 +755,15 @@ export function PhotoMapView({
       };
       setMapReady(true);
       updateViewport();
+      const markUserControlled = (event: { originalEvent?: unknown }) => {
+        if (!event.originalEvent) return;
+        userControlledViewportRef.current = true;
+        setUserControlledViewport(true);
+      };
       next.on("load", updateViewport);
       next.on("moveend", updateViewport);
+      next.on("dragstart", markUserControlled);
+      next.on("zoomstart", markUserControlled);
     });
     return () => {
       disposed = true;
@@ -742,6 +771,7 @@ export function PhotoMapView({
   }, [active]);
 
   useEffect(() => () => {
+    window.clearTimeout(refitTimer.current);
     map.current?.remove();
     map.current = null;
     markers.current.clear();
@@ -823,7 +853,7 @@ function PhotoIndexingNotice({
   map?: boolean;
   showMapping?: boolean;
 }) {
-  if (!operation?.running) return null;
+  if (!operation || !["queued", "running"].includes(operation.state)) return null;
   if (operation.module === "mapping" && !showMapping) return null;
   const stage = operation.progress?.stage ?? operation.message;
   const metadata = stage.toLowerCase().includes("metadata");
@@ -834,6 +864,6 @@ function PhotoIndexingNotice({
       : "Photo Library indexing · results may be incomplete";
   const progress = operation.total === null
     ? ""
-    : ` · ${operation.processed.toLocaleString()} / ${operation.total.toLocaleString()}`;
+    : ` · ${operation.completed.toLocaleString()} / ${operation.total.toLocaleString()}`;
   return <div className="photo-indexing-notice" role="status">{prefix}{progress}</div>;
 }

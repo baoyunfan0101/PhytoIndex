@@ -25,10 +25,7 @@ import {
   saveWorkspaceState,
   type GeneralSettings,
 } from "../api/general";
-import {
-  waitForOperation,
-  type OperationState,
-} from "../api/tasks";
+import type { OperationState } from "../api/tasks";
 import {
   getPhoto,
   type Photo,
@@ -101,7 +98,7 @@ import {
   type AppTab,
 } from "./workspaceState";
 import { getTabName } from "./tabPresentation";
-import { latestOperationForModule } from "./operationRegistry";
+import { latestOperationForModule, operationByTaskId } from "./operationRegistry";
 
 type TabKind = AppTab["kind"];
 
@@ -178,6 +175,7 @@ export function DesktopShell({
   ));
   const [tabStatuses, setTabStatuses] = useState<TabStatusMap>({});
   const [startedPhotoOperation, setStartedPhotoOperation] = useState<OperationState | null>(null);
+  const startedPhotoOperationTabId = useRef<string | null>(null);
   const emptySearchInputRef = useRef<HTMLInputElement>(null);
   const operationsMenuRef = useRef<HTMLDivElement>(null);
   const activeIdRef = useRef<string | null>(null);
@@ -191,18 +189,25 @@ export function DesktopShell({
   const workspaceAvailable = Boolean(
     activeLibrary?.root_available && activeLibrary.database_available,
   );
-  const runningOperations = Object.values(operations).filter((operation) => operation.running);
+  const runningOperations = Object.values(operations).filter((operation) => (
+    operation.state === "queued" || operation.state === "running"
+  ));
   const latestPhotoOperation = latestOperationForModule(operations, "photos");
   const latestMappingOperation = latestOperationForModule(operations, "mapping");
-  const photoLibraryOperation = startedPhotoOperation?.running
-    ? startedPhotoOperation
-    : latestPhotoOperation?.running
+  const observedStartedPhotoOperation = operationByTaskId(
+    operations,
+    startedPhotoOperation?.task_id ?? null,
+  ) ?? startedPhotoOperation;
+  const photoLibraryOperation = observedStartedPhotoOperation
+    && ["queued", "running"].includes(observedStartedPhotoOperation.state)
+    ? observedStartedPhotoOperation
+    : latestPhotoOperation && ["queued", "running"].includes(latestPhotoOperation.state)
       ? latestPhotoOperation
-      : latestMappingOperation?.running
+      : latestMappingOperation && ["queued", "running"].includes(latestMappingOperation.state)
         ? latestMappingOperation
         : null;
   const photoLibraryOperationError = latestPhotoOperation
-    && ["initial_index", "photo_library_index"].includes(latestPhotoOperation.operation ?? "")
+    && ["initial_index", "photo_library_index", "photo_scan", "metadata_index"].includes(latestPhotoOperation.operation ?? "")
     && latestPhotoOperation.error
     ? `Photo Library indexing failed: ${latestPhotoOperation.error}. Retry the active library or reopen it.`
     : "";
@@ -228,28 +233,23 @@ export function DesktopShell({
 
   const followPhotoOperation = useCallback((operation: OperationState | null) => {
     if (!operation?.task_id) return;
-    const reportingTabId = activeIdRef.current;
+    startedPhotoOperationTabId.current = activeIdRef.current;
     setStartedPhotoOperation(operation);
-    void waitForOperation("photos", operation.task_id, setStartedPhotoOperation)
-      .then((finished) => {
-        setStartedPhotoOperation((current) => (
-          current?.task_id === operation.task_id ? null : current
-        ));
-        if (finished.error) {
-          if (reportingTabId !== null) {
-            reportTabStatus(reportingTabId, `Photo Library task failed: ${finished.error}. Retry it in Settings or reopen it.`);
-          }
-        } else {
-          emitPhotoMutation({ photoId: null, kind: "photo" });
-        }
-      })
-      .catch((nextError) => {
-        setStartedPhotoOperation((current) => (
-          current?.task_id === operation.task_id ? null : current
-        ));
-        if (reportingTabId !== null) reportTabStatus(reportingTabId, String(nextError));
-      });
-  }, [reportTabStatus]);
+  }, []);
+
+  useEffect(() => {
+    if (!startedPhotoOperation?.task_id) return;
+    const observed = operationByTaskId(operations, startedPhotoOperation.task_id);
+    if (!observed || observed.state === "queued" || observed.state === "running") return;
+    if (observed.error && startedPhotoOperationTabId.current !== null) {
+      reportTabStatus(
+        startedPhotoOperationTabId.current,
+        `Photo Library task failed: ${observed.error}. Retry it in Settings or reopen it.`,
+      );
+    }
+    setStartedPhotoOperation(null);
+    startedPhotoOperationTabId.current = null;
+  }, [operations, reportTabStatus, startedPhotoOperation?.task_id]);
 
   usePhotoMutation((mutation) => {
     if (mutation.kind !== "photo") return;
@@ -701,10 +701,10 @@ export function DesktopShell({
                   <div key={operation.task_id ?? `${operation.module}-${operation.started_at}`}>
                     <b>{backgroundTaskName(operation)}</b>
                     <span>{backgroundTaskStage(operation)}</span>
-                    {operation.running && operation.total !== null && (
-                      <progress value={operation.processed} max={operation.total} />
+                    {operation.state === "running" && operation.total !== null && (
+                      <progress value={operation.completed} max={operation.total} />
                     )}
-                    {operation.running && operation.total === null && <progress />}
+                    {operation.state === "running" && operation.total === null && <progress />}
                     {operation.error && <small className="operation-error">{operation.error}</small>}
                   </div>
                 ))}
@@ -726,12 +726,17 @@ export function DesktopShell({
 }
 
 function compareBackgroundOperations(left: OperationState, right: OperationState) {
-  if (left.running !== right.running) return left.running ? -1 : 1;
+  const leftActive = left.state === "queued" || left.state === "running";
+  const rightActive = right.state === "queued" || right.state === "running";
+  if (leftActive !== rightActive) return leftActive ? -1 : 1;
   return (right.started_at ?? "").localeCompare(left.started_at ?? "");
 }
 
 function backgroundTaskName(operation: OperationState) {
   const names: Record<string, string> = {
+    photo_scan: "Photo scan",
+    metadata_index: "Photo metadata index",
+    photo_mapping: "Photo mapping",
     initial_index: "Photo Library indexing",
     photo_library_index: "Photo Library indexing",
     refresh: "Photo Library refresh",
@@ -747,8 +752,9 @@ function backgroundTaskName(operation: OperationState) {
 
 function backgroundTaskStage(operation: OperationState) {
   const stage = operation.progress?.stage ?? operation.message;
-  if (operation.running && operation.total !== null) {
-    return `${stage} · ${operation.processed.toLocaleString()} / ${operation.total.toLocaleString()}`;
+  if (operation.state === "queued") return "Queued";
+  if (operation.state === "running" && operation.total !== null) {
+    return `${stage} · ${operation.completed.toLocaleString()} / ${operation.total.toLocaleString()}`;
   }
   return stage;
 }

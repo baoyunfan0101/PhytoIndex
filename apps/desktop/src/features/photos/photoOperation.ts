@@ -3,14 +3,14 @@ import type { OperationState } from "../../api/tasks";
 
 export function describePhotoOperation(operation: OperationState): string {
   const stage = operation.progress?.stage || operation.message || "Loading Photo Library";
-  const current = operation.progress?.current ?? operation.processed;
+  const current = operation.progress?.current ?? operation.completed;
   const total = operation.progress?.total ?? operation.total;
   if (total === null || total <= 0) return stage;
   return `${stage}: ${current.toLocaleString("en-US")} / ${total.toLocaleString("en-US")}`;
 }
 
 export function photoOperationProgress(operation: OperationState): { value: number; max: number } | null {
-  const value = operation.progress?.current ?? operation.processed;
+  const value = operation.progress?.current ?? operation.completed;
   const max = operation.progress?.total ?? operation.total;
   if (max === null || max <= 0) return null;
   return { value: Math.min(value, max), max };
