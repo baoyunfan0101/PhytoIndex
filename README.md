@@ -23,11 +23,53 @@ Biological photo collections often combine three different kinds of information:
 Vividarium brings that work into one native desktop application:
 
 - **Photo libraries** - register independent libraries, browse folders and thumbnails, inspect metadata, and keep original files local.
+- **Automatic indexing** - opening an unindexed library starts a recursive background scan while unrelated taxonomy and settings work remains available.
 - **Taxonomy workbench** - search and navigate taxa, edit name groups, run formatted updates, or replace a taxonomy through SQL Import or Direct Import.
 - **Photo-to-taxon mapping** - match configurable filename fields against scientific, Chinese, and English names, review ambiguous results, and override mappings explicitly.
 - **Consistent rename tools** - rename one photo or a directory selection from accepted taxonomy names with audit history and rollback.
 - **Large-library navigation** - cursor-paged lists, virtualized views, resizable workbenches, keyboard navigation, and map browsing for geotagged photos.
 - **Local-first operation** - SQLite databases, thumbnails, metadata, and operation history remain on the user's computer.
+
+## Product Tour
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <strong>Folders</strong><br>
+      Browse indexed photos in synchronized list and full-image views.<br><br>
+      <a href="assets/screenshots/folders-photo-view.png"><img src="assets/screenshots/folders-photo-view.png" alt="Folders workspace showing a photo list and full-image view" width="100%"></a>
+    </td>
+    <td width="50%" valign="top">
+      <strong>Taxon Tree</strong><br>
+      Navigate the taxonomy hierarchy alongside a virtual thumbnail grid.<br><br>
+      <a href="assets/screenshots/taxon-tree-grid.png"><img src="assets/screenshots/taxon-tree-grid.png" alt="Taxon Tree workspace showing taxonomy hierarchy and photo grid" width="100%"></a>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <strong>Mapping</strong><br>
+      Review ambiguous filename matches and map photos directly to taxa.<br><br>
+      <a href="assets/screenshots/mapping-review.png"><img src="assets/screenshots/mapping-review.png" alt="Mapping workspace showing a photo and candidate taxa" width="100%"></a>
+    </td>
+    <td width="50%" valign="top">
+      <strong>Taxonomy Search</strong><br>
+      Search names, inspect the hierarchy, and maintain taxon records.<br><br>
+      <a href="assets/screenshots/taxonomy-search.png"><img src="assets/screenshots/taxonomy-search.png" alt="Taxonomy Search workspace showing search results and taxon details" width="100%"></a>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <strong>Custom SQL</strong><br>
+      Query accessible taxonomy and file data with structured results.<br><br>
+      <a href="assets/screenshots/custom-sql.png"><img src="assets/screenshots/custom-sql.png" alt="Custom SQL workspace showing a query and tabular results" width="100%"></a>
+    </td>
+    <td width="50%" valign="top">
+      <strong>Hooks</strong><br>
+      Customize parsers and validate their behavior with project tests.<br><br>
+      <a href="assets/screenshots/hooks-and-tests.png"><img src="assets/screenshots/hooks-and-tests.png" alt="Hooks settings showing a parser and passing project tests" width="100%"></a>
+    </td>
+  </tr>
+</table>
 
 ## Highlights
 
@@ -66,10 +108,10 @@ Release packages do not require Python, Node.js, Rust, SQLite, or a separate dat
 1. Open Vividarium and create or register a Photo Library.
 2. Open **Settings > Taxonomy Databases** and populate the taxonomy with SQL Import or a compatible Direct Import database.
 3. Configure filename matching under **Settings > Naming**.
-4. Refresh the relevant photo folders and review the Mapping workspace.
+4. Let the first background index and mapping pass finish, then review the Mapping workspace. Later filesystem changes can be reconciled with Refresh.
 5. Use Folders, Taxon Tree, Search, or Map to browse the indexed collection.
 
-Vividarium does not copy or upload original photos while indexing. Actions explicitly labeled Rename do rename files on disk and record the operation in Rename History.
+Vividarium does not copy or upload original photos while indexing, and the initial index does not pre-generate the library's thumbnails. Lists and grids load cursor pages on demand; thumbnails are created only near the visible area. Actions explicitly labeled Rename do rename files on disk and record the operation in Rename History.
 
 ## Taxonomy Data Sources
 

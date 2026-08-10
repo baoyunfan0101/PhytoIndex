@@ -42,10 +42,10 @@ interface.
 | `Database::active_photo_library` | none | `CoreResult<Option<PhotoLibraryRegistration>>` | Return the active registration. |
 | `Database::list_photo_libraries` | none | `CoreResult<Vec<PhotoLibraryRegistration>>` | List registered libraries. |
 | `Database::register_photo_library` | `root_path: &Path`, `database_path: &Path`, `display_name: Option<&str>` | `CoreResult<PhotoLibraryRegistration>` | Register an existing or new photo library DB and activate it. The root must be an existing directory not used by another library. An existing DB with a different taxonomy identity or synchronization watermark is fully queued for remapping before activation. |
-| `Database::switch_photo_library` | `library_uuid: &str` | `CoreResult<PhotoLibraryRegistration>` | Validate the registered DB, apply its pending taxonomy synchronization, and activate it. A missing DB is reported and never recreated. |
-| `Database::remove_photo_library` | `library_uuid: &str` | `CoreResult<()>` | Remove only the metadata registration; files and the library DB remain. |
+| `Database::switch_photo_library` | `library_uuid: &str` | `CoreResult<PhotoLibraryRegistration>` | Validate the registered DB and activate it. A missing DB is reported and never recreated. Pending taxonomy synchronization runs through desktop background work. |
+| `Database::remove_photo_library` | `library_uuid: &str` | `CoreResult<()>` | Remove only the metadata registration, even when the root or DB is missing. Files and the library DB remain. Removing the active registration also clears the active identity. |
 | `Database::rename_photo_library` | `library_uuid: &str`, `display_name: &str` | `CoreResult<PhotoLibraryRegistration>` | Replace the user-visible registration name. Blank names are rejected. |
-| `Database::rebind_photo_library_root` | `library_uuid: &str`, `root_path: &Path` | `CoreResult<PhotoLibraryRegistration>` | Bind a copied library DB to a new local photo root. |
+| `Database::rebind_photo_library_root` | `library_uuid: &str`, `root_path: &Path` | `CoreResult<PhotoLibraryRegistration>` | Bind a copied library DB to a new local photo root and mark its initial index incomplete. |
 | `Database::rebind_photo_library_database` | `library_uuid: &str`, `existing_database_path: &Path` | `CoreResult<PhotoLibraryRegistration>` | Point an existing registration at an existing DB without copying or moving it. The schema and persisted library UUID must match. A taxonomy identity or synchronization watermark mismatch creates a full-remap request. |
 | `Database::relocate_photo_library_database` | `library_uuid: &str`, `destination: &Path` | `CoreResult<PhotoLibraryRegistration>` | Safely move one library database and update its registered path. |
 | `Database::open_taxonomy_database` | `existing_database: &Path` | `CoreResult<DatabaseLocations>` | Validate and select an existing schema-2 taxonomy database without moving it. A changed taxonomy identity resets the dispatch cursor and marks every registered Photo Library for a full remap. |
@@ -62,8 +62,17 @@ history.
 Every photo library must represent one real photo root. Root paths and
 database paths are unique among registrations. Callers must prevent concurrent
 mutating operations while relocating a photo database or rebinding its path;
-the desktop commands enforce this requirement. Taxonomy relocation cannot
+the desktop serializes library activation and task startup, and blocks lifecycle
+changes while photo or mapping work is running. Taxonomy relocation cannot
 overlap another taxonomy replacement.
+
+The desktop open, register, switch, and rebind commands return a
+`PhotoLibraryActivation<T>` containing the selected library and an optional
+`photos/initial_index` operation. A new library has a durable incomplete marker.
+Its first activation recursively indexes the photo root in the background and
+marks the index complete only after a successful scan. Failed or interrupted
+work remains retryable. Existing files whose size and modification time are
+unchanged are ignored, and initial indexing never generates thumbnails.
 
 Metadata and taxonomy storage remain available when the active photo library
 is offline. Pure taxonomy reads, updates, history, settings, and taxonomy

@@ -17,8 +17,8 @@ grouped by domain:
 
 | Module | Contract |
 | --- | --- |
-| `storage` | Database locations and photo-library registration. See [STORAGE.md](STORAGE.md). |
-| `photos` | Photo indexing, browsing, media, rename, and rename history. See [PHOTOS.md](PHOTOS.md). |
+| `storage` | Database locations, Photo Library registration, activation, and lifecycle. See [STORAGE.md](STORAGE.md). |
+| `photos` | Initial indexing, refresh, cursor browsing, lazy media, rename, and rename history. See [PHOTOS.md](PHOTOS.md). |
 | `mapping` | Photo-to-taxon state, matching, and photographed-taxonomy browsing. See [MAPPING.md](MAPPING.md). |
 | `taxonomy` | Taxonomy views, search, mutations, import, SQL, synchronization, and history. See [TAXONOMY.md](TAXONOMY.md). |
 | `naming` | Name normalization, Rhai hooks, templates, and hook tests. See [NAMING.md](NAMING.md). |

@@ -33,6 +33,9 @@ state.
 Parameters: `handlers: PhotoOpenHandlers`.
 
 Returns: an expandable directory tree and photo stage for the active library.
+Directory lists use cursor pages and the photo grid is virtualized. Nearing the
+loaded page boundary requests the next page; thumbnail media is requested only
+near the visible grid area.
 
 ### `TaxonPhotosView(props)`
 
@@ -65,7 +68,17 @@ opened.
 ### `PhotoStage` and `PhotoThumb`
 
 Parameters: a `Photo`, with display options appropriate to the full image or
-thumbnail. Returns media UI using the desktop photo URI.
+thumbnail. Returns media UI using the desktop photo URI, active Photo Library
+UUID, and file identity. This prevents cached media from crossing library
+boundaries.
+
+### `PhotoOperationOverlay({ operation })`
+
+Parameters: the current photo or mapping `OperationState`.
+
+Returns: a tab-scoped loading layer with stage and progress. The shell mounts
+it only over photo-dependent tabs, so long indexing, Refresh, mapping, bulk
+rename, and other photo operations do not block unrelated application tabs.
 
 ### `EmptyWorkspace(props)`
 

@@ -52,7 +52,9 @@ response boundary. Command adapters validate desktop-only inputs, translate
 errors to IPC strings, and delegate business behavior to `vividarium-core`.
 
 Long-running work is registered with the desktop operation coordinator and is
-reported through structured progress. Native paths, dialogs, the private
+reported through structured progress. Photo Library lifecycle changes and
+photo or mapping task startup share one coordinator lock, while the task itself
+runs in the background. Native paths, dialogs, the private
 `vividarium://` media protocol, updates, and system application opening remain
 outside the core crate.
 
@@ -83,11 +85,14 @@ Vividarium uses separate SQLite roles:
 - The taxonomy database stores taxa, names, search structures, source
   metadata, and taxonomy operations.
 - Each Photo Library database stores its directory tree, indexed photos,
-  extracted metadata, thumbnails, mapping state, and rename operations.
+  extracted metadata, thumbnail references, durable initial-index state,
+  mapping state, and rename operations.
 
 One taxonomy can therefore serve several independently registered Photo
 Libraries. A taxonomy identity change schedules remapping for every registered
 library without requiring all libraries to be online at the same time.
+Thumbnail files live in library-UUID cache namespaces, and media requests carry
+that identity so independently numbered photos cannot share cached content.
 
 ## Mutation flow
 

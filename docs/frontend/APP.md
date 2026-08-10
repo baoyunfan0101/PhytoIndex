@@ -65,7 +65,8 @@ returns history with closed targets removed.
 Parameters: none.
 
 Returns: the latest `OperationsStatus` plus observer state used by the shell.
-It also publishes photo invalidation after mapping work completes.
+It publishes photo invalidation after mapping or photo work completes,
+including tasks that start and finish between polling intervals.
 
 ### `useNativeMenu(handler)`
 
@@ -88,6 +89,13 @@ section; closing all tabs renders `EmptyWorkspace`.
 The native About menu action opens `NativeAboutOverlay`, which returns only
 the product name, software version, author, email, and GitHub link. External
 links use the system opener and report failures inside the overlay.
+
+Photo Library activation follows its returned initial-index operation
+immediately. While photos, refresh, mapping, bulk rename, or initial indexing is
+running, photo-dependent tabs show one scoped loading and progress overlay and
+may be temporarily unavailable. Taxonomy, Settings, and other unrelated tabs
+remain interactive. Operation completion invalidates cursor pages without
+eagerly loading all photos.
 
 Submitting a global photo query always starts a fresh search, including when a
 tab for the same normalized query is already open. The existing tab is focused

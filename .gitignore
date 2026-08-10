@@ -19,6 +19,7 @@ data/
 *.jpg
 *.jpeg
 *.png
+!assets/screenshots/**/*.png
 !apps/desktop/src-tauri/icons/**/*.png
 !apps/desktop/public/**/*.png
 *.heic
