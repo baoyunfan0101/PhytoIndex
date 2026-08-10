@@ -18,7 +18,7 @@ import { errorMessage } from "../../api/common";
 import { getMapPhotoBounds, getMapSettings, listMapPhotos, type MapBounds, type MapPhoto } from "../../api/map";
 import { browsePhotoTaxon, type PhotoTaxonItem, type PhotoTaxonUsage } from "../../api/mapping";
 import type { TaxonTreeNameParts } from "../../api/general";
-import { waitForOperation } from "../../api/tasks";
+import type { OperationState } from "../../api/tasks";
 import { EmptyState, IconButton, SectionHeader, VirtualList } from "../../shared/ui";
 import { DirectoryContextMenu } from "./DirectoryContextMenu";
 import { PhotoStage } from "./PhotoMedia";
@@ -126,9 +126,11 @@ function readMapBounds(value: maplibregl.LngLatBounds): MapBounds {
 export function FolderPhotosView({
   handlers,
   onStatus,
+  backgroundOperation,
 }: {
   handlers: PhotoOpenHandlers;
   onStatus: (message: string, busy?: boolean) => void;
+  backgroundOperation?: OperationState | null;
 }) {
   const [library, setLibrary] = useViewState<PhotoLibrary | null>("folders.library", null);
   const [trail, setTrail] = useViewState<PhotoDirectory[]>("folders.trail", []);
@@ -182,7 +184,8 @@ export function FolderPhotosView({
   });
   const resolvedActiveRowKey = activeRowKey ?? (interaction.selectedId === null ? null : `p:${interaction.selectedId}`);
   const activeRowIndex = rows.findIndex((row) => directoryTreeRowKey(row) === resolvedActiveRowKey);
-  usePhotoMutation(() => {
+  usePhotoMutation((mutation) => {
+    if (mutation.kind !== "photo" && mutation.kind !== "index") return;
     void Promise.all([page.reload(), tree.reloadExpanded()]);
   });
 
@@ -211,9 +214,7 @@ export function FolderPhotosView({
   async function refreshDirectory(refreshDirectoryId: number) {
     onStatus("Refreshing photo library", true);
     const started = await refreshPhotoDirectory(refreshDirectoryId);
-    await waitForOperation("photos", started.operation.task_id, (operation) => onStatus(operation.message, true));
-    await Promise.all([page.reload(), tree.reloadExpanded()]);
-    if (directoryId !== null) await reportDirectoryCounts(directoryId);
+    onStatus(started.operation.task_id ? "Refresh started in Background" : "Refresh complete");
   }
 
   function enter(directory: PhotoDirectory) {
@@ -309,6 +310,7 @@ export function FolderPhotosView({
         </div>
         <PhotoDisplayToggle mode={displayMode} onChange={setDisplayMode} />
       </header>
+      <PhotoIndexingNotice operation={backgroundOperation} />
       <ResizablePanels
         className="explorer-columns"
         initialRatio={0.34}
@@ -373,7 +375,8 @@ export function FolderPhotosView({
               )
             )}
           />
-          {(libraryLoading || page.loading) && <div className="pane-overlay">Loading</div>}
+          {(libraryLoading || (page.loading && page.items.length === 0)) && <div className="pane-overlay">Loading</div>}
+          {page.loading && page.items.length > 0 && <div className="pane-progress">Refreshing...</div>}
           {(libraryError || page.error) && <div className="inline-error">{libraryError || page.error}</div>}
         </aside>)}
         second={(
@@ -403,7 +406,6 @@ export function FolderPhotosView({
             await Promise.all([page.reload(), tree.reloadExpanded()]);
             emitPhotoMutation({ photoId: null, kind: "photo" });
           }}
-          onRenamed={() => emitPhotoMutation({ photoId: null, kind: "photo" })}
           onStatus={onStatus}
         />
       )}
@@ -415,9 +417,11 @@ export function FolderPhotosView({
 export function TaxonPhotosView({
   handlers,
   nameParts,
+  backgroundOperation,
 }: {
   handlers: PhotoOpenHandlers;
   nameParts: TaxonTreeNameParts;
+  backgroundOperation?: OperationState | null;
 }) {
   const [trail, setTrail] = useViewState<PhotoTaxonUsage[]>("photo-taxonomy.trail", []);
   const [activeRowKey, setActiveRowKey] = useViewState<string | null>("photo-taxonomy.active-row", null);
@@ -461,7 +465,8 @@ export function TaxonPhotosView({
   });
   const resolvedActiveRowKey = activeRowKey ?? (interaction.selectedId === null ? null : `p:${interaction.selectedId}`);
   const activeRowIndex = rows.findIndex((row) => taxonTreeRowKey(row) === resolvedActiveRowKey);
-  usePhotoMutation(() => {
+  usePhotoMutation((mutation) => {
+    if (mutation.kind === "metadata") return;
     void Promise.all([page.reload(), tree.reloadExpanded()]);
   });
 
@@ -568,6 +573,7 @@ export function TaxonPhotosView({
         </div>
         <PhotoDisplayToggle mode={displayMode} onChange={setDisplayMode} />
       </header>
+      <PhotoIndexingNotice operation={backgroundOperation} showMapping />
       <ResizablePanels
         className="explorer-columns"
         initialRatio={0.34}
@@ -622,7 +628,8 @@ export function TaxonPhotosView({
               )
             )}
           />
-          {page.loading && <div className="pane-overlay">Loading</div>}
+          {page.loading && page.items.length === 0 && <div className="pane-overlay">Loading</div>}
+          {page.loading && page.items.length > 0 && <div className="pane-progress">Refreshing...</div>}
           {page.error && <div className="inline-error">{page.error}</div>}
         </aside>)}
         second={(
@@ -658,9 +665,11 @@ export function TaxonPhotosView({
 export function PhotoMapView({
   active,
   handlers,
+  backgroundOperation,
 }: {
   active: boolean;
   handlers: PhotoOpenHandlers;
+  backgroundOperation?: OperationState | null;
 }) {
   const libraryUuid = usePhotoLibraryIdentity();
   const container = useRef<HTMLDivElement>(null);
@@ -691,7 +700,7 @@ export function PhotoMapView({
   });
   useDeferredPhotoMutation(active, () => {
     void page.reload();
-  }, (mutation) => mutation.kind === "photo");
+  }, (mutation) => mutation.kind === "photo" || mutation.kind === "metadata");
 
   useEffect(() => {
     let disposed = false;
@@ -786,6 +795,7 @@ export function PhotoMapView({
       }}
     >
       <div className="map-canvas" ref={container} />
+      <PhotoIndexingNotice operation={backgroundOperation} map />
       {interaction.selected && (
         <button
           className="map-photo-preview"
@@ -802,4 +812,28 @@ export function PhotoMapView({
       {interaction.contextMenu}
     </div>
   );
+}
+
+function PhotoIndexingNotice({
+  operation,
+  map = false,
+  showMapping = false,
+}: {
+  operation?: OperationState | null;
+  map?: boolean;
+  showMapping?: boolean;
+}) {
+  if (!operation?.running) return null;
+  if (operation.module === "mapping" && !showMapping) return null;
+  const stage = operation.progress?.stage ?? operation.message;
+  const metadata = stage.toLowerCase().includes("metadata");
+  const prefix = operation.module === "mapping"
+    ? "Photo mapping is still running · results may be incomplete"
+    : map && metadata
+      ? "Location metadata is still being indexed"
+      : "Photo Library indexing · results may be incomplete";
+  const progress = operation.total === null
+    ? ""
+    : ` · ${operation.processed.toLocaleString()} / ${operation.total.toLocaleString()}`;
+  return <div className="photo-indexing-notice" role="status">{prefix}{progress}</div>;
 }

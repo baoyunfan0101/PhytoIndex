@@ -5,12 +5,9 @@ import {
   renamePhotoDirectory,
   renamePhotosInDirectoryFromTaxa,
   type PhotoDirectory,
-  type PhotoRenameOperationSummary,
 } from "../../api/photos";
 import { errorMessage } from "../../api/common";
-import { waitForOperation } from "../../api/tasks";
 import { Button, Modal } from "../../shared/ui";
-import { photoRenameSummaryFromOperation } from "./photoOperation";
 
 export function DirectoryContextMenu({
   directory,
@@ -19,7 +16,6 @@ export function DirectoryContextMenu({
   onClose,
   onRefresh,
   onDirectoryRenamed,
-  onRenamed,
   onStatus,
 }: {
   directory: PhotoDirectory;
@@ -28,7 +24,6 @@ export function DirectoryContextMenu({
   onClose: () => void;
   onRefresh: (directory: PhotoDirectory) => Promise<void>;
   onDirectoryRenamed: (directory: PhotoDirectory) => Promise<void> | void;
-  onRenamed: () => Promise<void> | void;
   onStatus: (message: string, busy?: boolean) => void;
 }) {
   const menuRef = useRef<HTMLDivElement>(null);
@@ -75,16 +70,7 @@ export function DirectoryContextMenu({
   async function renameDirectoryPhotos(includeDescendants: boolean) {
     onStatus(includeDescendants ? "Renaming directory photos recursively" : "Renaming directory photos", true);
     const started = await renamePhotosInDirectoryFromTaxa(directory.directory_id, includeDescendants);
-    const completed = started.operation.task_id
-      ? await waitForOperation(
-        "photos",
-        started.operation.task_id,
-        (operation) => onStatus(operation.message, true),
-      )
-      : started.operation;
-    const result = photoRenameSummaryFromOperation(completed);
-    onStatus(summarizeRenameResult(result));
-    await onRenamed();
+    onStatus(started.operation.task_id ? "Rename started in Background" : "Rename complete");
   }
 
   async function renameDirectoryOnly() {
@@ -185,17 +171,4 @@ function MenuButton({
       <span>{label}</span>
     </button>
   );
-}
-
-function summarizeRenameResult(result: PhotoRenameOperationSummary) {
-  if (result.total === 0) return "No matched photos to rename";
-  return [
-    result.applied > 0 ? formatCount(result.applied, "renamed") : "",
-    result.no_change > 0 ? formatCount(result.no_change, "unchanged") : "",
-    result.failed > 0 ? formatCount(result.failed, "failed") : "",
-  ].filter(Boolean).join(", ");
-}
-
-function formatCount(count: number, label: string) {
-  return `${count} ${count === 1 ? "photo" : "photos"} ${label}`;
 }

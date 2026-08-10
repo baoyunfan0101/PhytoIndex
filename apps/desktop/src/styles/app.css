@@ -139,10 +139,12 @@
   box-shadow: 0 10px 30px var(--shadow);
 }
 .toolbar-popover > strong { display: block; padding: 6px 7px; color: var(--text); }
-.operations-popover { top: auto; right: 3px; bottom: 25px; width: 310px; }
+.operations-popover { top: auto; right: 3px; bottom: 25px; width: 310px; max-height: min(70vh, 480px); overflow-y: auto; }
 .operations-popover > div { display: grid; gap: 3px; padding: 7px; border-top: 1px solid var(--line); }
 .operations-popover span, .operations-popover small { color: var(--muted); }
 .operations-popover progress { width: 100%; accent-color: var(--accent); }
+.operations-popover .operations-empty { display: block; padding: 7px; border-top: 1px solid var(--line); }
+.operations-popover .operation-error { color: var(--danger); overflow-wrap: anywhere; }
 
 .native-about-overlay {
   position: fixed;

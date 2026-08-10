@@ -14,15 +14,23 @@ export function useOperationObserver() {
       try {
         const next = await getOperationsStatus();
         if (!active) return;
-        const priorMapping = previous.current.mapping;
-        const nextMapping = next.mapping;
-        if (observedSuccessfulCompletion(priorMapping, nextMapping)) {
-          emitPhotoMutation({ photoId: null, kind: "mapping" });
-        }
-        const priorPhotos = previous.current.photos;
-        const nextPhotos = next.photos;
-        if (observedSuccessfulCompletion(priorPhotos, nextPhotos)) {
-          emitPhotoMutation({ photoId: null, kind: "photo" });
+        for (const operation of Object.values(next)) {
+          const prior = operation.task_id ? previous.current[operation.task_id] : undefined;
+          const stage = operation.progress?.stage ?? operation.message;
+          const progressed = operation.running
+            && operation.processed !== prior?.processed;
+          if (operation.module === "photos" && progressed) {
+            emitPhotoMutation({
+              photoId: null,
+              kind: stage.toLowerCase().includes("metadata") ? "metadata" : "index",
+            });
+          }
+          if (operation.module === "mapping" && observedSuccessfulCompletion(prior, operation)) {
+            emitPhotoMutation({ photoId: null, kind: "mapping" });
+          }
+          if (operation.module === "photos" && observedSuccessfulCompletion(prior, operation)) {
+            emitPhotoMutation({ photoId: null, kind: "photo" });
+          }
         }
         previous.current = next;
         setOperations(next);

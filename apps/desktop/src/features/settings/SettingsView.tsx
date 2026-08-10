@@ -35,7 +35,7 @@ import {
 } from "../../api/storage";
 import { getMapSettings, setMapSettings, type MapSettings } from "../../api/map";
 import { startPhotoMapping } from "../../api/mapping";
-import { waitForOperation, type OperationState } from "../../api/tasks";
+import type { OperationState } from "../../api/tasks";
 import { getTaxonomyImportMetadata, type TaxonomyImportMetadata } from "../../api/taxonomyImport";
 import {
   getNamingHookSettings,
@@ -64,7 +64,6 @@ import { SqlImportSettings } from "../taxonomy/SqlImportSettings";
 import { DirectImportSettings } from "../taxonomy/DirectImportSettings";
 import { AboutSettings } from "./AboutSettings";
 import { PhotoLibrariesSettings } from "./PhotoLibrariesSettings";
-import { emitPhotoMutation } from "../photos/photoMutations";
 import { emitMetadataChange } from "../../shared/metadataChanges";
 import {
   defaultPhotoFilenameFormatSettings,
@@ -553,13 +552,11 @@ function NamingSettings() {
       }
 
       if (priorityChanged) {
-        setMessage("Naming settings saved. Remapping photos...");
         const started = await startPhotoMapping();
-        const operation = await waitForOperation("mapping", started.operation.task_id);
-        if (operation.error) throw new Error(operation.error);
         savedPriority.current = [...priority];
-        emitPhotoMutation({ photoId: null, kind: "mapping" });
-        setMessage("Naming settings saved. Photo mapping complete.");
+        setMessage(started.operation.task_id
+          ? "Naming settings saved. Photo mapping started in Background."
+          : "Naming settings saved.");
       } else {
         setMessage("Naming settings saved.");
       }

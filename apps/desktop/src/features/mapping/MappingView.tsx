@@ -9,14 +9,14 @@ import {
   type PhotoMappingListItem,
   type PhotoTaxonStatus,
 } from "../../api/mapping";
-import { waitForOperation } from "../../api/tasks";
+import { errorMessage } from "../../api/common";
 import { Button, VirtualList } from "../../shared/ui";
 import { PhotoStage } from "../photos/PhotoMedia";
 import { MappingBadge } from "./MappingBadge";
 import { MappingEditor } from "./MappingEditor";
 import { usePhotoInteraction, type PhotoOpenHandlers } from "../photos/PhotoInteraction";
 import { findTypeSelectIndex, nextListIndex } from "../photos/photoListNavigation";
-import { emitPhotoMutation, useDeferredPhotoMutation } from "../photos/photoMutations";
+import { useDeferredPhotoMutation } from "../photos/photoMutations";
 import { useCursorPage } from "../../shared/useCursorPage";
 import { ResizablePanels } from "../../shared/ResizablePanels";
 
@@ -42,6 +42,7 @@ export function MappingView({
   const [metadata, setMetadata] = useState<MappingMetadata>(emptyMetadata);
   const [query, setQuery] = useState("");
   const [editorRevision, setEditorRevision] = useState(0);
+  const [mappingStarting, setMappingStarting] = useState(false);
   const normalizedQuery = query.trim();
   const refreshMetadata = useCallback(() => {
     void getMappingMetadata().then(setMetadata);
@@ -89,11 +90,16 @@ export function MappingView({
   }
 
   async function mapAll() {
-    onStatus("Mapping photos", true);
-    const started = await startPhotoMapping();
-    await waitForOperation("mapping", started.operation.task_id, (operation) => onStatus(operation.message, true));
-    emitPhotoMutation({ photoId: null, kind: "mapping" });
-    onStatus("Mapping complete");
+    setMappingStarting(true);
+    onStatus("Starting photo mapping", true);
+    try {
+      const started = await startPhotoMapping();
+      onStatus(started.operation.task_id ? "Mapping started in Background" : "Mapping complete");
+    } catch (nextError) {
+      onStatus(errorMessage(nextError));
+    } finally {
+      setMappingStarting(false);
+    }
   }
 
   const counts: Record<PhotoTaxonStatus, number> = {
@@ -124,7 +130,7 @@ export function MappingView({
           <Search size={14} />
           <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={`Search ${status} photos`} />
         </label>
-        <Button onClick={() => void mapAll()}><RefreshCw size={13} />Map all</Button>
+        <Button disabled={mappingStarting} onClick={() => void mapAll()}><RefreshCw size={13} />{mappingStarting ? "Starting..." : "Map all"}</Button>
       </header>
       <ResizablePanels
         className="mapping-three-columns"

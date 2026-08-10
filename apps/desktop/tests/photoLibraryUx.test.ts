@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { OperationState } from "../src/api/tasks.ts";
+import { latestOperationForModule, operationByTaskId } from "../src/app/operationRegistry.ts";
 import { photoCacheIdentity } from "../src/api/photoCacheIdentity.ts";
 import { observedSuccessfulCompletion } from "../src/app/operationTransitions.ts";
 import { shouldSwitchPhotoLibrary } from "../src/features/settings/photoLibraryUx.ts";
@@ -78,6 +79,14 @@ test("a photo operation completed entirely between polls still invalidates photo
   assert.equal(observedSuccessfulCompletion(idle, completed), true);
   assert.equal(observedSuccessfulCompletion(completed, completed), false);
   assert.equal(observedSuccessfulCompletion(idle, { ...completed, error: "failed" }), false);
+});
+
+test("background status resolves exact tasks without collapsing module history", () => {
+  const older = operation({ task_id: "task-1", running: false });
+  const newer = operation({ task_id: "task-2", started_at: "2026-08-09 22:01:00" });
+  const operations = { "task-1": older, "task-2": newer };
+  assert.equal(operationByTaskId(operations, "task-1"), older);
+  assert.equal(latestOperationForModule(operations, "photos"), newer);
 });
 
 test("reads the completed bulk rename result from the photo operation", () => {

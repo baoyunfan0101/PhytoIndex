@@ -1,4 +1,5 @@
 import { call } from "./client";
+import { operationByTaskId } from "../app/operationRegistry";
 
 export type OperationProgress = {
   stage: string;
@@ -52,7 +53,7 @@ export async function waitForOperation(
 ): Promise<OperationState> {
   if (!taskId) return demoOperation(module, "Complete");
   while (true) {
-    const operation = (await getOperationsStatus())[module];
+    const operation = operationByTaskId(await getOperationsStatus(), taskId);
     if (operation) onChange?.(operation);
     if (!operation || operation.task_id !== taskId || !operation.running) {
       return operation ?? demoOperation(module, "Complete");

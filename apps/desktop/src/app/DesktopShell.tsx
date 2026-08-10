@@ -25,7 +25,10 @@ import {
   saveWorkspaceState,
   type GeneralSettings,
 } from "../api/general";
-import { waitForOperation, type OperationState } from "../api/tasks";
+import {
+  waitForOperation,
+  type OperationState,
+} from "../api/tasks";
 import {
   getPhoto,
   type Photo,
@@ -47,7 +50,6 @@ import {
   recordNavigation,
 } from "./navigationHistory";
 import { PhotoDetailView } from "../features/photos/PhotoDetailView";
-import { PhotoOperationOverlay } from "../features/photos/PhotoOperationOverlay";
 import { PhotoLibraryIdentityProvider } from "../features/photos/PhotoLibraryIdentity";
 import { PhotoSet } from "../features/photos/PhotoSet";
 import { EmptyWorkspace } from "../features/photos/search/EmptyWorkspace";
@@ -99,6 +101,7 @@ import {
   type AppTab,
 } from "./workspaceState";
 import { getTabName } from "./tabPresentation";
+import { latestOperationForModule } from "./operationRegistry";
 
 type TabKind = AppTab["kind"];
 
@@ -189,22 +192,19 @@ export function DesktopShell({
     activeLibrary?.root_available && activeLibrary.database_available,
   );
   const runningOperations = Object.values(operations).filter((operation) => operation.running);
+  const latestPhotoOperation = latestOperationForModule(operations, "photos");
+  const latestMappingOperation = latestOperationForModule(operations, "mapping");
   const photoLibraryOperation = startedPhotoOperation?.running
     ? startedPhotoOperation
-    : operations.photos?.running
-      ? operations.photos
-      : operations.mapping?.running
-        ? operations.mapping
+    : latestPhotoOperation?.running
+      ? latestPhotoOperation
+      : latestMappingOperation?.running
+        ? latestMappingOperation
         : null;
-  const photoOperationError = operations.photos?.error
-    ? operations.photos.operation === "initial_index"
-      ? `Photo Library indexing failed: ${operations.photos.error}. Retry the active library in Settings or reopen it.`
-      : `Photo operation failed: ${operations.photos.error}`
-    : operations.mapping?.error
-      ? `Photo mapping failed: ${operations.mapping.error}`
-      : "";
-  const photoLibraryOperationError = operations.photos?.operation === "initial_index" && operations.photos.error
-    ? `Photo Library indexing failed: ${operations.photos.error}. Retry the active library or reopen it.`
+  const photoLibraryOperationError = latestPhotoOperation
+    && ["initial_index", "photo_library_index"].includes(latestPhotoOperation.operation ?? "")
+    && latestPhotoOperation.error
+    ? `Photo Library indexing failed: ${latestPhotoOperation.error}. Retry the active library or reopen it.`
     : "";
   const taxonomyMutationLocked = runningOperations.some(
     (operation) => operation.operation === "apply_sql_import" || operation.operation === "apply_direct_import",
@@ -348,38 +348,6 @@ export function DesktopShell({
       active?.id ?? null,
     ));
   }, [active?.id, existingTabIds]);
-
-  useEffect(() => {
-    if (!photoOperationError) return;
-    setTabStatuses((current) => tabs.reduce(
-      (next, tab) => photoTabKinds.has(tab.kind)
-        ? updateTabStatus(next, tab.id, photoOperationError)
-        : next,
-      current,
-    ));
-  }, [photoOperationError, tabs]);
-
-  useEffect(() => {
-    const operation = operations.photos;
-    if (!operation?.task_id || operation.running || operation.error) return;
-    setTabStatuses((current) => Object.fromEntries(Object.entries(current).map(([tabId, message]) => [
-      tabId,
-      message.startsWith("Photo operation failed:")
-        || message.startsWith("Photo Library task failed:")
-        || message.startsWith("Photo Library indexing failed:")
-        ? "Photo Library ready"
-        : message,
-    ])));
-  }, [operations.photos?.error, operations.photos?.running, operations.photos?.task_id]);
-
-  useEffect(() => {
-    const operation = operations.mapping;
-    if (!operation?.task_id || operation.running || operation.error) return;
-    setTabStatuses((current) => Object.fromEntries(Object.entries(current).map(([tabId, message]) => [
-      tabId,
-      message.startsWith("Photo mapping failed:") ? "Photo Library ready" : message,
-    ])));
-  }, [operations.mapping?.error, operations.mapping?.running, operations.mapping?.task_id]);
 
   useEffect(() => {
     if (!operationsOpen) return;
@@ -709,9 +677,6 @@ export function DesktopShell({
                       generalSettingsLoadError={generalSettingsLoadError}
                       onGeneralSettingsChange={onGeneralSettingsChange}
                     />
-                    {photoTabKinds.has(tab.kind) && photoLibraryOperation && (
-                      <PhotoOperationOverlay operation={photoLibraryOperation} />
-                    )}
                   </ViewStateProvider>
                 </PhotoLibraryIdentityProvider>
               </section>
@@ -723,21 +688,24 @@ export function DesktopShell({
           {status}
           <span className="status-title">{active?.title ?? ""}</span>
           <div className="status-operations" ref={operationsMenuRef}>
-            <IconButton aria-label="Background operations" className={runningOperations.length > 0 ? "running" : ""} title="Background operations" onClick={() => {
+            <IconButton aria-label="Background" className={runningOperations.length > 0 ? "running" : ""} title="Background" onClick={() => {
               setOperationsOpen((current) => !current);
             }}>
               <Activity size={12} /><span>{runningOperations.length}</span>
             </IconButton>
             {operationsOpen && (
               <div className="toolbar-popover operations-popover">
-                <strong>Background operations</strong>
-                {Object.values(operations).length === 0 && <span>No operations</span>}
-                {Object.values(operations).map((operation) => (
-                  <div key={operation.module}>
-                    <b>{operation.module}</b>
-                    <span>{operation.message}</span>
-                    {operation.running && <progress value={operation.processed} max={operation.total ?? undefined} />}
-                    {operation.error && <small>{operation.error}</small>}
+                <strong>Background</strong>
+                {Object.values(operations).length === 0 && <span className="operations-empty">No background tasks</span>}
+                {Object.values(operations).sort(compareBackgroundOperations).map((operation) => (
+                  <div key={operation.task_id ?? `${operation.module}-${operation.started_at}`}>
+                    <b>{backgroundTaskName(operation)}</b>
+                    <span>{backgroundTaskStage(operation)}</span>
+                    {operation.running && operation.total !== null && (
+                      <progress value={operation.processed} max={operation.total} />
+                    )}
+                    {operation.running && operation.total === null && <progress />}
+                    {operation.error && <small className="operation-error">{operation.error}</small>}
                   </div>
                 ))}
               </div>
@@ -755,6 +723,34 @@ export function DesktopShell({
       {aboutOpen && <NativeAboutOverlay onClose={() => setAboutOpen(false)} />}
     </div>
   );
+}
+
+function compareBackgroundOperations(left: OperationState, right: OperationState) {
+  if (left.running !== right.running) return left.running ? -1 : 1;
+  return (right.started_at ?? "").localeCompare(left.started_at ?? "");
+}
+
+function backgroundTaskName(operation: OperationState) {
+  const names: Record<string, string> = {
+    initial_index: "Photo Library indexing",
+    photo_library_index: "Photo Library indexing",
+    refresh: "Photo Library refresh",
+    rename_from_taxonomy: "Rename photos",
+    rename_directory_from_taxonomy: "Rename photos recursively",
+    taxonomy_sync: "Photo mapping",
+    match: "Photo mapping",
+    apply_sql_import: "SQL import",
+    apply_direct_import: "Direct import",
+  };
+  return names[operation.operation ?? ""] ?? operation.operation?.split("_").join(" ") ?? operation.module;
+}
+
+function backgroundTaskStage(operation: OperationState) {
+  const stage = operation.progress?.stage ?? operation.message;
+  if (operation.running && operation.total !== null) {
+    return `${stage} · ${operation.processed.toLocaleString()} / ${operation.total.toLocaleString()}`;
+  }
+  return stage;
 }
 
 function TabBody({
@@ -819,9 +815,9 @@ function TabBody({
       />
     );
   }
-  if (tab.kind === "folders") return <FolderPhotosView handlers={handlers} onStatus={onStatus} />;
-  if (tab.kind === "photo-taxonomy") return <TaxonPhotosView handlers={handlers} nameParts={generalSettings.taxon_tree_name_parts} />;
-  if (tab.kind === "map") return <PhotoMapView active={active} handlers={handlers} />;
+  if (tab.kind === "folders") return <FolderPhotosView handlers={handlers} onStatus={onStatus} backgroundOperation={photoLibraryOperation} />;
+  if (tab.kind === "photo-taxonomy") return <TaxonPhotosView handlers={handlers} nameParts={generalSettings.taxon_tree_name_parts} backgroundOperation={photoLibraryOperation} />;
+  if (tab.kind === "map") return <PhotoMapView active={active} handlers={handlers} backgroundOperation={photoLibraryOperation} />;
   if (tab.kind === "photo-history") return <OperationHistoryView domain="photo" onStatus={onStatus} />;
   if (tab.kind === "mapping") return <MappingView active={active} onStatus={onStatus} handlers={handlers} />;
   if (tab.kind === "taxonomy-search") return <TaxonomySearchView mutationDisabled={taxonomyMutationLocked} onOpenPhotos={(taxonId, label) => openTab({ id: `taxon-photos:${taxonId}`, kind: "taxon-photos", title: label, taxonId })} />;
