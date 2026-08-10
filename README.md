@@ -23,7 +23,7 @@ Biological photo collections often combine three different kinds of information:
 Vividarium brings that work into one native desktop application:
 
 - **Photo libraries** - register independent libraries, browse folders and thumbnails, inspect metadata, and keep original files local.
-- **Automatic indexing** - opening an unindexed library starts a recursive background scan while unrelated taxonomy and settings work remains available.
+- **Automatic indexing** - opening an unindexed library starts background filesystem, metadata, and mapping stages while existing data and unrelated tabs remain available.
 - **Taxonomy workbench** - search and navigate taxa, edit name groups, run formatted updates, or replace a taxonomy through SQL Import or Direct Import.
 - **Photo-to-taxon mapping** - match configurable filename fields against scientific, Chinese, and English names, review ambiguous results, and override mappings explicitly.
 - **Consistent rename tools** - rename one photo or a directory selection from accepted taxonomy names with audit history and rollback.
@@ -47,9 +47,9 @@ Vividarium brings that work into one native desktop application:
   </tr>
   <tr>
     <td width="50%" valign="top">
-      <strong>Mapping</strong><br>
-      Review ambiguous filename matches and map photos directly to taxa.<br><br>
-      <a href="assets/screenshots/mapping-review.png"><img src="assets/screenshots/mapping-review.png" alt="Mapping workspace showing a photo and candidate taxa" width="100%"></a>
+      <strong>Custom SQL</strong><br>
+      Query accessible taxonomy and file data with structured results.<br><br>
+      <a href="assets/screenshots/custom-sql.png"><img src="assets/screenshots/custom-sql.png" alt="Custom SQL workspace showing a query and tabular results" width="100%"></a>
     </td>
     <td width="50%" valign="top">
       <strong>Taxonomy Search</strong><br>
@@ -59,9 +59,9 @@ Vividarium brings that work into one native desktop application:
   </tr>
   <tr>
     <td width="50%" valign="top">
-      <strong>Custom SQL</strong><br>
-      Query accessible taxonomy and file data with structured results.<br><br>
-      <a href="assets/screenshots/custom-sql.png"><img src="assets/screenshots/custom-sql.png" alt="Custom SQL workspace showing a query and tabular results" width="100%"></a>
+      <strong>Mapping</strong><br>
+      Review ambiguous filename matches and map photos directly to taxa.<br><br>
+      <a href="assets/screenshots/mapping-review.png"><img src="assets/screenshots/mapping-review.png" alt="Mapping workspace showing a photo and candidate taxa" width="100%"></a>
     </td>
     <td width="50%" valign="top">
       <strong>Hooks</strong><br>
@@ -111,7 +111,7 @@ Release packages do not require Python, Node.js, Rust, SQLite, or a separate dat
 4. Let the first background index and mapping pass finish, then review the Mapping workspace. Later filesystem changes can be reconciled with Refresh.
 5. Use Folders, Taxon Tree, Search, or Map to browse the indexed collection.
 
-Vividarium does not copy or upload original photos while indexing, and the initial index does not pre-generate the library's thumbnails. Lists and grids load cursor pages on demand; thumbnails are created only near the visible area. Actions explicitly labeled Rename do rename files on disk and record the operation in Rename History.
+Vividarium does not copy or upload original photos while indexing. Filesystem and metadata work runs in bounded background batches, and the initial index does not pre-generate the library's thumbnails. Lists and grids load cursor pages on demand; thumbnails are created only near the visible area. Actions explicitly labeled Rename do rename files on disk and record the operation in Rename History.
 
 ## Taxonomy Data Sources
 

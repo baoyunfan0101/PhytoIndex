@@ -52,10 +52,14 @@ child directories before photos.
 | `refresh_directory` | `directory_id: i64` | `PhotoSyncResult` | Reconcile the requested directory and every descendant directory. |
 | `is_initial_index_complete` | `library_uuid: &str` | `bool` | Return the durable first-index state for one registered library. |
 | `initial_index_photo_library` | `library_uuid: &str`, progress callback | `Option<PhotoSyncResult>` | Recursively reconcile one captured registration and mark it complete only after success. Return `None` when it is already complete. |
+| `has_pending_photo_metadata` | `library_uuid: &str` | `bool` | Report whether indexed photos still need metadata extraction. |
+| `index_photo_metadata_for_library` | `library_uuid: &str`, progress callback | `PhotoMetadataIndexResult` | Extract missing metadata in bounded batches and skip completed rows. |
 
 Every newly discovered, changed, or unqueued indexed photo is queued for automatic mapping.
-Initial indexing performs the same incremental comparison as Refresh and does
-not request image metadata or thumbnails.
+Filesystem indexing performs the same incremental comparison as Refresh.
+Directories are scanned without holding the photo write lock and committed one
+directory at a time. Metadata is extracted separately in bounded background
+batches. Neither phase requests or creates thumbnails.
 
 ### Search interfaces
 
@@ -88,7 +92,8 @@ The desktop media URL includes the active library UUID. The private media
 protocol rejects stale requests for another library, and thumbnail files are
 stored below a UUID-specific cache directory. Photo IDs and file timestamps
 therefore cannot collide across libraries. Thumbnails are generated lazily by
-near-viewport media requests, never as part of indexing.
+near-viewport media requests, never as part of indexing. Image decoding does
+not hold the photo-index write lock.
 
 ### Rename interfaces
 

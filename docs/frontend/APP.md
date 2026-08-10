@@ -65,8 +65,10 @@ returns history with closed targets removed.
 Parameters: none.
 
 Returns: the latest `OperationsStatus` plus observer state used by the shell.
-It publishes photo invalidation after mapping or photo work completes,
-including tasks that start and finish between polling intervals.
+The status is keyed by task identity, so one module can retain distinct task
+records while Background remains the single source of truth. The observer
+publishes incremental photo/index/metadata invalidations and successful
+completion invalidations, including tasks that finish between polls.
 
 ### `useNativeMenu(handler)`
 
@@ -90,12 +92,13 @@ The native About menu action opens `NativeAboutOverlay`, which returns only
 the product name, software version, author, email, and GitHub link. External
 links use the system opener and report failures inside the overlay.
 
-Photo Library activation follows its returned initial-index operation
-immediately. While photos, refresh, mapping, bulk rename, or initial indexing is
-running, photo-dependent tabs show one scoped loading and progress overlay and
-may be temporarily unavailable. Taxonomy, Settings, and other unrelated tabs
-remain interactive. Operation completion invalidates cursor pages without
-eagerly loading all photos.
+Photo Library activation follows its returned indexing operation without
+waiting. Existing photo data remains browseable while filesystem, metadata,
+and mapping stages run in Background. Folder, Taxon Tree, and Map show a small
+incomplete-data notice when their results are still being filled; they are not
+covered or disabled. Progress invalidates only affected cursor pages and Map
+continues adding newly discovered geotagged photos. Foreground pagination and
+pane loads use local loading states and remain outside Background.
 
 Submitting a global photo query always starts a fresh search, including when a
 tab for the same normalized query is already open. The existing tab is focused

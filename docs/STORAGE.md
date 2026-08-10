@@ -68,11 +68,13 @@ overlap another taxonomy replacement.
 
 The desktop open, register, switch, and rebind commands return a
 `PhotoLibraryActivation<T>` containing the selected library and an optional
-`photos/initial_index` operation. A new library has a durable incomplete marker.
-Its first activation recursively indexes the photo root in the background and
-marks the index complete only after a successful scan. Failed or interrupted
-work remains retryable. Existing files whose size and modification time are
-unchanged are ignored, and initial indexing never generates thumbnails.
+`photos/photo_library_index` operation. A new library has a durable incomplete
+marker. Its first activation immediately exposes existing database content and
+starts a background pipeline for filesystem discovery and photo metadata.
+Directory updates use short transactions, metadata uses bounded batches, and
+photo mapping follows through the same operation coordinator. Failed or
+interrupted work remains retryable. Existing index and metadata rows are
+skipped, and indexing never generates thumbnails.
 
 Metadata and taxonomy storage remain available when the active photo library
 is offline. Pure taxonomy reads, updates, history, settings, and taxonomy

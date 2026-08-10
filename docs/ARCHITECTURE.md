@@ -52,9 +52,12 @@ response boundary. Command adapters validate desktop-only inputs, translate
 errors to IPC strings, and delegate business behavior to `vividarium-core`.
 
 Long-running work is registered with the desktop operation coordinator and is
-reported through structured progress. Photo Library lifecycle changes and
-photo or mapping task startup share one coordinator lock, while the task itself
-runs in the background. Native paths, dialogs, the private
+reported through structured progress. Its task-keyed status map is the single
+source for the bottom-right Background UI. Photo Library lifecycle changes and
+photo or mapping task startup share one coordinator lock, while each task runs
+on a blocking worker in bounded database batches and yields between batches.
+Foreground queries remain ordinary asynchronous commands. Native paths,
+dialogs, the private
 `vividarium://` media protocol, updates, and system application opening remain
 outside the core crate.
 

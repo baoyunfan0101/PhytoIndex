@@ -64,7 +64,8 @@ failures are operation errors and leave the current taxonomy unchanged.
 
 Photo Library open, register, switch, and rebind calls return
 `PhotoLibraryActivation<T>`, which contains `library` and an optional initial
-index `operation`. Feature code follows that operation by task ID without
-blocking unrelated tabs. Bulk taxonomy rename calls also return operation
-handles; their completed result is a compact count summary while audit details
-are loaded from Rename History.
+index `operation`. Filesystem discovery, missing metadata, Refresh, mapping,
+and bulk rename return operation handles immediately and continue through the
+unified Background source. Task status is keyed by `task_id`; callers that need
+a completed result resolve that exact task rather than a module slot. Audit
+details are loaded from Rename History.

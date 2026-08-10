@@ -15,7 +15,7 @@ through one settings workbench.
 | `onSectionChange` | `(section) => void` | Updates the settings page stored by the owning tab. |
 | `onWorkspaceChanged` | optional callback | Refreshes application state after Photo Library changes. |
 | `onOpenPhotoLibrary` | callback | Uses the same native Open Photo Library workflow as the system toolbar. |
-| `onPhotoOperationStarted` | callback | Follows an initial-index operation returned by activation. |
+| `onPhotoOperationStarted` | callback | Follows a Photo Library indexing operation returned by activation. |
 | `onTaxonomyImported` | optional callback | Refreshes taxonomy and mapping state after a completed import. |
 | `generalSettings` | `GeneralSettings` | Current application-wide settings. |
 | `onGeneralSettingsChange` | `(settings) => void` | Applies a committed General settings value to the application. |
@@ -60,9 +60,9 @@ Remove deletes only the registration, works for the active library and for
 missing resources, and clears active state when necessary.
 
 Opening or selecting an incompletely indexed library starts a background
-initial-index operation. The Settings page follows returned operations
-immediately, exposes Retry after an indexing failure, and prevents conflicting
-library lifecycle actions while photo or mapping work is running.
+filesystem and metadata indexing operation. The Settings page follows returned
+operations immediately, exposes Retry after an indexing failure, and prevents
+conflicting library lifecycle actions while photo or mapping work is running.
 
 ### Taxonomy Databases
 

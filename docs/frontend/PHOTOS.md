@@ -30,7 +30,8 @@ state.
 
 ### `FolderPhotosView(props)`
 
-Parameters: `handlers: PhotoOpenHandlers`.
+Parameters: `handlers: PhotoOpenHandlers` and the optional active background
+photo operation.
 
 Returns: an expandable directory tree and photo stage for the active library.
 Directory lists use cursor pages and the photo grid is virtualized. Nearing the
@@ -39,13 +40,15 @@ near the visible grid area.
 
 ### `TaxonPhotosView(props)`
 
-Parameters: `handlers: PhotoOpenHandlers`.
+Parameters: `handlers: PhotoOpenHandlers` and the optional active background
+photo operation.
 
 Returns: an expandable photographed-taxonomy tree and photo stage.
 
 ### `PhotoMapView(props)`
 
-Parameters include `handlers` and the owning tab's active state.
+Parameters include `handlers`, the owning tab's active state, and the optional
+active background photo operation.
 
 Returns: a viewport-driven MapLibre page. The first open fits the aggregate
 coordinates of all geotagged photos; the tab then retains its center and zoom.
@@ -72,13 +75,10 @@ thumbnail. Returns media UI using the desktop photo URI, active Photo Library
 UUID, and file identity. This prevents cached media from crossing library
 boundaries.
 
-### `PhotoOperationOverlay({ operation })`
-
-Parameters: the current photo or mapping `OperationState`.
-
-Returns: a tab-scoped loading layer with stage and progress. The shell mounts
-it only over photo-dependent tabs, so long indexing, Refresh, mapping, bulk
-rename, and other photo operations do not block unrelated application tabs.
+Folder, photographed-taxonomy, and Map pages render a non-blocking indexing
+notice while relevant background work is active. Existing results stay
+interactive. An initial empty pane has a pane-local Loading state; refresh and
+pagination keep existing rows visible.
 
 ### `EmptyWorkspace(props)`
 
