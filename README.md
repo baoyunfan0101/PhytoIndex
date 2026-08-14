@@ -161,7 +161,7 @@ See [Architecture](docs/ARCHITECTURE.md), [Desktop Frontend](docs/DESKTOP.md), a
 ### Prerequisites
 
 - Rust 1.85 or newer
-- Node.js 20 or newer and npm
+- Node.js 24 or newer and npm
 - Tauri 2 platform prerequisites
 - Tauri CLI 2
 
