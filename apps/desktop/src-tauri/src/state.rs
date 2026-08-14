@@ -313,7 +313,7 @@ impl BackgroundTaskScheduler {
             };
             while self
                 .operations
-                .blocked_by_other(&work.pending.module, &work.task_id)
+                .blocked_by_other(work.pending.module, &work.task_id)
                 .is_some()
             {
                 std::thread::sleep(Duration::from_millis(25));
