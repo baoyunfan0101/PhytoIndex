@@ -64,7 +64,10 @@ pub use sql_inputs::{
     AddSqlInputRequest, AddSqlInputResult, PersistentSqlInput, RemoveSqlInputRequest,
     RemoveSqlInputResult, SqlInputKind,
 };
-pub use sync::{TaxonomySyncResult, TaxonomySyncRun, synchronize_pending_photo_libraries};
+pub use sync::{
+    TaxonomySyncResult, TaxonomySyncRun, has_pending_photo_library_sync,
+    synchronize_pending_photo_libraries,
+};
 pub(crate) use view::load_taxon_summaries;
 pub use view::{
     TaxonBreadcrumbItem, TaxonChild, TaxonDetail, TaxonDisplayNames, TaxonNameDetail,

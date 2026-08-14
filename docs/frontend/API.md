@@ -18,10 +18,10 @@ owns one backend domain, its request types, and response types.
 | `directImport` | Direct Import database inspection and confirmed replacement. |
 | `taxonomyImport` | Shared taxonomy import metadata and result types. |
 | `general` | Application-wide theme, workspace, search, taxon-tree display, and CSV delimiter settings. |
-| `storage` | Database locations, Taxonomy Database selection, Photo Library registration, and file-manager opening for displayed storage paths. |
+| `storage` | Database locations, Taxonomy Database selection, Photo Library activation results, registration lifecycle, and file-manager opening for displayed storage paths. |
 | `settings` | Naming settings, Rhai hooks, hook tests, and taxonomy name separator. |
 | `map` | Map settings, viewport bounds, and geotagged photo pages. |
-| `tasks` | Background operation status and completion waiting. |
+| `tasks` | Task-keyed Background status, progress state, recovery snapshots, and exact-task completion waiting for foreground import workflows. |
 | `updater` | Application version, update check, and installation. |
 | `dialogs` | Native file, directory, and destination selection. |
 | `external` | Project and author contact constants plus scoped system URL opening. |
@@ -61,3 +61,14 @@ metadata. It does not replace the current taxonomy. Only the subsequent
 `apply_direct_import` call starts a `direct_import` operation. Its completed
 result is `TaxonomyImportResult`; schema, integrity, and taxonomy validation
 failures are operation errors and leave the current taxonomy unchanged.
+
+Photo Library open, register, switch, and rebind calls return
+`PhotoLibraryActivation<T>`, which contains `library` and the first scheduled
+`operation`. Activation enqueues task-keyed Photo Scan, Metadata Index, and
+Photo Mapping stages. Refresh, mapping, and bulk rename return operation handles
+immediately and continue through the unified Background source. Task status
+includes `task_id`, `task_kind`, `task_scope`, and queued/running/completed/failed
+state. Live Background state comes from `operation-progress`; status fetches are
+used for startup and recovery. Callers that need a completed foreground import
+result resolve that exact task rather than a module slot. Audit details are
+loaded from Rename History.

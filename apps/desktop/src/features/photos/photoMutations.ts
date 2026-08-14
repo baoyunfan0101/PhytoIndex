@@ -4,7 +4,7 @@ import type { Photo } from "../../api/photos";
 export type PhotoMutation = {
   photoId: number | null;
   photoIds?: number[];
-  kind: "photo" | "mapping";
+  kind: "photo" | "mapping" | "index" | "metadata";
   photo?: Photo;
 };
 

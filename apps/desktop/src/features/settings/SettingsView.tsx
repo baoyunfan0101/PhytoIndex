@@ -12,10 +12,7 @@ import {
   Info,
   Library,
   Map,
-  Move,
-  Pencil,
   Plug,
-  RefreshCcw,
   Save,
   SlidersHorizontal,
   Trash2,
@@ -30,25 +27,15 @@ import {
 import { errorMessage } from "../../api/common";
 import {
   getDatabaseLocations,
-  listPhotoLibraries,
   openPathInFileManager,
-  photoLibraryAvailabilityLabel,
-  rebindPhotoLibraryDatabase,
-  rebindPhotoLibraryRoot,
-  registerPhotoLibrary,
-  relocatePhotoLibraryDatabase,
   relocateTaxonomyDatabase,
-  removePhotoLibrary,
-  renamePhotoLibrary,
   setDefaultPhotoLibraryDatabaseDirectory,
   setDefaultTaxonomyDatabaseDirectory,
-  switchPhotoLibrary,
   type DatabaseLocations,
-  type PhotoLibraryWorkspace,
 } from "../../api/storage";
 import { getMapSettings, setMapSettings, type MapSettings } from "../../api/map";
 import { startPhotoMapping } from "../../api/mapping";
-import { waitForOperation } from "../../api/tasks";
+import type { OperationState } from "../../api/tasks";
 import { getTaxonomyImportMetadata, type TaxonomyImportMetadata } from "../../api/taxonomyImport";
 import {
   getNamingHookSettings,
@@ -69,14 +56,14 @@ import {
   type PhotoFilenameFormatSettings,
   type PhotoNameField,
 } from "../../api/settings";
-import { selectDatabaseDestination, selectPhotoDirectory, selectSqliteDatabase } from "../../api/dialogs";
+import { selectDatabaseDestination, selectPhotoDirectory } from "../../api/dialogs";
 import { Button, IconButton, SectionHeader } from "../../shared/ui";
 import { CodeEditor } from "../../shared/CodeEditor";
 import { ResizablePanels } from "../../shared/ResizablePanels";
 import { SqlImportSettings } from "../taxonomy/SqlImportSettings";
 import { DirectImportSettings } from "../taxonomy/DirectImportSettings";
 import { AboutSettings } from "./AboutSettings";
-import { emitPhotoMutation } from "../photos/photoMutations";
+import { PhotoLibrariesSettings } from "./PhotoLibrariesSettings";
 import { emitMetadataChange } from "../../shared/metadataChanges";
 import {
   defaultPhotoFilenameFormatSettings,
@@ -106,6 +93,10 @@ export function SettingsView({
   onTaxonomyImported,
   onSectionChange,
   onWorkspaceChanged,
+  onOpenPhotoLibrary,
+  onPhotoOperationStarted,
+  photoLibraryOperation,
+  photoLibraryOperationError,
   generalSettings,
   generalSettingsLoadError,
   onGeneralSettingsChange,
@@ -116,7 +107,11 @@ export function SettingsView({
   onGeneralSettingsChange: (settings: GeneralSettingsValue) => void;
   onTaxonomyImported?: () => void;
   onSectionChange: (section: SettingsSection) => void;
-  onWorkspaceChanged?: (resetPhotoTabs: boolean) => void;
+  onWorkspaceChanged?: (resetPhotoTabs: boolean) => Promise<void>;
+  onOpenPhotoLibrary: () => Promise<boolean>;
+  onPhotoOperationStarted: (operation: OperationState | null) => void;
+  photoLibraryOperation: OperationState | null;
+  photoLibraryOperationError: string;
   section: SettingsSection;
 }) {
   const hookSection = section === "Filename Parser" || section === "Synonym Splitter";
@@ -193,7 +188,15 @@ export function SettingsView({
           />
         )}
         {section === "Storage" && <StorageSettings />}
-        {section === "Photo Libraries" && <PhotoLibrariesSettings onChanged={onWorkspaceChanged} />}
+        {section === "Photo Libraries" && (
+          <PhotoLibrariesSettings
+            onChanged={onWorkspaceChanged}
+            onOpenPhotoLibrary={onOpenPhotoLibrary}
+            onPhotoOperationStarted={onPhotoOperationStarted}
+            blockingOperation={photoLibraryOperation}
+            operationError={photoLibraryOperationError}
+          />
+        )}
         {(section === "Taxonomy Databases" || section === "SQL Import") && <SqlImportSettings onApplied={onTaxonomyImported} />}
         {section === "Direct Import" && <DirectImportSettings onApplied={onTaxonomyImported} />}
         {section === "Naming" && <NamingSettings />}
@@ -463,108 +466,6 @@ function StorageSettings() {
   );
 }
 
-function PhotoLibrariesSettings({ onChanged }: { onChanged?: (resetPhotoTabs: boolean) => void }) {
-  const [libraries, setLibraries] = useState<PhotoLibraryWorkspace[]>([]);
-  const [busy, setBusy] = useState("");
-  const [message, setMessage] = useState("");
-
-  async function load() {
-    try {
-      setLibraries(await listPhotoLibraries());
-    } catch (nextError) {
-      setMessage(errorMessage(nextError));
-    }
-  }
-
-  useEffect(() => { void load(); }, []);
-
-  async function createLibrary() {
-    const rootPath = await selectPhotoDirectory();
-    if (!rootPath) return;
-    try {
-      const locations = await getDatabaseLocations();
-      const databasePath = await selectDatabaseDestination(locations.default_photo_library_directory);
-      if (!databasePath) return;
-      const displayName = window.prompt("Photo Library name", rootPath.split(/[\\/]/).pop() ?? "Photo Library");
-      if (displayName === null) return;
-      await mutate(
-        "Creating library",
-        () => registerPhotoLibrary(rootPath, databasePath, displayName),
-        true,
-      );
-    } catch (nextError) {
-      setMessage(errorMessage(nextError));
-    }
-  }
-
-  async function mutate(
-    label: string,
-    action: () => Promise<unknown>,
-    resetPhotoTabs = false,
-  ) {
-    setBusy(label);
-    setMessage("");
-    try {
-      await action();
-      await load();
-      onChanged?.(resetPhotoTabs);
-    } catch (nextError) {
-      setMessage(errorMessage(nextError));
-    } finally {
-      setBusy("");
-    }
-  }
-
-  return (
-    <div className="settings-section">
-      <SectionHeader
-        title="Photo Libraries"
-        detail="Open, register, and manage photo libraries."
-        actions={(
-          <>
-            <Button onClick={() => void load()}><RefreshCcw size={13} />Refresh</Button>
-            <Button variant="primary" disabled={Boolean(busy)} onClick={() => void createLibrary()}>Create or register</Button>
-          </>
-        )}
-      />
-      <div className="library-settings-list">
-        {libraries.map((library) => (
-          <article className={`library-settings-row${library.active ? " active" : ""}`} key={library.library_uuid}>
-            <div className="library-heading">
-              <strong>{library.display_name}</strong>
-              <span className={library.root_available && library.database_available ? "available" : "unavailable"}>
-                {photoLibraryAvailabilityLabel(library)}
-              </span>
-              {library.active && <b>Active</b>}
-            </div>
-            <code>{library.root_path}</code>
-            <code>{library.db_path}</code>
-            <small>Last opened: {library.last_opened_at}</small>
-            <div className="library-actions">
-              <Button size="small" disabled={library.active || !library.root_available || !library.database_available} onClick={() => void mutate("Switching library", () => switchPhotoLibrary(library.library_uuid), true)}>Open</Button>
-              <Button size="small" onClick={() => {
-                const name = window.prompt("Photo Library name", library.display_name)?.trim();
-                if (name) void mutate("Renaming library", () => renamePhotoLibrary(library.library_uuid, name));
-              }}><Pencil size={12} />Rename</Button>
-              <Button size="small" onClick={() => void selectPhotoDirectory(library.root_path).then((path) => {
-                if (path) return mutate("Rebinding root", () => rebindPhotoLibraryRoot(library.library_uuid, path), library.active);
-              })}>Rebind root</Button>
-              <Button size="small" onClick={() => void selectSqliteDatabase(library.db_path).then((path) => {
-                if (path) return mutate("Rebinding database", () => rebindPhotoLibraryDatabase(library.library_uuid, path), library.active);
-              })}>Rebind DB</Button>
-              <Button size="small" disabled={!library.database_available} onClick={() => void selectDatabaseDestination(library.db_path).then((path) => {
-                if (path) return mutate("Relocating database", () => relocatePhotoLibraryDatabase(library.library_uuid, path), library.active);
-              })}><Move size={12} />Relocate DB</Button>
-              <Button size="small" disabled={library.active} onClick={() => void mutate("Removing registration", () => removePhotoLibrary(library.library_uuid))}><Trash2 size={12} />Remove</Button>
-            </div>
-          </article>
-        ))}
-      </div>
-      {(busy || message) && <div className={message ? "inline-error" : "editor-message"}>{message || busy}</div>}
-    </div>
-  );
-}
-
 function StoragePath({
   label,
   value,
@@ -651,13 +552,11 @@ function NamingSettings() {
       }
 
       if (priorityChanged) {
-        setMessage("Naming settings saved. Remapping photos...");
         const started = await startPhotoMapping();
-        const operation = await waitForOperation("mapping", started.operation.task_id);
-        if (operation.error) throw new Error(operation.error);
         savedPriority.current = [...priority];
-        emitPhotoMutation({ photoId: null, kind: "mapping" });
-        setMessage("Naming settings saved. Photo mapping complete.");
+        setMessage(started.operation.task_id
+          ? "Naming settings saved. Photo mapping started in Background."
+          : "Naming settings saved.");
       } else {
         setMessage("Naming settings saved.");
       }

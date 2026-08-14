@@ -18,10 +18,11 @@ import { errorMessage } from "../../api/common";
 import { getMapPhotoBounds, getMapSettings, listMapPhotos, type MapBounds, type MapPhoto } from "../../api/map";
 import { browsePhotoTaxon, type PhotoTaxonItem, type PhotoTaxonUsage } from "../../api/mapping";
 import type { TaxonTreeNameParts } from "../../api/general";
-import { waitForOperation } from "../../api/tasks";
+import type { OperationState } from "../../api/tasks";
 import { EmptyState, IconButton, SectionHeader, VirtualList } from "../../shared/ui";
 import { DirectoryContextMenu } from "./DirectoryContextMenu";
 import { PhotoStage } from "./PhotoMedia";
+import { usePhotoLibraryIdentity } from "./PhotoLibraryIdentity";
 import { PhotoDisplay, PhotoDisplayToggle, usePhotoActivation, usePhotoDisplayMode } from "./PhotoDisplay";
 import { usePhotoInteraction, type PhotoOpenHandlers } from "./PhotoInteraction";
 import { TaxonContextMenu } from "./TaxonContextMenu";
@@ -125,9 +126,11 @@ function readMapBounds(value: maplibregl.LngLatBounds): MapBounds {
 export function FolderPhotosView({
   handlers,
   onStatus,
+  backgroundOperation,
 }: {
   handlers: PhotoOpenHandlers;
   onStatus: (message: string, busy?: boolean) => void;
+  backgroundOperation?: OperationState | null;
 }) {
   const [library, setLibrary] = useViewState<PhotoLibrary | null>("folders.library", null);
   const [trail, setTrail] = useViewState<PhotoDirectory[]>("folders.trail", []);
@@ -181,7 +184,8 @@ export function FolderPhotosView({
   });
   const resolvedActiveRowKey = activeRowKey ?? (interaction.selectedId === null ? null : `p:${interaction.selectedId}`);
   const activeRowIndex = rows.findIndex((row) => directoryTreeRowKey(row) === resolvedActiveRowKey);
-  usePhotoMutation(() => {
+  usePhotoMutation((mutation) => {
+    if (mutation.kind !== "photo" && mutation.kind !== "index") return;
     void Promise.all([page.reload(), tree.reloadExpanded()]);
   });
 
@@ -210,9 +214,7 @@ export function FolderPhotosView({
   async function refreshDirectory(refreshDirectoryId: number) {
     onStatus("Refreshing photo library", true);
     const started = await refreshPhotoDirectory(refreshDirectoryId);
-    await waitForOperation("photos", started.operation.task_id, (operation) => onStatus(operation.message, true));
-    await Promise.all([page.reload(), tree.reloadExpanded()]);
-    if (directoryId !== null) await reportDirectoryCounts(directoryId);
+    onStatus(started.operation.task_id ? "Refresh started in Background" : "Refresh complete");
   }
 
   function enter(directory: PhotoDirectory) {
@@ -308,6 +310,7 @@ export function FolderPhotosView({
         </div>
         <PhotoDisplayToggle mode={displayMode} onChange={setDisplayMode} />
       </header>
+      <PhotoIndexingNotice operation={backgroundOperation} />
       <ResizablePanels
         className="explorer-columns"
         initialRatio={0.34}
@@ -372,7 +375,8 @@ export function FolderPhotosView({
               )
             )}
           />
-          {(libraryLoading || page.loading) && <div className="pane-overlay">Loading</div>}
+          {(libraryLoading || (page.loading && page.items.length === 0)) && <div className="pane-overlay">Loading</div>}
+          {page.loading && page.items.length > 0 && <div className="pane-progress">Refreshing...</div>}
           {(libraryError || page.error) && <div className="inline-error">{libraryError || page.error}</div>}
         </aside>)}
         second={(
@@ -402,10 +406,6 @@ export function FolderPhotosView({
             await Promise.all([page.reload(), tree.reloadExpanded()]);
             emitPhotoMutation({ photoId: null, kind: "photo" });
           }}
-          onRenamed={(result) => {
-            const photoIds = result.rows.map((row) => row.photo_id);
-            if (photoIds.length > 0) emitPhotoMutation({ photoId: null, photoIds, kind: "photo" });
-          }}
           onStatus={onStatus}
         />
       )}
@@ -417,9 +417,11 @@ export function FolderPhotosView({
 export function TaxonPhotosView({
   handlers,
   nameParts,
+  backgroundOperation,
 }: {
   handlers: PhotoOpenHandlers;
   nameParts: TaxonTreeNameParts;
+  backgroundOperation?: OperationState | null;
 }) {
   const [trail, setTrail] = useViewState<PhotoTaxonUsage[]>("photo-taxonomy.trail", []);
   const [activeRowKey, setActiveRowKey] = useViewState<string | null>("photo-taxonomy.active-row", null);
@@ -463,7 +465,8 @@ export function TaxonPhotosView({
   });
   const resolvedActiveRowKey = activeRowKey ?? (interaction.selectedId === null ? null : `p:${interaction.selectedId}`);
   const activeRowIndex = rows.findIndex((row) => taxonTreeRowKey(row) === resolvedActiveRowKey);
-  usePhotoMutation(() => {
+  usePhotoMutation((mutation) => {
+    if (mutation.kind === "metadata") return;
     void Promise.all([page.reload(), tree.reloadExpanded()]);
   });
 
@@ -570,6 +573,7 @@ export function TaxonPhotosView({
         </div>
         <PhotoDisplayToggle mode={displayMode} onChange={setDisplayMode} />
       </header>
+      <PhotoIndexingNotice operation={backgroundOperation} showMapping />
       <ResizablePanels
         className="explorer-columns"
         initialRatio={0.34}
@@ -624,7 +628,8 @@ export function TaxonPhotosView({
               )
             )}
           />
-          {page.loading && <div className="pane-overlay">Loading</div>}
+          {page.loading && page.items.length === 0 && <div className="pane-overlay">Loading</div>}
+          {page.loading && page.items.length > 0 && <div className="pane-progress">Refreshing...</div>}
           {page.error && <div className="inline-error">{page.error}</div>}
         </aside>)}
         second={(
@@ -660,13 +665,17 @@ export function TaxonPhotosView({
 export function PhotoMapView({
   active,
   handlers,
+  backgroundOperation,
 }: {
   active: boolean;
   handlers: PhotoOpenHandlers;
+  backgroundOperation?: OperationState | null;
 }) {
+  const libraryUuid = usePhotoLibraryIdentity();
   const container = useRef<HTMLDivElement>(null);
   const map = useRef<MapLibreMap | null>(null);
   const markers = useRef(new Map<number, maplibregl.Marker>());
+  const refitTimer = useRef(0);
   const [mapReady, setMapReady] = useState(false);
   const [bounds, setBounds] = useState<MapBounds | null>(null);
   const [savedViewport, setSavedViewport] = useViewState<{
@@ -674,6 +683,12 @@ export function PhotoMapView({
     latitude: number;
     zoom: number;
   } | null>("map.viewport", null);
+  const [userControlledViewport, setUserControlledViewport] = useViewState(
+    "map.user-controlled-viewport",
+    false,
+  );
+  const userControlledViewportRef = useRef(userControlledViewport);
+  userControlledViewportRef.current = userControlledViewport;
   const boundsKey = bounds
     ? `${bounds.west}:${bounds.south}:${bounds.east}:${bounds.north}`
     : "no-bounds";
@@ -691,15 +706,30 @@ export function PhotoMapView({
     stateKey: "map.interaction",
   });
   useDeferredPhotoMutation(active, () => {
-    void page.reload();
-  }, (mutation) => mutation.kind === "photo");
+    if (refitTimer.current) return;
+    refitTimer.current = window.setTimeout(() => {
+      refitTimer.current = 0;
+      void page.reload();
+      if (!userControlledViewportRef.current) {
+        void getMapPhotoBounds().then((photoBounds) => {
+          if (!photoBounds || userControlledViewportRef.current || !map.current) return;
+          map.current.fitBounds(
+            [[photoBounds.west, photoBounds.south], [photoBounds.east, photoBounds.north]],
+            { padding: 64, maxZoom: 13 },
+          );
+        }).catch(() => undefined);
+      }
+    }, 350);
+  }, (mutation) => mutation.kind === "photo" || mutation.kind === "metadata");
 
   useEffect(() => {
     let disposed = false;
     if (!active || map.current) return;
     Promise.all([
       getMapSettings().catch(() => ({ provider: "osm" as const, tianditu_token: null })),
-      savedViewport ? Promise.resolve(null) : getMapPhotoBounds().catch(() => null),
+      userControlledViewport && savedViewport
+        ? Promise.resolve(null)
+        : getMapPhotoBounds().catch(() => null),
     ]).then(([settings, photoBounds]) => {
       if (disposed || !container.current) return;
       const rasterUrl = settings.provider === "tianditu" && settings.tianditu_token
@@ -707,7 +737,7 @@ export function PhotoMapView({
         : "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
       const next = new maplibregl.Map({
         container: container.current,
-        ...(savedViewport
+        ...(userControlledViewport && savedViewport
           ? { center: [savedViewport.longitude, savedViewport.latitude] as [number, number], zoom: savedViewport.zoom }
           : photoBounds
             ? {
@@ -725,8 +755,15 @@ export function PhotoMapView({
       };
       setMapReady(true);
       updateViewport();
+      const markUserControlled = (event: { originalEvent?: unknown }) => {
+        if (!event.originalEvent) return;
+        userControlledViewportRef.current = true;
+        setUserControlledViewport(true);
+      };
       next.on("load", updateViewport);
       next.on("moveend", updateViewport);
+      next.on("dragstart", markUserControlled);
+      next.on("zoomstart", markUserControlled);
     });
     return () => {
       disposed = true;
@@ -734,6 +771,7 @@ export function PhotoMapView({
   }, [active]);
 
   useEffect(() => () => {
+    window.clearTimeout(refitTimer.current);
     map.current?.remove();
     map.current = null;
     markers.current.clear();
@@ -787,6 +825,7 @@ export function PhotoMapView({
       }}
     >
       <div className="map-canvas" ref={container} />
+      <PhotoIndexingNotice operation={backgroundOperation} map />
       {interaction.selected && (
         <button
           className="map-photo-preview"
@@ -795,7 +834,7 @@ export function PhotoMapView({
           onClick={() => handlers.openDetails(interaction.selected!)}
           onContextMenu={(event) => interaction.openContextMenu(event, interaction.selected!)}
         >
-          <img src={photoUrl(interaction.selected, true)} alt="" draggable={false} />
+          <img src={photoUrl(interaction.selected, true, libraryUuid)} alt="" draggable={false} />
           <span>{interaction.selected.filename}</span>
         </button>
       )}
@@ -803,4 +842,28 @@ export function PhotoMapView({
       {interaction.contextMenu}
     </div>
   );
+}
+
+function PhotoIndexingNotice({
+  operation,
+  map = false,
+  showMapping = false,
+}: {
+  operation?: OperationState | null;
+  map?: boolean;
+  showMapping?: boolean;
+}) {
+  if (!operation || !["queued", "running"].includes(operation.state)) return null;
+  if (operation.module === "mapping" && !showMapping) return null;
+  const stage = operation.progress?.stage ?? operation.message;
+  const metadata = stage.toLowerCase().includes("metadata");
+  const prefix = operation.module === "mapping"
+    ? "Photo mapping is still running · results may be incomplete"
+    : map && metadata
+      ? "Location metadata is still being indexed"
+      : "Photo Library indexing · results may be incomplete";
+  const progress = operation.total === null
+    ? ""
+    : ` · ${operation.completed.toLocaleString()} / ${operation.total.toLocaleString()}`;
+  return <div className="photo-indexing-notice" role="status">{prefix}{progress}</div>;
 }

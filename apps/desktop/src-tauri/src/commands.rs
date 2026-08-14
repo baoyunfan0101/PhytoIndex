@@ -21,7 +21,9 @@ use vividarium_core::naming::{
     TaxonomicNameInfo,
 };
 use vividarium_core::operations::{OperationAuditRow, OperationPage, OperationSummary};
-use vividarium_core::photos::{PhotoFilenameFormatSettings, PhotoRenameOperationResult};
+use vividarium_core::photos::{
+    PhotoFilenameFormatSettings, PhotoRenameOperationResult, PhotoRenameRowStatus,
+};
 use vividarium_core::taxonomy::{
     AddSqlInputRequest, AddSqlInputResult, CustomSqlExecutionResult,
     CustomTaxonomySqlExportRequest, CustomTaxonomySqlRequest, DeleteTaxonNameInput,
@@ -33,7 +35,7 @@ use vividarium_core::taxonomy::{
 };
 use vividarium_core::{mapping, naming, photos, taxonomy};
 
-use crate::state::AppState;
+use crate::state::{AppState, BackgroundTaskKey, BackgroundTaskKind};
 use crate::updater::{AppUpdateEvent, AppUpdateInfo, PendingAppUpdate};
 
 pub mod map;
@@ -50,6 +52,12 @@ pub struct PhotoLibraryWorkspace {
     pub active: bool,
     pub root_available: bool,
     pub database_available: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PhotoLibraryActivation<T> {
+    pub library: T,
+    pub operation: Option<OperationState>,
 }
 
 #[derive(Debug, Serialize)]
@@ -136,10 +144,18 @@ pub fn open_photo_library(
     app: AppHandle,
     state: State<'_, AppState>,
     root: String,
-) -> CommandResult<PhotoLibrary> {
+) -> CommandResult<PhotoLibraryActivation<PhotoLibrary>> {
+    let _lifecycle = state.lock_photo_library_lifecycle()?;
+    ensure_photo_workspace_activation_allowed(&state)?;
     let library = photos::open_library(&state.database, &root).map_err(error)?;
-    schedule_taxonomy_sync(app, &state);
-    Ok(library)
+    let library_uuid = state
+        .database
+        .active_photo_library()
+        .map_err(error)?
+        .ok_or_else(|| "opened photo library is not active".to_string())?
+        .library_uuid;
+    let operation = start_photo_library_pipeline(app, &state, &library_uuid)?;
+    Ok(PhotoLibraryActivation { library, operation })
 }
 
 #[tauri::command]
@@ -184,7 +200,9 @@ pub fn register_photo_library(
     root_path: String,
     database_path: String,
     display_name: Option<String>,
-) -> CommandResult<PhotoLibraryRegistration> {
+) -> CommandResult<PhotoLibraryActivation<PhotoLibraryRegistration>> {
+    let _lifecycle = state.lock_photo_library_lifecycle()?;
+    ensure_photo_workspace_activation_allowed(&state)?;
     let library = state
         .database
         .register_photo_library(
@@ -193,8 +211,8 @@ pub fn register_photo_library(
             display_name.as_deref(),
         )
         .map_err(error)?;
-    schedule_taxonomy_sync(app, &state);
-    Ok(library)
+    let operation = start_photo_library_pipeline(app, &state, &library.library_uuid)?;
+    Ok(PhotoLibraryActivation { library, operation })
 }
 
 #[tauri::command]
@@ -202,25 +220,43 @@ pub fn switch_photo_library(
     app: AppHandle,
     state: State<'_, AppState>,
     library_uuid: String,
-) -> CommandResult<PhotoLibraryRegistration> {
+) -> CommandResult<PhotoLibraryActivation<PhotoLibraryRegistration>> {
+    let _lifecycle = state.lock_photo_library_lifecycle()?;
+    ensure_photo_workspace_activation_allowed(&state)?;
     let library = state
         .database
         .switch_photo_library(&library_uuid)
         .map_err(error)?;
-    schedule_taxonomy_sync(app, &state);
-    Ok(library)
+    let operation = start_photo_library_pipeline(app, &state, &library.library_uuid)?;
+    Ok(PhotoLibraryActivation { library, operation })
 }
 
 #[tauri::command]
 pub fn rebind_photo_library_root(
+    app: AppHandle,
     state: State<'_, AppState>,
     library_uuid: String,
     root_path: String,
-) -> CommandResult<PhotoLibraryRegistration> {
-    state
+) -> CommandResult<PhotoLibraryActivation<PhotoLibraryRegistration>> {
+    let _lifecycle = state.lock_photo_library_lifecycle()?;
+    ensure_photo_workspace_activation_allowed(&state)?;
+    let library = state
         .database
         .rebind_photo_library_root(&library_uuid, Path::new(&root_path))
-        .map_err(error)
+        .map_err(error)?;
+    let operation = if state
+        .database
+        .locations()
+        .map_err(error)?
+        .active_photo_library_uuid
+        .as_deref()
+        == Some(library_uuid.as_str())
+    {
+        start_photo_library_pipeline(app, &state, &library_uuid)?
+    } else {
+        None
+    };
+    Ok(PhotoLibraryActivation { library, operation })
 }
 
 #[tauri::command]
@@ -229,14 +265,26 @@ pub fn rebind_photo_library_database(
     state: State<'_, AppState>,
     library_uuid: String,
     database_path: String,
-) -> CommandResult<PhotoLibraryRegistration> {
+) -> CommandResult<PhotoLibraryActivation<PhotoLibraryRegistration>> {
+    let _lifecycle = state.lock_photo_library_lifecycle()?;
     ensure_database_relocation_allowed(&state)?;
     let library = state
         .database
         .rebind_photo_library_database(&library_uuid, Path::new(&database_path))
         .map_err(error)?;
-    schedule_taxonomy_sync(app, &state);
-    Ok(library)
+    let operation = if state
+        .database
+        .locations()
+        .map_err(error)?
+        .active_photo_library_uuid
+        .as_deref()
+        == Some(library_uuid.as_str())
+    {
+        start_photo_library_pipeline(app, &state, &library_uuid)?
+    } else {
+        None
+    };
+    Ok(PhotoLibraryActivation { library, operation })
 }
 
 #[tauri::command]
@@ -245,6 +293,7 @@ pub fn relocate_photo_library_database(
     library_uuid: String,
     database_path: String,
 ) -> CommandResult<PhotoLibraryRegistration> {
+    let _lifecycle = state.lock_photo_library_lifecycle()?;
     ensure_database_relocation_allowed(&state)?;
     state
         .database
@@ -254,6 +303,8 @@ pub fn relocate_photo_library_database(
 
 #[tauri::command]
 pub fn remove_photo_library(state: State<'_, AppState>, library_uuid: String) -> CommandResult<()> {
+    let _lifecycle = state.lock_photo_library_lifecycle()?;
+    ensure_photo_workspace_activation_allowed(&state)?;
     state
         .database
         .remove_photo_library(&library_uuid)
@@ -337,19 +388,24 @@ pub fn set_default_photo_library_database_directory(
 }
 
 #[tauri::command]
-pub fn browse_photo_directory(
+pub async fn browse_photo_directory(
     state: State<'_, AppState>,
     directory_id: i64,
     cursor: Option<String>,
     limit: Option<usize>,
 ) -> CommandResult<PhotoPage<PhotoDirectoryItem>> {
-    photos::browse_directory(
-        &state.database,
-        directory_id,
-        cursor.as_deref(),
-        limit.unwrap_or(50),
-    )
-    .map_err(error)
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        photos::browse_directory(
+            &database,
+            directory_id,
+            cursor.as_deref(),
+            limit.unwrap_or(50),
+        )
+        .map_err(error)
+    })
+    .await
+    .map_err(error)?
 }
 
 #[tauri::command]
@@ -366,31 +422,87 @@ pub fn refresh_photo_directory(
     state: State<'_, AppState>,
     directory_id: i64,
 ) -> CommandResult<Value> {
+    let _lifecycle = state.lock_photo_library_lifecycle()?;
+    let library = state
+        .database
+        .active_photo_library()
+        .map_err(error)?
+        .ok_or_else(|| "no active photo library is registered".to_string())?;
     let database = state.database.clone();
-    let operation = state
-        .operations
-        .start(app, "photos", "refresh", move |progress| {
+    let operation = state.background_tasks.enqueue(
+        app.clone(),
+        BackgroundTaskKey::new(
+            BackgroundTaskKind::PhotoScan,
+            format!("{}:directory:{directory_id}", library.library_uuid),
+        ),
+        "photos",
+        "photo_scan",
+        true,
+        move |progress| {
             progress(0, None, "Refreshing directory");
             let refresh = photos::refresh_directory(&database, directory_id).map_err(error)?;
-            taxonomy::synchronize_pending_photo_libraries(&database).map_err(error)?;
-            let mapping =
-                mapping::process_pending_photo_matches(&database, progress).map_err(error)?;
-            Ok(json!({ "refresh": refresh, "mapping": mapping }))
-        })?;
+            serde_json::to_value(refresh).map_err(error)
+        },
+    )?;
+    let metadata_database = state.database.clone();
+    let metadata_scope = library.library_uuid.clone();
+    state.background_tasks.enqueue(
+        app.clone(),
+        BackgroundTaskKey::new(BackgroundTaskKind::MetadataIndex, &metadata_scope),
+        "photos",
+        "metadata_index",
+        true,
+        move |progress| {
+            let result = photos::index_photo_metadata_for_library(
+                &metadata_database,
+                &metadata_scope,
+                progress,
+            )
+            .map_err(error)?;
+            serde_json::to_value(result).map_err(error)
+        },
+    )?;
+    let mapping_database = state.database.clone();
+    let mapping_scope = library.library_uuid.clone();
+    state.background_tasks.enqueue(
+        app,
+        BackgroundTaskKey::new(BackgroundTaskKind::PhotoMapping, &mapping_scope),
+        "mapping",
+        "photo_mapping",
+        true,
+        move |progress| {
+            taxonomy::synchronize_pending_photo_libraries(&mapping_database).map_err(error)?;
+            let result = mapping::process_pending_photo_matches(&mapping_database, progress)
+                .map_err(error)?;
+            serde_json::to_value(result).map_err(error)
+        },
+    )?;
     Ok(json!({ "operation": operation }))
 }
 
 #[tauri::command]
 pub fn start_photo_mapping(app: AppHandle, state: State<'_, AppState>) -> CommandResult<Value> {
+    let _lifecycle = state.lock_photo_library_lifecycle()?;
+    let scope = state
+        .database
+        .active_photo_library()
+        .map_err(error)?
+        .map(|library| library.library_uuid)
+        .unwrap_or_else(|| "taxonomy".into());
     let database = state.database.clone();
-    let operation = state
-        .operations
-        .start(app, "mapping", "match", move |progress| {
+    let operation = state.background_tasks.enqueue(
+        app,
+        BackgroundTaskKey::new(BackgroundTaskKind::PhotoMapping, scope),
+        "mapping",
+        "photo_mapping",
+        true,
+        move |progress| {
             taxonomy::synchronize_pending_photo_libraries(&database).map_err(error)?;
             let result =
                 mapping::process_pending_photo_matches(&database, progress).map_err(error)?;
             serde_json::to_value(result).map_err(error)
-        })?;
+        },
+    )?;
     Ok(json!({ "operation": operation }))
 }
 
@@ -516,24 +628,67 @@ pub fn rename_photo_from_taxon(state: State<'_, AppState>, photo_id: i64) -> Com
 
 #[tauri::command]
 pub fn rename_photos_from_taxa(
+    app: AppHandle,
     state: State<'_, AppState>,
     photo_ids: Vec<i64>,
-) -> CommandResult<PhotoRenameOperationResult> {
-    photos::rename_photos_from_taxa(&state.database, &photo_ids).map_err(error)
+) -> CommandResult<Value> {
+    let _lifecycle = state.lock_photo_library_lifecycle()?;
+    let database = state.database.clone();
+    let operation =
+        state
+            .operations
+            .start(app, "photos", "rename_from_taxonomy", move |progress| {
+                let result =
+                    photos::rename_photos_from_taxa_with_progress(&database, &photo_ids, progress)
+                        .map_err(error)?;
+                Ok(compact_photo_rename_result(&result))
+            })?;
+    Ok(json!({ "operation": operation }))
 }
 
 #[tauri::command]
 pub fn rename_photos_in_directory_from_taxa(
+    app: AppHandle,
     state: State<'_, AppState>,
     directory_id: i64,
     include_descendants: Option<bool>,
-) -> CommandResult<PhotoRenameOperationResult> {
-    photos::rename_photos_in_directory_from_taxa(
-        &state.database,
-        directory_id,
-        include_descendants.unwrap_or(true),
-    )
-    .map_err(error)
+) -> CommandResult<Value> {
+    let _lifecycle = state.lock_photo_library_lifecycle()?;
+    let database = state.database.clone();
+    let operation = state.operations.start(
+        app,
+        "photos",
+        "rename_directory_from_taxonomy",
+        move |progress| {
+            let result = photos::rename_photos_in_directory_from_taxa_with_progress(
+                &database,
+                directory_id,
+                include_descendants.unwrap_or(true),
+                progress,
+            )
+            .map_err(error)?;
+            Ok(compact_photo_rename_result(&result))
+        },
+    )?;
+    Ok(json!({ "operation": operation }))
+}
+
+fn compact_photo_rename_result(result: &PhotoRenameOperationResult) -> Value {
+    let (mut applied, mut no_change, mut failed) = (0, 0, 0);
+    for row in &result.rows {
+        match row.status {
+            PhotoRenameRowStatus::Applied => applied += 1,
+            PhotoRenameRowStatus::NoChange => no_change += 1,
+            PhotoRenameRowStatus::Failed => failed += 1,
+        }
+    }
+    json!({
+        "operation_id": result.operation_id,
+        "total": result.rows.len(),
+        "applied": applied,
+        "no_change": no_change,
+        "failed": failed,
+    })
 }
 
 #[tauri::command]
@@ -655,19 +810,19 @@ pub async fn search_photos(
 }
 
 #[tauri::command]
-pub fn search_photos_by_filename(
+pub async fn search_photos_by_filename(
     state: State<'_, AppState>,
     query: String,
     cursor: Option<String>,
     limit: Option<usize>,
 ) -> CommandResult<PhotoPage<Photo>> {
-    photos::search_photos_by_filename(
-        &state.database,
-        &query,
-        cursor.as_deref(),
-        limit.unwrap_or(50),
-    )
-    .map_err(error)
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        photos::search_photos_by_filename(&database, &query, cursor.as_deref(), limit.unwrap_or(50))
+            .map_err(error)
+    })
+    .await
+    .map_err(error)?
 }
 
 #[tauri::command]
@@ -697,11 +852,16 @@ pub fn open_photo_directory_in_file_manager(
 }
 
 #[tauri::command]
-pub fn get_photo_metadata(
+pub async fn get_photo_metadata(
     state: State<'_, AppState>,
     photo_id: i64,
 ) -> CommandResult<PhotoMetadata> {
-    photos::get_photo_metadata(&state.database, photo_id).map_err(error)
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        photos::get_photo_metadata(&database, photo_id).map_err(error)
+    })
+    .await
+    .map_err(error)?
 }
 
 #[tauri::command]
@@ -1279,54 +1439,108 @@ pub fn apply_direct_import(
     )
 }
 
-fn schedule_taxonomy_sync(app: AppHandle, state: &AppState) {
-    if !state.taxonomy_sync.request() {
+fn start_photo_library_pipeline(
+    app: AppHandle,
+    state: &AppState,
+    library_uuid: &str,
+) -> CommandResult<Option<OperationState>> {
+    let scan_database = state.database.clone();
+    let scan_scope = library_uuid.to_string();
+    let scan = state.background_tasks.enqueue(
+        app.clone(),
+        BackgroundTaskKey::new(BackgroundTaskKind::PhotoScan, &scan_scope),
+        "photos",
+        "photo_scan",
+        false,
+        move |progress| {
+            let result =
+                photos::scan_photo_library(&scan_database, &scan_scope, progress).map_err(error)?;
+            serde_json::to_value(result).map_err(error)
+        },
+    )?;
+    let metadata_database = state.database.clone();
+    let metadata_scope = library_uuid.to_string();
+    state.background_tasks.enqueue(
+        app.clone(),
+        BackgroundTaskKey::new(BackgroundTaskKind::MetadataIndex, &metadata_scope),
+        "photos",
+        "metadata_index",
+        false,
+        move |progress| {
+            let result = photos::index_photo_metadata_for_library(
+                &metadata_database,
+                &metadata_scope,
+                progress,
+            )
+            .map_err(error)?;
+            serde_json::to_value(result).map_err(error)
+        },
+    )?;
+    let mapping_database = state.database.clone();
+    let mapping_scope = library_uuid.to_string();
+    state.background_tasks.enqueue(
+        app,
+        BackgroundTaskKey::new(BackgroundTaskKind::PhotoMapping, &mapping_scope),
+        "mapping",
+        "photo_mapping",
+        false,
+        move |progress| {
+            taxonomy::synchronize_pending_photo_libraries(&mapping_database).map_err(error)?;
+            let result = mapping::process_pending_photo_matches(&mapping_database, progress)
+                .map_err(error)?;
+            serde_json::to_value(result).map_err(error)
+        },
+    )?;
+    Ok(Some(scan))
+}
+
+pub(crate) fn resume_active_photo_library_work(app: AppHandle, state: &AppState) {
+    let Some(library) = state.database.active_photo_library().ok().flatten() else {
         return;
-    }
-    let state = state.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        loop {
-            if !state.taxonomy_sync.take_request() {
-                if state.taxonomy_sync.release_or_continue() {
-                    continue;
-                }
-                break;
-            }
-            while state
-                .operations
-                .status()
-                .values()
-                .any(|operation| operation.running)
-            {
-                std::thread::sleep(std::time::Duration::from_millis(100));
-            }
-            let database = state.database.clone();
-            let operation =
-                state
-                    .operations
-                    .start(app.clone(), "mapping", "taxonomy_sync", move |progress| {
-                        progress(0, None, "Synchronizing taxonomy changes");
-                        let sync = taxonomy::synchronize_pending_photo_libraries(&database)
-                            .map_err(error)?;
-                        let mapping = mapping::process_pending_photo_matches(&database, progress)
-                            .map_err(error)?;
-                        Ok(json!({ "sync": sync, "mapping": mapping }))
-                    });
-            let task_id = match operation {
-                Ok(operation) => operation.task_id,
-                Err(_) => {
-                    state.taxonomy_sync.request();
-                    std::thread::sleep(std::time::Duration::from_millis(100));
-                    continue;
-                }
-            };
-            while state.operations.status().values().any(|operation| {
-                operation.running && operation.task_id.as_deref() == task_id.as_deref()
-            }) {
-                std::thread::sleep(std::time::Duration::from_millis(100));
-            }
+    };
+    let _ = start_photo_library_pipeline(app, state, &library.library_uuid);
+}
+
+fn schedule_taxonomy_sync(app: AppHandle, state: &AppState) {
+    let active_library = state.database.active_photo_library().ok().flatten();
+    if let Some(library) = active_library.as_ref() {
+        let scan_pending =
+            photos::is_initial_index_complete(&state.database, &library.library_uuid)
+                .is_ok_and(|complete| !complete);
+        let mapping_pending = mapping::has_pending_photo_matches(&state.database).unwrap_or(true);
+        let sync_pending =
+            taxonomy::has_pending_photo_library_sync(&state.database, &library.library_uuid)
+                .unwrap_or(true);
+        if !scan_pending && !mapping_pending && !sync_pending {
+            return;
         }
-    });
+    }
+    let scope = active_library
+        .map(|library| library.library_uuid)
+        .unwrap_or_else(|| "taxonomy".into());
+    let database = state.database.clone();
+    let _ = state.background_tasks.enqueue(
+        app,
+        BackgroundTaskKey::new(BackgroundTaskKind::PhotoMapping, &scope),
+        "mapping",
+        "photo_mapping",
+        true,
+        move |progress| {
+            progress(0, None, "Synchronizing taxonomy changes");
+            let sync = taxonomy::synchronize_pending_photo_libraries(&database).map_err(error)?;
+            let active_library = database.active_photo_library().map_err(error)?;
+            let mapping = if active_library
+                .as_ref()
+                .is_some_and(|library| Path::new(&library.db_path).is_file())
+            {
+                Some(mapping::process_pending_photo_matches(&database, progress).map_err(error)?)
+            } else {
+                progress(0, Some(0), "No active Photo Library");
+                None
+            };
+            Ok(json!({ "sync": sync, "mapping": mapping }))
+        },
+    );
 }
 
 fn audit_writer(destination_path: &str) -> CommandResult<BufWriter<File>> {
@@ -1348,7 +1562,7 @@ fn ensure_database_relocation_allowed(state: &AppState) -> CommandResult<()> {
         .operations
         .status()
         .into_values()
-        .filter(|operation| operation.running)
+        .filter(|operation| operation.is_active())
         .filter_map(|operation| operation.operation)
         .collect::<Vec<_>>();
     if running.is_empty() {
@@ -1358,6 +1572,23 @@ fn ensure_database_relocation_allowed(state: &AppState) -> CommandResult<()> {
             "database relocation is blocked by running operations: {}",
             running.join(", ")
         ))
+    }
+}
+
+fn ensure_photo_workspace_activation_allowed(state: &AppState) -> CommandResult<()> {
+    let blocker = state
+        .operations
+        .status()
+        .into_values()
+        .find_map(|operation| {
+            (operation.is_active() && matches!(operation.module.as_str(), "photos" | "mapping"))
+                .then_some(operation.operation.unwrap_or(operation.module))
+        });
+    match blocker {
+        Some(operation) => Err(format!(
+            "photo library activation is blocked by running operation: {operation}"
+        )),
+        None => Ok(()),
     }
 }
 
@@ -1438,19 +1669,19 @@ pub fn remap_photo(
 }
 
 #[tauri::command]
-pub fn list_taxon_photos(
+pub async fn list_taxon_photos(
     state: State<'_, AppState>,
     taxon_id: i64,
     cursor: Option<String>,
     limit: Option<usize>,
 ) -> CommandResult<PhotoPage<Photo>> {
-    mapping::list_taxon_photos(
-        &state.database,
-        taxon_id,
-        cursor.as_deref(),
-        limit.unwrap_or(50),
-    )
-    .map_err(error)
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        mapping::list_taxon_photos(&database, taxon_id, cursor.as_deref(), limit.unwrap_or(50))
+            .map_err(error)
+    })
+    .await
+    .map_err(error)?
 }
 
 #[tauri::command]
@@ -1464,21 +1695,26 @@ pub fn get_photo_taxon_node(
 }
 
 #[tauri::command]
-pub fn browse_photo_taxon(
+pub async fn browse_photo_taxon(
     state: State<'_, AppState>,
     taxon_id: Option<i64>,
     show_empty: Option<bool>,
     cursor: Option<String>,
     limit: Option<usize>,
 ) -> CommandResult<PhotoPage<PhotoTaxonItem>> {
-    mapping::browse_photo_taxon(
-        &state.database,
-        taxon_id,
-        show_empty.unwrap_or(false),
-        cursor.as_deref(),
-        limit.unwrap_or(50),
-    )
-    .map_err(error)
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        mapping::browse_photo_taxon(
+            &database,
+            taxon_id,
+            show_empty.unwrap_or(false),
+            cursor.as_deref(),
+            limit.unwrap_or(50),
+        )
+        .map_err(error)
+    })
+    .await
+    .map_err(error)?
 }
 
 #[tauri::command]

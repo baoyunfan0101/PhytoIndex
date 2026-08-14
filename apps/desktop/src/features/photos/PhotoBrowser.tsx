@@ -108,6 +108,7 @@ export function PhotoBrowser({
         second={(<main className="photo-browser-main">
           <header className="pane-header">
             <div><strong>{interaction.selected?.filename ?? "Photos"}</strong><span>{interaction.selected ? formatPhotoSummary(interaction.selected) : status}</span></div>
+            {page.loading && photos.length > 0 && <small className="pane-loading-label">Loading...</small>}
             <PhotoDisplayToggle mode={mode} onChange={setMode} />
           </header>
           {page.loading && photos.length === 0 ? (

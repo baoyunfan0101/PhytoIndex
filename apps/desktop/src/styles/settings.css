@@ -83,7 +83,12 @@
 }
 .storage-actions { display: flex; flex-wrap: wrap; gap: 5px; }
 .library-settings-list { display: grid; gap: 8px; padding: 10px; overflow: auto; }
-.library-settings-row { display: grid; gap: 6px; padding: 9px; border: 1px solid var(--line); background: var(--panel); }
+.library-settings-row { position: relative; display: grid; gap: 6px; padding: 9px; border: 1px solid var(--line); background: var(--panel); }
+.library-settings-row:hover:not(.busy, .locked, .unavailable, .active), .library-settings-row:focus-within { border-color: var(--line-strong); background: var(--hover); }
+.library-card-select { position: absolute; z-index: 0; inset: 0; padding: 0; border: 0; outline: 0; background: transparent; cursor: pointer; }
+.library-card-select:disabled { cursor: default; }
+.library-settings-row > :not(.library-card-select) { position: relative; z-index: 1; pointer-events: none; }
+.library-settings-row > .library-actions { pointer-events: auto; }
 .library-settings-row.active { border-color: #4c7158; }
 .library-heading { display: flex; align-items: center; gap: 8px; }
 .library-heading > span { padding: 2px 6px; border-radius: 8px; color: #111; }

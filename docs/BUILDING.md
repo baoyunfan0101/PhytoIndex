@@ -42,6 +42,14 @@ Also set `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` to the private key password.
 Environment variables must be set in the shell; a `.env` file is not loaded by
 the Tauri CLI.
 
+The release operator keeps the current keypair outside the repository at
+`~/.config/Vividarium/updater.key` and
+`~/.config/Vividarium/updater.key.pub`. The password is stored in the macOS
+Keychain service `io.github.baoyunfan0101.vividarium.updater-key-password`; an
+offline backup of both the private key and its password is required. Before
+creating a tag, confirm that the public file, the updater `pubkey`, and the two
+GitHub Actions secrets all belong to this same keypair.
+
 ## macOS Apple Silicon
 
 ### Build-machine prerequisites
@@ -191,7 +199,8 @@ npm run build
 ```
 
 The GitHub release workflow runs these checks in its `verify` job before either
-platform package job may start.
+platform package job may start. Each package job also validates that both
+updater signing secrets are non-empty before compiling the application.
 
 Create and push the release tag:
 

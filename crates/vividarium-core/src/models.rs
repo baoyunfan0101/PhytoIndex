@@ -112,20 +112,45 @@ pub struct OperationProgress {
     pub statement_total: Option<u64>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum BackgroundTaskState {
+    Queued,
+    #[default]
+    Running,
+    Completed,
+    Failed,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct OperationState {
     pub module: String,
     pub task_id: Option<String>,
+    pub task_kind: Option<String>,
+    pub task_scope: Option<String>,
+    #[serde(default)]
+    pub state: BackgroundTaskState,
     pub operation: Option<String>,
     pub running: bool,
     pub started_at: Option<String>,
     pub finished_at: Option<String>,
     pub message: String,
+    #[serde(default)]
+    pub completed: u64,
     pub processed: u64,
     pub total: Option<u64>,
     pub progress: Option<OperationProgress>,
     pub result: Option<serde_json::Value>,
     pub error: Option<String>,
+}
+
+impl OperationState {
+    pub fn is_active(&self) -> bool {
+        matches!(
+            self.state,
+            BackgroundTaskState::Queued | BackgroundTaskState::Running
+        )
+    }
 }
 
 pub type OperationsStatus = BTreeMap<String, OperationState>;

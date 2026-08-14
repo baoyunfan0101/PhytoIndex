@@ -160,6 +160,16 @@ impl Database {
         database_path: &Path,
         display_name: Option<&str>,
     ) -> CoreResult<PhotoLibraryRegistration> {
+        let _guard = crate::photos::lock_photo_workspace()?;
+        self.register_photo_library_locked(root_path, database_path, display_name)
+    }
+
+    fn register_photo_library_locked(
+        &self,
+        root_path: &Path,
+        database_path: &Path,
+        display_name: Option<&str>,
+    ) -> CoreResult<PhotoLibraryRegistration> {
         if !root_path.is_dir() {
             return Err(CoreError::InvalidArgument(format!(
                 "photo library root is not an existing directory: {}",
@@ -195,6 +205,7 @@ impl Database {
             initialize_file(&database_path, PHOTO_SCHEMA)?;
             None
         };
+        ensure_photo_library_index_state(&open_existing_connection(&database_path)?)?;
         let library_uuid = stored_state
             .as_ref()
             .map(|state| state.library_uuid.clone())
@@ -271,10 +282,18 @@ impl Database {
             )?;
         }
         metadata_transaction.commit()?;
-        self.switch_photo_library(&library_uuid)
+        self.switch_photo_library_locked(&library_uuid)
     }
 
     pub fn switch_photo_library(&self, library_uuid: &str) -> CoreResult<PhotoLibraryRegistration> {
+        let _guard = crate::photos::lock_photo_workspace()?;
+        self.switch_photo_library_locked(library_uuid)
+    }
+
+    fn switch_photo_library_locked(
+        &self,
+        library_uuid: &str,
+    ) -> CoreResult<PhotoLibraryRegistration> {
         let library = self
             .connect_metadata()?
             .query_row(
@@ -295,7 +314,7 @@ impl Database {
             )));
         }
         initialize_existing_file(Path::new(&library.db_path), PHOTO_SCHEMA)?;
-        crate::taxonomy::sync::synchronize_photo_library(self, &library)?;
+        ensure_photo_library_index_state(&open_existing_connection(Path::new(&library.db_path))?)?;
         let mut connection = self.connect_metadata()?;
         let transaction = connection.transaction()?;
         transaction.execute(
@@ -316,20 +335,13 @@ impl Database {
     }
 
     pub fn remove_photo_library(&self, library_uuid: &str) -> CoreResult<()> {
+        let _guard = crate::photos::lock_photo_workspace()?;
         let mut connection = self.connect_metadata()?;
         let transaction = connection.transaction()?;
-        let active = transaction
-            .query_row(
-                "SELECT library_uuid FROM active_photo_library WHERE active_id = 1",
-                [],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()?;
-        if active.as_deref() == Some(library_uuid) {
-            return Err(CoreError::InvalidArgument(
-                "cannot remove the active photo library registration".into(),
-            ));
-        }
+        transaction.execute(
+            "DELETE FROM active_photo_library WHERE library_uuid = ?",
+            [library_uuid],
+        )?;
         let removed = transaction.execute(
             "DELETE FROM photo_libraries WHERE library_uuid = ?",
             [library_uuid],
@@ -367,6 +379,7 @@ impl Database {
         library_uuid: &str,
         root_path: &Path,
     ) -> CoreResult<PhotoLibraryRegistration> {
+        let _guard = crate::photos::lock_photo_workspace()?;
         if !root_path.is_dir() {
             return Err(CoreError::InvalidArgument(format!(
                 "photo library root is not an existing directory: {}",
@@ -394,6 +407,7 @@ impl Database {
         }
         let mut connection = self.connect_photo_library_registration(&library)?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        reset_photo_library_initial_index_state(&transaction)?;
         transaction.execute(
             "UPDATE photo_library SET root_path = ? WHERE library_id = 1",
             [path_string(&root_path)],
@@ -411,6 +425,7 @@ impl Database {
         library_uuid: &str,
         existing_database_path: &Path,
     ) -> CoreResult<PhotoLibraryRegistration> {
+        let _guard = crate::photos::lock_photo_workspace()?;
         self.photo_library(library_uuid)?;
         let database_path = absolute_path(existing_database_path)?;
         validate_existing_file(&database_path)?;
@@ -483,6 +498,7 @@ impl Database {
         library_uuid: &str,
         destination: &Path,
     ) -> CoreResult<PhotoLibraryRegistration> {
+        let _guard = crate::photos::lock_photo_workspace()?;
         let library = self.photo_library(library_uuid)?;
         let source = PathBuf::from(&library.db_path);
         let destination = absolute_path(destination)?;
@@ -830,9 +846,6 @@ impl Database {
         self.ensure_taxonomy_identity()?;
         self.seed_metadata()?;
         crate::taxonomy::sync::dispatch_pending_events(self)?;
-        if let Some(active) = self.active_photo_library()? {
-            let _ = crate::taxonomy::sync::synchronize_photo_library(self, &active);
-        }
         Ok(())
     }
 
@@ -900,6 +913,40 @@ fn initialize_connection(connection: &Connection, schema: &str) -> CoreResult<()
 fn initialize_existing_file(path: &Path, schema: &str) -> CoreResult<()> {
     let connection = open_existing_connection(path)?;
     initialize_connection(&connection, schema)
+}
+
+const PHOTO_LIBRARY_INDEX_STATE_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS photo_library_index_state (
+    state_id INTEGER PRIMARY KEY CHECK (state_id = 1),
+    initial_index_complete INTEGER NOT NULL DEFAULT 0,
+    completed_at TEXT,
+    CHECK (initial_index_complete IN (0, 1)),
+    CHECK ((initial_index_complete = 0 AND completed_at IS NULL)
+        OR (initial_index_complete = 1 AND completed_at IS NOT NULL))
+);
+INSERT INTO photo_library_index_state (
+    state_id, initial_index_complete, completed_at
+) VALUES (1, 0, NULL)
+ON CONFLICT(state_id) DO NOTHING;
+"#;
+
+pub(crate) fn ensure_photo_library_index_state(connection: &Connection) -> CoreResult<()> {
+    connection.execute_batch(PHOTO_LIBRARY_INDEX_STATE_SCHEMA)?;
+    Ok(())
+}
+
+fn reset_photo_library_initial_index_state(connection: &Connection) -> CoreResult<()> {
+    ensure_photo_library_index_state(connection)?;
+    connection.execute(
+        r#"
+        UPDATE photo_library_index_state
+        SET initial_index_complete = 0,
+            completed_at = NULL
+        WHERE state_id = 1
+        "#,
+        [],
+    )?;
+    Ok(())
 }
 
 fn validate_existing_file(path: &Path) -> CoreResult<()> {

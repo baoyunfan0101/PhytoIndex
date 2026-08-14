@@ -50,8 +50,19 @@ child directories before photos.
 | `get_photo` | `photo_id: i64` | `Option<Photo>` | Load one photo. |
 | `browse_directory` | `directory_id: i64`, `cursor: Option<&str>`, `limit: usize` | `PhotoPage<PhotoDirectoryItem>` | Browse one directory as a cursor page. |
 | `refresh_directory` | `directory_id: i64` | `PhotoSyncResult` | Reconcile the requested directory and every descendant directory. |
+| `is_initial_index_complete` | `library_uuid: &str` | `bool` | Return the durable first-index state for one registered library. |
+| `initial_index_photo_library` | `library_uuid: &str`, progress callback | `Option<PhotoSyncResult>` | Recursively reconcile one captured registration and mark it complete only after success. Return `None` when it is already complete. |
+| `scan_photo_library` | `library_uuid: &str`, progress callback | `PhotoSyncResult` | Incrementally reconcile the complete registered root; also completes the durable initial-index marker when needed. |
+| `has_pending_photo_metadata` | `library_uuid: &str` | `bool` | Report whether indexed photos still need metadata extraction. |
+| `index_photo_metadata_for_library` | `library_uuid: &str`, progress callback | `PhotoMetadataIndexResult` | Extract missing metadata in bounded batches and skip completed rows. |
 
 Every newly discovered, changed, or unqueued indexed photo is queued for automatic mapping.
+Filesystem indexing performs the same incremental comparison as Refresh.
+Directories are scanned without holding the photo write lock and committed one
+directory and at most 256 photo rows at a time. Metadata is extracted separately
+in batches of 64, committed in short transactions, and shares the same cache as
+foreground `get_photo_metadata`. Both loops yield between batches. Neither phase
+requests or creates thumbnails.
 
 ### Search interfaces
 
@@ -73,10 +84,19 @@ worker and resolves asynchronously.
 | Function | Parameters after `database` | Return | Description |
 | --- | --- | --- | --- |
 | `photo_file_path` | `photo_id: i64` | `PathBuf` | Resolve and validate the current absolute file path. |
+| `photo_file_path_for_library` | `library_uuid: &str`, `photo_id: i64` | `PathBuf` | Resolve a photo against one explicit registered library. |
 | `photo_directory_path` | `directory_id: i64` | `PathBuf` | Resolve and validate the current absolute directory path. |
 | `get_photo_metadata` | `photo_id: i64` | `PhotoMetadata` | Return cached metadata or extract and cache it. |
 | `get_or_create_thumbnail` | `photo_id: i64`, `thumbnail_root: &Path` | `PathBuf` | Return or create a WebP thumbnail. |
+| `get_or_create_thumbnail_for_library` | `library_uuid: &str`, `photo_id: i64`, `thumbnail_root: &Path` | `PathBuf` | Return or create a WebP thumbnail in that library's UUID namespace. |
 | `rebase_thumbnail_paths` | `thumbnail_root: &Path` | `usize` | Rebind stored thumbnail paths to files found under a new cache root. |
+
+The desktop media URL includes the active library UUID. The private media
+protocol rejects stale requests for another library, and thumbnail files are
+stored below a UUID-specific cache directory. Photo IDs and file timestamps
+therefore cannot collide across libraries. Thumbnails are generated lazily by
+near-viewport media requests, never as part of indexing. Image decoding does
+not hold the photo-index write lock.
 
 ### Rename interfaces
 
@@ -93,6 +113,11 @@ non-empty request and one `PhotoRenameRowOutcome` per input. Each row contains
 `row_number`, the same `operation_id`, `photo_id`, `status`, `message`, and
 optional current `photo`. `PhotoRenameRowStatus` is `applied`, `no_change`, or
 `failed`. An empty request returns no operation.
+
+The desktop bulk-rename commands return an operation immediately. Completed
+operation state contains only `operation_id`, `total`, `applied`, `no_change`,
+and `failed`; per-photo audit rows remain in Rename History instead of being
+retained in the operation-status payload.
 
 ### Filename format settings
 

@@ -212,6 +212,7 @@ pub fn process_pending_photo_matches(
         transaction.commit()?;
         processed += photo_ids.len();
         progress(processed as u64, Some(total as u64), "Matching photo names");
+        std::thread::yield_now();
     }
     let connection = database.connect()?;
     let queued = connection.query_row("SELECT COUNT(*) FROM photo_mapping_queue", [], |row| {
@@ -222,6 +223,17 @@ pub fn process_pending_photo_matches(
         changed,
         pending: queued,
     })
+}
+
+pub fn has_pending_photo_matches(database: &Database) -> CoreResult<bool> {
+    let connection = database.connect()?;
+    connection
+        .query_row(
+            "SELECT EXISTS (SELECT 1 FROM photo_mapping_queue)",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(Into::into)
 }
 
 pub(crate) fn remap_photo_ids(

@@ -91,6 +91,31 @@ pub fn synchronize_pending_photo_libraries(database: &Database) -> CoreResult<Ta
     })
 }
 
+pub fn has_pending_photo_library_sync(database: &Database, library_uuid: &str) -> CoreResult<bool> {
+    let taxonomy = database.connect_taxonomy()?;
+    let metadata = database.connect_metadata()?;
+    let last_dispatched = metadata.query_row(
+        "SELECT last_dispatched_sync_id FROM taxonomy_sync_dispatch WHERE dispatch_id = 1",
+        [],
+        |row| row.get::<_, i64>(0),
+    )?;
+    let undispatched = taxonomy.query_row(
+        "SELECT EXISTS (SELECT 1 FROM taxonomy_sync_events WHERE sync_id > ?)",
+        [last_dispatched],
+        |row| row.get::<_, bool>(0),
+    )?;
+    if undispatched {
+        return Ok(true);
+    }
+    metadata
+        .query_row(
+            "SELECT EXISTS (SELECT 1 FROM photo_library_taxonomy_pending WHERE library_uuid = ?)",
+            [library_uuid],
+            |row| row.get(0),
+        )
+        .map_err(Into::into)
+}
+
 pub(crate) fn dispatch_pending_events(database: &Database) -> CoreResult<()> {
     let _guard = SYNC_LOCK
         .lock()
@@ -206,17 +231,6 @@ fn cleanup_dispatched_events(
         )?;
     }
     Ok(())
-}
-
-pub(crate) fn synchronize_photo_library(
-    database: &Database,
-    library: &PhotoLibraryRegistration,
-) -> CoreResult<TaxonomySyncResult> {
-    let _guard = SYNC_LOCK
-        .lock()
-        .map_err(|_| CoreError::Consistency("taxonomy sync lock is poisoned".into()))?;
-    dispatch_pending_events_unlocked(database)?;
-    synchronize_photo_library_unlocked(database, library)
 }
 
 fn synchronize_photo_library_unlocked(

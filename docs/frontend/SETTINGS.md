@@ -14,6 +14,8 @@ through one settings workbench.
 | `section` | `SettingsSection` | Currently displayed settings page. |
 | `onSectionChange` | `(section) => void` | Updates the settings page stored by the owning tab. |
 | `onWorkspaceChanged` | optional callback | Refreshes application state after Photo Library changes. |
+| `onOpenPhotoLibrary` | callback | Uses the same native Open Photo Library workflow as the system toolbar. |
+| `onPhotoOperationStarted` | callback | Follows a Photo Library indexing operation returned by activation. |
 | `onTaxonomyImported` | optional callback | Refreshes taxonomy and mapping state after a completed import. |
 | `generalSettings` | `GeneralSettings` | Current application-wide settings. |
 | `onGeneralSettingsChange` | `(settings) => void` | Applies a committed General settings value to the application. |
@@ -48,10 +50,19 @@ reopen at their current value.
 
 ### Photo Libraries
 
-Registers, opens, renames, rebinds, relocates, and removes Photo Library
-resources. Creating or registering a library starts its database destination
-dialog in the configured default Photo Library database directory. It does not
-own photo browsing or mapping behavior.
+Opens, selects, renames, rebinds, relocates, and removes Photo Library
+registrations. Selecting an available inactive card activates it. The Open
+Photo Library action is the same workflow as the system toolbar and uses the
+configured default Photo Library database directory when a database destination
+is needed. Each card provides Open, Rename, Rebind Root, Rebind DB, Move DB,
+and Remove actions. Open reveals the photo root in the system file manager.
+Remove deletes only the registration, works for the active library and for
+missing resources, and clears active state when necessary.
+
+Opening or selecting an incompletely indexed library starts a background
+filesystem and metadata indexing operation. The Settings page follows returned
+operations immediately, exposes Retry after an indexing failure, and prevents
+conflicting library lifecycle actions while photo or mapping work is running.
 
 ### Taxonomy Databases
 

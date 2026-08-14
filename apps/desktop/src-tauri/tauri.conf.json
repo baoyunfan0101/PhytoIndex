@@ -46,7 +46,7 @@
       "endpoints": [
         "https://github.com/baoyunfan0101/Vividarium/releases/latest/download/latest.json"
       ],
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEYwMTc1NDlDMUMwQjcyRjEKUldUeGNnc2NuRlFYOEpHWHJzcFp4Z2hiVFpacUQ1YitWNEI2d2ppSlJZSFh2S1piaWZCZlFWOHMK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEJCRjVBODZEMkREODM0RTcKUldUbk5OZ3RiYWoxdXgweFk0SHkwWllZb2xqVzRBejZIWEFUY0V5emF2NDBONzIxbDFOR0k1alQK",
       "windows": {
         "installMode": "passive"
       }

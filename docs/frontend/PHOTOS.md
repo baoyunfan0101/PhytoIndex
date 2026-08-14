@@ -30,19 +30,25 @@ state.
 
 ### `FolderPhotosView(props)`
 
-Parameters: `handlers: PhotoOpenHandlers`.
+Parameters: `handlers: PhotoOpenHandlers` and the optional active background
+photo operation.
 
 Returns: an expandable directory tree and photo stage for the active library.
+Directory lists use cursor pages and the photo grid is virtualized. Nearing the
+loaded page boundary requests the next page; thumbnail media is requested only
+near the visible grid area.
 
 ### `TaxonPhotosView(props)`
 
-Parameters: `handlers: PhotoOpenHandlers`.
+Parameters: `handlers: PhotoOpenHandlers` and the optional active background
+photo operation.
 
 Returns: an expandable photographed-taxonomy tree and photo stage.
 
 ### `PhotoMapView(props)`
 
-Parameters include `handlers` and the owning tab's active state.
+Parameters include `handlers`, the owning tab's active state, and the optional
+active background photo operation.
 
 Returns: a viewport-driven MapLibre page. The first open fits the aggregate
 coordinates of all geotagged photos; the tab then retains its center and zoom.
@@ -50,6 +56,11 @@ Map requests use the visible bounds and backend cursor, and only returned
 markers are mounted. Selecting a marker reuses one bottom-right thumbnail and
 filename preview. Selecting another marker replaces its contents, selecting
 the map closes it, and selecting the preview opens Photo Detail.
+
+Metadata progress invalidations are coalesced into periodic page reloads. While
+the user has not dragged or zoomed the map, newly discovered GPS bounds may
+refit the initial viewport. The first manual map interaction disables automatic
+refitting so background work cannot move the user's chosen view.
 
 ### `PhotoDetailView({ photo, handlers })`
 
@@ -65,7 +76,14 @@ opened.
 ### `PhotoStage` and `PhotoThumb`
 
 Parameters: a `Photo`, with display options appropriate to the full image or
-thumbnail. Returns media UI using the desktop photo URI.
+thumbnail. Returns media UI using the desktop photo URI, active Photo Library
+UUID, and file identity. This prevents cached media from crossing library
+boundaries.
+
+Folder, photographed-taxonomy, and Map pages render a non-blocking indexing
+notice while relevant background work is active. Existing results stay
+interactive. An initial empty pane has a pane-local Loading state; refresh and
+pagination keep existing rows visible.
 
 ### `EmptyWorkspace(props)`
 

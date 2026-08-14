@@ -2,7 +2,7 @@
 
 All notable changes to Vividarium are documented in this file.
 
-## [3.0.0] - Unreleased
+## [3.0.0] - 2026-08-14
 
 ### Added
 
@@ -18,13 +18,15 @@ All notable changes to Vividarium are documented in this file.
 - Added selectable Rename History and Taxonomy History with formatted audit JSON, batch audit export, replayable taxonomy input export, and rollback.
 - Added signed in-app update checks and installation from Vividarium GitHub Releases.
 - Added native file, folder, database, external repository, and author email actions.
+- Added automatic retryable Photo Scan, Metadata Index, and Photo Mapping tasks without eager thumbnail generation.
 
 ### Changed
 
 - Reorganized the application into React feature domains, typed frontend API wrappers, thin Tauri adapters, and a Tauri-independent `vividarium-core` service crate.
 - Separated application metadata, taxonomy, and each Photo Library into distinct SQLite roles so one taxonomy can serve several libraries.
 - Replaced unbounded collection loads with cursor pages, virtualized lists, and adjustable workbench panes.
-- Made long-running mapping, refresh, import, SQL, and update work report structured background progress without blocking the interface.
+- Made long-running mapping, refresh, import, SQL, and update work report structured event-driven background progress without blocking the interface.
+- Scoped photo indexing, refresh, mapping, and bulk rename loading states to photo-dependent tabs while unrelated work remains interactive.
 - Standardized tab names, icons, compressed tab layout, status isolation, context-menu icons, button feedback, and shared photo interactions.
 - Kept SQLite schema version `2`; databases with other schema versions remain incompatible and are rejected.
 
@@ -38,6 +40,7 @@ All notable changes to Vividarium are documented in this file.
 - Fixed SQL source sidebar grouping, schema duplication, scrolling, and collapsed-content flicker.
 - Fixed history row hover layering, selection coverage, oversized errors, JSON alignment, and code-block rendering.
 - Fixed project hook tests, long settings paths, Direct Import prompts, and several long-running actions that previously lacked visible feedback.
+- Fixed active and unavailable Photo Library removal, cross-library thumbnail collisions, and library switching during photo work.
 
 ### Removed
 

@@ -32,7 +32,7 @@ pub struct PendingAppUpdate(Mutex<Option<Update>>);
 pub(crate) fn ensure_install_allowed(operations: &OperationsStatus) -> Result<(), String> {
     let running = operations
         .values()
-        .filter(|state| state.running)
+        .filter(|state| state.is_active())
         .map(|state| {
             state.operation.as_deref().map_or_else(
                 || state.module.clone(),
@@ -184,11 +184,15 @@ mod tests {
             OperationState {
                 module: "mapping".into(),
                 task_id: Some("task".into()),
+                task_kind: None,
+                task_scope: None,
+                state: vividarium_core::BackgroundTaskState::Running,
                 operation: Some("match".into()),
                 running: true,
                 started_at: None,
                 finished_at: None,
                 message: "running".into(),
+                completed: 0,
                 processed: 0,
                 total: None,
                 progress: None,
@@ -213,11 +217,15 @@ mod tests {
             OperationState {
                 module: "photos".into(),
                 task_id: None,
+                task_kind: None,
+                task_scope: None,
+                state: vividarium_core::BackgroundTaskState::Completed,
                 operation: None,
                 running: false,
                 started_at: None,
                 finished_at: None,
                 message: "idle".into(),
+                completed: 0,
                 processed: 0,
                 total: None,
                 progress: None,

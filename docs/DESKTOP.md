@@ -28,8 +28,9 @@ passes explicit handlers into feature pages. Feature pages call only the API
 modules they need and use shared components for behavior that is common across
 multiple domains.
 
-Photo-library selection defines the workspace for Photos, Mapping, and Map
-pages. Taxonomy pages can be used independently. Cross-domain actions are
+Photo Library selection defines the workspace for Photos, Mapping, and Map
+pages. Initial indexing and other long photo work are represented by scoped
+background operations. Taxonomy pages can be used independently. Cross-domain actions are
 expressed through typed handlers or mutation notifications so a feature does
 not need to know how another page is mounted.
 

@@ -52,7 +52,14 @@ response boundary. Command adapters validate desktop-only inputs, translate
 errors to IPC strings, and delegate business behavior to `vividarium-core`.
 
 Long-running work is registered with the desktop operation coordinator and is
-reported through structured progress. Native paths, dialogs, the private
+reported through structured progress. Its task-keyed status map is the single
+source for the bottom-right Background UI. `BackgroundTaskScheduler` identifies
+photo work by `(kind, scope)`, coalesces duplicate queued or running work, and
+runs Photo Scan, Metadata Index, and Photo Mapping through one conservative
+worker. Each stage uses bounded database batches and yields between batches.
+Photo Library lifecycle changes and task startup share one coordinator lock;
+foreground queries remain ordinary asynchronous commands. Native paths,
+dialogs, the private
 `vividarium://` media protocol, updates, and system application opening remain
 outside the core crate.
 
@@ -83,11 +90,14 @@ Vividarium uses separate SQLite roles:
 - The taxonomy database stores taxa, names, search structures, source
   metadata, and taxonomy operations.
 - Each Photo Library database stores its directory tree, indexed photos,
-  extracted metadata, thumbnails, mapping state, and rename operations.
+  extracted metadata, thumbnail references, durable initial-index state,
+  mapping state, and rename operations.
 
 One taxonomy can therefore serve several independently registered Photo
 Libraries. A taxonomy identity change schedules remapping for every registered
 library without requiring all libraries to be online at the same time.
+Thumbnail files live in library-UUID cache namespaces, and media requests carry
+that identity so independently numbered photos cannot share cached content.
 
 ## Mutation flow
 
@@ -95,7 +105,8 @@ library without requiring all libraries to be online at the same time.
 2. The Tauri command delegates to a core domain service or schedules a
    background operation.
 3. The core commits one transaction and records audit state when applicable.
-4. The desktop publishes completion or structured progress.
+4. The desktop publishes queued, running, progress, completed, or failed state
+   through `operation-progress`.
 5. The frontend emits a domain mutation notification and refreshes only
    affected views.
 
