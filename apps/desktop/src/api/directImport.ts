@@ -8,8 +8,8 @@ export type DirectImportDatabase = {
   schema: SqlSourceSchema;
 };
 
-export const inspectDirectImportDatabase = (sourcePath: string) =>
-  call<DirectImportDatabase>("inspect_direct_import_database", { sourcePath }, () => ({
+export const inspectDirectImportDatabase = (sourcePath: string, ownerId: string) =>
+  call<DirectImportDatabase>("inspect_direct_import_database", { sourcePath, ownerId }, () => ({
     source_path: sourcePath,
     schema: {
       alias: "direct_import",
@@ -40,8 +40,8 @@ export const inspectDirectImportDatabase = (sourcePath: string) =>
     },
   }));
 
-export const applyDirectImport = (sourcePath: string) =>
-  call<OperationState>("apply_direct_import", { sourcePath }, () => {
+export const applyDirectImport = (sourcePath: string, ownerId: string) =>
+  call<OperationState>("apply_direct_import", { sourcePath, ownerId }, () => {
     const operation = demoOperation("direct_import", "Direct Import applied");
     operation.operation = "apply_direct_import";
     operation.result = {

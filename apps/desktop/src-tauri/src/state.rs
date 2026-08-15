@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -11,7 +11,8 @@ use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
 use vividarium_core::taxonomy::{PreparedTaxonomyUpdate, TaxonomyPreviewResult};
 use vividarium_core::{
-    BackgroundTaskState, CoreError, Database, OperationProgress, OperationState, OperationsStatus,
+    BackgroundTaskState, CancellationToken, CoreError, Database, OperationProgress, OperationState,
+    OperationsStatus,
 };
 
 static GLOBAL_STATE: OnceLock<AppState> = OnceLock::new();
@@ -60,12 +61,14 @@ pub struct AppState {
     pub thumbnail_dir: PathBuf,
     pub operations: OperationManager,
     pub background_tasks: BackgroundTaskScheduler,
+    pub active_tasks: ActiveTaskRegistry,
     photo_library_lifecycle: Arc<Mutex<()>>,
     formatted_update_preview: Arc<Mutex<Option<StagedFormattedUpdate>>>,
 }
 
 #[derive(Debug)]
 struct StagedFormattedUpdate {
+    owner_id: String,
     preview_id: String,
     prepared: PreparedTaxonomyUpdate,
 }
@@ -83,6 +86,7 @@ impl AppState {
             thumbnail_dir,
             background_tasks: BackgroundTaskScheduler::new(operations.clone()),
             operations,
+            active_tasks: ActiveTaskRegistry::default(),
             photo_library_lifecycle: Arc::new(Mutex::new(())),
             formatted_update_preview: Arc::new(Mutex::new(None)),
         })
@@ -96,6 +100,7 @@ impl AppState {
 
     pub fn replace_formatted_update_preview(
         &self,
+        owner_id: String,
         prepared: PreparedTaxonomyUpdate,
     ) -> Result<(String, TaxonomyPreviewResult), CoreError> {
         let preview_id = Uuid::new_v4().to_string();
@@ -104,6 +109,7 @@ impl AppState {
             CoreError::Consistency("formatted update preview lock is poisoned".into())
         })?;
         *current = Some(StagedFormattedUpdate {
+            owner_id,
             preview_id: preview_id.clone(),
             prepared,
         });
@@ -112,12 +118,17 @@ impl AppState {
 
     pub fn take_formatted_update_preview(
         &self,
+        owner_id: &str,
         preview_id: &str,
     ) -> Result<PreparedTaxonomyUpdate, CoreError> {
         let mut current = self.formatted_update_preview.lock().map_err(|_| {
             CoreError::Consistency("formatted update preview lock is poisoned".into())
         })?;
-        if current.as_ref().map(|value| value.preview_id.as_str()) != Some(preview_id) {
+        if current
+            .as_ref()
+            .map(|value| (value.owner_id.as_str(), value.preview_id.as_str()))
+            != Some((owner_id, preview_id))
+        {
             return Err(CoreError::InvalidArgument(
                 "formatted update preview is no longer current; preview again".into(),
             ));
@@ -128,12 +139,105 @@ impl AppState {
             .ok_or_else(|| CoreError::Consistency("formatted update preview disappeared".into()))
     }
 
-    pub fn clear_formatted_update_preview(&self) -> Result<(), CoreError> {
+    pub fn clear_formatted_update_preview(&self, owner_id: &str) -> Result<(), CoreError> {
         let mut current = self.formatted_update_preview.lock().map_err(|_| {
             CoreError::Consistency("formatted update preview lock is poisoned".into())
         })?;
-        *current = None;
+        if current
+            .as_ref()
+            .is_some_and(|value| value.owner_id == owner_id)
+        {
+            *current = None;
+        }
         Ok(())
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct ActiveTaskRegistry {
+    state: Arc<Mutex<ActiveTaskRegistryState>>,
+}
+
+#[derive(Default)]
+struct ActiveTaskRegistryState {
+    tasks: HashMap<String, HashMap<String, CancellationToken>>,
+    cancelled_owners: HashSet<String>,
+}
+
+impl ActiveTaskRegistry {
+    pub fn start(&self, owner_id: String) -> Result<ActiveTask, String> {
+        let task_id = Uuid::new_v4().simple().to_string();
+        let cancellation = CancellationToken::new();
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "active task registry lock is poisoned".to_string())?;
+        if state.cancelled_owners.contains(&owner_id) {
+            return Err("operation cancelled".into());
+        }
+        state
+            .tasks
+            .entry(owner_id.clone())
+            .or_default()
+            .insert(task_id.clone(), cancellation.clone());
+        drop(state);
+        Ok(ActiveTask {
+            registry: self.clone(),
+            owner_id,
+            task_id,
+            cancellation,
+        })
+    }
+
+    pub fn cancel_owner(&self, owner_id: &str) -> Result<usize, String> {
+        let cancellations = {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| "active task registry lock is poisoned".to_string())?;
+            state.cancelled_owners.insert(owner_id.to_string());
+            state
+                .tasks
+                .remove(owner_id)
+                .map(|tasks| tasks.into_values().collect::<Vec<_>>())
+                .unwrap_or_default()
+        };
+        for cancellation in &cancellations {
+            cancellation.cancel();
+        }
+        Ok(cancellations.len())
+    }
+
+    fn finish(&self, owner_id: &str, task_id: &str) {
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        let Some(owner_tasks) = state.tasks.get_mut(owner_id) else {
+            return;
+        };
+        owner_tasks.remove(task_id);
+        if owner_tasks.is_empty() {
+            state.tasks.remove(owner_id);
+        }
+    }
+}
+
+pub struct ActiveTask {
+    registry: ActiveTaskRegistry,
+    owner_id: String,
+    task_id: String,
+    cancellation: CancellationToken,
+}
+
+impl ActiveTask {
+    pub fn cancellation(&self) -> CancellationToken {
+        self.cancellation.clone()
+    }
+}
+
+impl Drop for ActiveTask {
+    fn drop(&mut self) {
+        self.registry.finish(&self.owner_id, &self.task_id);
     }
 }
 
@@ -653,6 +757,24 @@ mod tests {
         assert!(!throttle.should_emit(1, Some(100), "Importing"));
         assert!(throttle.should_emit(100, Some(100), "Importing"));
         assert!(throttle.should_emit(100, None, "Committing"));
+    }
+
+    #[test]
+    fn active_tasks_are_cancelled_by_owner_only() {
+        let registry = ActiveTaskRegistry::default();
+        let first = registry.start("tab-a".into()).unwrap();
+        let second = registry.start("tab-b".into()).unwrap();
+        let first_cancellation = first.cancellation();
+        let second_cancellation = second.cancellation();
+
+        assert_eq!(registry.cancel_owner("tab-a").unwrap(), 1);
+        assert!(first_cancellation.is_cancelled());
+        assert!(!second_cancellation.is_cancelled());
+        assert_eq!(registry.cancel_owner("tab-a").unwrap(), 0);
+        assert_eq!(
+            registry.start("tab-a".into()).err().as_deref(),
+            Some("operation cancelled")
+        );
     }
 
     #[test]

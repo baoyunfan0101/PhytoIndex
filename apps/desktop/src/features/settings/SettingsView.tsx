@@ -101,6 +101,7 @@ export function SettingsView({
   generalSettingsLoadError,
   onGeneralSettingsChange,
   section,
+  taskOwnerId,
 }: {
   generalSettings: GeneralSettingsValue;
   generalSettingsLoadError?: string;
@@ -113,15 +114,18 @@ export function SettingsView({
   photoLibraryOperation: OperationState | null;
   photoLibraryOperationError: string;
   section: SettingsSection;
+  taskOwnerId: string;
 }) {
   const hookSection = section === "Filename Parser" || section === "Synonym Splitter";
   const taxonomyDatabaseSection = section === "Taxonomy Databases"
     || section === "SQL Import"
     || section === "Direct Import";
   const sqlImportSection = section === "Taxonomy Databases" || section === "SQL Import";
+  const directImportSection = section === "Direct Import";
   const [hooksExpanded, setHooksExpanded] = useState(hookSection);
   const [taxonomyDatabasesExpanded, setTaxonomyDatabasesExpanded] = useState(taxonomyDatabaseSection);
   const [sqlImportMounted, setSqlImportMounted] = useState(sqlImportSection);
+  const [directImportMounted, setDirectImportMounted] = useState(directImportSection);
 
   useEffect(() => {
     if (hookSection) setHooksExpanded(true);
@@ -135,7 +139,12 @@ export function SettingsView({
     if (sqlImportSection) setSqlImportMounted(true);
   }, [sqlImportSection]);
 
+  useEffect(() => {
+    if (directImportSection) setDirectImportMounted(true);
+  }, [directImportSection]);
+
   const shouldMountSqlImport = sqlImportMounted || sqlImportSection;
+  const shouldMountDirectImport = directImportMounted || directImportSection;
 
   return (
     <ResizablePanels
@@ -205,8 +214,8 @@ export function SettingsView({
             operationError={photoLibraryOperationError}
           />
         )}
-        {shouldMountSqlImport && <SqlImportSettings active={sqlImportSection} onApplied={onTaxonomyImported} />}
-        {section === "Direct Import" && <DirectImportSettings onApplied={onTaxonomyImported} />}
+        {shouldMountSqlImport && <SqlImportSettings active={sqlImportSection} onApplied={onTaxonomyImported} taskOwnerId={taskOwnerId} />}
+        {shouldMountDirectImport && <DirectImportSettings active={directImportSection} onApplied={onTaxonomyImported} taskOwnerId={taskOwnerId} />}
         {section === "Naming" && <NamingSettings />}
         {section === "Map" && <MapSettingsPanel />}
         {hookSection && <HooksSettings kind={section === "Filename Parser" ? "photo_filename" : "synonym_authority"} />}

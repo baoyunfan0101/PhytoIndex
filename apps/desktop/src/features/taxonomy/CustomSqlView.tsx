@@ -27,9 +27,11 @@ import { emitTaxonomyMutation } from "./taxonomyMutations";
 
 export function CustomSqlView({
   onStatus,
+  taskOwnerId,
   mutationDisabled = false,
 }: {
   onStatus: (message: string) => void;
+  taskOwnerId: string;
   mutationDisabled?: boolean;
 }) {
   const [sql, setSql] = useState("");
@@ -90,7 +92,7 @@ export function CustomSqlView({
     setBusy("Executing SQL");
     setError("");
     try {
-      const next = await executeCustomSql(sql);
+      const next = await executeCustomSql(sql, taskOwnerId);
       setResult(next);
       const outcome = next.operation_id === null
         ? "Query completed without creating an operation"
@@ -111,7 +113,7 @@ export function CustomSqlView({
     setBusy("Exporting full query");
     setError("");
     try {
-      const exported = await exportCustomSqlQuery(sql, destination);
+      const exported = await exportCustomSqlQuery(sql, destination, taskOwnerId);
       onStatus(`Exported ${exported.row_count} rows to ${exported.path}`);
     } catch (nextError) {
       setError(errorMessage(nextError));

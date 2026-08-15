@@ -26,6 +26,7 @@ import {
   type GeneralSettings,
 } from "../api/general";
 import type { OperationState } from "../api/tasks";
+import { cancelActiveTabTasks } from "../api/activeTasks";
 import {
   getPhoto,
   type Photo,
@@ -180,6 +181,7 @@ export function DesktopShell({
   const operationsMenuRef = useRef<HTMLDivElement>(null);
   const activeIdRef = useRef<string | null>(null);
   const viewStateStores = useRef(new globalThis.Map<string, ViewStateStore>());
+  const taskOwnerIds = useRef(new globalThis.Map<string, string>());
   const [navigationHistory, setNavigationHistory] = useState(
     createNavigationHistory(null),
   );
@@ -385,6 +387,20 @@ export function DesktopShell({
     focusTab(tab.id);
   }
 
+  function taskOwnerId(tabId: string) {
+    const existing = taskOwnerIds.current.get(tabId);
+    if (existing) return existing;
+    const ownerId = `${tabId}:${crypto.randomUUID()}`;
+    taskOwnerIds.current.set(tabId, ownerId);
+    return ownerId;
+  }
+
+  function cancelTabTasks(tabId: string) {
+    const ownerId = taskOwnerIds.current.get(tabId);
+    taskOwnerIds.current.delete(tabId);
+    if (ownerId) void cancelActiveTabTasks(ownerId).catch(() => undefined);
+  }
+
   function focusTab(id: string | null, record = true) {
     setActiveId(id);
     if (record && id !== null) {
@@ -424,6 +440,7 @@ export function DesktopShell({
       : null;
     const next = closeTabState(tabs, activeId, id, previousActiveId);
     if (next.tabs === tabs) return;
+    cancelTabTasks(id);
     viewStateStores.current.delete(id);
     setTabs(next.tabs);
     if (activeId !== next.activeId) focusTab(next.activeId);
@@ -481,7 +498,10 @@ export function DesktopShell({
       : initialTab.id;
     setTabs((current) => {
       const remaining = current.filter((tab) => !photoTabKinds.has(tab.kind));
-      current.filter((tab) => photoTabKinds.has(tab.kind)).forEach((tab) => viewStateStores.current.delete(tab.id));
+      current.filter((tab) => photoTabKinds.has(tab.kind)).forEach((tab) => {
+        cancelTabTasks(tab.id);
+        viewStateStores.current.delete(tab.id);
+      });
       if (remaining.length === 0 || (active !== null && photoTabKinds.has(active.kind))) {
         const folders = { ...initialTab };
         setActiveId(folders.id);
@@ -530,6 +550,7 @@ export function DesktopShell({
 
   function closeAllTabs() {
     const next = closeAllTabsState<AppTab>();
+    tabs.forEach((tab) => cancelTabTasks(tab.id));
     viewStateStores.current.clear();
     setTabStatuses({});
     setTabs(next.tabs);
@@ -541,7 +562,10 @@ export function DesktopShell({
 
   function resetTaxonomyResources(message = "Taxonomy database replaced successfully. Photo mappings are being rebuilt in the background.") {
     tabs.filter((tab) => dependsOnReplacedTaxonomy(tab.kind))
-      .forEach((tab) => viewStateStores.current.delete(tab.id));
+      .forEach((tab) => {
+        cancelTabTasks(tab.id);
+        viewStateStores.current.delete(tab.id);
+      });
     const remaining = retainTabsAfterTaxonomyReplacement(tabs);
     const nextTabs = remaining.length > 0 ? remaining : [{ ...initialTab }];
     const nextActiveId = nextTabs.some((tab) => tab.id === activeId)
@@ -656,6 +680,7 @@ export function DesktopShell({
                     <TabBody
                       active={isActive}
                       tab={tab}
+                      taskOwnerId={taskOwnerId(tab.id)}
                       handlers={handlers}
                       onTabStatus={reportTabStatus}
                       openTab={openTab}
@@ -762,6 +787,7 @@ function backgroundTaskStage(operation: OperationState) {
 function TabBody({
   active,
   tab,
+  taskOwnerId,
   handlers,
   onTabStatus,
   openTab,
@@ -782,6 +808,7 @@ function TabBody({
 }: {
   active: boolean;
   tab: AppTab;
+  taskOwnerId: string;
   handlers: PhotoOpenHandlers;
   onTabStatus: (tabId: string, message: string, busy?: boolean) => void;
   openTab: (tab: AppTab, singleton?: boolean) => void;
@@ -828,10 +855,10 @@ function TabBody({
   if (tab.kind === "mapping") return <MappingView active={active} onStatus={onStatus} handlers={handlers} />;
   if (tab.kind === "taxonomy-search") return <TaxonomySearchView mutationDisabled={taxonomyMutationLocked} onOpenPhotos={(taxonId, label) => openTab({ id: `taxon-photos:${taxonId}`, kind: "taxon-photos", title: label, taxonId })} />;
   if (tab.kind === "taxon-detail" && tab.taxonId !== undefined) return <TaxonomyHierarchyPage initialTaxonId={tab.taxonId} mutationDisabled={taxonomyMutationLocked} onTaxonChange={(taxonId, label) => updateTaxonTab(tab.id, taxonId, label)} onOpenPhotos={(taxonId, label) => openTab({ id: `taxon-photos:${taxonId}`, kind: "taxon-photos", title: label, taxonId })} />;
-  if (tab.kind === "formatted-update") return <FormattedUpdateView onStatus={onStatus} mutationDisabled={taxonomyMutationLocked} />;
-  if (tab.kind === "custom-sql") return <CustomSqlView onStatus={onStatus} mutationDisabled={taxonomyMutationLocked} />;
+  if (tab.kind === "formatted-update") return <FormattedUpdateView onStatus={onStatus} taskOwnerId={taskOwnerId} mutationDisabled={taxonomyMutationLocked} />;
+  if (tab.kind === "custom-sql") return <CustomSqlView onStatus={onStatus} taskOwnerId={taskOwnerId} mutationDisabled={taxonomyMutationLocked} />;
   if (tab.kind === "taxonomy-history") return <OperationHistoryView domain="taxonomy" onStatus={onStatus} />;
-  if (tab.kind === "settings") return <SettingsView section={tab.settingsSection ?? "General"} onSectionChange={(section) => updateSettingsTab(tab.id, section)} onTaxonomyImported={onTaxonomyImported} onWorkspaceChanged={onWorkspaceChanged} onOpenPhotoLibrary={onOpenPhotoLibrary} onPhotoOperationStarted={onPhotoOperationStarted} photoLibraryOperation={photoLibraryOperation} photoLibraryOperationError={photoLibraryOperationError} generalSettings={generalSettings} generalSettingsLoadError={generalSettingsLoadError} onGeneralSettingsChange={onGeneralSettingsChange} />;
+  if (tab.kind === "settings") return <SettingsView section={tab.settingsSection ?? "General"} taskOwnerId={taskOwnerId} onSectionChange={(section) => updateSettingsTab(tab.id, section)} onTaxonomyImported={onTaxonomyImported} onWorkspaceChanged={onWorkspaceChanged} onOpenPhotoLibrary={onOpenPhotoLibrary} onPhotoOperationStarted={onPhotoOperationStarted} photoLibraryOperation={photoLibraryOperation} photoLibraryOperationError={photoLibraryOperationError} generalSettings={generalSettings} generalSettingsLoadError={generalSettingsLoadError} onGeneralSettingsChange={onGeneralSettingsChange} />;
   if (tab.kind === "photo-detail" && tab.photo) return <PhotoDetailView photo={tab.photo} handlers={handlers} />;
   if (tab.kind === "mapping-editor" && tab.photo) return <MappingEditor photo={tab.photo} onOpenTaxon={handlers.openTaxon} />;
   if (tab.kind === "search-photos" && tab.query) return <PhotoSet query={tab.query} refreshKey={tab.refreshKey} handlers={handlers} />;

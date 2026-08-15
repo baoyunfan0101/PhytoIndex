@@ -28,9 +28,11 @@ import { resolveSqlWorkbenchLoads } from "./sqlWorkbenchLoading";
 export function SqlImportSettings({
   active = true,
   onApplied,
+  taskOwnerId,
 }: {
   active?: boolean;
   onApplied?: () => void;
+  taskOwnerId: string;
 }) {
   const [inputs, setInputs] = useState<PersistentSqlInput[]>([]);
   const [databaseSchemas, setDatabaseSchemas] = useState<SqlSourceSchema[]>([]);
@@ -87,7 +89,7 @@ export function SqlImportSettings({
     setError("");
     setValidation(null);
     try {
-      const started = await startSqlImportValidation(sql);
+      const started = await startSqlImportValidation(sql, taskOwnerId);
       const completed = started.task_id
         ? await waitForOperation("sql_import", started.task_id)
         : started;
@@ -121,7 +123,7 @@ export function SqlImportSettings({
     setMessage("");
     setError("");
     try {
-      const operation = await applySqlImport();
+      const operation = await applySqlImport(taskOwnerId);
       const completed = await waitForOperation(operation.module, operation.task_id);
       if (completed.error) throw new Error(completed.error);
       const result = completed.result as TaxonomyImportResult | null;

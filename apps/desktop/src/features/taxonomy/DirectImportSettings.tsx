@@ -15,7 +15,15 @@ import { formatTaxonomyImportApplyMessage } from "./taxonomyImportMessages";
 import { emitTaxonomyMutation } from "./taxonomyMutations";
 import { SqlSourceSchemaObjects } from "./SqlInputList";
 
-export function DirectImportSettings({ onApplied }: { onApplied?: () => void }) {
+export function DirectImportSettings({
+  active = true,
+  onApplied,
+  taskOwnerId,
+}: {
+  active?: boolean;
+  onApplied?: () => void;
+  taskOwnerId: string;
+}) {
   const [database, setDatabase] = useState<DirectImportDatabase | null>(null);
   const [operation, setOperation] = useState<OperationState | null>(null);
   const [busy, setBusy] = useState<"" | "inspect" | "apply">("");
@@ -30,7 +38,7 @@ export function DirectImportSettings({ onApplied }: { onApplied?: () => void }) 
       const sourcePath = await selectSqliteDatabase(locations.default_taxonomy_directory);
       if (!sourcePath) return;
       setBusy("inspect");
-      setDatabase(await inspectDirectImportDatabase(sourcePath));
+      setDatabase(await inspectDirectImportDatabase(sourcePath, taskOwnerId));
     } catch (nextError) {
       setDatabase(null);
       setError(errorMessage(nextError));
@@ -45,7 +53,7 @@ export function DirectImportSettings({ onApplied }: { onApplied?: () => void }) 
     setError("");
     setBusy("apply");
     try {
-      const started = await applyDirectImport(database.source_path);
+      const started = await applyDirectImport(database.source_path, taskOwnerId);
       setOperation(started);
       const completed = started.task_id
         ? await waitForOperation(started.module, started.task_id, setOperation)
@@ -74,7 +82,7 @@ export function DirectImportSettings({ onApplied }: { onApplied?: () => void }) 
   const sourceName = database?.source_path.split(/[\\/]/).pop() ?? "SQLite database";
 
   return (
-    <div className="settings-section direct-import-settings">
+    <div aria-hidden={!active} className={`settings-section direct-import-settings${active ? "" : " inactive"}`}>
       <SectionHeader
         title="Direct Import"
         detail="Replace the current taxonomy with a ready-to-use SQLite database."

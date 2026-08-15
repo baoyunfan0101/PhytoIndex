@@ -6,6 +6,7 @@ use std::time::Duration;
 use rusqlite::{Connection, OpenFlags, OptionalExtension, Row, TransactionBehavior, params};
 use uuid::Uuid;
 
+use crate::CancellationToken;
 use crate::error::{CoreError, CoreResult};
 use crate::models::{DatabaseLocations, Photo, PhotoLibraryLocation, PhotoLibraryRegistration};
 
@@ -707,11 +708,13 @@ impl Database {
             })
     }
 
-    pub(crate) fn replace_taxonomy_database_file(
+    pub(crate) fn replace_taxonomy_database_file_with_cancellation(
         &self,
         _guard: &TaxonomyReplacementGuard<'_>,
         replacement: &Path,
+        cancellation: &CancellationToken,
     ) -> CoreResult<()> {
+        cancellation.check()?;
         initialize_existing_file(replacement, TAXONOMY_SCHEMA)?;
         let replacement_identity = open_existing_connection(replacement)?
             .query_row(
@@ -730,8 +733,14 @@ impl Database {
             ".taxonomy-replacement-candidate-{}.db",
             Uuid::new_v4()
         ));
-        copy_database_file(replacement, &candidate, TAXONOMY_SCHEMA)?;
+        copy_database_file_with_cancellation(
+            replacement,
+            &candidate,
+            TAXONOMY_SCHEMA,
+            cancellation,
+        )?;
         let replacement_result = (|| -> CoreResult<()> {
+            cancellation.check()?;
             {
                 let mut metadata = self.connect_metadata()?;
                 let transaction =
@@ -760,6 +769,7 @@ impl Database {
                     [target_sync_id],
                 )?;
                 transaction.execute("DELETE FROM photo_library_taxonomy_pending_taxa", [])?;
+                cancellation.check()?;
                 transaction.commit()?;
             }
             open_existing_connection(&target)?.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")?;
@@ -769,6 +779,7 @@ impl Database {
                 ".taxonomy-replacement-backup-{}.db",
                 Uuid::new_v4()
             ));
+            cancellation.check()?;
             fs::rename(&target, &backup)?;
             if let Err(error) = fs::rename(&candidate, &target) {
                 let _ = fs::rename(&backup, &target);
@@ -1233,7 +1244,13 @@ fn move_database_file(source: &Path, destination: &Path, schema: &str) -> CoreRe
     Ok(())
 }
 
-fn copy_database_file(source: &Path, destination: &Path, schema: &str) -> CoreResult<()> {
+fn copy_database_file_with_cancellation(
+    source: &Path,
+    destination: &Path,
+    schema: &str,
+    cancellation: &CancellationToken,
+) -> CoreResult<()> {
+    cancellation.check()?;
     if destination.exists() {
         return Err(CoreError::InvalidArgument(format!(
             "database destination already exists: {}",
@@ -1249,7 +1266,14 @@ fn copy_database_file(source: &Path, destination: &Path, schema: &str) -> CoreRe
     let backup_result = (|| -> CoreResult<()> {
         let backup =
             rusqlite::backup::Backup::new(&source_connection, &mut destination_connection)?;
-        backup.run_to_completion(256, Duration::from_millis(10), None)?;
+        loop {
+            cancellation.check()?;
+            let step = backup.step(256)?;
+            if step == rusqlite::backup::StepResult::Done {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
         drop(backup);
         let version: i64 =
             destination_connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;

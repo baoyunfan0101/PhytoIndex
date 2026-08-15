@@ -25,7 +25,7 @@ use super::sql_support::{
 };
 use crate::metadata::{self, MetadataKey};
 use crate::operations::{self, NewAuditRow, NewOperation};
-use crate::{CoreError, CoreResult, Database};
+use crate::{CancellationToken, CoreError, CoreResult, Database};
 
 pub const DEFAULT_SQL_RESULT_ROW_LIMIT: usize = 1000;
 static CUSTOM_SQL_LOCKS: OnceLock<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> = OnceLock::new();
@@ -132,8 +132,18 @@ pub fn execute_custom_taxonomy_sql(
     database: &Database,
     request: &CustomTaxonomySqlRequest,
 ) -> CoreResult<CustomSqlExecutionResult> {
+    execute_custom_taxonomy_sql_with_cancellation(database, request, &CancellationToken::new())
+}
+
+pub fn execute_custom_taxonomy_sql_with_cancellation(
+    database: &Database,
+    request: &CustomTaxonomySqlRequest,
+    cancellation: &CancellationToken,
+) -> CoreResult<CustomSqlExecutionResult> {
+    cancellation.check()?;
     let sql_mutex = custom_sql_mutex(database)?;
     let _sql_guard = lock_custom_sql(&sql_mutex)?;
+    cancellation.check()?;
     let _guard = database.try_taxonomy_mutation()?;
     let sql = require_sql(&request.sql)?;
     let maximum_result_rows = request
@@ -141,6 +151,7 @@ pub fn execute_custom_taxonomy_sql(
         .unwrap_or(DEFAULT_SQL_RESULT_ROW_LIMIT)
         .min(DEFAULT_SQL_RESULT_ROW_LIMIT);
     let mut connection = database.connect_taxonomy()?;
+    cancellation.install_sqlite_progress_handler(&connection);
     let sources = sql_inputs::stored_sources(database, SqlInputScope::CustomSql)?;
     let delimiter = crate::general::get_csv_delimiter_byte(database)?;
     let attached = prepare_sources(&mut connection, &sources, delimiter)?;
@@ -158,6 +169,7 @@ pub fn execute_custom_taxonomy_sql(
         drop(session);
         result.changeset_size = changeset_blob.len();
         if changeset_blob.is_empty() {
+            cancellation.check()?;
             transaction.commit()?;
             return Ok(result);
         }
@@ -172,12 +184,13 @@ pub fn execute_custom_taxonomy_sql(
             affected_taxon_ids,
             full_remap_required,
         )?;
+        cancellation.check()?;
         transaction.commit()?;
         result.operation_id = Some(operation_id);
         Ok(result)
     })();
     let detach = detach_sources(&connection, &attached);
-    let mut result = match (execution, detach) {
+    let mut result = cancellation.normalize(match (execution, detach) {
         (Ok(result), Ok(())) => Ok(result),
         (Err(error), _) => Err(error),
         (Ok(mut result), Err(error)) => {
@@ -186,7 +199,8 @@ pub fn execute_custom_taxonomy_sql(
             ));
             Ok(result)
         }
-    }?;
+    })?;
+    cancellation.check()?;
     match database.connect_metadata().and_then(|connection| {
         metadata::set_raw(&connection, MetadataKey::CustomTaxonomySql, &request.sql)
     }) {
@@ -202,8 +216,18 @@ pub fn export_custom_taxonomy_query(
     database: &Database,
     request: &CustomTaxonomySqlExportRequest,
 ) -> CoreResult<SqlExportResult> {
+    export_custom_taxonomy_query_with_cancellation(database, request, &CancellationToken::new())
+}
+
+pub fn export_custom_taxonomy_query_with_cancellation(
+    database: &Database,
+    request: &CustomTaxonomySqlExportRequest,
+    cancellation: &CancellationToken,
+) -> CoreResult<SqlExportResult> {
+    cancellation.check()?;
     let sql_mutex = custom_sql_mutex(database)?;
     let _sql_guard = lock_custom_sql(&sql_mutex)?;
+    cancellation.check()?;
     let sql = require_sql(&request.sql)?;
     if !request.destination_path.is_absolute() {
         return Err(CoreError::InvalidArgument(
@@ -211,16 +235,21 @@ pub fn export_custom_taxonomy_query(
         ));
     }
     let mut connection = database.connect_taxonomy()?;
+    cancellation.install_sqlite_progress_handler(&connection);
     let sources = sql_inputs::stored_sources(database, SqlInputScope::CustomSql)?;
     let delimiter = crate::general::get_csv_delimiter_byte(database)?;
     let attached = prepare_sources(&mut connection, &sources, delimiter)?;
     let export = export_single_query(&connection, sql, &request.destination_path, delimiter);
     let detach = detach_sources(&connection, &attached);
-    match (export, detach) {
+    let result = cancellation.normalize(match (export, detach) {
         (Ok(result), Ok(())) => Ok(result),
         (Err(error), _) => Err(error),
         (Ok(_), Err(error)) => Err(error),
+    });
+    if cancellation.is_cancelled() {
+        let _ = std::fs::remove_file(&request.destination_path);
     }
+    result
 }
 
 pub(super) fn inspect_sql_data_source(

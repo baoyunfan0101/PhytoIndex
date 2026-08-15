@@ -92,9 +92,14 @@ export function demoTaxonomySqlSchema(alias: string): SqlSourceSchema {
   };
 }
 
-export const executeCustomSql = (sql: string, maximumResultRows: number | null = 1000) =>
+export const executeCustomSql = (
+  sql: string,
+  ownerId: string,
+  maximumResultRows: number | null = 1000,
+) =>
   call<CustomSqlExecutionResult>("execute_custom_taxonomy_sql", {
     request: { sql, maximum_result_rows: maximumResultRows },
+    ownerId,
   }, () => ({
     operation_id: null,
     changeset_size: 0,
@@ -108,9 +113,10 @@ export const executeCustomSql = (sql: string, maximumResultRows: number | null =
     script_saved: true,
     warnings: [],
   }));
-export const exportCustomSqlQuery = (sql: string, destinationPath: string) =>
+export const exportCustomSqlQuery = (sql: string, destinationPath: string, ownerId: string) =>
   call<SqlExportResult>("export_custom_taxonomy_query", {
     request: { sql, destination_path: destinationPath },
+    ownerId,
   }, () => ({ path: destinationPath, row_count: 1 }));
 export const getCustomTaxonomySql = () =>
   call<string>("get_custom_taxonomy_sql", undefined, () => "SELECT * FROM taxa LIMIT 100;");

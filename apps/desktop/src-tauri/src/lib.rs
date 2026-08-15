@@ -29,6 +29,7 @@ pub fn run() {
         .register_uri_scheme_protocol("vividarium", |_context, request| media::handle(request))
         .invoke_handler(tauri::generate_handler![
             commands::get_general_settings,
+            commands::cancel_active_tab_tasks,
             commands::update_general_settings,
             commands::get_workspace_state,
             commands::save_workspace_state,

@@ -257,9 +257,11 @@ type FormattedBusy = "" | "import" | "template" | "preview" | "apply";
 
 export function FormattedUpdateView({
   onStatus,
+  taskOwnerId,
   mutationDisabled = false,
 }: {
   onStatus: (message: string) => void;
+  taskOwnerId: string;
   mutationDisabled?: boolean;
 }) {
   const [rows, setRows] = useState<TaxonInputRow[]>([{ species: "" }]);
@@ -355,7 +357,7 @@ export function FormattedUpdateView({
     setMessage("");
     setCurrentPreview(null);
     try {
-      const result = await previewTaxonomyRows(rows);
+      const result = await previewTaxonomyRows(rows, taskOwnerId);
       setOutcomes(result.rows);
       setCurrentPreview(result.preview_id);
       report(`${result.rows.length} rows previewed`);
@@ -373,7 +375,7 @@ export function FormattedUpdateView({
     setMessage("");
     setCurrentPreview(null);
     try {
-      const result = await applyTaxonomyRows(currentPreviewId);
+      const result = await applyTaxonomyRows(currentPreviewId, taskOwnerId);
       setOutcomes(result.rows);
       report(`${result.succeeded_rows} succeeded, ${result.failed_rows} failed`);
       emitTaxonomyMutation();

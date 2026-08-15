@@ -85,6 +85,18 @@ pub fn get_app_version(app: AppHandle) -> String {
 }
 
 #[tauri::command]
+pub fn cancel_active_tab_tasks(
+    state: State<'_, AppState>,
+    owner_id: String,
+) -> CommandResult<usize> {
+    let cancelled = state.active_tasks.cancel_owner(&owner_id)?;
+    state
+        .clear_formatted_update_preview(&owner_id)
+        .map_err(error)?;
+    Ok(cancelled)
+}
+
+#[tauri::command]
 pub fn get_general_settings(state: State<'_, AppState>) -> CommandResult<GeneralSettings> {
     vividarium_core::general::get_general_settings(&state.database).map_err(error)
 }
@@ -1008,10 +1020,15 @@ pub async fn execute_custom_taxonomy_sql(
     app: AppHandle,
     state: State<'_, AppState>,
     request: CustomTaxonomySqlRequest,
+    owner_id: String,
 ) -> CommandResult<CustomSqlExecutionResult> {
+    let active_task = state.active_tasks.start(owner_id)?;
+    let cancellation = active_task.cancellation();
     let database = state.database.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
-        taxonomy::execute_custom_taxonomy_sql(&database, &request).map_err(error)
+        let _active_task = active_task;
+        taxonomy::execute_custom_taxonomy_sql_with_cancellation(&database, &request, &cancellation)
+            .map_err(error)
     })
     .await
     .map_err(error)??;
@@ -1070,10 +1087,15 @@ pub async fn remove_custom_sql_input(
 pub async fn export_custom_taxonomy_query(
     state: State<'_, AppState>,
     request: CustomTaxonomySqlExportRequest,
+    owner_id: String,
 ) -> CommandResult<SqlExportResult> {
+    let active_task = state.active_tasks.start(owner_id)?;
+    let cancellation = active_task.cancellation();
     let database = state.database.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        taxonomy::export_custom_taxonomy_query(&database, &request).map_err(error)
+        let _active_task = active_task;
+        taxonomy::export_custom_taxonomy_query_with_cancellation(&database, &request, &cancellation)
+            .map_err(error)
     })
     .await
     .map_err(error)?
@@ -1083,17 +1105,32 @@ pub async fn export_custom_taxonomy_query(
 pub async fn preview_taxonomy_rows(
     state: State<'_, AppState>,
     rows: Vec<TaxonInputRow>,
+    owner_id: String,
 ) -> CommandResult<FormattedUpdatePreviewResult> {
-    state.clear_formatted_update_preview().map_err(error)?;
+    state
+        .clear_formatted_update_preview(&owner_id)
+        .map_err(error)?;
+    let active_task = state.active_tasks.start(owner_id.clone())?;
+    let cancellation = active_task.cancellation();
     let database = state.database.clone();
+    let worker_cancellation = cancellation.clone();
     let prepared = tauri::async_runtime::spawn_blocking(move || {
-        taxonomy::prepare_rows(&database, &rows).map_err(error)
+        taxonomy::prepare_rows_with_cancellation(&database, &rows, &worker_cancellation)
+            .map_err(error)
     })
     .await
     .map_err(error)??;
+    cancellation.check().map_err(error)?;
     let (preview_id, preview) = state
-        .replace_formatted_update_preview(prepared)
+        .replace_formatted_update_preview(owner_id.clone(), prepared)
         .map_err(error)?;
+    if cancellation.is_cancelled() {
+        state
+            .clear_formatted_update_preview(&owner_id)
+            .map_err(error)?;
+        return Err(error(vividarium_core::CoreError::Cancelled));
+    }
+    drop(active_task);
     Ok(FormattedUpdatePreviewResult::new(preview_id, preview))
 }
 
@@ -1102,13 +1139,18 @@ pub async fn apply_taxonomy_rows(
     app: AppHandle,
     state: State<'_, AppState>,
     preview_id: String,
+    owner_id: String,
 ) -> CommandResult<TaxonomyOperationResult> {
+    let active_task = state.active_tasks.start(owner_id.clone())?;
+    let cancellation = active_task.cancellation();
     let prepared = state
-        .take_formatted_update_preview(&preview_id)
+        .take_formatted_update_preview(&owner_id, &preview_id)
         .map_err(error)?;
     let database = state.database.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
-        taxonomy::apply_prepared_rows(&database, prepared).map_err(error)
+        let _active_task = active_task;
+        taxonomy::apply_prepared_rows_with_cancellation(&database, prepared, &cancellation)
+            .map_err(error)
     })
     .await
     .map_err(error)??;
@@ -1306,10 +1348,18 @@ pub fn get_taxonomy_import_metadata(
 pub async fn inspect_direct_import_database(
     state: State<'_, AppState>,
     source_path: String,
+    owner_id: String,
 ) -> CommandResult<DirectImportDatabase> {
+    let active_task = state.active_tasks.start(owner_id)?;
+    let cancellation = active_task.cancellation();
     let database = state.database.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        taxonomy::inspect_direct_import_database(&database, Path::new(&source_path)).map_err(error)
+        let _active_task = active_task;
+        cancellation.check().map_err(error)?;
+        let result = taxonomy::inspect_direct_import_database(&database, Path::new(&source_path))
+            .map_err(error)?;
+        cancellation.check().map_err(error)?;
+        Ok(result)
     })
     .await
     .map_err(error)?
@@ -1372,25 +1422,34 @@ pub fn start_sql_import_validation(
     app: AppHandle,
     state: State<'_, AppState>,
     request: ValidateSqlImportRequest,
+    owner_id: String,
 ) -> CommandResult<OperationState> {
+    let active_task = state.active_tasks.start(owner_id)?;
+    let cancellation = active_task.cancellation();
     let database = state.database.clone();
     state.operations.start_with_progress(
         app,
         "sql_import",
         "validate_sql_import",
-        move |progress| match taxonomy::validate_sql_import_with_progress(
-            &database, &request, progress,
-        ) {
-            Ok(result) => serde_json::to_value(result).map_err(error),
-            Err(failure) => {
-                progress(vividarium_core::OperationProgress {
-                    stage: "operational_failure".into(),
-                    current: None,
-                    total: None,
-                    statement_index: None,
-                    statement_total: None,
-                });
-                Err(error(failure))
+        move |progress| {
+            let _active_task = active_task;
+            match taxonomy::validate_sql_import_with_progress_and_cancellation(
+                &database,
+                &request,
+                progress,
+                &cancellation,
+            ) {
+                Ok(result) => serde_json::to_value(result).map_err(error),
+                Err(failure) => {
+                    progress(vividarium_core::OperationProgress {
+                        stage: "operational_failure".into(),
+                        current: None,
+                        total: None,
+                        statement_index: None,
+                        statement_total: None,
+                    });
+                    Err(error(failure))
+                }
             }
         },
     )
@@ -1400,15 +1459,20 @@ pub fn start_sql_import_validation(
 pub fn apply_sql_import(
     app: AppHandle,
     state: State<'_, AppState>,
+    owner_id: String,
 ) -> CommandResult<OperationState> {
+    let active_task = state.active_tasks.start(owner_id)?;
+    let cancellation = active_task.cancellation();
     let database = state.database.clone();
     let background_state = state.inner().clone();
     let sync_app = app.clone();
     state
         .operations
         .start(app, "sql_import", "apply_sql_import", move |progress| {
+            let _active_task = active_task;
             progress(0, None, "Validating SQL import candidate");
-            let result = taxonomy::apply_sql_import(&database).map_err(error)?;
+            let result = taxonomy::apply_sql_import_with_cancellation(&database, &cancellation)
+                .map_err(error)?;
             progress(1, Some(1), "Taxonomy SQL import applied");
             schedule_taxonomy_sync(sync_app, &background_state);
             serde_json::to_value(result).map_err(error)
@@ -1420,7 +1484,10 @@ pub fn apply_direct_import(
     app: AppHandle,
     state: State<'_, AppState>,
     source_path: String,
+    owner_id: String,
 ) -> CommandResult<OperationState> {
+    let active_task = state.active_tasks.start(owner_id)?;
+    let cancellation = active_task.cancellation();
     let database = state.database.clone();
     let background_state = state.inner().clone();
     let sync_app = app.clone();
@@ -1429,9 +1496,14 @@ pub fn apply_direct_import(
         "direct_import",
         "apply_direct_import",
         move |progress| {
+            let _active_task = active_task;
             progress(0, None, "Validating direct import database");
-            let result =
-                taxonomy::apply_direct_import(&database, Path::new(&source_path)).map_err(error)?;
+            let result = taxonomy::apply_direct_import_with_cancellation(
+                &database,
+                Path::new(&source_path),
+                &cancellation,
+            )
+            .map_err(error)?;
             progress(1, Some(1), "Direct import applied");
             schedule_taxonomy_sync(sync_app, &background_state);
             serde_json::to_value(result).map_err(error)

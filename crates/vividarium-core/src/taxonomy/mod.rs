@@ -26,15 +26,16 @@ pub use actions::{
 };
 pub use direct_import::{
     DirectImportDatabase, TaxonomyImportMetadata, TaxonomyImportResult, apply_direct_import,
-    get_taxonomy_import_metadata, inspect_direct_import_database,
+    apply_direct_import_with_cancellation, get_taxonomy_import_metadata,
+    inspect_direct_import_database,
 };
 pub use formatted::{
     PreparedTaxonomyUpdate, TaxonChange, TaxonChangeKind, TaxonInputRow, TaxonRank,
     TaxonRowOutcome, TaxonRowStatus, TaxonomyNameType, TaxonomyOperationResult,
-    TaxonomyPreviewResult, apply_prepared_rows, apply_rows, get_taxonomy_name_separator,
-    list_operation_audit, list_operations, parse_taxonomy_input_csv, prepare_rows, preview_rows,
-    rollback_operation, set_taxonomy_name_separator, taxonomy_formatted_update_template,
-    taxonomy_log_csv,
+    TaxonomyPreviewResult, apply_prepared_rows, apply_prepared_rows_with_cancellation, apply_rows,
+    get_taxonomy_name_separator, list_operation_audit, list_operations, parse_taxonomy_input_csv,
+    prepare_rows, prepare_rows_with_cancellation, preview_rows, rollback_operation,
+    set_taxonomy_name_separator, taxonomy_formatted_update_template, taxonomy_log_csv,
 };
 pub use operation_export::{
     export_all_replayable_inputs, export_operation_input, export_operations_input,
@@ -50,15 +51,17 @@ pub use sql::{
     CustomSqlExecutionResult, CustomTaxonomySqlExportRequest, CustomTaxonomySqlRequest, SqlColumn,
     SqlExportResult, SqlObjectType, SqlResultSet, SqlSourceObject, SqlSourceSchema,
     SqlStatementMessage, SqlValue, add_custom_sql_input, execute_custom_taxonomy_sql,
-    export_custom_taxonomy_query, get_custom_taxonomy_sql, list_custom_sql_database_schemas,
-    list_custom_sql_inputs, remove_custom_sql_input,
+    execute_custom_taxonomy_sql_with_cancellation, export_custom_taxonomy_query,
+    export_custom_taxonomy_query_with_cancellation, get_custom_taxonomy_sql,
+    list_custom_sql_database_schemas, list_custom_sql_inputs, remove_custom_sql_input,
 };
 pub use sql_import::{
     NameTypeCount, SqlImportExecutionResult, SqlImportIssue, SqlImportValidationResult,
     ValidateSqlImportRequest, ValidateSqlImportResult, add_sql_import_input, apply_sql_import,
-    get_sql_import_sql, list_sql_import_database_schemas, list_sql_import_inputs,
-    list_sql_import_staging_schemas, remove_sql_import_input, validate_sql_import,
-    validate_sql_import_with_progress,
+    apply_sql_import_with_cancellation, get_sql_import_sql, list_sql_import_database_schemas,
+    list_sql_import_inputs, list_sql_import_staging_schemas, remove_sql_import_input,
+    validate_sql_import, validate_sql_import_with_progress,
+    validate_sql_import_with_progress_and_cancellation,
 };
 pub use sql_inputs::{
     AddSqlInputRequest, AddSqlInputResult, PersistentSqlInput, RemoveSqlInputRequest,

@@ -20,7 +20,7 @@ use crate::naming::{SynonymAuthorityParser, normalize_taxonomy_name};
 use crate::operations::{
     self, NewAuditRow, NewOperation, OperationAuditRow, OperationPage, OperationSummary,
 };
-use crate::{CoreError, CoreResult, Database};
+use crate::{CancellationToken, CoreError, CoreResult, Database};
 
 pub const TAXONOMY_INPUT_COLUMNS: [&str; 13] = [
     "kingdom",
@@ -304,28 +304,42 @@ pub fn prepare_rows(
     database: &Database,
     rows: &[TaxonInputRow],
 ) -> CoreResult<PreparedTaxonomyUpdate> {
+    prepare_rows_with_cancellation(database, rows, &CancellationToken::new())
+}
+
+pub fn prepare_rows_with_cancellation(
+    database: &Database,
+    rows: &[TaxonInputRow],
+    cancellation: &CancellationToken,
+) -> CoreResult<PreparedTaxonomyUpdate> {
+    cancellation.check()?;
     let delimiter = crate::general::get_csv_delimiter(database)?;
     let _guard = database.try_taxonomy_mutation()?;
     let mut connection = database.connect_taxonomy_metadata_context()?;
-    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let revision = taxonomy_revision(&transaction)?;
-    let mut session = start_taxonomy_session(&transaction)?;
-    let outcomes = process_rows(&transaction, rows)?;
-    validate_taxonomy(&transaction)?;
-    let mut changeset_blob = Vec::new();
-    session.changeset_strm(&mut changeset_blob)?;
-    drop(session);
-    transaction.rollback()?;
-    Ok(PreparedTaxonomyUpdate {
-        rows: rows.to_vec(),
-        preview: TaxonomyPreviewResult {
-            delimiter,
-            encoding: "UTF-8".into(),
-            rows: outcomes,
-        },
-        changeset_blob,
-        revision,
-    })
+    cancellation.install_sqlite_progress_handler(&connection);
+    let result = (|| {
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let revision = taxonomy_revision(&transaction)?;
+        let mut session = start_taxonomy_session(&transaction)?;
+        let outcomes = process_rows(&transaction, rows, cancellation)?;
+        validate_taxonomy(&transaction)?;
+        cancellation.check()?;
+        let mut changeset_blob = Vec::new();
+        session.changeset_strm(&mut changeset_blob)?;
+        drop(session);
+        transaction.rollback()?;
+        Ok(PreparedTaxonomyUpdate {
+            rows: rows.to_vec(),
+            preview: TaxonomyPreviewResult {
+                delimiter,
+                encoding: "UTF-8".into(),
+                rows: outcomes,
+            },
+            changeset_blob,
+            revision,
+        })
+    })();
+    cancellation.normalize(result)
 }
 
 pub fn apply_rows(
@@ -337,7 +351,7 @@ pub fn apply_rows(
     let mut connection = database.connect_taxonomy_metadata_context()?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let mut session = start_taxonomy_session(&transaction)?;
-    let outcomes = process_rows(&transaction, rows)?;
+    let outcomes = process_rows(&transaction, rows, &CancellationToken::new())?;
     validate_taxonomy(&transaction)?;
     let mut changeset_blob = Vec::new();
     session.changeset_strm(&mut changeset_blob)?;
@@ -352,38 +366,52 @@ pub fn apply_prepared_rows(
     database: &Database,
     prepared: PreparedTaxonomyUpdate,
 ) -> CoreResult<TaxonomyOperationResult> {
+    apply_prepared_rows_with_cancellation(database, prepared, &CancellationToken::new())
+}
+
+pub fn apply_prepared_rows_with_cancellation(
+    database: &Database,
+    prepared: PreparedTaxonomyUpdate,
+    cancellation: &CancellationToken,
+) -> CoreResult<TaxonomyOperationResult> {
+    cancellation.check()?;
     let delimiter = prepared.preview.delimiter.clone();
     let _guard = database.try_taxonomy_mutation()?;
     let mut connection = database.connect_taxonomy_metadata_context()?;
-    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    if taxonomy_revision(&transaction)? != prepared.revision {
-        return Err(CoreError::InvalidArgument(
-            "formatted update preview is stale; preview again".into(),
-        ));
-    }
-    if !prepared.changeset_blob.is_empty() {
-        transaction
-            .apply_strm(
-                &mut Cursor::new(&prepared.changeset_blob),
-                Some(is_taxonomy_session_table),
-                |_, _| ConflictAction::SQLITE_CHANGESET_ABORT,
-            )
-            .map_err(|_| {
-                CoreError::InvalidArgument(
-                    "formatted update preview is stale; preview again".into(),
+    cancellation.install_sqlite_progress_handler(&connection);
+    let result = (|| {
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if taxonomy_revision(&transaction)? != prepared.revision {
+            return Err(CoreError::InvalidArgument(
+                "formatted update preview is stale; preview again".into(),
+            ));
+        }
+        if !prepared.changeset_blob.is_empty() {
+            transaction
+                .apply_strm(
+                    &mut Cursor::new(&prepared.changeset_blob),
+                    Some(is_taxonomy_session_table),
+                    |_, _| ConflictAction::SQLITE_CHANGESET_ABORT,
                 )
-            })?;
-    }
-    validate_taxonomy(&transaction)?;
-    let result = store_applied_rows(
-        &transaction,
-        &prepared.rows,
-        prepared.preview.rows,
-        prepared.changeset_blob,
-        delimiter,
-    )?;
-    transaction.commit()?;
-    Ok(result)
+                .map_err(|_| {
+                    CoreError::InvalidArgument(
+                        "formatted update preview is stale; preview again".into(),
+                    )
+                })?;
+        }
+        validate_taxonomy(&transaction)?;
+        let result = store_applied_rows(
+            &transaction,
+            &prepared.rows,
+            prepared.preview.rows,
+            prepared.changeset_blob,
+            delimiter,
+        )?;
+        cancellation.check()?;
+        transaction.commit()?;
+        Ok(result)
+    })();
+    cancellation.normalize(result)
 }
 
 fn store_applied_rows(
@@ -533,10 +561,12 @@ fn insert_operation_audit(
 fn process_rows(
     transaction: &Transaction<'_>,
     rows: &[TaxonInputRow],
+    cancellation: &CancellationToken,
 ) -> CoreResult<Vec<TaxonRowOutcome>> {
     let synonym_parser = SynonymAuthorityParser::load(transaction)?;
     let mut outcomes = Vec::with_capacity(rows.len());
     for (index, row) in rows.iter().enumerate() {
+        cancellation.check()?;
         outcomes.push(process_row(transaction, &synonym_parser, index + 1, row)?);
     }
     Ok(outcomes)

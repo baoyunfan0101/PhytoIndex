@@ -747,8 +747,8 @@ let demoFormattedUpdatePreview: {
   result: TaxonomyPreviewResult;
 } | null = null;
 
-export const previewTaxonomyRows = (rows: TaxonInputRow[]) =>
-  call<FormattedUpdatePreviewResult>("preview_taxonomy_rows", { rows }, async () => {
+export const previewTaxonomyRows = (rows: TaxonInputRow[], ownerId: string) =>
+  call<FormattedUpdatePreviewResult>("preview_taxonomy_rows", { rows, ownerId }, async () => {
     const { csv_delimiter: delimiter } = await getGeneralSettings();
     const previewId = `demo-preview-${Date.now()}`;
     const result: TaxonomyPreviewResult = {
@@ -767,8 +767,8 @@ export const previewTaxonomyRows = (rows: TaxonInputRow[]) =>
     demoFormattedUpdatePreview = { previewId, result };
     return { ...result, preview_id: previewId };
   });
-export const applyTaxonomyRows = (previewId: string) =>
-  call<TaxonomyOperationResult>("apply_taxonomy_rows", { previewId }, () => {
+export const applyTaxonomyRows = (previewId: string, ownerId: string) =>
+  call<TaxonomyOperationResult>("apply_taxonomy_rows", { previewId, ownerId }, () => {
     if (demoFormattedUpdatePreview?.previewId !== previewId) {
       throw new Error("Formatted update preview is no longer current; preview again");
     }
