@@ -118,8 +118,10 @@ export function SettingsView({
   const taxonomyDatabaseSection = section === "Taxonomy Databases"
     || section === "SQL Import"
     || section === "Direct Import";
+  const sqlImportSection = section === "Taxonomy Databases" || section === "SQL Import";
   const [hooksExpanded, setHooksExpanded] = useState(hookSection);
   const [taxonomyDatabasesExpanded, setTaxonomyDatabasesExpanded] = useState(taxonomyDatabaseSection);
+  const [sqlImportMounted, setSqlImportMounted] = useState(sqlImportSection);
 
   useEffect(() => {
     if (hookSection) setHooksExpanded(true);
@@ -128,6 +130,12 @@ export function SettingsView({
   useEffect(() => {
     if (taxonomyDatabaseSection) setTaxonomyDatabasesExpanded(true);
   }, [taxonomyDatabaseSection]);
+
+  useEffect(() => {
+    if (sqlImportSection) setSqlImportMounted(true);
+  }, [sqlImportSection]);
+
+  const shouldMountSqlImport = sqlImportMounted || sqlImportSection;
 
   return (
     <ResizablePanels
@@ -197,7 +205,7 @@ export function SettingsView({
             operationError={photoLibraryOperationError}
           />
         )}
-        {(section === "Taxonomy Databases" || section === "SQL Import") && <SqlImportSettings onApplied={onTaxonomyImported} />}
+        {shouldMountSqlImport && <SqlImportSettings active={sqlImportSection} onApplied={onTaxonomyImported} />}
         {section === "Direct Import" && <DirectImportSettings onApplied={onTaxonomyImported} />}
         {section === "Naming" && <NamingSettings />}
         {section === "Map" && <MapSettingsPanel />}

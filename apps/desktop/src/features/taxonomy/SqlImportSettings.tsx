@@ -25,7 +25,13 @@ import { emitTaxonomyMutation } from "./taxonomyMutations";
 import { formatTaxonomyImportApplyMessage } from "./taxonomyImportMessages";
 import { resolveSqlWorkbenchLoads } from "./sqlWorkbenchLoading";
 
-export function SqlImportSettings({ onApplied }: { onApplied?: () => void }) {
+export function SqlImportSettings({
+  active = true,
+  onApplied,
+}: {
+  active?: boolean;
+  onApplied?: () => void;
+}) {
   const [inputs, setInputs] = useState<PersistentSqlInput[]>([]);
   const [databaseSchemas, setDatabaseSchemas] = useState<SqlSourceSchema[]>([]);
   const [stagingSchemas, setStagingSchemas] = useState<SqlSourceSchema[]>([]);
@@ -214,7 +220,7 @@ export function SqlImportSettings({ onApplied }: { onApplied?: () => void }) {
   ) : null;
 
   return (
-    <div className="sql-import-settings">
+    <div aria-hidden={!active} className={`sql-import-settings${active ? "" : " inactive"}`}>
       <SectionHeader
         title="SQL Import"
         detail="Build, validate, and apply a replacement taxonomy database."
