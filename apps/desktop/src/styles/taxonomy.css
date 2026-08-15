@@ -214,7 +214,8 @@
 .sql-import-progress { display: flex; min-height: 34px; align-items: center; gap: 8px; padding: 6px 9px; border-top: 1px solid var(--line); background: var(--panel-2); }
 .sql-import-progress span { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
 .direct-import-settings { display: grid; height: 100%; min-height: 0; grid-template-rows: auto minmax(0, 1fr) auto; }
-.direct-import-description { display: grid; align-self: start; gap: 8px; margin: 16px 12px; padding: 14px; border: 1px solid var(--line); background: var(--panel); }
+.direct-import-description { display: grid; align-self: start; gap: 0; margin: 16px 12px; padding: 14px; border: 1px solid var(--line); background: var(--panel); }
+.direct-import-description > * + * { margin-top: 8px; }
 .direct-import-description p { margin: 0; color: var(--muted); line-height: 1.5; }
 .direct-import-source-list { min-height: 0; margin: 12px; overflow: auto; border: 1px solid var(--line); }
 .direct-import-source-list .sql-source-card > code { overflow-wrap: anywhere; text-overflow: initial; white-space: normal; }
