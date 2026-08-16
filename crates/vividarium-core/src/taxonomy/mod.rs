@@ -7,6 +7,7 @@
 mod actions;
 mod cleanup;
 mod direct_import;
+mod exact_match;
 mod formatted;
 mod operation_export;
 mod page;
@@ -29,6 +30,7 @@ pub use direct_import::{
     apply_direct_import_with_cancellation, get_taxonomy_import_metadata,
     inspect_direct_import_database,
 };
+pub(crate) use exact_match::match_exact_taxonomy_name;
 pub use formatted::{
     PreparedTaxonomyUpdate, TaxonChange, TaxonChangeKind, TaxonInputRow, TaxonRank,
     TaxonRowOutcome, TaxonRowStatus, TaxonomyNameType, TaxonomyOperationResult,

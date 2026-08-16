@@ -15,6 +15,7 @@ use crate::models::Photo;
 use crate::naming::PhotoFilenameParser;
 use crate::taxonomy::{
     TaxonDisplayNames, TaxonRank, TaxonSummary, TaxonomyNameType, load_taxon_summaries,
+    match_exact_taxonomy_name,
 };
 
 mod actions;
@@ -393,77 +394,31 @@ fn find_photo_name_candidates(
     field: PhotoNameField,
     name: &str,
 ) -> CoreResult<Vec<PhotoTaxonCandidate>> {
-    let [first_name_type, second_name_type] = field.name_types();
-    let mut statement = connection.prepare(
-        r#"
-        WITH candidate_taxa AS (
-            SELECT DISTINCT taxa.taxon_id
-            FROM taxa
-            JOIN taxon_names USING (taxon_id)
-            WHERE taxa.rank = ?
-              AND taxon_names.name_type IN (?, ?)
-              AND taxon_names.normalized_name = lower(?)
-            ORDER BY taxa.taxon_id
-            LIMIT ?
-        )
-        SELECT candidate_taxa.taxon_id, taxon_names.name_id,
-               taxon_names.name_type, taxon_names.name
-        FROM candidate_taxa
-        JOIN taxon_names USING (taxon_id)
-        WHERE taxon_names.name_type IN (?, ?)
-          AND taxon_names.normalized_name = lower(?)
-        ORDER BY candidate_taxa.taxon_id, taxon_names.name_type,
-                 taxon_names.name_id
-        "#,
-    )?;
-    let rows = statement
-        .query_map(
-            params![
-                field.rank().code(),
-                first_name_type.code(),
-                second_name_type.code(),
-                name,
-                PHOTO_TAXON_CANDIDATE_LIMIT as i64,
-                first_name_type.code(),
-                second_name_type.code(),
-                name
-            ],
-            |row| {
-                let name_type_code = row.get::<_, i64>(2)?;
-                let name_type = TaxonomyNameType::from_code(name_type_code).map_err(|error| {
-                    rusqlite::Error::FromSqlConversionFailure(
-                        2,
-                        rusqlite::types::Type::Integer,
-                        Box::new(error),
-                    )
-                })?;
-                Ok((
-                    row.get::<_, i64>(0)?,
-                    PhotoMatchedName {
-                        name_id: row.get(1)?,
-                        name_type,
-                        name: row.get(3)?,
-                    },
-                ))
-            },
-        )?
-        .collect::<Result<Vec<_>, _>>()?;
-    let mut matched_names_by_taxon = BTreeMap::<i64, Vec<PhotoMatchedName>>::new();
-    for (taxon_id, matched_name) in rows {
-        matched_names_by_taxon
-            .entry(taxon_id)
-            .or_default()
-            .push(matched_name);
+    let mut matches =
+        match_exact_taxonomy_name(connection, name, field.rank(), field.accepted_name_type())?;
+    if matches.is_empty() {
+        matches =
+            match_exact_taxonomy_name(connection, name, field.rank(), field.alias_name_type())?;
     }
-    let taxon_ids = matched_names_by_taxon.keys().copied().collect::<Vec<_>>();
-    let summaries = load_taxon_summaries(connection, &taxon_ids)?;
-    Ok(summaries
+    let matches = matches
         .into_iter()
-        .map(|summary| PhotoTaxonCandidate {
+        .take(PHOTO_TAXON_CANDIDATE_LIMIT)
+        .collect::<Vec<_>>();
+    let taxon_ids = matches
+        .iter()
+        .map(|matched| matched.taxon_id)
+        .collect::<Vec<_>>();
+    let summaries = load_taxon_summaries(connection, &taxon_ids)?;
+    Ok(matches
+        .into_iter()
+        .zip(summaries)
+        .map(|(matched, summary)| PhotoTaxonCandidate {
             accepted_names: summary.names.clone(),
-            matched_names: matched_names_by_taxon
-                .remove(&summary.taxon_id)
-                .unwrap_or_default(),
+            matched_names: vec![PhotoMatchedName {
+                name_id: matched.name_id,
+                name_type: matched.name_type,
+                name: matched.name,
+            }],
             summary,
         })
         .collect())

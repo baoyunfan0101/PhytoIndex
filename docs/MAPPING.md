@@ -100,6 +100,8 @@ child `taxon` or a `photo`.
 | `get_photo_name_match_settings` | none | `PhotoNameMatchSettings` |
 | `set_photo_name_match_settings` | `settings: &PhotoNameMatchSettings` | `()` |
 
-Within one field, accepted and alias name types are queried together and
-deduplicated by `taxon_id`. The search stops at the first field with any
-candidate.
+Within one field, the accepted name type is matched first by case-sensitive
+stored `name`. The alias or synonym type is matched only when the accepted type
+has no candidate. Any accepted candidates, including an ambiguous set, stop
+the alias fallback and stop evaluation of later fields. The search moves to the
+next field only when both name types have no candidate.

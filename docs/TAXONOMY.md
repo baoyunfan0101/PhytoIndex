@@ -123,24 +123,27 @@ word of the species scientific name into `genus`. Every later step therefore
 treats that row exactly like a row that supplied both fields.
 
 Matching starts at the lowest supplied rank. The rank name and then each input
-synonym are considered in input order, and each name is matched against one
-combined set of existing `sci_name` and `synonym` records. Zero candidates
-means the target is new; one candidate selects it immediately without checking
-any supplied ancestor. Multiple candidates are narrowed using supplied
-ancestor names from the nearest rank upward, stopping as soon as one remains.
-Ancestor matching uses the same combined scientific-name and synonym rule.
-After a target is selected or created, the other supplied scientific names are
-appended or supplemented as target synonyms.
+synonym are considered in input order. For each input name, exact `sci_name`
+matches are used when present; `synonym` is queried only when that name has no
+`sci_name` candidate. Matching uses the case-sensitive stored `name`, not
+`normalized_name`. Zero candidates means the target is new; one candidate
+selects it immediately without checking any supplied ancestor. Multiple
+candidates are narrowed using supplied ancestor names from the nearest rank
+upward, stopping as soon as one remains. Ancestor matching uses the same
+`sci_name`-first, `synonym`-fallback rule. After a target is selected or
+created, the other supplied scientific names are appended or supplemented as
+target synonyms.
 
 Updating a selected target keeps the existing supplement, append, and
 overwrite behavior. Creating a target requires its strict parent-rank name.
-That parent is resolved with the same zero, one, or multiple-candidate rules:
-one candidate is reused without consulting higher ranks, zero candidates
-creates that parent, and multiple candidates are narrowed by the nearest
-supplied ancestor. Creating a missing parent recursively requires and resolves
-its own strict parent, so one formatted row can create every missing rank in a
-complete supplied lineage. Missing strict-parent input and unresolved
-ambiguity fail the row without applying a partial lineage.
+That parent is resolved with the same exact `sci_name`-first fallback and the
+same zero, one, or multiple-candidate rules: one candidate is reused without
+consulting higher ranks, zero candidates creates that parent, and multiple
+candidates are narrowed by the nearest supplied ancestor. Creating a missing
+parent recursively requires and resolves its own strict parent, so one
+formatted row can create every missing rank in a complete supplied lineage.
+Missing strict-parent input and unresolved ambiguity fail the row without
+applying a partial lineage.
 
 ### Preview and apply types
 

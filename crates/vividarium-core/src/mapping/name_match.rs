@@ -47,14 +47,17 @@ impl PhotoNameField {
         }
     }
 
-    pub(crate) fn name_types(self) -> [TaxonomyNameType; 2] {
+    pub(crate) fn accepted_name_type(self) -> TaxonomyNameType {
         match self {
-            Self::SpeciesSci | Self::GenusSci | Self::FamilySci => {
-                [TaxonomyNameType::SciName, TaxonomyNameType::Synonym]
-            }
-            Self::SpeciesZh | Self::GenusZh | Self::FamilyZh => {
-                [TaxonomyNameType::ZhName, TaxonomyNameType::ZhAlias]
-            }
+            Self::SpeciesSci | Self::GenusSci | Self::FamilySci => TaxonomyNameType::SciName,
+            Self::SpeciesZh | Self::GenusZh | Self::FamilyZh => TaxonomyNameType::ZhName,
+        }
+    }
+
+    pub(crate) fn alias_name_type(self) -> TaxonomyNameType {
+        match self {
+            Self::SpeciesSci | Self::GenusSci | Self::FamilySci => TaxonomyNameType::Synonym,
+            Self::SpeciesZh | Self::GenusZh | Self::FamilyZh => TaxonomyNameType::ZhAlias,
         }
     }
 }

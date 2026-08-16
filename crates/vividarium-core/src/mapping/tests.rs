@@ -258,13 +258,104 @@ fn matches_the_filename_stem_and_builds_sparse_usage() {
 }
 
 #[test]
+fn accepted_name_match_wins_and_alias_is_an_exact_fallback() {
+    let data = tempfile::tempdir().unwrap();
+    let database = Database::open_test(data.path().join("vividarium.db")).unwrap();
+    let connection = database.connect_taxonomy_metadata_context().unwrap();
+    connection
+        .execute_batch(
+            r#"
+            INSERT INTO taxa (taxon_id, rank) VALUES (1, 5), (2, 5);
+            INSERT INTO taxon_names (taxon_id, name_type, name) VALUES
+                (1, 1, 'Shared name'),
+                (2, 1, 'Other name'),
+                (2, 2, 'Shared name');
+            "#,
+        )
+        .unwrap();
+
+    let accepted =
+        find_photo_name_candidates(&connection, PhotoNameField::SpeciesSci, "Shared name").unwrap();
+    assert_eq!(accepted.len(), 1);
+    assert_eq!(accepted[0].summary.taxon_id, 1);
+    assert_eq!(
+        accepted[0].matched_names[0].name_type,
+        TaxonomyNameType::SciName
+    );
+
+    connection
+        .execute(
+            "DELETE FROM taxon_names WHERE taxon_id = 1 AND name_type = 1",
+            [],
+        )
+        .unwrap();
+    let alias =
+        find_photo_name_candidates(&connection, PhotoNameField::SpeciesSci, "Shared name").unwrap();
+    assert_eq!(alias.len(), 1);
+    assert_eq!(alias[0].summary.taxon_id, 2);
+    assert_eq!(
+        alias[0].matched_names[0].name_type,
+        TaxonomyNameType::Synonym
+    );
+    assert!(
+        find_photo_name_candidates(&connection, PhotoNameField::SpeciesSci, "shared name")
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn candidate_limit_is_applied_before_loading_taxon_summaries() {
+    let data = tempfile::tempdir().unwrap();
+    let database = Database::open_test(data.path().join("vividarium.db")).unwrap();
+    let connection = database.connect_taxonomy_metadata_context().unwrap();
+    connection
+        .execute_batch(&format!(
+            r#"
+            PRAGMA foreign_keys = OFF;
+            WITH RECURSIVE ids(value) AS (
+                SELECT 1
+                UNION ALL
+                SELECT value + 1 FROM ids WHERE value < {limit}
+            )
+            INSERT INTO taxa (taxon_id, rank)
+                SELECT value, 5 FROM ids;
+            INSERT INTO taxa (taxon_id, parent_taxon_id, rank)
+                VALUES ({orphan_id}, 999999, 5);
+            WITH RECURSIVE ids(value) AS (
+                SELECT 1
+                UNION ALL
+                SELECT value + 1 FROM ids WHERE value < {orphan_id}
+            )
+            INSERT INTO taxon_names (taxon_id, name_type, name)
+                SELECT value, 1, 'Limited name' FROM ids;
+            "#,
+            limit = PHOTO_TAXON_CANDIDATE_LIMIT,
+            orphan_id = PHOTO_TAXON_CANDIDATE_LIMIT + 1,
+        ))
+        .unwrap();
+
+    let candidates =
+        find_photo_name_candidates(&connection, PhotoNameField::SpeciesSci, "Limited name")
+            .unwrap();
+
+    assert_eq!(candidates.len(), PHOTO_TAXON_CANDIDATE_LIMIT);
+    assert_eq!(
+        candidates
+            .last()
+            .map(|candidate| candidate.summary.taxon_id),
+        Some(PHOTO_TAXON_CANDIDATE_LIMIT as i64)
+    );
+}
+
+#[test]
 fn persists_ambiguous_candidates_and_accepts_a_forced_mapping() {
     let data = tempfile::tempdir().unwrap();
     let root = tempfile::tempdir().unwrap();
     fs::write(root.path().join("Shared name.jpg"), b"photo").unwrap();
     let database = Database::open_test(data.path().join("vividarium.db")).unwrap();
     let connection = database.connect().unwrap();
-    for accepted_name in ["Shared name", "Different name"] {
+    for _ in 0..2 {
         connection
             .execute("INSERT INTO taxa (rank) VALUES (5)", [])
             .unwrap();
@@ -275,19 +366,24 @@ fn persists_ambiguous_candidates_and_accepts_a_forced_mapping() {
                     INSERT INTO taxon_names (taxon_id, name_type, name)
                     VALUES (?, 1, ?)
                     "#,
-                params![taxon_id, accepted_name],
-            )
-            .unwrap();
-        connection
-            .execute(
-                r#"
-                    INSERT INTO taxon_names (taxon_id, name_type, name)
-                    VALUES (?, 2, 'Shared name')
-                    "#,
-                [taxon_id],
+                params![taxon_id, "Shared name"],
             )
             .unwrap();
     }
+    connection
+        .execute("INSERT INTO taxa (rank) VALUES (5)", [])
+        .unwrap();
+    let alias_taxon_id = connection.last_insert_rowid();
+    connection
+        .execute(
+            r#"
+            INSERT INTO taxon_names (taxon_id, name_type, name) VALUES
+                (?, 1, 'Different name'),
+                (?, 2, 'Shared name')
+            "#,
+            params![alias_taxon_id, alias_taxon_id],
+        )
+        .unwrap();
     let library = open_library(&database, root.path().to_str().unwrap()).unwrap();
     refresh_directory(&database, library.root_directory_id).unwrap();
     let photo = photos::list_photos(&database).unwrap().remove(0);
@@ -301,8 +397,13 @@ fn persists_ambiguous_candidates_and_accepts_a_forced_mapping() {
     let candidates = get_photo_mapping_candidates(&database, photo.photo_id).unwrap();
     assert_eq!(mapping.status, PhotoTaxonStatus::Ambiguous);
     assert_eq!(candidates.len(), 2);
-    assert_eq!(candidates[0].matched_names.len(), 2);
+    assert_eq!(candidates[0].matched_names.len(), 1);
     assert_eq!(candidates[1].matched_names.len(), 1);
+    assert!(
+        candidates
+            .iter()
+            .all(|candidate| candidate.summary.taxon_id != alias_taxon_id)
+    );
     let connection = database.connect().unwrap();
     assert_eq!(
         connection
@@ -322,7 +423,7 @@ fn persists_ambiguous_candidates_and_accepts_a_forced_mapping() {
                 |row| row.get::<_, i64>(0),
             )
             .unwrap(),
-        3
+        2
     );
     drop(connection);
     let selected_taxon_id = candidates[0].summary.taxon_id;

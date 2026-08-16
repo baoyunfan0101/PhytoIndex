@@ -15,6 +15,7 @@ use rusqlite::{
 };
 use serde::{Deserialize, Serialize};
 
+use super::match_exact_taxonomy_name;
 use super::view::{TaxonSummary, load_taxon_summaries, load_taxon_summary};
 use crate::naming::{SynonymAuthorityParser, normalize_taxonomy_name};
 use crate::operations::{
@@ -1067,26 +1068,24 @@ fn existing_name_type(
 ) -> CoreResult<Option<TaxonomyNameType>> {
     let accepted_type = family.accepted_type();
     let alias_type = family.alias_type();
-    transaction
-        .query_row(
+    for name_type in [accepted_type, alias_type] {
+        let exists = transaction.query_row(
             r#"
-            SELECT name_type FROM taxon_names
-            WHERE taxon_id = ? AND name = ? AND name_type IN (?, ?)
-            ORDER BY CASE name_type WHEN ? THEN 0 ELSE 1 END
-            LIMIT 1
+            SELECT EXISTS(
+                SELECT 1 FROM taxon_names
+                WHERE taxon_id = ?
+                  AND name = ? COLLATE BINARY
+                  AND name_type = ?
+            )
             "#,
-            params![
-                taxon_id,
-                name,
-                accepted_type.code(),
-                alias_type.code(),
-                accepted_type.code()
-            ],
-            |row| row.get::<_, i64>(0),
-        )
-        .optional()?
-        .map(TaxonomyNameType::from_code)
-        .transpose()
+            params![taxon_id, name, name_type.code()],
+            |row| row.get::<_, bool>(0),
+        )?;
+        if exists {
+            return Ok(Some(name_type));
+        }
+    }
+    Ok(None)
 }
 
 fn existing_scientific_name_type(
@@ -1094,27 +1093,34 @@ fn existing_scientific_name_type(
     taxon_id: i64,
     name: &str,
 ) -> CoreResult<Option<TaxonomyNameType>> {
-    transaction
-        .query_row(
+    for name_type in [TaxonomyNameType::SciName, TaxonomyNameType::Synonym] {
+        let exists = transaction.query_row(
             r#"
-            SELECT name_type FROM taxon_names
-            WHERE taxon_id = ? AND name = ?
-              AND name_type IN (1, 2)
-            ORDER BY name_type
-            LIMIT 1
+            SELECT EXISTS(
+                SELECT 1 FROM taxon_names
+                WHERE taxon_id = ?
+                  AND name = ? COLLATE BINARY
+                  AND name_type = ?
+            )
             "#,
-            params![taxon_id, name],
-            |row| row.get::<_, i64>(0),
-        )
-        .optional()?
-        .map(TaxonomyNameType::from_code)
-        .transpose()
+            params![taxon_id, name, name_type.code()],
+            |row| row.get::<_, bool>(0),
+        )?;
+        if exists {
+            return Ok(Some(name_type));
+        }
+    }
+    Ok(None)
 }
 
 fn find_target(transaction: &Transaction<'_>, input: &NormalizedInput) -> CoreResult<MatchResult> {
     for (input_index, input_name) in input.scientific_names().into_iter().enumerate() {
-        let mut candidates =
-            find_scientific_candidates(transaction, input.target_rank, &input_name.name)?;
+        let matches =
+            find_preferred_scientific_matches(transaction, input.target_rank, &input_name.name)?;
+        if matches.is_empty() {
+            continue;
+        }
+        let mut candidates = load_scientific_candidates(transaction, matches)?;
         if candidates.len() > 1 {
             candidates =
                 disambiguate_candidates(transaction, candidates, input, input.target_rank)?;
@@ -1142,40 +1148,42 @@ fn find_target(transaction: &Transaction<'_>, input: &NormalizedInput) -> CoreRe
     Ok(MatchResult::None)
 }
 
-fn find_scientific_candidates(
+fn find_preferred_scientific_matches(
     transaction: &Transaction<'_>,
     rank: TaxonRank,
     name: &str,
-) -> CoreResult<Vec<ScientificCandidate>> {
-    let mut statement = transaction.prepare(
-        r#"
-        SELECT taxa.taxon_id, MIN(taxon_names.name_type)
-        FROM taxa JOIN taxon_names USING (taxon_id)
-        WHERE taxa.rank = ? AND taxon_names.name = ? COLLATE BINARY
-          AND taxon_names.name_type IN (1, 2)
-        GROUP BY taxa.taxon_id
-        ORDER BY taxa.taxon_id
-        "#,
-    )?;
-    let rows = statement
-        .query_map(params![rank.code(), name], |row| {
-            Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
-        })?
-        .collect::<Result<Vec<_>, _>>()?;
-    let ids = rows
-        .iter()
-        .map(|(taxon_id, _)| *taxon_id)
-        .collect::<Vec<_>>();
-    let summaries = load_taxon_summaries(transaction, &ids)?;
-    rows.into_iter()
-        .zip(summaries)
-        .map(|((_, name_type), summary)| {
-            Ok(ScientificCandidate {
-                summary,
-                existing_type: TaxonomyNameType::from_code(name_type)?,
-            })
+) -> CoreResult<Vec<ScientificMatch>> {
+    let mut matches =
+        match_exact_taxonomy_name(transaction, name, rank, TaxonomyNameType::SciName)?;
+    if matches.is_empty() {
+        matches = match_exact_taxonomy_name(transaction, name, rank, TaxonomyNameType::Synonym)?;
+    }
+    Ok(matches
+        .into_iter()
+        .map(|matched| ScientificMatch {
+            taxon_id: matched.taxon_id,
+            existing_type: matched.name_type,
         })
-        .collect()
+        .collect())
+}
+
+fn load_scientific_candidates(
+    transaction: &Transaction<'_>,
+    matches: Vec<ScientificMatch>,
+) -> CoreResult<Vec<ScientificCandidate>> {
+    let taxon_ids = matches
+        .iter()
+        .map(|matched| matched.taxon_id)
+        .collect::<Vec<_>>();
+    let summaries = load_taxon_summaries(transaction, &taxon_ids)?;
+    Ok(matches
+        .into_iter()
+        .zip(summaries)
+        .map(|(matched, summary)| ScientificCandidate {
+            summary,
+            existing_type: matched.existing_type,
+        })
+        .collect())
 }
 
 fn disambiguate_candidates(
@@ -1188,49 +1196,21 @@ fn disambiguate_candidates(
         let Some(expected) = input.path[ancestor_rank.index()].as_deref() else {
             continue;
         };
-        let mut filtered = Vec::new();
-        for candidate in candidates {
-            if lineage_has_scientific_name(
-                transaction,
-                candidate.summary.taxon_id,
-                ancestor_rank,
-                expected,
-            )? {
-                filtered.push(candidate);
-            }
-        }
-        candidates = filtered;
+        let allowed_ancestor_ids =
+            find_preferred_scientific_matches(transaction, ancestor_rank, expected)?
+                .into_iter()
+                .map(|matched| matched.taxon_id)
+                .collect::<HashSet<_>>();
+        candidates.retain(|candidate| {
+            candidate.summary.breadcrumb.iter().any(|ancestor| {
+                ancestor.rank == ancestor_rank && allowed_ancestor_ids.contains(&ancestor.taxon_id)
+            })
+        });
         if candidates.len() <= 1 {
             break;
         }
     }
     Ok(candidates)
-}
-
-fn lineage_has_scientific_name(
-    transaction: &Transaction<'_>,
-    taxon_id: i64,
-    rank: TaxonRank,
-    name: &str,
-) -> CoreResult<bool> {
-    Ok(transaction.query_row(
-        r#"
-        WITH RECURSIVE lineage(taxon_id, parent_taxon_id, rank) AS (
-            SELECT taxon_id, parent_taxon_id, rank FROM taxa WHERE taxon_id = ?
-            UNION ALL
-            SELECT parent.taxon_id, parent.parent_taxon_id, parent.rank
-            FROM taxa AS parent JOIN lineage AS child
-              ON child.parent_taxon_id = parent.taxon_id
-        )
-        SELECT EXISTS(
-            SELECT 1 FROM lineage JOIN taxon_names USING (taxon_id)
-            WHERE lineage.rank = ? AND taxon_names.name_type IN (1, 2)
-              AND taxon_names.name = ? COLLATE BINARY
-        )
-        "#,
-        params![taxon_id, rank.code(), name],
-        |row| row.get(0),
-    )?)
 }
 
 fn resolve_or_create_lineage(
@@ -1246,7 +1226,12 @@ fn resolve_or_create_lineage(
             parent_rank: rank,
         }));
     };
-    let mut candidates = find_scientific_candidates(transaction, rank, name)?;
+    let matches = find_preferred_scientific_matches(transaction, rank, name)?;
+    let mut candidates = if matches.is_empty() {
+        Vec::new()
+    } else {
+        load_scientific_candidates(transaction, matches)?
+    };
     if candidates.len() > 1 {
         candidates = disambiguate_candidates(transaction, candidates, input, rank)?;
     }
@@ -1345,6 +1330,12 @@ enum MatchResult {
     None,
     One(TaxonSummary, MatchedName),
     Many(Vec<TaxonSummary>),
+}
+
+#[derive(Debug)]
+struct ScientificMatch {
+    taxon_id: i64,
+    existing_type: TaxonomyNameType,
 }
 
 #[derive(Debug)]

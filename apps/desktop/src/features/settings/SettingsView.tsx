@@ -589,6 +589,7 @@ function NamingSettings() {
       <SectionHeader title="Naming" detail="Configure taxonomy matching and mapped-photo filename generation." actions={<Button variant="primary" disabled={saving} onClick={() => void save()}><Save size={13} />Save</Button>} />
       <div className="field-stack">
         <span><strong>Mapping name priority</strong></span>
+        <small>Within each field, accepted names are matched first. Aliases or synonyms are used only when no accepted-name match exists.</small>
         <div className="priority-list">
           {priority.map((field, index) => (
             <div key={field}>

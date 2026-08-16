@@ -661,7 +661,7 @@ fn input_priority_precedes_database_name_type_priority() {
 }
 
 #[test]
-fn sci_name_and_synonym_matches_are_one_candidate_set() {
+fn target_sci_name_wins_over_synonym() {
     let (_directory, database) = database();
     apply_rows(
         &database,
@@ -696,11 +696,52 @@ fn sci_name_and_synonym_matches_are_one_candidate_set() {
         }],
     )
     .unwrap();
-    assert_eq!(preview.rows[0].target, None);
-    assert_eq!(preview.rows[0].candidates.len(), 2);
+    assert_eq!(
+        preview.rows[0]
+            .target
+            .as_ref()
+            .and_then(|target| target.names.sci_name.as_deref()),
+        Some("Shared")
+    );
+    assert!(preview.rows[0].candidates.is_empty());
     assert_eq!(
         preview.rows[0].operation_types,
-        vec![TaxonRowStatus::MultipleCandidates]
+        vec![TaxonRowStatus::Supplement]
+    );
+}
+
+#[test]
+fn target_matching_is_case_sensitive() {
+    let (_directory, database) = database();
+    apply_rows(
+        &database,
+        &[TaxonInputRow {
+            kingdom: Some("Shared".into()),
+            ..TaxonInputRow::default()
+        }],
+    )
+    .unwrap();
+
+    let preview = preview_rows(
+        &database,
+        &[TaxonInputRow {
+            kingdom: Some("shared".into()),
+            ..TaxonInputRow::default()
+        }],
+    )
+    .unwrap();
+
+    assert!(
+        preview.rows[0]
+            .operation_types
+            .contains(&TaxonRowStatus::NewTaxon)
+    );
+    assert_eq!(
+        preview.rows[0]
+            .target
+            .as_ref()
+            .and_then(|target| target.names.sci_name.as_deref()),
+        Some("shared")
     );
 }
 
@@ -890,7 +931,7 @@ fn a_unique_lowest_rank_match_ignores_supplied_ancestors() {
 }
 
 #[test]
-fn ambiguous_lowest_rank_matches_use_each_nearest_supplied_ancestor() {
+fn ancestor_matching_prefers_sci_name_and_falls_back_to_synonym() {
     let (_directory, database) = database();
     let connection = database.connect_taxonomy_metadata_context().unwrap();
     connection
@@ -906,7 +947,8 @@ fn ambiguous_lowest_rank_matches_use_each_nearest_supplied_ancestor() {
                 (7, 6, 2),
                 (8, 7, 3),
                 (9, 8, 4),
-                (10, 9, 5);
+                (10, 9, 5),
+                (11, 4, 5);
             INSERT INTO taxon_names (taxon_id, name_type, name) VALUES
                 (1, 1, 'Animalia'),
                 (2, 1, 'Carnivora'),
@@ -917,8 +959,10 @@ fn ambiguous_lowest_rank_matches_use_each_nearest_supplied_ancestor() {
                 (6, 1, 'Other kingdom'),
                 (7, 1, 'Other order'),
                 (8, 1, 'Other family'),
-                (9, 1, 'Canis'),
-                (10, 1, 'Shared species');
+                (9, 1, 'Other genus'),
+                (10, 1, 'Shared species'),
+                (11, 1, 'Different species'),
+                (11, 2, 'Shared species');
             "#,
         )
         .unwrap();
@@ -939,6 +983,32 @@ fn ambiguous_lowest_rank_matches_use_each_nearest_supplied_ancestor() {
     assert_eq!(
         result.rows[0].target.as_ref().map(|target| target.taxon_id),
         Some(5)
+    );
+
+    database
+        .connect_taxonomy_metadata_context()
+        .unwrap()
+        .execute(
+            "UPDATE taxon_names SET name = 'Canis' WHERE taxon_id = 9 AND name_type = 1",
+            [],
+        )
+        .unwrap();
+    let accepted_ancestor = preview_rows(
+        &database,
+        &[TaxonInputRow {
+            family: Some("Canidae".into()),
+            genus: Some("Canis".into()),
+            species: Some("Shared species".into()),
+            ..TaxonInputRow::default()
+        }],
+    )
+    .unwrap();
+    assert_eq!(
+        accepted_ancestor.rows[0]
+            .target
+            .as_ref()
+            .map(|target| target.taxon_id),
+        Some(10)
     );
 }
 
@@ -1009,6 +1079,47 @@ fn a_new_taxon_reuses_a_unique_parent_synonym_without_checking_higher_ranks() {
             )
             .unwrap(),
         0
+    );
+}
+
+#[test]
+fn a_new_taxon_prefers_an_accepted_parent_over_a_parent_synonym() {
+    let (_directory, database) = database();
+    let connection = database.connect_taxonomy_metadata_context().unwrap();
+    connection
+        .execute_batch(
+            r#"
+            INSERT INTO taxa (taxon_id, parent_taxon_id, rank) VALUES
+                (1, NULL, 1),
+                (2, 1, 2),
+                (3, 2, 3),
+                (4, 3, 4),
+                (5, 3, 4);
+            INSERT INTO taxon_names (taxon_id, name_type, name) VALUES
+                (1, 1, 'Animalia'),
+                (2, 1, 'Carnivora'),
+                (3, 1, 'Canidae'),
+                (4, 1, 'Canis'),
+                (4, 2, 'Canini'),
+                (5, 1, 'Canini');
+            "#,
+        )
+        .unwrap();
+
+    let result = apply_rows(
+        &database,
+        &[TaxonInputRow {
+            family: Some("Canidae".into()),
+            genus: Some("Canini".into()),
+            species: Some("Canini example".into()),
+            ..TaxonInputRow::default()
+        }],
+    )
+    .unwrap();
+
+    assert_eq!(
+        result.rows[0].parent.as_ref().map(|parent| parent.taxon_id),
+        Some(5)
     );
 }
 

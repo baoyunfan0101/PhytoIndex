@@ -470,7 +470,7 @@ fn validate_name_group_additions(
     for addition in additions {
         let name = normalize_taxonomy_name(&addition.name)
             .ok_or_else(|| CoreError::InvalidArgument("taxonomy name must not be blank".into()))?;
-        if !seen_names.insert(name.to_lowercase()) {
+        if !seen_names.insert(name.clone()) {
             return Err(CoreError::InvalidArgument(format!(
                 "taxonomy name '{name}' is included more than once"
             )));
@@ -488,7 +488,7 @@ fn validate_name_group_additions(
                 SELECT 1 FROM taxon_names
                 WHERE taxon_id = ?
                   AND name_type IN (?, ?)
-                  AND normalized_name = lower(?)
+                  AND name = ? COLLATE BINARY
             )
             "#,
             params![taxon_id, accepted_type.code(), alias_type.code(), name],
@@ -832,6 +832,37 @@ mod tests {
     fn saving_a_name_group_validates_type_primary_and_species_names() {
         let (_directory, database) = database();
         let (taxon_id, sci_name_id, _synonym_id) = canis_species(&database);
+
+        let exact_duplicate = save_taxon_name_group(
+            &database,
+            SaveTaxonNameGroupInput {
+                taxon_id,
+                name_type: TaxonomyNameType::Synonym,
+                updates: vec![],
+                additions: vec![NewTaxonNameInput {
+                    name: "Canis lycaon".into(),
+                    authority_year: None,
+                    source: None,
+                }],
+            },
+        )
+        .unwrap_err();
+        assert!(exact_duplicate.to_string().contains("already exists"));
+
+        save_taxon_name_group(
+            &database,
+            SaveTaxonNameGroupInput {
+                taxon_id,
+                name_type: TaxonomyNameType::Synonym,
+                updates: vec![],
+                additions: vec![NewTaxonNameInput {
+                    name: "Canis Lycaon".into(),
+                    authority_year: None,
+                    source: None,
+                }],
+            },
+        )
+        .unwrap();
 
         let invalid_species = save_taxon_name_group(
             &database,

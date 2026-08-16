@@ -842,7 +842,7 @@ fn records_an_operation_when_every_rename_row_fails() {
 fn renames_a_matched_photo_with_its_accepted_scientific_name() {
     let data = tempfile::tempdir().unwrap();
     let root = tempfile::tempdir().unwrap();
-    fs::write(root.path().join("canis lupus.JPG"), b"photo").unwrap();
+    fs::write(root.path().join("Canis lupus.JPG"), b"photo").unwrap();
     let database = Database::open_test(data.path().join("vividarium.db")).unwrap();
     let connection = database.connect().unwrap();
     connection
