@@ -174,6 +174,32 @@ fn rejects_a_direct_import_database_with_text_name_types() {
     );
 }
 
+#[test]
+fn rejects_duplicate_names_within_a_direct_import_name_family() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = Database::open(directory.path().join("vividarium.db")).unwrap();
+    let source_path = directory.path().join("direct-import.db");
+    create_direct_import_database(&source_path);
+    Connection::open(&source_path)
+        .unwrap()
+        .execute(
+            r#"
+            INSERT INTO taxon_names (name_id, taxon_id, name_type, name)
+            VALUES (1003, 101, 2, 'New kingdom')
+            "#,
+            [],
+        )
+        .unwrap();
+
+    let error = apply_direct_import(&database, &source_path).unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("duplicate name 'New kingdom' in one name family")
+    );
+}
+
 fn seed_old_taxonomy_tree(database: &Database) -> [i64; 3] {
     let result = apply_rows(
         database,

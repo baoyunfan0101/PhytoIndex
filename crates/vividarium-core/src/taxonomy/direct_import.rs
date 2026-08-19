@@ -1,10 +1,11 @@
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, OpenFlags, OptionalExtension, Transaction, params};
 use serde::{Deserialize, Serialize};
 
-use super::formatted::validate_taxonomy;
+use super::formatted::{TaxonomyNameType, validate_taxonomy};
 use super::sql::{SqlDataSource, SqlSourceSchema, inspect_sql_data_source};
 use super::sync;
 use crate::db::LOCAL_TAXON_ID_FLOOR;
@@ -219,6 +220,7 @@ fn import_normalized_names(
         ) VALUES (?, ?, ?, ?, ?, ?)
         "#,
     )?;
+    let mut seen_family_names = HashSet::new();
     for (name_id, taxon_id, name_type, raw_name, authority_year, source) in names {
         cancellation.check()?;
         let name = normalize_taxonomy_name(&raw_name).ok_or_else(|| {
@@ -226,6 +228,14 @@ fn import_normalized_names(
                 "direct import name {name_id} is empty after normalization"
             ))
         })?;
+        let name_family = TaxonomyNameType::from_code(name_type)?
+            .accepted_type()
+            .code();
+        if !seen_family_names.insert((taxon_id, name_family, name.clone())) {
+            return Err(CoreError::InvalidArgument(format!(
+                "direct import taxon {taxon_id} contains duplicate name '{name}' in one name family"
+            )));
+        }
         insert.execute(params![
             name_id,
             taxon_id,

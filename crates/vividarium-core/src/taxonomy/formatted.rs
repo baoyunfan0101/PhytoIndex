@@ -1031,24 +1031,21 @@ fn existing_name_type(
 ) -> CoreResult<Option<TaxonomyNameType>> {
     let accepted_type = family.accepted_type();
     let alias_type = family.alias_type();
-    for name_type in [accepted_type, alias_type] {
-        let exists = transaction.query_row(
+    transaction
+        .query_row(
             r#"
-            SELECT EXISTS(
-                SELECT 1 FROM taxon_names
-                WHERE taxon_id = ?
-                  AND name = ? COLLATE BINARY
-                  AND name_type = ?
-            )
+            SELECT name_type
+            FROM taxon_names
+            WHERE taxon_id = ?
+              AND name = ? COLLATE BINARY
+              AND name_type IN (?, ?)
             "#,
-            params![taxon_id, name, name_type.code()],
-            |row| row.get::<_, bool>(0),
-        )?;
-        if exists {
-            return Ok(Some(name_type));
-        }
-    }
-    Ok(None)
+            params![taxon_id, name, accepted_type.code(), alias_type.code()],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()?
+        .map(TaxonomyNameType::from_code)
+        .transpose()
 }
 
 fn existing_scientific_name_type(
@@ -1977,6 +1974,38 @@ pub(super) fn visit_taxonomy_validation_issues(
         if !visit(TaxonomyValidationIssue {
             code,
             message: format!("Taxon {taxon_id} must have at most one {language} accepted name."),
+            taxon_id: Some(taxon_id),
+            related_taxon_id: None,
+        }) {
+            return Ok(());
+        }
+    }
+    let mut duplicate_family_names = connection.prepare(
+        r#"
+            SELECT taxon_id, (name_type + 1) / 2 AS name_family, name
+            FROM taxon_names
+            GROUP BY taxon_id, name_family, name
+            HAVING COUNT(name_id) > 1
+            ORDER BY taxon_id, name_family, name
+            "#,
+    )?;
+    for row in duplicate_family_names.query_map([], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, String>(2)?,
+        ))
+    })? {
+        let (taxon_id, name_family, name) = row?;
+        let family = match name_family {
+            1 => "scientific",
+            2 => "Chinese",
+            3 => "English",
+            _ => "invalid",
+        };
+        if !visit(TaxonomyValidationIssue {
+            code: "duplicate_name_family",
+            message: format!("Taxon {taxon_id} contains duplicate {family} name '{name}'."),
             taxon_id: Some(taxon_id),
             related_taxon_id: None,
         }) {

@@ -562,7 +562,94 @@ fn rejects_any_other_schema_version() {
         .unwrap();
     drop(connection);
     let error = Database::open(path).unwrap_err();
-    assert!(error.to_string().contains("expected 2"));
+    assert!(error.to_string().contains("expected 3"));
+}
+
+#[test]
+fn migrates_v2_taxonomy_name_family_duplicates() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("taxonomy.db");
+    initialize_taxonomy_database_file(&path).unwrap();
+    let connection = open_existing_connection(&path).unwrap();
+    connection
+        .execute_batch(
+            r#"
+            DROP INDEX idx_taxon_names_scientific_family_name;
+            DROP INDEX idx_taxon_names_chinese_family_name;
+            DROP INDEX idx_taxon_names_english_family_name;
+            INSERT INTO taxa (taxon_id, rank) VALUES (1, 1);
+            INSERT INTO taxon_names (
+                name_id, taxon_id, name_type, name, authority_year, source
+            ) VALUES
+                (1, 1, 1, 'Animalia', 'accepted authority', NULL),
+                (2, 1, 2, 'Animalia', 'alias authority', 'catalog');
+            INSERT INTO taxonomy_base_metadata (
+                metadata_id, source_path, taxa_count, taxon_names_count
+            ) VALUES (1, 'test', 1, 2);
+            PRAGMA user_version = 2;
+            "#,
+        )
+        .unwrap();
+    drop(connection);
+
+    initialize_existing_file(&path, TAXONOMY_SCHEMA).unwrap();
+
+    let connection = open_existing_connection(&path).unwrap();
+    assert_eq!(schema_version(&connection), SCHEMA_VERSION);
+    assert_eq!(
+        connection
+            .query_row(
+                r#"
+                SELECT name_id, name_type, authority_year, source
+                FROM taxon_names
+                WHERE taxon_id = 1 AND name = 'Animalia'
+                "#,
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                    ))
+                },
+            )
+            .unwrap(),
+        (
+            1,
+            1,
+            Some("accepted authority".into()),
+            Some("catalog".into())
+        )
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM taxon_names_fts WHERE taxon_names_fts MATCH 'Animalia'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT taxon_names_count FROM taxonomy_base_metadata WHERE metadata_id = 1",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        1
+    );
+    assert!(
+        connection
+            .execute(
+                "INSERT INTO taxon_names (taxon_id, name_type, name) VALUES (1, 2, 'Animalia')",
+                [],
+            )
+            .is_err()
+    );
 }
 
 fn schema_version(connection: &Connection) -> i64 {

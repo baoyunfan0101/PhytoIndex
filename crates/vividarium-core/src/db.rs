@@ -10,7 +10,7 @@ use crate::CancellationToken;
 use crate::error::{CoreError, CoreResult};
 use crate::models::{DatabaseLocations, Photo, PhotoLibraryLocation, PhotoLibraryRegistration};
 
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 3;
 pub(crate) const LOCAL_TAXON_ID_FLOOR: i64 = 8_000_000_000_000_000;
 
 const DEFAULT_TAXONOMY_FILENAME: &str = "taxonomy.db";
@@ -429,7 +429,7 @@ impl Database {
         let _guard = crate::photos::lock_photo_workspace()?;
         self.photo_library(library_uuid)?;
         let database_path = absolute_path(existing_database_path)?;
-        validate_existing_file(&database_path)?;
+        validate_existing_file(&database_path, PHOTO_SCHEMA)?;
         let stored_state = read_photo_library_sync_state(&database_path)
             .map_err(|state_error| {
                 CoreError::InvalidArgument(format!(
@@ -541,7 +541,7 @@ impl Database {
         if existing_database == current_database {
             return self.locations();
         }
-        validate_existing_file(&existing_database)?;
+        validate_existing_file(&existing_database, TAXONOMY_SCHEMA)?;
         let taxonomy_identity = open_existing_connection(&existing_database)?
             .query_row(
                 "SELECT taxonomy_identity FROM taxonomy_identity WHERE identity_id = 1",
@@ -911,6 +911,7 @@ fn initialize_connection(connection: &Connection, schema: &str) -> CoreResult<()
     let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
     match version {
         0 => connection.execute_batch(schema)?,
+        2 => migrate_v2_to_v3(connection, schema)?,
         SCHEMA_VERSION => {}
         _ => {
             return Err(CoreError::InvalidArgument(format!(
@@ -960,16 +961,130 @@ fn reset_photo_library_initial_index_state(connection: &Connection) -> CoreResul
     Ok(())
 }
 
-fn validate_existing_file(path: &Path) -> CoreResult<()> {
+fn validate_existing_file(path: &Path, schema: &str) -> CoreResult<()> {
     let connection = open_existing_connection(path)?;
     let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-    if version == SCHEMA_VERSION {
-        Ok(())
-    } else {
-        Err(CoreError::InvalidArgument(format!(
+    match version {
+        2 => migrate_v2_to_v3(&connection, schema),
+        SCHEMA_VERSION => Ok(()),
+        _ => Err(CoreError::InvalidArgument(format!(
             "unsupported database schema version: {version}; expected {SCHEMA_VERSION}"
-        )))
+        ))),
     }
+}
+
+fn migrate_v2_to_v3(connection: &Connection, schema: &str) -> CoreResult<()> {
+    if schema == TAXONOMY_SCHEMA {
+        migrate_taxonomy_v2_to_v3(connection)
+    } else {
+        connection.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        Ok(())
+    }
+}
+
+fn migrate_taxonomy_v2_to_v3(connection: &Connection) -> CoreResult<()> {
+    let transaction = connection.unchecked_transaction()?;
+    transaction.execute_batch(
+        r#"
+        UPDATE taxon_names AS accepted
+        SET authority_year = COALESCE(
+                accepted.authority_year,
+                (SELECT alias.authority_year
+                 FROM taxon_names AS alias
+                 WHERE alias.taxon_id = accepted.taxon_id
+                   AND alias.name = accepted.name COLLATE BINARY
+                   AND alias.name_type = accepted.name_type + 1)
+            ),
+            source = COALESCE(
+                accepted.source,
+                (SELECT alias.source
+                 FROM taxon_names AS alias
+                 WHERE alias.taxon_id = accepted.taxon_id
+                   AND alias.name = accepted.name COLLATE BINARY
+                   AND alias.name_type = accepted.name_type + 1)
+            )
+        WHERE accepted.name_type IN (1, 3, 5)
+          AND EXISTS(
+              SELECT 1 FROM taxon_names AS alias
+              WHERE alias.taxon_id = accepted.taxon_id
+                AND alias.name = accepted.name COLLATE BINARY
+                AND alias.name_type = accepted.name_type + 1
+          );
+
+        DROP TRIGGER taxon_names_ai;
+        DROP TRIGGER taxon_names_ad;
+        DROP TRIGGER taxon_names_au;
+
+        CREATE TABLE taxon_names_v3 (
+            name_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            taxon_id INTEGER NOT NULL,
+            name_type INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            normalized_name TEXT GENERATED ALWAYS AS (lower(name)) STORED,
+            authority_year TEXT,
+            source TEXT,
+            CHECK (name_type BETWEEN 1 AND 6),
+            CHECK (length(trim(name)) > 0),
+            FOREIGN KEY (taxon_id) REFERENCES taxa(taxon_id) ON DELETE CASCADE
+        );
+
+        INSERT INTO taxon_names_v3 (
+            name_id, taxon_id, name_type, name, authority_year, source
+        )
+        SELECT name_id, taxon_id, name_type, name, authority_year, source
+        FROM taxon_names AS candidate
+        WHERE candidate.name_type NOT IN (2, 4, 6)
+           OR NOT EXISTS(
+               SELECT 1 FROM taxon_names AS accepted
+               WHERE accepted.taxon_id = candidate.taxon_id
+                 AND accepted.name = candidate.name COLLATE BINARY
+                 AND accepted.name_type = candidate.name_type - 1
+           )
+        ORDER BY name_id;
+
+        DROP TABLE taxon_names;
+        ALTER TABLE taxon_names_v3 RENAME TO taxon_names;
+
+        CREATE TRIGGER taxon_names_ai AFTER INSERT ON taxon_names BEGIN
+            INSERT INTO taxon_names_fts(rowid, name) VALUES (new.name_id, new.name);
+        END;
+        CREATE TRIGGER taxon_names_ad AFTER DELETE ON taxon_names BEGIN
+            INSERT INTO taxon_names_fts(taxon_names_fts, rowid, name)
+            VALUES ('delete', old.name_id, old.name);
+        END;
+        CREATE TRIGGER taxon_names_au AFTER UPDATE OF name ON taxon_names BEGIN
+            INSERT INTO taxon_names_fts(taxon_names_fts, rowid, name)
+            VALUES ('delete', old.name_id, old.name);
+            INSERT INTO taxon_names_fts(rowid, name) VALUES (new.name_id, new.name);
+        END;
+
+        CREATE UNIQUE INDEX idx_taxon_names_one_sci_name
+            ON taxon_names(taxon_id) WHERE name_type = 1;
+        CREATE UNIQUE INDEX idx_taxon_names_one_zh_name
+            ON taxon_names(taxon_id) WHERE name_type = 3;
+        CREATE UNIQUE INDEX idx_taxon_names_one_en_name
+            ON taxon_names(taxon_id) WHERE name_type = 5;
+        CREATE UNIQUE INDEX idx_taxon_names_scientific_family_name
+            ON taxon_names(taxon_id, name) WHERE name_type IN (1, 2);
+        CREATE UNIQUE INDEX idx_taxon_names_chinese_family_name
+            ON taxon_names(taxon_id, name) WHERE name_type IN (3, 4);
+        CREATE UNIQUE INDEX idx_taxon_names_english_family_name
+            ON taxon_names(taxon_id, name) WHERE name_type IN (5, 6);
+        CREATE INDEX idx_taxon_names_type_name ON taxon_names(name_type, name);
+        CREATE INDEX idx_taxon_names_type_taxon ON taxon_names(name_type, taxon_id);
+        CREATE INDEX idx_taxon_names_name ON taxon_names(name);
+        CREATE INDEX idx_taxon_names_name_search
+            ON taxon_names(normalized_name, taxon_id);
+
+        INSERT INTO taxon_names_fts(taxon_names_fts) VALUES ('rebuild');
+        UPDATE taxonomy_base_metadata
+        SET taxon_names_count = (SELECT COUNT(*) FROM taxon_names)
+        WHERE metadata_id = 1;
+        PRAGMA user_version = 3;
+        "#,
+    )?;
+    transaction.commit()?;
+    Ok(())
 }
 
 fn open_connection(path: &Path) -> CoreResult<Connection> {
@@ -1421,7 +1536,7 @@ CREATE TABLE sql_inputs (
     CHECK (length(stored_path) > 0)
 ) WITHOUT ROWID;
 
-PRAGMA user_version = 2;
+PRAGMA user_version = 3;
 "#;
 
 const TAXONOMY_SCHEMA: &str = r#"
@@ -1454,7 +1569,6 @@ CREATE TABLE taxon_names (
     normalized_name TEXT GENERATED ALWAYS AS (lower(name)) STORED,
     authority_year TEXT,
     source TEXT,
-    UNIQUE (taxon_id, name_type, name),
     CHECK (name_type BETWEEN 1 AND 6),
     CHECK (length(trim(name)) > 0),
     FOREIGN KEY (taxon_id) REFERENCES taxa(taxon_id) ON DELETE CASCADE
@@ -1563,6 +1677,12 @@ CREATE UNIQUE INDEX idx_taxon_names_one_zh_name
     ON taxon_names(taxon_id) WHERE name_type = 3;
 CREATE UNIQUE INDEX idx_taxon_names_one_en_name
     ON taxon_names(taxon_id) WHERE name_type = 5;
+CREATE UNIQUE INDEX idx_taxon_names_scientific_family_name
+    ON taxon_names(taxon_id, name) WHERE name_type IN (1, 2);
+CREATE UNIQUE INDEX idx_taxon_names_chinese_family_name
+    ON taxon_names(taxon_id, name) WHERE name_type IN (3, 4);
+CREATE UNIQUE INDEX idx_taxon_names_english_family_name
+    ON taxon_names(taxon_id, name) WHERE name_type IN (5, 6);
 CREATE INDEX idx_taxa_parent ON taxa(parent_taxon_id);
 CREATE INDEX idx_taxa_parent_rank_id ON taxa(parent_taxon_id, rank, taxon_id);
 CREATE INDEX idx_taxa_rank ON taxa(rank);
@@ -1578,7 +1698,7 @@ CREATE INDEX idx_operation_audit_entity
 CREATE INDEX idx_taxonomy_sync_events_created
     ON taxonomy_sync_events(sync_id);
 
-PRAGMA user_version = 2;
+PRAGMA user_version = 3;
 "#;
 
 const PHOTO_SCHEMA: &str = r#"
@@ -1770,7 +1890,7 @@ CREATE INDEX idx_operation_audit_entity
 CREATE INDEX idx_operations_applied
     ON operations(applied_at DESC, operation_id DESC);
 
-PRAGMA user_version = 2;
+PRAGMA user_version = 3;
 "#;
 
 pub fn photo_library_location(

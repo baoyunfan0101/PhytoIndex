@@ -31,6 +31,9 @@ are invalid.
 
 Every taxon has exactly one `sci_name`, at most one `zh_name`, and at most one
 `en_name`. Synonyms and Chinese or English aliases have no count limit.
+Within a taxon, the same case-sensitive stored `name` may appear only once in
+each name family: scientific (`sci_name` and `synonym`), Chinese (`zh_name` and
+`zh_alias`), or English (`en_name` and `en_alias`).
 
 `TaxonomyPage<T>` contains `items` and an opaque `next_cursor`. Pass `None`
 for the first page and reuse a returned cursor only with the same interface
@@ -210,8 +213,8 @@ name of the parent genus.
 group accepts at most one name, and an alias or synonym can be added only when
 its accepted-name group is present. New species scientific names and synonyms
 must start with the accepted scientific name of the parent genus. Blank,
-duplicate, mismatched-group, and otherwise invalid additions are rejected
-without applying any part of the group save.
+family-duplicate, mismatched-group, and otherwise invalid additions are
+rejected without applying any part of the group save.
 
 | Function | Parameters after `database` | Return | Description |
 | --- | --- | --- | --- |
@@ -364,11 +367,12 @@ artifacts and stops before candidate validation.
 
 After SQL succeeds, validation builds the candidate and checks file integrity,
 required schema and constraints, supported ranks and name types, canonical
-normalization, and the complete taxonomy invariants. Taxonomy data violations
-are returned with `valid = false`, `can_apply = false`, and structured issues;
-SQL, SQLite, file, and candidate-build failures remain interface errors. The
-result contains authoritative totals and bounded warning and error samples.
-Any later source or SQL change requires validation again.
+normalization, name-family uniqueness, and the complete taxonomy invariants.
+Taxonomy data violations are returned with `valid = false`,
+`can_apply = false`, and structured issues; SQL, SQLite, file, and
+candidate-build failures remain interface errors. The result contains
+authoritative totals and bounded warning and error samples. Any later source
+or SQL change requires validation again.
 
 The progress callback reports a stage plus optional row counts and SQL
 statement indexes. Stages cover input preparation, SQL execution, staging,
@@ -402,10 +406,12 @@ visible table or view with its columns.
 
 The supplied SQLite file must contain valid `taxa` and `taxon_names` data
 using the current schema. Imported names pass through the shared canonical
-normalizer. `inspect_direct_import_database` validates the file, rejects the
-active taxonomy database as an input, and returns its canonical path and
-schema without changing application data. `apply_direct_import` repeats
-validation so a file changed after inspection cannot bypass the checks.
+normalizer and must be unique within each taxon's scientific, Chinese, and
+English name families. `inspect_direct_import_database` validates the file,
+rejects the active taxonomy database as an input, and returns its canonical
+path and schema without changing application data. `apply_direct_import`
+repeats validation so a file changed after inspection cannot bypass the
+checks.
 Successful replacement creates a new taxonomy identity, clears
 taxonomy user history, and causes every registered photo library to rebuild
 mapping state when synchronized. Immediate synchronization and mapping of the

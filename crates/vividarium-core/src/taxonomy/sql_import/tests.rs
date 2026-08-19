@@ -23,12 +23,17 @@ CREATE TABLE sql_import.taxon_names (
     normalized_name TEXT,
     authority_year TEXT,
     source TEXT,
-    UNIQUE (taxon_id, name_type, name),
     CHECK (name_type BETWEEN 1 AND 6),
     CHECK (length(trim(name)) > 0),
     FOREIGN KEY (taxon_id)
         REFERENCES taxa(taxon_id) ON DELETE CASCADE
 );
+CREATE UNIQUE INDEX sql_import.idx_taxon_names_scientific_family_name
+    ON taxon_names(taxon_id, name) WHERE name_type IN (1, 2);
+CREATE UNIQUE INDEX sql_import.idx_taxon_names_chinese_family_name
+    ON taxon_names(taxon_id, name) WHERE name_type IN (3, 4);
+CREATE UNIQUE INDEX sql_import.idx_taxon_names_english_family_name
+    ON taxon_names(taxon_id, name) WHERE name_type IN (5, 6);
 INSERT INTO sql_import.taxa
 SELECT CAST(taxon_id AS INTEGER), NULL, CAST(rank AS INTEGER), geological_range
 FROM source_taxa;
@@ -443,6 +448,27 @@ fn normalized_name_conflicts_are_validation_results() {
 INSERT INTO sql_import.taxon_names (name_id, taxon_id, name_type, name)
 VALUES (2, 101, 2, 'Animalia  old'),
        (3, 101, 2, 'Animalia old');
+COMMIT;"#,
+    );
+
+    let result =
+        validate_sql_import(&database, &ValidateSqlImportRequest { sql: invalid_sql }).unwrap();
+
+    assert!(!result.validation.valid);
+    assert_eq!(result.validation.errors[0].code, "duplicate_canonical_name");
+    assert_eq!(result.validation.errors[0].taxon_id, Some(101));
+}
+
+#[test]
+fn accepted_and_alias_canonical_name_conflicts_are_validation_results() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = Database::open(directory.path().join("metadata.db")).unwrap();
+    add_simple_input(&directory, &database);
+    let invalid_sql = SIMPLE_IMPORT_SQL.replace(
+        "COMMIT;",
+        r#"
+INSERT INTO sql_import.taxon_names (name_id, taxon_id, name_type, name)
+VALUES (2, 101, 2, 'Animalia ');
 COMMIT;"#,
     );
 

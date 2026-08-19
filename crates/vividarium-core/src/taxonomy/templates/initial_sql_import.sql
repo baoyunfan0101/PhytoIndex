@@ -70,13 +70,18 @@ BEGIN IMMEDIATE;
 --         GENERATED ALWAYS AS (lower(name)) STORED
 --     ,authority_year TEXT
 --     ,source TEXT
---     ,UNIQUE (taxon_id, name_type, name)
 --     ,CHECK (name_type BETWEEN 1 AND 6)
 --     ,CHECK (length(trim(name)) > 0)
 --     ,FOREIGN KEY (taxon_id)
 --         REFERENCES taxa(taxon_id)
 --         ON DELETE CASCADE
 -- );
+-- CREATE UNIQUE INDEX idx_taxon_names_scientific_family_name
+--     ON taxon_names(taxon_id, name) WHERE name_type IN (1, 2);
+-- CREATE UNIQUE INDEX idx_taxon_names_chinese_family_name
+--     ON taxon_names(taxon_id, name) WHERE name_type IN (3, 4);
+-- CREATE UNIQUE INDEX idx_taxon_names_english_family_name
+--     ON taxon_names(taxon_id, name) WHERE name_type IN (5, 6);
 -- ============================================================
 
 -- Create the SQL Import staging database
@@ -104,8 +109,6 @@ CREATE TABLE sql_import.taxon_names (
     ,authority_year TEXT
     ,source TEXT
 
-    ,UNIQUE (taxon_id, name_type, name)
-
     ,CHECK (name_type BETWEEN 1 AND 6)
     -- name_type: 1 = sci_name; 2 = synonym; 3 = zh_name; 4 = zh_alias; 5 = en_name; 6 = en_alias
 
@@ -115,6 +118,13 @@ CREATE TABLE sql_import.taxon_names (
         REFERENCES taxa(taxon_id)
         ON DELETE CASCADE
 );
+
+CREATE UNIQUE INDEX sql_import.idx_taxon_names_scientific_family_name
+    ON taxon_names(taxon_id, name) WHERE name_type IN (1, 2);
+CREATE UNIQUE INDEX sql_import.idx_taxon_names_chinese_family_name
+    ON taxon_names(taxon_id, name) WHERE name_type IN (3, 4);
+CREATE UNIQUE INDEX sql_import.idx_taxon_names_english_family_name
+    ON taxon_names(taxon_id, name) WHERE name_type IN (5, 6);
 
 -- ============================================================
 

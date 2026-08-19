@@ -380,9 +380,10 @@ fn validate_sql_import_candidate_in_workspace(
         })? {
             cancellation.check()?;
             let (name_id, taxon_id, name_type, raw_name) = row?;
-            if canonical_name_group != Some((taxon_id, name_type)) {
+            let name_family = (name_type + 1) / 2;
+            if canonical_name_group != Some((taxon_id, name_family)) {
                 canonical_names.clear();
-                canonical_name_group = Some((taxon_id, name_type));
+                canonical_name_group = Some((taxon_id, name_family));
             }
             match normalize_taxonomy_name(&raw_name) {
                 Some(name) => {
@@ -1059,12 +1060,6 @@ fn validate_staging_schema(
         "taxon_id",
         "CASCADE",
     )?;
-    validate_unique_columns(
-        connection,
-        validation,
-        "taxon_names",
-        &["taxon_id", "name_type", "name"],
-    )?;
     if validation.total_error_count == 0 {
         let invalid_ranks = connection.query_row(
             "SELECT COUNT(*) FROM taxa WHERE rank NOT BETWEEN 1 AND 5",
@@ -1211,53 +1206,6 @@ fn validate_foreign_key(
             "foreign_key_constraint_missing",
             &format!(
                 "{table}.{from_column} must reference {target_table}.{target_column} ON DELETE {on_delete}"
-            ),
-            Some(table),
-            None,
-        );
-    }
-    Ok(())
-}
-
-fn validate_unique_columns(
-    connection: &Connection,
-    validation: &mut SqlImportValidationResult,
-    table: &str,
-    required_columns: &[&str],
-) -> CoreResult<()> {
-    let mut indexes =
-        connection.prepare(&format!("PRAGMA index_list({})", quote_identifier(table)))?;
-    let unique_indexes = indexes
-        .query_map([], |row| {
-            Ok((row.get::<_, String>(1)?, row.get::<_, bool>(2)?))
-        })?
-        .collect::<Result<Vec<_>, _>>()?;
-    let mut present = false;
-    for (index, unique) in unique_indexes {
-        if !unique {
-            continue;
-        }
-        let mut columns =
-            connection.prepare(&format!("PRAGMA index_info({})", quote_identifier(&index)))?;
-        let columns = columns
-            .query_map([], |row| row.get::<_, String>(2))?
-            .collect::<Result<Vec<_>, _>>()?;
-        if columns
-            .iter()
-            .map(String::as_str)
-            .eq(required_columns.iter().copied())
-        {
-            present = true;
-            break;
-        }
-    }
-    if !present {
-        record_error(
-            validation,
-            "unique_constraint_missing",
-            &format!(
-                "{table} must enforce UNIQUE ({})",
-                required_columns.join(", ")
             ),
             Some(table),
             None,

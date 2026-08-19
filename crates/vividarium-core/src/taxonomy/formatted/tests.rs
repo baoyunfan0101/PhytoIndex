@@ -194,6 +194,72 @@ fn taxonomy_validation_allows_multiple_alias_names() {
 }
 
 #[test]
+fn taxonomy_schema_enforces_name_family_uniqueness() {
+    let (_directory, database) = database();
+    let connection = database.connect_taxonomy_metadata_context().unwrap();
+    connection
+        .execute("INSERT INTO taxa (taxon_id, rank) VALUES (1, 1)", [])
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO taxon_names (taxon_id, name_type, name) VALUES (1, 1, 'Animalia')",
+            [],
+        )
+        .unwrap();
+
+    assert!(
+        connection
+            .execute(
+                "INSERT INTO taxon_names (taxon_id, name_type, name) VALUES (1, 2, 'Animalia')",
+                [],
+            )
+            .is_err()
+    );
+    connection
+        .execute_batch(
+            r#"
+            INSERT INTO taxon_names (taxon_id, name_type, name)
+                VALUES (1, 2, 'animalia');
+            INSERT INTO taxon_names (taxon_id, name_type, name)
+                VALUES (1, 3, 'Animalia');
+            "#,
+        )
+        .unwrap();
+}
+
+#[test]
+fn taxonomy_validation_rejects_duplicate_names_within_a_family() {
+    let (_directory, database) = database();
+    let connection = database.connect_taxonomy_metadata_context().unwrap();
+    connection
+        .execute_batch(
+            r#"
+            DROP INDEX idx_taxon_names_scientific_family_name;
+            INSERT INTO taxa (taxon_id, rank) VALUES (1, 1);
+            INSERT INTO taxon_names (taxon_id, name_type, name) VALUES
+                (1, 1, 'Animalia'),
+                (1, 2, 'Animalia');
+            "#,
+        )
+        .unwrap();
+    let mut issues = Vec::new();
+
+    visit_taxonomy_validation_issues(&connection, true, |issue| {
+        issues.push(issue);
+        true
+    })
+    .unwrap();
+
+    assert_eq!(issues.len(), 1);
+    assert_eq!(issues[0].code, "duplicate_name_family");
+    assert_eq!(issues[0].taxon_id, Some(1));
+    assert_eq!(
+        issues[0].message,
+        "Taxon 1 contains duplicate scientific name 'Animalia'."
+    );
+}
+
+#[test]
 fn name_type_codes_follow_public_name_order() {
     for (index, name_type) in TaxonomyNameType::ALL.into_iter().enumerate() {
         let code = index as i64 + 1;
