@@ -14,6 +14,8 @@ BEGIN IMMEDIATE;
 --    remaining ancestor as parent.
 -- 4. For rows with the same taxon and name, aggregate them into
 --    one row and use MAX(authority_year) as the authority year.
+-- 5. Do not import a scientific synonym when it is the same as
+--    the taxon's accepted scientific name.
 -- ============================================================
 
 -- ============================================================
@@ -317,10 +319,13 @@ FROM (
         parent
         ,synonym
 ) AS synonym
+JOIN biolib.taxa AS source
+    ON synonym.parent = source.id
 JOIN sql_import.taxa AS retained
     ON synonym.parent = retained.taxon_id
-WHERE synonym IS NOT NULL
-    AND trim(synonym) <> ''
+WHERE synonym.synonym IS NOT NULL
+    AND trim(synonym.synonym) <> ''
+    AND synonym.synonym <> source.scientific_name
 ORDER BY
     synonym.parent
     ,synonym.synonym

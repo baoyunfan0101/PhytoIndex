@@ -691,7 +691,10 @@ fn built_in_sql_reads_a_named_sqlite_input() {
             INSERT INTO taxa VALUES
                 (10, NULL, 0, 60, 'Animalia', NULL, 'Recent', 'Animals'),
                 (11, 10, 0, 601, 'Fallback species', NULL, 'Recent', NULL);
-            INSERT INTO synonyms VALUES (10, 0, 'Metazoa', NULL);
+            INSERT INTO synonyms VALUES
+                (10, 0, 'Animalia', 'self authority'),
+                (10, 0, 'Metazoa', '1758'),
+                (10, 0, 'Metazoa', '1900');
             INSERT INTO chinese VALUES
                 (10, 1, 'Animals zh', 'test'),
                 (11, 1, '   ', 'ignored'),
@@ -719,6 +722,41 @@ fn built_in_sql_reads_a_named_sqlite_input() {
     )
     .unwrap();
     let staging = Connection::open(workspace(&database).unwrap().join(STAGING_DATABASE)).unwrap();
+    let animalia_names = staging
+        .prepare(
+            r#"
+            SELECT name_type, name, authority_year, source
+            FROM taxon_names
+            WHERE taxon_id = 10
+            ORDER BY name_type, name
+            "#,
+        )
+        .unwrap()
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Option<String>>(3)?,
+            ))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(
+        animalia_names,
+        vec![
+            (1, "Animalia".into(), None, Some("biolib".into())),
+            (
+                2,
+                "Metazoa".into(),
+                Some("1900".into()),
+                Some("biolib".into())
+            ),
+            (3, "Animals zh".into(), None, Some("test".into())),
+            (5, "Animals".into(), None, Some("biolib".into())),
+        ]
+    );
     let fallback_names = staging
         .prepare(
             "SELECT name_type, name FROM taxon_names WHERE taxon_id = 11 ORDER BY name_type, name",
