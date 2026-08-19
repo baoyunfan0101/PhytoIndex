@@ -23,6 +23,10 @@ import { SqlInputList } from "./SqlInputList";
 import { SqlEnumHelpModal } from "./TaxonomyHelpModal";
 import { emitTaxonomyMutation } from "./taxonomyMutations";
 import { formatTaxonomyImportApplyMessage } from "./taxonomyImportMessages";
+import {
+  SQL_IMPORT_VALIDATION_ISSUE_ROW_HEIGHT,
+  sqlImportValidationIssueRow,
+} from "./sqlImportValidation";
 import { resolveSqlWorkbenchLoads } from "./sqlWorkbenchLoading";
 
 export function SqlImportSettings({
@@ -209,14 +213,17 @@ export function SqlImportSettings({
       <VirtualList
         className="validation-issues"
         items={[...validation.errors, ...validation.warnings]}
-        rowHeight={58}
+        rowHeight={SQL_IMPORT_VALIDATION_ISSUE_ROW_HEIGHT}
         itemKey={(item, index) => `${item.code}:${item.row_identifier}:${index}`}
-        renderItem={(item) => (
-          <div className="validation-issue">
-            <span>{item.message}</span>
-            <code>{issueContext(item)}</code>
-          </div>
-        )}
+        renderItem={(item) => {
+          const row = sqlImportValidationIssueRow(item);
+          return (
+            <div className="validation-issue">
+              <span className="validation-issue-message" title={row.message}>{row.message}</span>
+              <code className="validation-issue-context" title={row.context}>{row.context}</code>
+            </div>
+          );
+        }}
       />
     </div>
   ) : null;
@@ -275,12 +282,4 @@ export function SqlImportSettings({
 
 function Metric({ label, value }: { label: string; value: string }) {
   return <div><span>{label}</span><strong title={value}>{value}</strong></div>;
-}
-
-function issueContext(issue: SqlImportValidationResult["errors"][number]): string {
-  const context = [];
-  if (issue.taxon_id !== null) context.push(`Taxon ${issue.taxon_id}`);
-  if (issue.related_taxon_id !== null) context.push(`Related taxon ${issue.related_taxon_id}`);
-  if (context.length === 0) context.push(...[issue.table, issue.row_identifier].filter(Boolean));
-  return context.join(" / ");
 }
