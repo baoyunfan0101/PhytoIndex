@@ -504,44 +504,49 @@ fn source_only_fills_an_empty_existing_value() {
 }
 
 #[test]
-fn row_source_applies_to_supplied_lineage_names() {
+fn row_source_applies_only_to_target_taxon_names() {
     let (_directory, database) = database();
     apply_rows(
         &database,
         &[TaxonInputRow {
             kingdom: Some("Animalia".into()),
-            ..TaxonInputRow::default()
-        }],
-    )
-    .unwrap();
-    let result = apply_rows(
-        &database,
-        &[TaxonInputRow {
-            kingdom: Some("Animalia".into()),
             order: Some("Carnivora".into()),
+            family: Some("Canidae".into()),
+            genus: Some("Canis".into()),
+            species: Some("Canis lupus".into()),
             source: Some("catalog".into()),
             ..TaxonInputRow::default()
         }],
     )
     .unwrap();
-    assert_eq!(
-        result.rows[0].operation_types,
-        vec![
-            TaxonRowStatus::NewTaxon,
-            TaxonRowStatus::Supplement,
-            TaxonRowStatus::NewName
-        ]
-    );
-    let source: String = database
-        .connect_taxonomy_metadata_context()
-        .unwrap()
-        .query_row(
-            "SELECT source FROM taxon_names WHERE name = 'Animalia'",
-            [],
-            |row| row.get(0),
+    let connection = database.connect_taxonomy_metadata_context().unwrap();
+    let mut statement = connection
+        .prepare(
+            r#"
+            SELECT taxon_names.name, taxon_names.source
+            FROM taxa JOIN taxon_names USING (taxon_id)
+            WHERE taxon_names.name_type = 1
+            ORDER BY taxa.rank
+            "#,
         )
         .unwrap();
-    assert_eq!(source, "catalog");
+    let sources = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(
+        sources,
+        vec![
+            ("Animalia".into(), None),
+            ("Carnivora".into(), None),
+            ("Canidae".into(), None),
+            ("Canis".into(), None),
+            ("Canis lupus".into(), Some("catalog".into())),
+        ]
+    );
 }
 
 #[test]

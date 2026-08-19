@@ -103,7 +103,7 @@ taxon as an error.
 | `en_name` | `Option<String>` | First English input name. |
 | `en_alias` | `Vec<String>` | Additional English input names. |
 | `geological_range` | `Option<String>` | Geological range for the target taxon. |
-| `source` | `Option<String>` | Source applied to supplied names when allowed. |
+| `source` | `Option<String>` | Source applied to supplied names on the target taxon when allowed. |
 | `selected_taxon_id` | `Option<i64>` | Exact target used by UI direct edit; not part of CSV. |
 
 The CSV columns are:
@@ -133,6 +133,10 @@ upward, stopping as soon as one remains. Ancestor matching uses the same
 `sci_name`-first, `synonym`-fallback rule. After a target is selected or
 created, the other supplied scientific names are appended or supplemented as
 target synonyms.
+
+The row source is stored only on supplied name records for the target taxon.
+Scientific names used to resolve or create its lineage have independent source
+values.
 
 Updating a selected target keeps the existing supplement, append, and
 overwrite behavior. Creating a target requires its strict parent-rank name.

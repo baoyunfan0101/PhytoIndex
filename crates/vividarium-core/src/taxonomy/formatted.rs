@@ -699,7 +699,6 @@ fn create_taxon(
     )?;
     let taxon_id = target.taxon_id;
     apply_additional_names(transaction, taxon_id, input, &mut changes)?;
-    supplement_path_sources(transaction, input, &target, &mut changes)?;
     let mut operation_types = classify_changes(&changes);
     operation_types.insert(0, TaxonRowStatus::NewTaxon);
     Ok(TaxonRowOutcome {
@@ -753,7 +752,6 @@ fn update_existing(
         )?;
     }
     apply_localized_input_names(transaction, taxon_id, input, &mut changes)?;
-    supplement_path_sources(transaction, input, &summary, &mut changes)?;
     let operation_types = classify_changes(&changes);
     let target = load_taxon_summary(transaction, taxon_id)?;
     Ok(TaxonRowOutcome {
@@ -769,41 +767,6 @@ fn update_existing(
         candidates: Vec::new(),
         changes,
     })
-}
-
-fn supplement_path_sources(
-    transaction: &Transaction<'_>,
-    input: &NormalizedInput,
-    target: &TaxonSummary,
-    changes: &mut Vec<TaxonChange>,
-) -> CoreResult<()> {
-    let Some(source) = input.source.as_deref() else {
-        return Ok(());
-    };
-    for (taxon_id, rank) in target
-        .breadcrumb
-        .iter()
-        .map(|item| (item.taxon_id, item.rank))
-        .chain(std::iter::once((target.taxon_id, target.rank)))
-    {
-        let Some(expected_name) = input.path[rank.index()].as_deref() else {
-            continue;
-        };
-        if let Some(existing_type) =
-            existing_scientific_name_type(transaction, taxon_id, expected_name)?
-        {
-            update_name_fields(
-                transaction,
-                taxon_id,
-                existing_type,
-                expected_name,
-                None,
-                Some(source),
-                changes,
-            )?;
-        }
-    }
-    Ok(())
 }
 
 fn apply_additional_names(
@@ -1269,7 +1232,7 @@ fn resolve_or_create_lineage(
         parent.as_ref(),
         None,
         None,
-        input.source.as_deref(),
+        None,
         changes,
     )
     .map(Ok)
