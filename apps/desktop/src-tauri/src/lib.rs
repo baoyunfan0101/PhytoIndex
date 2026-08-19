@@ -90,7 +90,6 @@ pub fn run() {
             commands::get_taxon_detail,
             commands::list_taxon_children,
             commands::delete_taxon_name,
-            commands::update_taxon,
             commands::promote_taxon_name,
             commands::save_taxon_name_group,
             commands::delete_taxon,

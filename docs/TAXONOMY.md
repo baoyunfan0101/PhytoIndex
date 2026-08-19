@@ -107,7 +107,6 @@ taxon as an error.
 | `en_alias` | `Vec<String>` | Additional English input names. |
 | `geological_range` | `Option<String>` | Geological range for the target taxon. |
 | `source` | `Option<String>` | Source applied to supplied names on the target taxon when allowed. |
-| `selected_taxon_id` | `Option<i64>` | Exact target used by UI direct edit; not part of CSV. |
 
 The CSV columns are:
 
@@ -195,10 +194,6 @@ asynchronously.
 
 ## Direct UI changes
 
-`TaxonUpdateInput` identifies `taxon_id` and supplies editable taxonomy
-fields. It is converted to one formatted input row and therefore returns a
-normal `TaxonomyOperationResult`.
-
 `PromoteTaxonNameInput` and `DeleteTaxonNameInput` both identify a name by
 `taxon_id` plus stable `name_id`.
 
@@ -218,7 +213,6 @@ rejected without applying any part of the group save.
 
 | Function | Parameters after `database` | Return | Description |
 | --- | --- | --- | --- |
-| `update_taxon` | `input: TaxonUpdateInput` | `TaxonomyOperationResult` | Apply one direct edit as formatted input. |
 | `promote_taxon_name` | `input: PromoteTaxonNameInput` | `()` | Exchange an alias type with its accepted type. |
 | `save_taxon_name_group` | `input: SaveTaxonNameGroupInput` | `()` | Atomically update metadata and append records in one name group. |
 | `delete_taxon_name` | `input: DeleteTaxonNameInput` | `()` | Delete a non-`sci_name` record. |

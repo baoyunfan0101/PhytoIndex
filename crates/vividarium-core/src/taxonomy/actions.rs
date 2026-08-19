@@ -4,27 +4,10 @@ use rusqlite::{OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 
 use super::formatted::{start_taxonomy_session, validate_taxonomy};
-use super::view::load_taxon_summary;
-use super::{
-    TaxonInputRow, TaxonRank, TaxonRowStatus, TaxonomyNameType, TaxonomyOperationResult,
-    apply_rows, preview_rows,
-};
+use super::{TaxonRank, TaxonomyNameType};
 use crate::naming::normalize_taxonomy_name;
 use crate::operations::{self, NewAuditRow, NewOperation};
 use crate::{CoreError, CoreResult, Database};
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct TaxonUpdateInput {
-    pub taxon_id: i64,
-    pub authority_year: Option<String>,
-    pub synonyms: Vec<String>,
-    pub zh_name: Option<String>,
-    pub zh_alias: Vec<String>,
-    pub en_name: Option<String>,
-    pub en_alias: Vec<String>,
-    pub geological_range: Option<String>,
-    pub source: Option<String>,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DeleteTaxonNameInput {
@@ -58,44 +41,6 @@ pub struct SaveTaxonNameGroupInput {
     pub name_type: TaxonomyNameType,
     pub updates: Vec<TaxonNameMetadataInput>,
     pub additions: Vec<NewTaxonNameInput>,
-}
-
-pub fn update_taxon(
-    database: &Database,
-    input: TaxonUpdateInput,
-) -> CoreResult<TaxonomyOperationResult> {
-    let connection = database.connect_taxonomy_metadata_context()?;
-    let summary = load_taxon_summary(&connection, input.taxon_id)?
-        .ok_or_else(|| CoreError::NotFound(format!("taxon {}", input.taxon_id)))?;
-    drop(connection);
-    let mut row = TaxonInputRow {
-        selected_taxon_id: Some(input.taxon_id),
-        authority_year: input.authority_year,
-        synonyms: input.synonyms,
-        zh_name: input.zh_name,
-        zh_alias: input.zh_alias,
-        en_name: input.en_name,
-        en_alias: input.en_alias,
-        geological_range: input.geological_range,
-        source: input.source,
-        ..TaxonInputRow::default()
-    };
-    for item in &summary.breadcrumb {
-        set_rank_locator(&mut row, item.rank, item.names.sci_name.clone())?;
-    }
-    set_rank_locator(&mut row, summary.rank, summary.names.sci_name)?;
-    let preview = preview_rows(database, std::slice::from_ref(&row))?;
-    if preview.rows[0].operation_types.iter().any(|value| {
-        matches!(
-            value,
-            TaxonRowStatus::Invalid
-                | TaxonRowStatus::NotMatched
-                | TaxonRowStatus::MultipleCandidates
-        )
-    }) {
-        return Err(CoreError::InvalidArgument(preview.rows[0].message.clone()));
-    }
-    apply_rows(database, &[row])
 }
 
 pub fn promote_taxon_name(database: &Database, input: PromoteTaxonNameInput) -> CoreResult<()> {
@@ -670,29 +615,12 @@ pub fn delete_taxon(database: &Database, taxon_id: i64) -> CoreResult<()> {
     Ok(())
 }
 
-fn set_rank_locator(
-    row: &mut TaxonInputRow,
-    rank: TaxonRank,
-    scientific_name: Option<String>,
-) -> CoreResult<()> {
-    let name = scientific_name.ok_or_else(|| {
-        CoreError::InvalidArgument(format!("{} taxon has no sci_name", rank.as_str()))
-    })?;
-    match rank {
-        TaxonRank::Kingdom => row.kingdom = Some(name),
-        TaxonRank::Order => row.order = Some(name),
-        TaxonRank::Family => row.family = Some(name),
-        TaxonRank::Genus => row.genus = Some(name),
-        TaxonRank::Species => row.species = Some(name),
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    use crate::taxonomy::{TaxonInputRow, apply_rows};
 
     fn database() -> (TempDir, Database) {
         let directory = TempDir::new().unwrap();

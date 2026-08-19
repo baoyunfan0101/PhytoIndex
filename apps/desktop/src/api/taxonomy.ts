@@ -60,7 +60,6 @@ export type TaxonChild = {
 };
 
 export type TaxonInputRow = {
-  selected_taxon_id?: number | null;
   kingdom?: string | null;
   order?: string | null;
   family?: string | null;
@@ -74,17 +73,6 @@ export type TaxonInputRow = {
   en_alias?: string[];
   geological_range?: string | null;
   source?: string | null;
-};
-export type TaxonUpdateInput = {
-  taxon_id: number;
-  authority_year: string | null;
-  synonyms: string[];
-  zh_name: string | null;
-  zh_alias: string[];
-  en_name: string | null;
-  en_alias: string[];
-  geological_range: string | null;
-  source: string | null;
 };
 export type TaxonNameActionInput = {
   taxon_id: number;
@@ -308,8 +296,6 @@ export const listTaxonPhotos = (taxonId: number, cursor: string | null = null, l
     items: demoPhotos.slice((taxonId % 4) * 8, (taxonId % 4) * 8 + limit),
     next_cursor: null,
   }));
-export const updateTaxon = (input: TaxonUpdateInput) =>
-  call<TaxonomyOperationResult>("update_taxon", { input }, () => demoUpdateTaxon(input));
 export const promoteTaxonName = (input: TaxonNameActionInput) =>
   call<void>("promote_taxon_name", { input }, () => demoPromoteTaxonName(input));
 export const saveTaxonNameGroup = (input: SaveTaxonNameGroupInput) =>
@@ -341,7 +327,6 @@ function demoSearchResult(taxon: TaxonSearchResult, query: string): TaxonSearchR
   return matches.length > 0 ? { ...taxon, matches } : null;
 }
 
-type DemoTaxonChange = TaxonRowOutcome["changes"][number];
 type DemoNameGroup = {
   acceptedType: "sci_name" | "zh_name" | "en_name";
   aliasType: "synonym" | "zh_alias" | "en_alias";
@@ -355,64 +340,6 @@ type DemoNameLocation = {
   nameType: TaxonomyNameType;
   aliasIndex: number | null;
 };
-
-function demoUpdateTaxon(input: TaxonUpdateInput): TaxonomyOperationResult {
-  const detail = requireDemoTaxonDetail(input.taxon_id);
-  const changes: DemoTaxonChange[] = [];
-  const authorityYear = demoText(input.authority_year);
-  const source = demoText(input.source);
-  const geologicalRange = demoText(input.geological_range);
-
-  if (geologicalRange !== null && detail.geological_range !== geologicalRange) {
-    const oldValue = detail.geological_range;
-    detail.geological_range = geologicalRange;
-    changes.push({
-      kind: oldValue === null ? "supplement" : "overwrite",
-      field: "taxa.geological_range",
-      old_value: oldValue,
-      new_value: geologicalRange,
-    });
-  }
-
-  if (detail.names.sci_name) {
-    demoSupplementName(detail.names.sci_name, "sci_name", authorityYear, source, changes);
-  }
-  for (const synonym of normalizedDemoNames(input.synonyms)) {
-    demoAddOrSupplementAlias(demoNameGroups(detail)[0], synonym, source, changes);
-  }
-  demoApplyLocalizedNames(
-    demoNameGroups(detail)[1],
-    normalizedDemoNames([input.zh_name, ...input.zh_alias]),
-    source,
-    changes,
-  );
-  demoApplyLocalizedNames(
-    demoNameGroups(detail)[2],
-    normalizedDemoNames([input.en_name, ...input.en_alias]),
-    source,
-    changes,
-  );
-  refreshDemoTaxonViews(input.taxon_id);
-
-  const operationTypes = demoOperationTypes(changes);
-  return {
-    delimiter: "|",
-    encoding: "UTF-8",
-    rows: [{
-      row_number: 1,
-      operation_types: operationTypes,
-      message: changes.length === 0 ? "input produces no change" : `applied ${changes.length} taxonomy changes`,
-      target: demoTaxonSummaryById(input.taxon_id),
-      parent: null,
-      candidates: [],
-      changes,
-    }],
-    operation_id: nextDemoTaxonomyOperationId++,
-    total_rows: 1,
-    succeeded_rows: 1,
-    failed_rows: 0,
-  };
-}
 
 function demoPromoteTaxonName(input: TaxonNameActionInput): void {
   const detail = requireDemoTaxonDetail(input.taxon_id);
@@ -586,87 +513,6 @@ function findDemoName(detail: TaxonDetail, nameId: number): DemoNameLocation | n
   return null;
 }
 
-function demoAddOrSupplementAlias(
-  group: DemoNameGroup,
-  name: string,
-  source: string | null,
-  changes: DemoTaxonChange[],
-): void {
-  const accepted = group.accepted();
-  if (accepted?.name === name) {
-    demoSupplementName(accepted, group.acceptedType, null, source, changes);
-    return;
-  }
-  const alias = group.aliases.find((candidate) => candidate.name === name);
-  if (alias) {
-    demoSupplementName(alias, group.aliasType, null, source, changes);
-    return;
-  }
-  group.aliases.push({ name_id: nextDemoTaxonNameId++, name, authority_year: null, source });
-  changes.push({ kind: "append_name", field: group.aliasType, old_value: null, new_value: name });
-}
-
-function demoApplyLocalizedNames(
-  group: DemoNameGroup,
-  names: string[],
-  source: string | null,
-  changes: DemoTaxonChange[],
-): void {
-  for (const name of names) {
-    const accepted = group.accepted();
-    if (accepted?.name === name) {
-      demoSupplementName(accepted, group.acceptedType, null, source, changes);
-      continue;
-    }
-    const alias = group.aliases.find((candidate) => candidate.name === name);
-    if (alias) {
-      demoSupplementName(alias, group.aliasType, null, source, changes);
-      continue;
-    }
-    const detail: TaxonNameDetail = {
-      name_id: nextDemoTaxonNameId++,
-      name,
-      authority_year: null,
-      source,
-    };
-    if (accepted) {
-      group.aliases.push(detail);
-      changes.push({ kind: "append_name", field: group.aliasType, old_value: null, new_value: name });
-    } else {
-      group.setAccepted(detail);
-      changes.push({ kind: "append_name", field: group.acceptedType, old_value: null, new_value: name });
-    }
-  }
-}
-
-function demoSupplementName(
-  name: TaxonNameDetail,
-  nameType: TaxonomyNameType,
-  authorityYear: string | null,
-  source: string | null,
-  changes: DemoTaxonChange[],
-): void {
-  if (authorityYear !== null && name.authority_year !== authorityYear) {
-    const oldValue = name.authority_year;
-    name.authority_year = authorityYear;
-    changes.push({
-      kind: oldValue === null ? "supplement" : "overwrite",
-      field: `${nameType}.authority_year`,
-      old_value: oldValue,
-      new_value: authorityYear,
-    });
-  }
-  if (source !== null && name.source === null) {
-    name.source = source;
-    changes.push({
-      kind: "supplement",
-      field: `${nameType}.source`,
-      old_value: null,
-      new_value: source,
-    });
-  }
-}
-
 function refreshDemoTaxonViews(taxonId: number): void {
   const detail = requireDemoTaxonDetail(taxonId);
   const names: TaxonDisplayNames = {
@@ -691,27 +537,6 @@ function refreshDemoTaxonViews(taxonId: number): void {
   }
 }
 
-function demoTaxonSummaryById(taxonId: number): TaxonSummary {
-  const detail = requireDemoTaxonDetail(taxonId);
-  return {
-    taxon_id: detail.taxon_id,
-    rank: detail.rank,
-    breadcrumb: detail.breadcrumb,
-    names: {
-      sci_name: detail.names.sci_name?.name ?? null,
-      zh_name: detail.names.zh_name?.name ?? null,
-      en_name: detail.names.en_name?.name ?? null,
-    },
-  };
-}
-
-function normalizedDemoNames(values: Array<string | null>): string[] {
-  return values.flatMap((value) => {
-    const normalized = demoText(value);
-    return normalized === null ? [] : [normalized];
-  });
-}
-
 function normalizeDemoName(value: string): string {
   return value.trim().replace(/\s+/g, " ");
 }
@@ -719,16 +544,6 @@ function normalizeDemoName(value: string): string {
 function demoText(value: string | null): string | null {
   const normalized = value?.trim() ?? "";
   return normalized.length > 0 ? normalized : null;
-}
-
-function demoOperationTypes(changes: DemoTaxonChange[]): string[] {
-  if (changes.length === 0) return ["no_change"];
-  const kinds = new Set(changes.map((change) => change.kind));
-  return [
-    ...(kinds.has("supplement") ? ["supplement"] : []),
-    ...(kinds.has("append_name") ? ["new_name"] : []),
-    ...(kinds.has("overwrite") ? ["overwrite"] : []),
-  ];
 }
 
 export const getTaxonomyTemplate = () =>

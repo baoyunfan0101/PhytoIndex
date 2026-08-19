@@ -2,8 +2,7 @@ use super::*;
 use crate::naming::{NamingHookKind, set_naming_hook, take_hook_compile_count};
 use crate::photos::{self, open_library, refresh_directory};
 use crate::taxonomy::{
-    CustomTaxonomySqlRequest, TaxonInputRow, TaxonUpdateInput, apply_rows,
-    execute_custom_taxonomy_sql, update_taxon,
+    CustomTaxonomySqlRequest, TaxonInputRow, apply_rows, execute_custom_taxonomy_sql,
 };
 use std::fs;
 
@@ -645,32 +644,30 @@ fn taxonomy_update_queues_only_affected_photos() {
     fs::write(root.path().join("domestic cat.jpg"), b"photo").unwrap();
     let database = Database::open_test(data.path().join("vividarium.db")).unwrap();
     let connection = database.connect().unwrap();
-    connection
-        .execute("INSERT INTO taxa (rank) VALUES (1)", [])
-        .unwrap();
-    let canis_taxon_id = connection.last_insert_rowid();
-    connection
-        .execute(
-            r#"
-                INSERT INTO taxon_names (taxon_id, name_type, name)
-                VALUES (?, 1, 'Canis lupus')
-                "#,
-            [canis_taxon_id],
-        )
-        .unwrap();
-    connection
-        .execute("INSERT INTO taxa (rank) VALUES (1)", [])
-        .unwrap();
-    let felis_taxon_id = connection.last_insert_rowid();
-    connection
-        .execute(
-            r#"
-                INSERT INTO taxon_names (taxon_id, name_type, name)
-                VALUES (?, 1, 'Felis catus')
-                "#,
-            [felis_taxon_id],
-        )
-        .unwrap();
+    let insert_taxon = |parent_taxon_id: Option<i64>, rank: i64, name: &str| {
+        connection
+            .execute(
+                "INSERT INTO taxa (parent_taxon_id, rank) VALUES (?, ?)",
+                params![parent_taxon_id, rank],
+            )
+            .unwrap();
+        let taxon_id = connection.last_insert_rowid();
+        connection
+            .execute(
+                "INSERT INTO taxon_names (taxon_id, name_type, name) VALUES (?, 1, ?)",
+                params![taxon_id, name],
+            )
+            .unwrap();
+        taxon_id
+    };
+    let animalia_taxon_id = insert_taxon(None, 1, "Animalia");
+    let carnivora_taxon_id = insert_taxon(Some(animalia_taxon_id), 2, "Carnivora");
+    let canidae_taxon_id = insert_taxon(Some(carnivora_taxon_id), 3, "Canidae");
+    let canis_genus_taxon_id = insert_taxon(Some(canidae_taxon_id), 4, "Canis");
+    let canis_taxon_id = insert_taxon(Some(canis_genus_taxon_id), 5, "Canis lupus");
+    let felidae_taxon_id = insert_taxon(Some(carnivora_taxon_id), 3, "Felidae");
+    let felis_genus_taxon_id = insert_taxon(Some(felidae_taxon_id), 4, "Felis");
+    let felis_taxon_id = insert_taxon(Some(felis_genus_taxon_id), 5, "Felis catus");
     drop(connection);
     let library = open_library(&database, root.path().to_str().unwrap()).unwrap();
     refresh_directory(&database, library.root_directory_id).unwrap();
@@ -717,14 +714,17 @@ fn taxonomy_update_queues_only_affected_photos() {
         .unwrap();
     drop(connection);
 
-    update_taxon(
+    apply_rows(
         &database,
-        TaxonUpdateInput {
-            taxon_id: felis_taxon_id,
-            geological_range: None,
+        &[TaxonInputRow {
+            kingdom: Some("Animalia".into()),
+            order: Some("Carnivora".into()),
+            family: Some("Felidae".into()),
+            genus: Some("Felis".into()),
+            species: Some("Felis catus".into()),
             en_name: Some("domestic cat".into()),
             ..Default::default()
-        },
+        }],
     )
     .unwrap();
     crate::taxonomy::synchronize_pending_photo_libraries(&database).unwrap();

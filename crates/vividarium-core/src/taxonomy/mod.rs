@@ -22,8 +22,8 @@ mod view;
 pub use crate::naming::{ScientificNameParts, split_scientific_name_authority};
 pub use actions::{
     DeleteTaxonNameInput, NewTaxonNameInput, PromoteTaxonNameInput, SaveTaxonNameGroupInput,
-    TaxonNameMetadataInput, TaxonUpdateInput, delete_taxon, delete_taxon_name, promote_taxon_name,
-    save_taxon_name_group, update_taxon,
+    TaxonNameMetadataInput, delete_taxon, delete_taxon_name, promote_taxon_name,
+    save_taxon_name_group,
 };
 pub use direct_import::{
     DirectImportDatabase, TaxonomyImportMetadata, TaxonomyImportResult, apply_direct_import,

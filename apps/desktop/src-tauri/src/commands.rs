@@ -30,8 +30,8 @@ use vividarium_core::taxonomy::{
     DirectImportDatabase, PersistentSqlInput, PromoteTaxonNameInput, RemoveSqlInputRequest,
     RemoveSqlInputResult, SaveTaxonNameGroupInput, SqlExportResult, SqlSourceSchema, TaxonChild,
     TaxonDetail, TaxonInputRow, TaxonRowOutcome, TaxonSearchResult, TaxonSuggestion,
-    TaxonUpdateInput, TaxonomyImportMetadata, TaxonomyOperationResult, TaxonomyPage,
-    TaxonomyPreviewResult, ValidateSqlImportRequest,
+    TaxonomyImportMetadata, TaxonomyOperationResult, TaxonomyPage, TaxonomyPreviewResult,
+    ValidateSqlImportRequest,
 };
 use vividarium_core::{mapping, naming, photos, taxonomy};
 
@@ -949,22 +949,6 @@ pub async fn delete_taxon_name(
     .map_err(error)??;
     schedule_taxonomy_sync(app, &state);
     Ok(())
-}
-
-#[tauri::command]
-pub async fn update_taxon(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    input: TaxonUpdateInput,
-) -> CommandResult<TaxonomyOperationResult> {
-    let database = state.database.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        taxonomy::update_taxon(&database, input).map_err(error)
-    })
-    .await
-    .map_err(error)??;
-    schedule_taxonomy_sync(app, &state);
-    Ok(result)
 }
 
 #[tauri::command]

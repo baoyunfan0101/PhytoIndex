@@ -188,8 +188,6 @@ impl TaxonomyNameType {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct TaxonInputRow {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub selected_taxon_id: Option<i64>,
     pub kingdom: Option<String>,
     pub order: Option<String>,
     pub family: Option<String>,
@@ -422,14 +420,6 @@ fn store_applied_rows(
     changeset_blob: Vec<u8>,
     delimiter: String,
 ) -> CoreResult<TaxonomyOperationResult> {
-    let stored_input = rows
-        .iter()
-        .cloned()
-        .map(|mut row| {
-            row.selected_taxon_id = None;
-            row
-        })
-        .collect::<Vec<_>>();
     let failed_rows = outcomes
         .iter()
         .filter(|row| row.operation_types.iter().any(|value| value.is_failure()))
@@ -469,7 +459,7 @@ fn store_applied_rows(
         ) VALUES (?, ?, ?)
         "#,
     )?;
-    for (index, input) in stored_input.iter().enumerate() {
+    for (index, input) in rows.iter().enumerate() {
         insert_input.execute(params![
             operation_id,
             (index + 1) as i64,
@@ -583,47 +573,7 @@ fn process_row(
         Ok(value) => value,
         Err(message) => return Ok(failed_outcome(row_number, TaxonRowStatus::Invalid, message)),
     };
-    let target_rank = normalized.target_rank;
-    let match_result = if let Some(taxon_id) = row.selected_taxon_id {
-        match load_taxon_summary(transaction, taxon_id)? {
-            Some(summary) if summary.rank == target_rank => {
-                let Some(existing_type) =
-                    existing_scientific_name_type(transaction, taxon_id, &normalized.target_name)?
-                else {
-                    return Ok(failed_outcome(
-                        row_number,
-                        TaxonRowStatus::Invalid,
-                        "selected taxon does not contain the target scientific name",
-                    ));
-                };
-                MatchResult::One(
-                    summary,
-                    MatchedName {
-                        input_index: 0,
-                        name: normalized.target_name.clone(),
-                        authority_year: normalized.authority_year.clone(),
-                        existing_type,
-                    },
-                )
-            }
-            Some(_) => {
-                return Ok(failed_outcome(
-                    row_number,
-                    TaxonRowStatus::Invalid,
-                    "selected taxon rank does not match the input target rank",
-                ));
-            }
-            None => {
-                return Ok(failed_outcome(
-                    row_number,
-                    TaxonRowStatus::NotMatched,
-                    format!("selected taxon {taxon_id} was not found"),
-                ));
-            }
-        }
-    } else {
-        find_target(transaction, &normalized)?
-    };
+    let match_result = find_target(transaction, &normalized)?;
 
     match match_result {
         MatchResult::Many(candidates) => Ok(TaxonRowOutcome {
@@ -1046,31 +996,6 @@ fn existing_name_type(
         .optional()?
         .map(TaxonomyNameType::from_code)
         .transpose()
-}
-
-fn existing_scientific_name_type(
-    transaction: &Transaction<'_>,
-    taxon_id: i64,
-    name: &str,
-) -> CoreResult<Option<TaxonomyNameType>> {
-    for name_type in [TaxonomyNameType::SciName, TaxonomyNameType::Synonym] {
-        let exists = transaction.query_row(
-            r#"
-            SELECT EXISTS(
-                SELECT 1 FROM taxon_names
-                WHERE taxon_id = ?
-                  AND name = ? COLLATE BINARY
-                  AND name_type = ?
-            )
-            "#,
-            params![taxon_id, name, name_type.code()],
-            |row| row.get::<_, bool>(0),
-        )?;
-        if exists {
-            return Ok(Some(name_type));
-        }
-    }
-    Ok(None)
 }
 
 fn find_target(transaction: &Transaction<'_>, input: &NormalizedInput) -> CoreResult<MatchResult> {
