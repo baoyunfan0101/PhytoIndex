@@ -434,7 +434,9 @@ fn validate_sql_import_candidate_in_workspace(
         );
         report_progress(progress, VALIDATING_TAXONOMY, None, None, None, None);
         visit_taxonomy_validation_issues(&connection, false, |issue| {
-            record_taxonomy_error(&mut validation, issue);
+            if issue.code != "duplicate_name_family" {
+                record_taxonomy_error(&mut validation, issue);
+            }
             true
         })?;
     }

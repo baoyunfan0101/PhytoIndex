@@ -422,6 +422,7 @@ COMMIT;"#,
     assert!(!result.validation.can_apply);
     assert!(!result.can_apply);
     assert_eq!(result.validation.total_error_count, 1);
+    assert_eq!(result.validation.errors.len(), 1);
     assert_eq!(result.validation.errors[0].code, "kingdom_has_parent");
     assert_eq!(result.validation.errors[0].taxon_id, Some(202));
     assert_eq!(result.validation.errors[0].related_taxon_id, Some(101));
@@ -435,6 +436,30 @@ COMMIT;"#,
             .any(|event| event.stage == VALIDATING_TAXONOMY)
     );
     assert_eq!(progress.last().unwrap().stage, VALIDATION_FAILED);
+}
+
+#[test]
+fn exact_family_name_conflicts_are_reported_once() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = Database::open(directory.path().join("metadata.db")).unwrap();
+    add_simple_input(&directory, &database);
+    let invalid_sql = SIMPLE_IMPORT_SQL.replace(
+        "COMMIT;",
+        r#"
+DROP INDEX sql_import.idx_taxon_names_scientific_family_name;
+INSERT INTO sql_import.taxon_names (name_id, taxon_id, name_type, name)
+VALUES (2, 101, 2, 'Animalia');
+COMMIT;"#,
+    );
+
+    let result =
+        validate_sql_import(&database, &ValidateSqlImportRequest { sql: invalid_sql }).unwrap();
+
+    assert!(!result.validation.valid);
+    assert_eq!(result.validation.total_error_count, 1);
+    assert_eq!(result.validation.errors.len(), 1);
+    assert_eq!(result.validation.errors[0].code, "duplicate_canonical_name");
+    assert_eq!(result.validation.errors[0].taxon_id, Some(101));
 }
 
 #[test]
@@ -455,6 +480,8 @@ COMMIT;"#,
         validate_sql_import(&database, &ValidateSqlImportRequest { sql: invalid_sql }).unwrap();
 
     assert!(!result.validation.valid);
+    assert_eq!(result.validation.total_error_count, 1);
+    assert_eq!(result.validation.errors.len(), 1);
     assert_eq!(result.validation.errors[0].code, "duplicate_canonical_name");
     assert_eq!(result.validation.errors[0].taxon_id, Some(101));
 }
@@ -476,6 +503,8 @@ COMMIT;"#,
         validate_sql_import(&database, &ValidateSqlImportRequest { sql: invalid_sql }).unwrap();
 
     assert!(!result.validation.valid);
+    assert_eq!(result.validation.total_error_count, 1);
+    assert_eq!(result.validation.errors.len(), 1);
     assert_eq!(result.validation.errors[0].code, "duplicate_canonical_name");
     assert_eq!(result.validation.errors[0].taxon_id, Some(101));
 }

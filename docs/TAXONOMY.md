@@ -364,6 +364,8 @@ artifacts and stops before candidate validation.
 After SQL succeeds, validation builds the candidate and checks file integrity,
 required schema and constraints, supported ranks and name types, canonical
 normalization, name-family uniqueness, and the complete taxonomy invariants.
+Stored and normalization-derived name-family duplicates are reported once as
+`duplicate_canonical_name`.
 Taxonomy data violations are returned with `valid = false`,
 `can_apply = false`, and structured issues; SQL, SQLite, file, and
 candidate-build failures remain interface errors. The result contains
