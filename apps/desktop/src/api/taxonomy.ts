@@ -2,6 +2,7 @@ import { call } from "./client";
 import type { Page } from "./common";
 import { getGeneralSettings } from "./general";
 import { demoPhotos, type Photo } from "./photos";
+import { demoCompletedOperation, type OperationState } from "./tasks";
 
 export type TaxonRank = "kingdom" | "order" | "family" | "genus" | "species";
 export type TaxonomyNameType =
@@ -563,7 +564,7 @@ let demoFormattedUpdatePreview: {
 } | null = null;
 
 export const previewTaxonomyRows = (rows: TaxonInputRow[], ownerId: string) =>
-  call<FormattedUpdatePreviewResult>("preview_taxonomy_rows", { rows, ownerId }, async () => {
+  call<OperationState>("preview_taxonomy_rows", { rows, ownerId }, async () => {
     const { csv_delimiter: delimiter } = await getGeneralSettings();
     const previewId = `demo-preview-${Date.now()}`;
     const result: TaxonomyPreviewResult = {
@@ -580,22 +581,25 @@ export const previewTaxonomyRows = (rows: TaxonInputRow[], ownerId: string) =>
       })),
     };
     demoFormattedUpdatePreview = { previewId, result };
-    return { ...result, preview_id: previewId };
+    return demoCompletedOperation("taxonomy", "preview_taxonomy_rows", {
+      ...result,
+      preview_id: previewId,
+    });
   });
 export const applyTaxonomyRows = (previewId: string, ownerId: string) =>
-  call<TaxonomyOperationResult>("apply_taxonomy_rows", { previewId, ownerId }, () => {
+  call<OperationState>("apply_taxonomy_rows", { previewId, ownerId }, () => {
     if (demoFormattedUpdatePreview?.previewId !== previewId) {
       throw new Error("Formatted update preview is no longer current; preview again");
     }
     const result = demoFormattedUpdatePreview.result;
     demoFormattedUpdatePreview = null;
-    return {
+    return demoCompletedOperation("taxonomy", "apply_taxonomy_rows", {
       ...result,
       operation_id: 100,
       total_rows: result.rows.length,
       succeeded_rows: result.rows.length,
       failed_rows: 0,
-    };
+    });
   });
 
 function parseDemoTaxonomyCsv(input: string, delimiter: string): TaxonInputRow[] {

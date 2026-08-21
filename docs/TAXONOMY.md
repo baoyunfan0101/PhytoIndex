@@ -178,6 +178,10 @@ and the same ordered row log.
 | `get_taxonomy_name_separator` | none | `String` |
 | `set_taxonomy_name_separator` | `separator: &str` | `()` |
 
+The desktop Formatted Update preview and apply commands return operation
+handles. Both keep owner-scoped cancellation while `OperationManager` records
+their lifecycle and result. The page waits for the exact returned task ID.
+
 `prepare_rows` evaluates and validates the update in a rolled-back transaction,
 retaining its inputs, row outcomes, taxonomy changeset, taxonomy identity, and
 operation revision in one in-memory candidate. `apply_prepared_rows` rejects a
@@ -293,8 +297,10 @@ commit succeed. A script-save failure returns the committed execution with
 the last successful SQL. Export accepts exactly one
 read-only query and streams its rows to the destination CSV using the
 application-wide delimiter.
-Desktop source removal, SQL execution, and query export commands execute file
-and database work on blocking workers and resolve asynchronously.
+Desktop SQL execution and query export return operation handles and run file
+and database work on blocking workers. They keep owner-scoped cancellation,
+publish indeterminate execution or export stages, and expose their exact result
+through `OperationManager`.
 `list_custom_sql_database_schemas` returns the complete non-SQLite-internal
 table and view catalog exposed through the `main` alias. Managed input schemas
 remain available from `list_custom_sql_inputs`; clients combine both sources
@@ -334,6 +340,7 @@ fields remain authoritative.
 | `validate_sql_import` | `request: &ValidateSqlImportRequest` | `ValidateSqlImportResult` |
 | `validate_sql_import_with_progress` | `request: &ValidateSqlImportRequest`, `progress: &mut FnMut(OperationProgress)` | `ValidateSqlImportResult` |
 | `apply_sql_import` | none | `TaxonomyImportResult` |
+| `apply_sql_import_with_progress_and_cancellation` | `progress: &mut FnMut(OperationProgress)`, `cancellation: &CancellationToken` | `TaxonomyImportResult` |
 
 SQL Import has one fixed workspace. Persistent inputs and the last successful
 SQL outlive tabs, application restarts, and successful Apply. Adding or
@@ -376,12 +383,15 @@ The progress callback reports stable stages for input preparation, SQL
 execution, staging finalization, staging fingerprinting, staging integrity and
 schema checks, name normalization, staging taxonomy validation, candidate taxa
 and name construction, candidate database validation, and the terminal
-validation result. SQL execution uses statement counts. Fingerprinting uses
+validation result. SQL execution starts at zero and increments its statement
+count only after each statement completes. Fingerprinting uses
 the staging file size and bytes read. Name work uses name counts, and candidate
 taxa report their final taxon count after the bulk insert. Missing counts mean
 that only the active stage is known; they do not represent a percentage.
 
 `apply_sql_import` accepts only the latest successfully validated candidate.
+Its progress callback reports candidate validation, staging fingerprint bytes,
+and applying immediately before taxonomy replacement.
 Successful replacement assigns a new taxonomy identity, clears taxonomy
 history, and marks every registered photo library for a full remap. It removes
 staging, candidate, and validation artifacts while retaining inputs and SQL.
@@ -404,6 +414,7 @@ visible table or view with its columns.
 | `get_taxonomy_import_metadata` | none | `Option<TaxonomyImportMetadata>` |
 | `inspect_direct_import_database` | `source_path: &Path` | `DirectImportDatabase` |
 | `apply_direct_import` | `source_path: &Path` | `TaxonomyImportResult` |
+| `apply_direct_import_with_progress_and_cancellation` | `source_path: &Path`, `progress: &mut FnMut(OperationProgress)`, `cancellation: &CancellationToken` | `TaxonomyImportResult` |
 
 The supplied SQLite file must contain valid `taxa` and `taxon_names` data
 using the current schema. Imported names pass through the shared canonical
@@ -419,12 +430,11 @@ mapping state when synchronized. Immediate synchronization and mapping of the
 active photo library are best-effort follow-up work; no active library or an
 unavailable library does not change a successful replacement result.
 
-The desktop `inspect_direct_import_database` command accepts
-`source_path: String`, runs on a blocking worker, and returns
-`DirectImportDatabase` directly. The desktop `apply_direct_import` command
-accepts `source_path: String` and returns a `direct_import` `OperationState`.
-It validates and replaces the database on a blocking worker, returns validation
-or file failures through the completed operation error, and schedules
+The desktop Direct Import inspection and apply commands accept
+`source_path: String` and return `direct_import` operation handles. Inspection
+completes with `DirectImportDatabase`. Apply reports validation and applying at
+the core operation boundaries, completes with `TaxonomyImportResult`, returns
+validation or file failures through the operation error, and schedules
 taxonomy/photo synchronization only after replacement commits.
 
 ## Photo-library synchronization

@@ -56,14 +56,19 @@ reported through a shared task lifecycle and structured progress. Each
 `OperationState` has an explicit queued, running, completed, or failed state.
 `OperationProgress` contains a stable stage identifier, optional current and
 total values, and an optional items, files, photos, names, taxa, bytes, or
-statements unit. A current and total pair is determinate progress; a missing
-total is indeterminate progress. The task-keyed status map is the single source
-for the bottom-right Background UI. `BackgroundTaskScheduler` identifies
+statements unit. Determinate `current / total` means completed work divided by
+total work. A stage without a reliable total reports both values as absent and
+is indeterminate. `OperationManager` owns every user-visible long-running task
+lifecycle, progress, exact result, and error. `ActiveTaskRegistry` independently
+owns owner/tab cancellation for tasks that stop when their tab closes. The
+task-keyed status map is the single source for the bottom-right Background UI,
+and foreground workflows wait for the exact returned `task_id`.
+`BackgroundTaskScheduler` identifies
 photo work by `(kind, scope)`, coalesces duplicate queued or running work, and
 runs Photo Scan, Metadata Index, and Photo Mapping through one conservative
 worker. Each stage uses bounded database batches and yields between batches.
 Photo Library lifecycle changes and task startup share one coordinator lock;
-foreground queries remain ordinary asynchronous commands. Native paths,
+short foreground queries remain ordinary asynchronous commands. Native paths,
 dialogs, the private
 `vividarium://` media protocol, updates, and system application opening remain
 outside the core crate.

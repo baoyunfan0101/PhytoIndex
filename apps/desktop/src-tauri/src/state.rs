@@ -872,6 +872,38 @@ mod tests {
     }
 
     #[test]
+    fn owner_cancellation_finishes_the_exact_visible_task_as_failed() {
+        let registry = ActiveTaskRegistry::default();
+        let active = registry.start("formatted-tab".into()).unwrap();
+        let cancellation = active.cancellation();
+        let manager = OperationManager::new();
+        let key = BackgroundTaskKey::new(BackgroundTaskKind::PhotoScan, "formatted-tab");
+        let queued = manager
+            .queue_background("taxonomy", "preview_taxonomy_rows", &key)
+            .unwrap();
+        let task_id = queued.task_id.clone().unwrap();
+        manager.mark_running(&task_id).unwrap();
+
+        assert_eq!(registry.cancel_owner("formatted-tab").unwrap(), 1);
+        let result = cancellation
+            .check()
+            .map(|_| Value::Null)
+            .map_err(|error| error.to_string());
+        drop(active);
+        let failed = manager.finish(&task_id, result).unwrap();
+
+        assert_eq!(failed.task_id.as_deref(), Some(task_id.as_str()));
+        assert_eq!(failed.state, BackgroundTaskState::Failed);
+        assert!(
+            failed
+                .error
+                .as_deref()
+                .is_some_and(|error| error.contains("cancelled"))
+        );
+        assert_eq!(manager.operation(&task_id), Some(failed));
+    }
+
+    #[test]
     fn completed_task_key_can_be_registered_again_for_new_work() {
         let key = BackgroundTaskKey::new(BackgroundTaskKind::PhotoMapping, "library-a");
         let mut queue = BackgroundQueue::default();

@@ -9,6 +9,7 @@ import { errorMessage } from "../../api/common";
 import { selectSqliteDatabase } from "../../api/dialogs";
 import { getDatabaseLocations } from "../../api/storage";
 import { waitForOperation, type OperationState } from "../../api/tasks";
+import { operationResult } from "../../app/backgroundTaskResult";
 import type { TaxonomyImportResult } from "../../api/taxonomyImport";
 import { backgroundStageLabel } from "../../app/backgroundPresentation";
 import { Button, SectionHeader } from "../../shared/ui";
@@ -39,7 +40,11 @@ export function DirectImportSettings({
       const sourcePath = await selectSqliteDatabase(locations.default_taxonomy_directory);
       if (!sourcePath) return;
       setBusy("inspect");
-      setDatabase(await inspectDirectImportDatabase(sourcePath, taskOwnerId));
+      const started = await inspectDirectImportDatabase(sourcePath, taskOwnerId);
+      const completed = started.task_id && ["queued", "running"].includes(started.state)
+        ? await waitForOperation(started.task_id)
+        : started;
+      setDatabase(operationResult<DirectImportDatabase>(completed, started.task_id));
     } catch (nextError) {
       setDatabase(null);
       setError(errorMessage(nextError));
@@ -57,7 +62,7 @@ export function DirectImportSettings({
       const started = await applyDirectImport(database.source_path, taskOwnerId);
       setOperation(started);
       const completed = started.task_id
-        ? await waitForOperation(started.module, started.task_id, setOperation)
+        ? await waitForOperation(started.task_id, setOperation)
         : started;
       if (completed.error) throw new Error(completed.error);
       const result = completed.result as TaxonomyImportResult | null;

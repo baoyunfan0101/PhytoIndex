@@ -13,10 +13,14 @@ import {
   getTaxonomyTemplate,
   parseTaxonomyCsv,
   previewTaxonomyRows,
+  type FormattedUpdatePreviewResult,
   type TaxonInputRow,
   type TaxonRowOutcome,
+  type TaxonomyOperationResult,
 } from "../../api/taxonomy";
 import { downloadCsv, errorMessage } from "../../api/common";
+import { waitForOperation } from "../../api/tasks";
+import { operationResult } from "../../app/backgroundTaskResult";
 import { getTaxonomyNameSeparator } from "../../api/settings";
 import { Busy, Button, EmptyState, SectionHeader, VirtualList } from "../../shared/ui";
 import { TaxonCard } from "./TaxonCard";
@@ -357,7 +361,11 @@ export function FormattedUpdateView({
     setMessage("");
     setCurrentPreview(null);
     try {
-      const result = await previewTaxonomyRows(rows, taskOwnerId);
+      const started = await previewTaxonomyRows(rows, taskOwnerId);
+      const completed = started.task_id && ["queued", "running"].includes(started.state)
+        ? await waitForOperation(started.task_id)
+        : started;
+      const result = operationResult<FormattedUpdatePreviewResult>(completed, started.task_id);
       setOutcomes(result.rows);
       setCurrentPreview(result.preview_id);
       report(`${result.rows.length} rows previewed`);
@@ -375,7 +383,11 @@ export function FormattedUpdateView({
     setMessage("");
     setCurrentPreview(null);
     try {
-      const result = await applyTaxonomyRows(currentPreviewId, taskOwnerId);
+      const started = await applyTaxonomyRows(currentPreviewId, taskOwnerId);
+      const completed = started.task_id && ["queued", "running"].includes(started.state)
+        ? await waitForOperation(started.task_id)
+        : started;
+      const result = operationResult<TaxonomyOperationResult>(completed, started.task_id);
       setOutcomes(result.rows);
       report(`${result.succeeded_rows} succeeded, ${result.failed_rows} failed`);
       emitTaxonomyMutation();

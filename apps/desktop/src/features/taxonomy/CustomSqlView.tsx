@@ -10,11 +10,14 @@ import {
   removeCustomSqlInput,
   type CustomSqlExecutionResult,
   type PersistentSqlInput,
+  type SqlExportResult,
   type SqlResultSet,
   type SqlSourceSchema,
   type SqlValue,
 } from "../../api/customSql";
 import { errorMessage } from "../../api/common";
+import { waitForOperation } from "../../api/tasks";
+import { operationResult } from "../../app/backgroundTaskResult";
 import { selectCsvDestination } from "../../api/dialogs";
 import { CodeEditor } from "../../shared/CodeEditor";
 import { ResizablePanels } from "../../shared/ResizablePanels";
@@ -92,7 +95,11 @@ export function CustomSqlView({
     setBusy("Executing SQL");
     setError("");
     try {
-      const next = await executeCustomSql(sql, taskOwnerId);
+      const started = await executeCustomSql(sql, taskOwnerId);
+      const completed = started.task_id && ["queued", "running"].includes(started.state)
+        ? await waitForOperation(started.task_id)
+        : started;
+      const next = operationResult<CustomSqlExecutionResult>(completed, started.task_id);
       setResult(next);
       const outcome = next.operation_id === null
         ? "Query completed without creating an operation"
@@ -113,7 +120,11 @@ export function CustomSqlView({
     setBusy("Exporting full query");
     setError("");
     try {
-      const exported = await exportCustomSqlQuery(sql, destination, taskOwnerId);
+      const started = await exportCustomSqlQuery(sql, destination, taskOwnerId);
+      const completed = started.task_id && ["queued", "running"].includes(started.state)
+        ? await waitForOperation(started.task_id)
+        : started;
+      const exported = operationResult<SqlExportResult>(completed, started.task_id);
       onStatus(`Exported ${exported.row_count} rows to ${exported.path}`);
     } catch (nextError) {
       setError(errorMessage(nextError));

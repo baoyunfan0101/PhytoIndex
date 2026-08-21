@@ -95,7 +95,7 @@ export function SqlImportSettings({
     try {
       const started = await startSqlImportValidation(sql, taskOwnerId);
       const completed = started.task_id
-        ? await waitForOperation("sql_import", started.task_id)
+        ? await waitForOperation(started.task_id)
         : started;
       if (completed.error) throw new Error(completed.error);
       const result = completed.result as ValidateSqlImportResult | null;
@@ -128,7 +128,9 @@ export function SqlImportSettings({
     setError("");
     try {
       const operation = await applySqlImport(taskOwnerId);
-      const completed = await waitForOperation(operation.module, operation.task_id);
+      const completed = operation.task_id
+        ? await waitForOperation(operation.task_id)
+        : operation;
       if (completed.error) throw new Error(completed.error);
       const result = completed.result as TaxonomyImportResult | null;
       if (!result) throw new Error("SQL import completed without a replacement result");

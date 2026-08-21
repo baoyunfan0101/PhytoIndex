@@ -80,6 +80,12 @@ duration are defined by `backgroundPresentation`. Running elapsed time updates
 once per second in the frontend. The status-bar count includes only queued and
 running tasks.
 
+Foreground long-running workflows keep the exact operation handle returned by
+their command and wait by `task_id`. Custom SQL, Custom SQL export, Formatted
+Update preview and apply, SQL Import validation and apply, and Direct Import
+inspection and apply use this path. Owner cancellation remains tied to the tab
+while task lifecycle, progress, result, and error remain visible in Background.
+
 ### `useNativeMenu(handler)`
 
 Parameters: a handler receiving one typed native `File` menu action.

@@ -40,21 +40,32 @@ export function demoOperation(module: string, _message: string): OperationState 
   };
 }
 
+export function demoCompletedOperation(
+  module: string,
+  operation: string,
+  result: unknown,
+): OperationState {
+  return {
+    ...demoOperation(module, "Complete"),
+    operation,
+    result,
+  };
+}
+
 export const getOperationsStatus = () =>
   call<OperationsStatus>("get_operations_status", undefined, () => ({}));
 
 export async function waitForOperation(
-  module: string,
-  taskId: string | null,
+  taskId: string,
   onChange?: (operation: OperationState) => void,
 ): Promise<OperationState> {
-  if (!taskId) return demoOperation(module, "Complete");
   while (true) {
     const operation = operationByTaskId(await getOperationsStatus(), taskId);
-    if (operation) onChange?.(operation);
-    if (!operation || operation.task_id !== taskId || !["queued", "running"].includes(operation.state)) {
-      return operation ?? demoOperation(module, "Complete");
+    if (!operation || operation.task_id !== taskId) {
+      throw new Error(`Background task ${taskId} is unavailable`);
     }
+    onChange?.(operation);
+    if (!["queued", "running"].includes(operation.state)) return operation;
     await new Promise((resolve) => window.setTimeout(resolve, 250));
   }
 }

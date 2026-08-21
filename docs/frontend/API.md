@@ -57,14 +57,22 @@ and an optional progress unit. Statement execution uses `statements`, staging
 fingerprinting uses `bytes`, name processing uses `names`, and candidate taxon
 construction uses `taxa`. Integrity, schema, and taxonomy checks are
 indeterminate stages when no reliable total is available.
+Statement progress starts at zero and increases only after each statement
+finishes. Apply reports candidate validation, staging fingerprint bytes, and
+the applying stage at the corresponding core operation boundaries.
 The completed result distinguishes a valid candidate from structured taxonomy
 validation issues; execution failures remain operation errors.
-Direct Import first calls `inspect_direct_import_database`, which performs a
-read-only validation and returns the normalized path plus table and column
-metadata. It does not replace the current taxonomy. Only the subsequent
-`apply_direct_import` call starts a `direct_import` operation. Its completed
-result is `TaxonomyImportResult`; schema, integrity, and taxonomy validation
-failures are operation errors and leave the current taxonomy unchanged.
+Direct Import inspection and apply return `direct_import` operation handles.
+Inspection completes with the normalized path plus table and column metadata
+without replacing the taxonomy. Apply completes with `TaxonomyImportResult` and
+reports validation and applying at the core replacement boundaries. Schema,
+integrity, and taxonomy validation failures are operation errors and leave the
+current taxonomy unchanged.
+
+Custom SQL execution and export plus Formatted Update preview and apply return
+operation handles. Their owner IDs remain registered for tab-close
+cancellation while `OperationManager` owns Background visibility and results.
+The foreground reads the result from the exact returned task ID.
 
 Photo Library open, register, switch, and rebind calls return
 `PhotoLibraryActivation<T>`, which contains `library` and the first scheduled
@@ -80,5 +88,6 @@ loaded from Rename History.
 `OperationState.state` is the task lifecycle source. Running task progress is
 read exclusively from `OperationState.progress`; completed and failed tasks use
 their timestamps, result, and optional error. Determinate progress has both
-`current` and `total`. A missing total represents indeterminate work. The unit
-is one of items, files, photos, names, taxa, bytes, or statements.
+`current` and `total`, where current is completed work. Work without a reliable
+total has both values absent and is indeterminate. The unit is one of items,
+files, photos, names, taxa, bytes, or statements.
