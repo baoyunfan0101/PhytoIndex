@@ -52,7 +52,9 @@ capability limits URL opening to the exact project repository and author email
 values; browser development uses the browser's ordinary external navigation.
 
 SQL Import validation returns a `sql_import` operation handle. Its structured
-progress contains a stage and optional row counts or SQL statement indexes.
+progress contains a machine-readable stage, optional current and total values,
+and an optional progress unit. Statement execution uses the shared current,
+total, and `statements` unit fields.
 The completed result distinguishes a valid candidate from structured taxonomy
 validation issues; execution failures remain operation errors.
 Direct Import first calls `inspect_direct_import_database`, which performs a
@@ -72,3 +74,9 @@ state. Live Background state comes from `operation-progress`; status fetches are
 used for startup and recovery. Callers that need a completed foreground import
 result resolve that exact task rather than a module slot. Audit details are
 loaded from Rename History.
+
+`OperationState.state` is the task lifecycle source. Running task progress is
+read exclusively from `OperationState.progress`; completed and failed tasks use
+their timestamps, result, and optional error. Determinate progress has both
+`current` and `total`. A missing total represents indeterminate work. The unit
+is one of items, files, photos, names, taxa, bytes, or statements.

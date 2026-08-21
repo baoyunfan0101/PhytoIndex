@@ -16,15 +16,9 @@ const stageLabels: Record<string, string> = {
 export function describeSqlImportProgress(progress: OperationProgress | null): string {
   if (!progress) return "Preparing input sources";
   const label = stageLabels[progress.stage] ?? progress.stage.replace(/_/g, " ");
-  if (
-    progress.stage === "executing_sql"
-    && progress.statement_index !== null
-    && progress.statement_total !== null
-  ) {
-    return `${label} statement ${progress.statement_index} / ${progress.statement_total}`;
-  }
   if (progress.current !== null && progress.total !== null) {
-    return `${label}: ${progress.current.toLocaleString()} / ${progress.total.toLocaleString()}`;
+    const unit = progress.unit === null ? "" : ` ${progress.unit}`;
+    return `${label}: ${progress.current.toLocaleString()} / ${progress.total.toLocaleString()}${unit}`;
   }
   return label;
 }

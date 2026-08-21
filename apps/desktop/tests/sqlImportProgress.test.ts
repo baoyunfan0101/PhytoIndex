@@ -5,11 +5,10 @@ import { describeSqlImportProgress, formatElapsed } from "../src/features/taxono
 test("describes SQL statement progress without inventing a percentage", () => {
   assert.equal(describeSqlImportProgress({
     stage: "executing_sql",
-    current: null,
-    total: null,
-    statement_index: 2,
-    statement_total: 7,
-  }), "Executing SQL statement 2 / 7");
+    current: 2,
+    total: 7,
+    unit: "statements",
+  }), "Executing SQL: 2 / 7 statements");
 });
 
 test("describes known row counts and phase-only progress", () => {
@@ -17,15 +16,13 @@ test("describes known row counts and phase-only progress", () => {
     stage: "normalizing_names",
     current: 120000,
     total: 850000,
-    statement_index: null,
-    statement_total: null,
-  }), "Normalizing names: 120,000 / 850,000");
+    unit: "names",
+  }), "Normalizing names: 120,000 / 850,000 names");
   assert.equal(describeSqlImportProgress({
     stage: "validating_taxonomy",
     current: null,
     total: null,
-    statement_index: null,
-    statement_total: null,
+    unit: null,
   }), "Validating taxonomy");
 });
 

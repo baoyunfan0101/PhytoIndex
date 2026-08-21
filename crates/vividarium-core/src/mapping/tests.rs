@@ -43,7 +43,7 @@ fn one_mapping_run_compiles_the_hook_once_across_batches() {
     drop(connection);
 
     take_hook_compile_count();
-    let mut progress = |_: u64, _: Option<u64>, _: &str| {};
+    let mut progress = |_: OperationProgress| {};
     let result = process_pending_photo_matches(&database, &mut progress).unwrap();
 
     assert_eq!(result.processed, PHOTO_MAPPING_BATCH_SIZE + 1);
@@ -114,7 +114,7 @@ fn six_dimension_priority_controls_photo_mapping() {
     let library = open_library(&database, root.path().to_str().unwrap()).unwrap();
     refresh_directory(&database, library.root_directory_id).unwrap();
     let photo = photos::list_photos(&database).unwrap().remove(0);
-    let mut progress = |_: u64, _: Option<u64>, _: &str| {};
+    let mut progress = |_: OperationProgress| {};
     process_pending_photo_matches(&database, &mut progress).unwrap();
     let species_mapping = get_photo_mapping(&database, photo.photo_id).unwrap();
     assert_eq!(species_mapping.status, PhotoTaxonStatus::Matched);
@@ -199,7 +199,7 @@ fn matches_the_filename_stem_and_builds_sparse_usage() {
     apply_rows(&database, &rows).unwrap();
     let library = open_library(&database, root.path().to_str().unwrap()).unwrap();
     refresh_directory(&database, library.root_directory_id).unwrap();
-    let mut progress = |_: u64, _: Option<u64>, _: &str| {};
+    let mut progress = |_: OperationProgress| {};
     process_pending_photo_matches(&database, &mut progress).unwrap();
     let photo = photos::list_photos(&database).unwrap().remove(0);
     let mapping = get_photo_mapping(&database, photo.photo_id).unwrap();
@@ -390,7 +390,7 @@ fn persists_ambiguous_candidates_and_accepts_a_forced_mapping() {
         get_photo_mapping(&database, photo.photo_id).unwrap().status,
         PhotoTaxonStatus::Processing
     );
-    let mut progress = |_: u64, _: Option<u64>, _: &str| {};
+    let mut progress = |_: OperationProgress| {};
     process_pending_photo_matches(&database, &mut progress).unwrap();
     let mapping = get_photo_mapping(&database, photo.photo_id).unwrap();
     let candidates = get_photo_mapping_candidates(&database, photo.photo_id).unwrap();
@@ -484,7 +484,7 @@ fn clears_forces_and_automatically_recomputes_one_mapping() {
     let library = open_library(&database, root.path().to_str().unwrap()).unwrap();
     refresh_directory(&database, library.root_directory_id).unwrap();
     let photo = photos::list_photos(&database).unwrap().remove(0);
-    let mut progress = |_: u64, _: Option<u64>, _: &str| {};
+    let mut progress = |_: OperationProgress| {};
     process_pending_photo_matches(&database, &mut progress).unwrap();
     assert_eq!(
         get_photo_mapping(&database, photo.photo_id)
@@ -594,7 +594,7 @@ fn queues_a_photo_when_its_selected_taxon_is_deleted() {
     let library = open_library(&database, root.path().to_str().unwrap()).unwrap();
     refresh_directory(&database, library.root_directory_id).unwrap();
     let photo = photos::list_photos(&database).unwrap().remove(0);
-    let mut progress = |_: u64, _: Option<u64>, _: &str| {};
+    let mut progress = |_: OperationProgress| {};
     process_pending_photo_matches(&database, &mut progress).unwrap();
     set_photo_mapping(&database, photo.photo_id, taxon_id).unwrap();
     assert_eq!(
@@ -671,7 +671,7 @@ fn taxonomy_update_queues_only_affected_photos() {
     drop(connection);
     let library = open_library(&database, root.path().to_str().unwrap()).unwrap();
     refresh_directory(&database, library.root_directory_id).unwrap();
-    let mut progress = |_: u64, _: Option<u64>, _: &str| {};
+    let mut progress = |_: OperationProgress| {};
     process_pending_photo_matches(&database, &mut progress).unwrap();
     let photos = photos::list_photos(&database).unwrap();
     let canis_photo = photos

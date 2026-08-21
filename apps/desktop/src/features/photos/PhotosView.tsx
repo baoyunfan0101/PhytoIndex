@@ -855,15 +855,17 @@ function PhotoIndexingNotice({
 }) {
   if (!operation || !["queued", "running"].includes(operation.state)) return null;
   if (operation.module === "mapping" && !showMapping) return null;
-  const stage = operation.progress?.stage ?? operation.message;
+  const stage = operation.progress?.stage ?? operation.operation ?? operation.module;
   const metadata = stage.toLowerCase().includes("metadata");
   const prefix = operation.module === "mapping"
     ? "Photo mapping is still running · results may be incomplete"
     : map && metadata
       ? "Location metadata is still being indexed"
       : "Photo Library indexing · results may be incomplete";
-  const progress = operation.total === null
+  const current = operation.progress?.current;
+  const total = operation.progress?.total;
+  const progress = current === null || current === undefined || total === null || total === undefined
     ? ""
-    : ` · ${operation.completed.toLocaleString()} / ${operation.total.toLocaleString()}`;
+    : ` · ${current.toLocaleString()} / ${total.toLocaleString()}`;
   return <div className="photo-indexing-notice" role="status">{prefix}{progress}</div>;
 }

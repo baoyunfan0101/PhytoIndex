@@ -52,8 +52,13 @@ response boundary. Command adapters validate desktop-only inputs, translate
 errors to IPC strings, and delegate business behavior to `vividarium-core`.
 
 Long-running work is registered with the desktop operation coordinator and is
-reported through structured progress. Its task-keyed status map is the single
-source for the bottom-right Background UI. `BackgroundTaskScheduler` identifies
+reported through a shared task lifecycle and structured progress. Each
+`OperationState` has an explicit queued, running, completed, or failed state.
+`OperationProgress` contains a stable stage identifier, optional current and
+total values, and an optional items, files, photos, names, taxa, bytes, or
+statements unit. A current and total pair is determinate progress; a missing
+total is indeterminate progress. The task-keyed status map is the single source
+for the bottom-right Background UI. `BackgroundTaskScheduler` identifies
 photo work by `(kind, scope)`, coalesces duplicate queued or running work, and
 runs Photo Scan, Metadata Index, and Photo Mapping through one conservative
 worker. Each stage uses bounded database batches and yields between batches.

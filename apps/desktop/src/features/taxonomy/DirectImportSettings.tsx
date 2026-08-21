@@ -76,7 +76,7 @@ export function DirectImportSettings({
   }
 
   const progressMessage = operation?.progress?.stage
-    ?? operation?.message
+    ?? operation?.operation
     ?? "Applying direct import";
 
   const sourceName = database?.source_path.split(/[\\/]/).pop() ?? "SQLite database";

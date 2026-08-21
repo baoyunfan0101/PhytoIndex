@@ -726,10 +726,10 @@ export function DesktopShell({
                   <div key={operation.task_id ?? `${operation.module}-${operation.started_at}`}>
                     <b>{backgroundTaskName(operation)}</b>
                     <span>{backgroundTaskStage(operation)}</span>
-                    {operation.state === "running" && operation.total !== null && (
-                      <progress value={operation.completed} max={operation.total} />
+                    {operation.state === "running" && operation.progress?.current != null && operation.progress.total != null && (
+                      <progress value={operation.progress.current} max={operation.progress.total} />
                     )}
-                    {operation.state === "running" && operation.total === null && <progress />}
+                    {operation.state === "running" && operation.progress?.total == null && <progress />}
                     {operation.error && <small className="operation-error">{operation.error}</small>}
                   </div>
                 ))}
@@ -776,10 +776,10 @@ function backgroundTaskName(operation: OperationState) {
 }
 
 function backgroundTaskStage(operation: OperationState) {
-  const stage = operation.progress?.stage ?? operation.message;
+  const stage = operation.progress?.stage ?? operation.operation ?? operation.module;
   if (operation.state === "queued") return "Queued";
-  if (operation.state === "running" && operation.total !== null) {
-    return `${stage} · ${operation.completed.toLocaleString()} / ${operation.total.toLocaleString()}`;
+  if (operation.state === "running" && operation.progress?.current != null && operation.progress.total !== null) {
+    return `${stage} · ${operation.progress.current.toLocaleString()} / ${operation.progress.total.toLocaleString()}`;
   }
   return stage;
 }

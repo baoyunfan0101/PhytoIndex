@@ -11,8 +11,8 @@ use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
 use vividarium_core::taxonomy::{PreparedTaxonomyUpdate, TaxonomyPreviewResult};
 use vividarium_core::{
-    BackgroundTaskState, CancellationToken, CoreError, Database, OperationProgress, OperationState,
-    OperationsStatus,
+    BackgroundTaskState, CancellationToken, CoreError, Database, OperationProgress,
+    OperationProgressUnit, OperationState, OperationsStatus,
 };
 
 static GLOBAL_STATE: OnceLock<AppState> = OnceLock::new();
@@ -20,36 +20,43 @@ const PROGRESS_EVENT_INTERVAL: Duration = Duration::from_millis(100);
 
 struct ProgressEventThrottle {
     last_emitted_at: Option<Instant>,
-    last_message: Option<String>,
-    last_processed: Option<u64>,
+    last_stage: Option<String>,
+    last_current: Option<u64>,
     last_total: Option<u64>,
+    last_unit: Option<OperationProgressUnit>,
 }
 
 impl ProgressEventThrottle {
     fn new() -> Self {
         Self {
             last_emitted_at: None,
-            last_message: None,
-            last_processed: None,
+            last_stage: None,
+            last_current: None,
             last_total: None,
+            last_unit: None,
         }
     }
 
-    fn should_emit(&mut self, processed: u64, total: Option<u64>, message: &str) -> bool {
+    fn should_emit(&mut self, progress: &OperationProgress) -> bool {
         let first = self.last_emitted_at.is_none();
-        let phase_changed =
-            self.last_message.as_deref() != Some(message) || self.last_total != total;
-        let completed =
-            total.is_some_and(|value| processed >= value) && self.last_processed != Some(processed);
+        let phase_changed = self.last_stage.as_deref() != Some(&progress.stage)
+            || self.last_total != progress.total
+            || self.last_unit != progress.unit;
+        let completed = progress
+            .total
+            .zip(progress.current)
+            .is_some_and(|(total, current)| current >= total)
+            && self.last_current != progress.current;
         let interval_elapsed = self
             .last_emitted_at
             .is_some_and(|instant| instant.elapsed() >= PROGRESS_EVENT_INTERVAL);
         let emit = first || phase_changed || completed || interval_elapsed;
         if emit {
             self.last_emitted_at = Some(Instant::now());
-            self.last_message = Some(message.into());
-            self.last_processed = Some(processed);
-            self.last_total = total;
+            self.last_stage = Some(progress.stage.clone());
+            self.last_current = progress.current;
+            self.last_total = progress.total;
+            self.last_unit = progress.unit;
         }
         emit
     }
@@ -274,7 +281,7 @@ impl BackgroundTaskKey {
 }
 
 type BackgroundCallback = Box<
-    dyn FnOnce(&mut (dyn FnMut(u64, Option<u64>, &str) + Send)) -> Result<Value, String>
+    dyn FnOnce(&mut (dyn FnMut(OperationProgress) + Send)) -> Result<Value, String>
         + Send
         + 'static,
 >;
@@ -341,7 +348,7 @@ impl BackgroundTaskScheduler {
         callback: F,
     ) -> Result<OperationState, String>
     where
-        F: FnOnce(&mut (dyn FnMut(u64, Option<u64>, &str) + Send)) -> Result<Value, String>
+        F: FnOnce(&mut (dyn FnMut(OperationProgress) + Send)) -> Result<Value, String>
             + Send
             + 'static,
     {
@@ -359,7 +366,7 @@ impl BackgroundTaskScheduler {
                     .operation(&task_id)
                     .ok_or_else(|| format!("background task registry lost task {task_id}"))?;
                 if existing.is_active() {
-                    if rerun_if_running && existing.running {
+                    if rerun_if_running && existing.state == BackgroundTaskState::Running {
                         queue.reruns.insert(key, pending);
                     }
                     return Ok(existing);
@@ -480,32 +487,6 @@ impl OperationManager {
             .clone()
     }
 
-    pub fn start<F>(
-        &self,
-        app: AppHandle,
-        module: &'static str,
-        operation: &'static str,
-        callback: F,
-    ) -> Result<OperationState, String>
-    where
-        F: FnOnce(&mut (dyn FnMut(u64, Option<u64>, &str) + Send)) -> Result<Value, String>
-            + Send
-            + 'static,
-    {
-        self.start_with_progress(app, module, operation, move |report| {
-            let mut legacy_report = |processed: u64, total: Option<u64>, message: &str| {
-                report(OperationProgress {
-                    stage: message.into(),
-                    current: Some(processed),
-                    total,
-                    statement_index: None,
-                    statement_total: None,
-                });
-            };
-            callback(&mut legacy_report)
-        })
-    }
-
     pub fn start_with_progress<F>(
         &self,
         app: AppHandle,
@@ -531,13 +512,8 @@ impl OperationManager {
                 task_scope: None,
                 state: BackgroundTaskState::Running,
                 operation: Some(operation.into()),
-                running: true,
                 started_at: Some(now()),
                 finished_at: None,
-                message: format!("{operation} running"),
-                completed: 0,
-                processed: 0,
-                total: None,
                 progress: None,
                 result: None,
                 error: None,
@@ -552,8 +528,7 @@ impl OperationManager {
             let progress_task_id = task_id.clone();
             let mut throttle = ProgressEventThrottle::new();
             let mut progress = move |progress: OperationProgress| {
-                let processed = progress.current.unwrap_or(0);
-                let emit = throttle.should_emit(processed, progress.total, &progress.stage);
+                let emit = throttle.should_emit(&progress);
                 let current = progress_manager.update_progress(&progress_task_id, &progress, emit);
                 if let Some(current) = current {
                     let _ = progress_app.emit("operation-progress", current);
@@ -576,13 +551,9 @@ impl OperationManager {
     ) -> Option<OperationState> {
         let mut states = self.states.lock().ok()?;
         let state = states.get_mut(task_id)?;
-        if !state.running {
+        if state.state != BackgroundTaskState::Running {
             return None;
         }
-        state.processed = progress.current.unwrap_or(0);
-        state.completed = state.processed;
-        state.total = progress.total;
-        state.message = progress.stage.clone();
         state.progress = Some(progress.clone());
         snapshot.then(|| state.clone())
     }
@@ -590,18 +561,15 @@ impl OperationManager {
     fn finish(&self, task_id: &str, result: Result<Value, String>) -> Option<OperationState> {
         let mut states = self.states.lock().ok()?;
         let state = states.get_mut(task_id)?;
-        state.running = false;
         state.finished_at = Some(now());
         match result {
             Ok(result) => {
                 state.state = BackgroundTaskState::Completed;
-                state.message = "completed".into();
                 state.result = Some(result);
                 state.error = None;
             }
             Err(error) => {
                 state.state = BackgroundTaskState::Failed;
-                state.message = "failed".into();
                 state.error = Some(error);
             }
         }
@@ -628,13 +596,8 @@ impl OperationManager {
             task_scope: Some(key.scope.clone()),
             state: BackgroundTaskState::Queued,
             operation: Some(operation.into()),
-            running: false,
             started_at: None,
             finished_at: None,
-            message: "queued".into(),
-            completed: 0,
-            processed: 0,
-            total: None,
             progress: None,
             result: None,
             error: None,
@@ -660,15 +623,8 @@ impl OperationManager {
         let progress_app = app.clone();
         let progress_task_id = task_id.to_string();
         let mut throttle = ProgressEventThrottle::new();
-        let mut progress = move |processed: u64, total: Option<u64>, message: &str| {
-            let value = OperationProgress {
-                stage: message.into(),
-                current: Some(processed),
-                total,
-                statement_index: None,
-                statement_total: None,
-            };
-            let emit = throttle.should_emit(processed, total, message);
+        let mut progress = move |value: OperationProgress| {
+            let emit = throttle.should_emit(&value);
             let current = progress_manager.update_progress(&progress_task_id, &value, emit);
             if let Some(current) = current {
                 let _ = progress_app.emit("operation-progress", current);
@@ -684,9 +640,7 @@ impl OperationManager {
         let mut states = self.states.lock().ok()?;
         let state = states.get_mut(task_id)?;
         state.state = BackgroundTaskState::Running;
-        state.running = true;
         state.started_at = Some(now());
-        state.message = format!("{} running", state.operation.as_deref().unwrap_or("task"));
         Some(state.clone())
     }
 }
@@ -728,7 +682,7 @@ fn blocked_by_excluding(
         let other = state.module.as_str();
         let taxonomy_import_conflict = matches!(module, "sql_import" | "direct_import")
             && matches!(other, "sql_import" | "direct_import");
-        (state.running
+        (state.is_active()
             && (module == other
                 || module == "mapping"
                 || other == "mapping"
@@ -751,12 +705,33 @@ mod tests {
     fn progress_throttle_emits_first_phase_changes_and_completion() {
         let mut throttle = ProgressEventThrottle::new();
 
-        assert!(throttle.should_emit(0, None, "Reading"));
-        assert!(!throttle.should_emit(1, None, "Reading"));
-        assert!(throttle.should_emit(0, Some(100), "Importing"));
-        assert!(!throttle.should_emit(1, Some(100), "Importing"));
-        assert!(throttle.should_emit(100, Some(100), "Importing"));
-        assert!(throttle.should_emit(100, None, "Committing"));
+        let progress = |stage: &str, current, total, unit| OperationProgress {
+            stage: stage.into(),
+            current,
+            total,
+            unit,
+        };
+        assert!(throttle.should_emit(&progress("reading", None, None, None)));
+        assert!(!throttle.should_emit(&progress("reading", Some(1), None, None)));
+        assert!(throttle.should_emit(&progress(
+            "importing",
+            Some(0),
+            Some(100),
+            Some(OperationProgressUnit::Items),
+        )));
+        assert!(!throttle.should_emit(&progress(
+            "importing",
+            Some(1),
+            Some(100),
+            Some(OperationProgressUnit::Items),
+        )));
+        assert!(throttle.should_emit(&progress(
+            "importing",
+            Some(100),
+            Some(100),
+            Some(OperationProgressUnit::Items),
+        )));
+        assert!(throttle.should_emit(&progress("committing", None, None, None)));
     }
 
     #[test]
@@ -791,13 +766,8 @@ mod tests {
                     task_scope: None,
                     state: BackgroundTaskState::Running,
                     operation: Some("validate_sql_import".into()),
-                    running: true,
                     started_at: Some(now()),
                     finished_at: None,
-                    message: "running".into(),
-                    completed: 0,
-                    processed: 0,
-                    total: None,
                     progress: None,
                     result: None,
                     error: None,
@@ -808,18 +778,48 @@ mod tests {
             stage: "executing_sql".into(),
             current: Some(2),
             total: Some(7),
-            statement_index: Some(2),
-            statement_total: Some(7),
+            unit: Some(OperationProgressUnit::Statements),
         };
 
         let state = manager
             .update_progress("validate-1", &progress, true)
             .unwrap();
 
-        assert_eq!(state.message, "executing_sql");
-        assert_eq!(state.processed, 2);
-        assert_eq!(state.total, Some(7));
         assert_eq!(state.progress, Some(progress));
+    }
+
+    #[test]
+    fn progress_serializes_determinate_and_indeterminate_units() {
+        let determinate = OperationProgress {
+            stage: "normalizing_names".into(),
+            current: Some(12),
+            total: Some(20),
+            unit: Some(OperationProgressUnit::Names),
+        };
+        assert_eq!(
+            serde_json::to_value(&determinate).unwrap(),
+            serde_json::json!({
+                "stage": "normalizing_names",
+                "current": 12,
+                "total": 20,
+                "unit": "names",
+            })
+        );
+        let indeterminate = OperationProgress {
+            stage: "checking_database".into(),
+            current: None,
+            total: None,
+            unit: None,
+        };
+        assert_eq!(
+            serde_json::to_value(&indeterminate).unwrap(),
+            serde_json::json!({
+                "stage": "checking_database",
+                "current": null,
+                "total": null,
+                "unit": null,
+            })
+        );
     }
 
     #[test]
@@ -844,15 +844,31 @@ mod tests {
             .unwrap();
         let task_id = queued.task_id.as_deref().unwrap();
         assert_eq!(queued.state, BackgroundTaskState::Queued);
-        assert!(!queued.running);
 
         let running = manager.mark_running(task_id).unwrap();
         assert_eq!(running.state, BackgroundTaskState::Running);
-        assert!(running.running);
 
         let completed = manager.finish(task_id, Ok(Value::Null)).unwrap();
         assert_eq!(completed.state, BackgroundTaskState::Completed);
-        assert!(!completed.running);
+    }
+
+    #[test]
+    fn background_task_failure_retains_the_error() {
+        let manager = OperationManager::new();
+        let key = BackgroundTaskKey::new(BackgroundTaskKind::PhotoMapping, "library-a");
+        let queued = manager
+            .queue_background("mapping", "photo_mapping", &key)
+            .unwrap();
+        let task_id = queued.task_id.as_deref().unwrap();
+        manager.mark_running(task_id).unwrap();
+
+        let failed = manager
+            .finish(task_id, Err("mapping failed".into()))
+            .unwrap();
+
+        assert_eq!(failed.state, BackgroundTaskState::Failed);
+        assert_eq!(failed.error.as_deref(), Some("mapping failed"));
+        assert!(failed.finished_at.is_some());
     }
 
     #[test]
@@ -891,7 +907,7 @@ mod tests {
             Some("sql_import")
         );
 
-        states.get_mut("task-1").unwrap().running = false;
+        states.get_mut("task-1").unwrap().state = BackgroundTaskState::Completed;
         states.insert("task-2".into(), running_state("direct_import"));
         assert_eq!(
             blocked_by(&states, "sql_import").as_deref(),
@@ -907,13 +923,8 @@ mod tests {
             task_scope: None,
             state: BackgroundTaskState::Running,
             operation: Some("test".into()),
-            running: true,
             started_at: Some(now()),
             finished_at: None,
-            message: "running".into(),
-            completed: 0,
-            processed: 0,
-            total: None,
             progress: None,
             result: None,
             error: None,

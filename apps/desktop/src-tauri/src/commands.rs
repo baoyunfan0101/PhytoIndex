@@ -11,9 +11,9 @@ use vividarium_core::mapping::{
     PhotoTaxonCandidate, PhotoTaxonItem, PhotoTaxonNode,
 };
 use vividarium_core::models::{
-    DatabaseLocations, DirectoryEntryCounts, MappingMetadata, OperationState, OperationsStatus,
-    Photo, PhotoDirectory, PhotoDirectoryItem, PhotoLibrary, PhotoLibraryRegistration,
-    PhotoMetadata, PhotoPage,
+    DatabaseLocations, DirectoryEntryCounts, MappingMetadata, OperationProgress, OperationState,
+    OperationsStatus, Photo, PhotoDirectory, PhotoDirectoryItem, PhotoLibrary,
+    PhotoLibraryRegistration, PhotoMetadata, PhotoPage,
 };
 use vividarium_core::naming::{
     NamingHookKind, NamingHookSettings, NamingHookTemplates, NamingHookTestCase,
@@ -451,8 +451,9 @@ pub fn refresh_photo_directory(
         "photo_scan",
         true,
         move |progress| {
-            progress(0, None, "Refreshing directory");
-            let refresh = photos::refresh_directory(&database, directory_id).map_err(error)?;
+            let refresh =
+                photos::refresh_directory_with_progress(&database, directory_id, progress)
+                    .map_err(error)?;
             serde_json::to_value(refresh).map_err(error)
         },
     )?;
@@ -646,15 +647,17 @@ pub fn rename_photos_from_taxa(
 ) -> CommandResult<Value> {
     let _lifecycle = state.lock_photo_library_lifecycle()?;
     let database = state.database.clone();
-    let operation =
-        state
-            .operations
-            .start(app, "photos", "rename_from_taxonomy", move |progress| {
-                let result =
-                    photos::rename_photos_from_taxa_with_progress(&database, &photo_ids, progress)
-                        .map_err(error)?;
-                Ok(compact_photo_rename_result(&result))
-            })?;
+    let operation = state.operations.start_with_progress(
+        app,
+        "photos",
+        "rename_from_taxonomy",
+        move |progress| {
+            let result =
+                photos::rename_photos_from_taxa_with_progress(&database, &photo_ids, progress)
+                    .map_err(error)?;
+            Ok(compact_photo_rename_result(&result))
+        },
+    )?;
     Ok(json!({ "operation": operation }))
 }
 
@@ -667,7 +670,7 @@ pub fn rename_photos_in_directory_from_taxa(
 ) -> CommandResult<Value> {
     let _lifecycle = state.lock_photo_library_lifecycle()?;
     let database = state.database.clone();
-    let operation = state.operations.start(
+    let operation = state.operations.start_with_progress(
         app,
         "photos",
         "rename_directory_from_taxonomy",
@@ -1426,11 +1429,10 @@ pub fn start_sql_import_validation(
                 Ok(result) => serde_json::to_value(result).map_err(error),
                 Err(failure) => {
                     progress(vividarium_core::OperationProgress {
-                        stage: "operational_failure".into(),
+                        stage: "validation_could_not_be_completed".into(),
                         current: None,
                         total: None,
-                        statement_index: None,
-                        statement_total: None,
+                        unit: None,
                     });
                     Err(error(failure))
                 }
@@ -1452,12 +1454,22 @@ pub fn apply_sql_import(
     let sync_app = app.clone();
     state
         .operations
-        .start(app, "sql_import", "apply_sql_import", move |progress| {
+        .start_with_progress(app, "sql_import", "apply_sql_import", move |progress| {
             let _active_task = active_task;
-            progress(0, None, "Validating SQL import candidate");
+            progress(OperationProgress {
+                stage: "validating_sql_import_candidate".into(),
+                current: None,
+                total: None,
+                unit: None,
+            });
             let result = taxonomy::apply_sql_import_with_cancellation(&database, &cancellation)
                 .map_err(error)?;
-            progress(1, Some(1), "Taxonomy SQL import applied");
+            progress(OperationProgress {
+                stage: "applying_sql_import".into(),
+                current: None,
+                total: None,
+                unit: None,
+            });
             schedule_taxonomy_sync(sync_app, &background_state);
             serde_json::to_value(result).map_err(error)
         })
@@ -1475,20 +1487,30 @@ pub fn apply_direct_import(
     let database = state.database.clone();
     let background_state = state.inner().clone();
     let sync_app = app.clone();
-    state.operations.start(
+    state.operations.start_with_progress(
         app,
         "direct_import",
         "apply_direct_import",
         move |progress| {
             let _active_task = active_task;
-            progress(0, None, "Validating direct import database");
+            progress(OperationProgress {
+                stage: "validating_direct_import_database".into(),
+                current: None,
+                total: None,
+                unit: None,
+            });
             let result = taxonomy::apply_direct_import_with_cancellation(
                 &database,
                 Path::new(&source_path),
                 &cancellation,
             )
             .map_err(error)?;
-            progress(1, Some(1), "Direct import applied");
+            progress(OperationProgress {
+                stage: "applying_direct_import".into(),
+                current: None,
+                total: None,
+                unit: None,
+            });
             schedule_taxonomy_sync(sync_app, &background_state);
             serde_json::to_value(result).map_err(error)
         },
@@ -1582,7 +1604,12 @@ fn schedule_taxonomy_sync(app: AppHandle, state: &AppState) {
         "photo_mapping",
         true,
         move |progress| {
-            progress(0, None, "Synchronizing taxonomy changes");
+            progress(OperationProgress {
+                stage: "synchronizing_taxonomy".into(),
+                current: None,
+                total: None,
+                unit: None,
+            });
             let sync = taxonomy::synchronize_pending_photo_libraries(&database).map_err(error)?;
             let active_library = database.active_photo_library().map_err(error)?;
             let mapping = if active_library
@@ -1591,7 +1618,12 @@ fn schedule_taxonomy_sync(app: AppHandle, state: &AppState) {
             {
                 Some(mapping::process_pending_photo_matches(&database, progress).map_err(error)?)
             } else {
-                progress(0, Some(0), "No active Photo Library");
+                progress(OperationProgress {
+                    stage: "no_active_photo_library".into(),
+                    current: None,
+                    total: None,
+                    unit: None,
+                });
                 None
             };
             Ok(json!({ "sync": sync, "mapping": mapping }))

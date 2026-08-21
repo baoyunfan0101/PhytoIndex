@@ -273,11 +273,12 @@ fn validate_reports_real_stages_and_sql_statement_progress() {
         .filter(|event| event.stage == EXECUTING_SQL)
         .collect::<Vec<_>>();
     assert!(!sql_events.is_empty());
-    assert_eq!(sql_events[0].statement_index, Some(1));
+    assert_eq!(sql_events[0].current, Some(1));
     assert_eq!(
-        sql_events[0].statement_total,
+        sql_events[0].total,
         Some(result.execution.statements_executed as u64)
     );
+    assert_eq!(sql_events[0].unit, Some(OperationProgressUnit::Statements));
     assert!(progress.iter().any(|event| {
         event.stage == NORMALIZING_NAMES && event.current == event.total && event.total == Some(1)
     }));

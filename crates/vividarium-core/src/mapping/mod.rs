@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::db::Database;
 use crate::error::{CoreError, CoreResult};
-use crate::models::Photo;
+use crate::models::{OperationProgress, OperationProgressUnit, Photo};
 use crate::naming::PhotoFilenameParser;
 use crate::taxonomy::{
     TaxonDisplayNames, TaxonRank, TaxonSummary, TaxonomyNameType, load_taxon_summaries,
@@ -148,7 +148,7 @@ pub struct PhotoMappingRunResult {
 const PHOTO_TAXON_CANDIDATE_LIMIT: usize = 500;
 const PHOTO_MAPPING_BATCH_SIZE: usize = 200;
 
-pub type MappingProgressCallback<'a> = dyn FnMut(u64, Option<u64>, &str) + Send + 'a;
+pub type MappingProgressCallback<'a> = dyn FnMut(OperationProgress) + Send + 'a;
 
 pub(crate) fn queue_photo_ids(
     transaction: &Transaction<'_>,
@@ -185,7 +185,12 @@ pub fn process_pending_photo_matches(
 
     let mut processed = 0usize;
     let mut changed = 0usize;
-    progress(0, Some(total as u64), "Matching photo names");
+    progress(OperationProgress {
+        stage: "mapping_photos".into(),
+        current: Some(0),
+        total: Some(total as u64),
+        unit: Some(OperationProgressUnit::Photos),
+    });
     loop {
         let mut connection = database.connect()?;
         let transaction = connection.transaction()?;
@@ -212,7 +217,12 @@ pub fn process_pending_photo_matches(
         delete_queued_photo_ids(&transaction, &photo_ids)?;
         transaction.commit()?;
         processed += photo_ids.len();
-        progress(processed as u64, Some(total as u64), "Matching photo names");
+        progress(OperationProgress {
+            stage: "mapping_photos".into(),
+            current: Some(processed as u64),
+            total: Some(total as u64),
+            unit: Some(OperationProgressUnit::Photos),
+        });
         std::thread::yield_now();
     }
     let connection = database.connect()?;

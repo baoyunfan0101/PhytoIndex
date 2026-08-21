@@ -30,7 +30,7 @@ use crate::db::{
     LOCAL_TAXON_ID_FLOOR, TaxonomyReplacementGuard, initialize_taxonomy_database_file,
 };
 use crate::metadata::{self, MetadataKey};
-use crate::models::OperationProgress;
+use crate::models::{OperationProgress, OperationProgressUnit};
 use crate::naming::normalize_taxonomy_name;
 use crate::{CancellationToken, CoreError, CoreResult, Database};
 
@@ -237,7 +237,7 @@ fn execute_sql_import_sql_in_workspace(
     let staging_path = staging.to_string_lossy().into_owned();
     let sql = replace_staging_literal(sql, &staging_path);
     let execution: CoreResult<Vec<SqlStatementMessage>> = (|| {
-        report_progress(progress, PREPARING_INPUT_SOURCES, None, None, None, None);
+        report_progress(progress, PREPARING_INPUT_SOURCES, None, None, None);
         let mut connection = Connection::open_in_memory()?;
         cancellation.install_sqlite_progress_handler(&connection);
         connection.execute_batch("PRAGMA foreign_keys = ON")?;
@@ -253,7 +253,7 @@ fn execute_sql_import_sql_in_workspace(
         attached.push("taxonomy".into());
         let execution =
             execute_sql_import_script(&connection, &sql, &staging_path, progress, cancellation);
-        report_progress(progress, BUILDING_STAGING_DATABASE, None, None, None, None);
+        report_progress(progress, BUILDING_STAGING_DATABASE, None, None, None);
         let attachments = validate_sql_import_attachments(&connection, &attached);
         let autocommit = unsafe { ffi::sqlite3_get_autocommit(connection.handle()) != 0 };
         if !autocommit {
@@ -361,8 +361,7 @@ fn validate_sql_import_candidate_in_workspace(
             NORMALIZING_NAMES,
             Some(0),
             Some(total_names),
-            None,
-            None,
+            Some(OperationProgressUnit::Names),
         );
         let mut names = connection.prepare(
             "SELECT name_id, taxon_id, name_type, name FROM taxon_names ORDER BY taxon_id, name_type, name_id",
@@ -419,8 +418,7 @@ fn validate_sql_import_candidate_in_workspace(
                     NORMALIZING_NAMES,
                     Some(processed_names),
                     Some(total_names),
-                    None,
-                    None,
+                    Some(OperationProgressUnit::Names),
                 );
             }
         }
@@ -429,10 +427,9 @@ fn validate_sql_import_candidate_in_workspace(
             NORMALIZING_NAMES,
             Some(processed_names),
             Some(total_names),
-            None,
-            None,
+            Some(OperationProgressUnit::Names),
         );
-        report_progress(progress, VALIDATING_TAXONOMY, None, None, None, None);
+        report_progress(progress, VALIDATING_TAXONOMY, None, None, None);
         visit_taxonomy_validation_issues(&connection, false, |issue| {
             if issue.code != "duplicate_name_family" {
                 record_taxonomy_error(&mut validation, issue);
@@ -452,7 +449,7 @@ fn validate_sql_import_candidate_in_workspace(
             cancellation,
         )
         .and_then(|_| {
-            report_progress(progress, VALIDATING_TAXONOMY, None, None, None, None);
+            report_progress(progress, VALIDATING_TAXONOMY, None, None, None);
             validate_candidate_database_with_cancellation(&candidate_build, cancellation)
         });
         if let Err(error) = build {
@@ -862,8 +859,7 @@ fn execute_sql_import_script(
             EXECUTING_SQL,
             Some(statement_index),
             Some(statement_total),
-            Some(statement_index),
-            Some(statement_total),
+            Some(OperationProgressUnit::Statements),
         );
         connection.authorizer(Some(sql_import_authorizer(staging_path.to_string())));
         let execution = unsafe { execute_statement_to_completion_raw(connection, &sql[offset..]) };
@@ -1238,8 +1234,7 @@ fn build_official_taxonomy(
         BUILDING_CANDIDATE_TAXA,
         Some(0),
         Some(taxa_total),
-        None,
-        None,
+        Some(OperationProgressUnit::Taxa),
     );
     transaction.execute(
         r#"
@@ -1255,8 +1250,7 @@ fn build_official_taxonomy(
         BUILDING_CANDIDATE_TAXA,
         Some(taxa_total),
         Some(taxa_total),
-        None,
-        None,
+        Some(OperationProgressUnit::Taxa),
     );
     let names_total =
         transaction.query_row("SELECT COUNT(*) FROM staging.taxon_names", [], |row| {
@@ -1267,8 +1261,7 @@ fn build_official_taxonomy(
         BUILDING_CANDIDATE_NAMES,
         Some(0),
         Some(names_total),
-        None,
-        None,
+        Some(OperationProgressUnit::Names),
     );
     let mut insert = transaction.prepare_cached(
         r#"
@@ -1344,12 +1337,11 @@ fn build_official_taxonomy(
             BUILDING_CANDIDATE_NAMES,
             Some(processed_names),
             Some(names_total),
-            None,
-            None,
+            Some(OperationProgressUnit::Names),
         );
     }
     drop(insert);
-    report_progress(progress, VALIDATING_TAXONOMY, None, None, None, None);
+    report_progress(progress, VALIDATING_TAXONOMY, None, None, None);
     validate_taxonomy(&transaction)?;
     transaction.execute(
         r#"
@@ -1461,15 +1453,13 @@ fn report_progress(
     stage: &str,
     current: Option<u64>,
     total: Option<u64>,
-    statement_index: Option<u64>,
-    statement_total: Option<u64>,
+    unit: Option<OperationProgressUnit>,
 ) {
     progress(OperationProgress {
         stage: stage.into(),
         current,
         total,
-        statement_index,
-        statement_total,
+        unit,
     });
 }
 
@@ -1484,7 +1474,6 @@ fn report_validation_outcome(
         } else {
             VALIDATION_FAILED
         },
-        None,
         None,
         None,
         None,
