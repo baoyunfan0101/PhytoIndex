@@ -10,6 +10,7 @@ import { selectSqliteDatabase } from "../../api/dialogs";
 import { getDatabaseLocations } from "../../api/storage";
 import { waitForOperation, type OperationState } from "../../api/tasks";
 import type { TaxonomyImportResult } from "../../api/taxonomyImport";
+import { backgroundStageLabel } from "../../app/backgroundPresentation";
 import { Button, SectionHeader } from "../../shared/ui";
 import { formatTaxonomyImportApplyMessage } from "./taxonomyImportMessages";
 import { emitTaxonomyMutation } from "./taxonomyMutations";
@@ -75,9 +76,7 @@ export function DirectImportSettings({
     }
   }
 
-  const progressMessage = operation?.progress?.stage
-    ?? operation?.operation
-    ?? "Applying direct import";
+  const progressMessage = operation ? backgroundStageLabel(operation) : "Applying direct import";
 
   const sourceName = database?.source_path.split(/[\\/]/).pop() ?? "SQLite database";
 

@@ -1,8 +1,9 @@
 import type { PhotoRenameOperationSummary } from "../../api/photos";
 import type { OperationState } from "../../api/tasks";
+import { backgroundStageLabel } from "../../app/backgroundPresentation.ts";
 
 export function describePhotoOperation(operation: OperationState): string {
-  const stage = operation.progress?.stage || operation.operation || "Loading Photo Library";
+  const stage = backgroundStageLabel(operation);
   const current = operation.progress?.current ?? 0;
   const total = operation.progress?.total ?? null;
   if (total === null || total <= 0) return stage;

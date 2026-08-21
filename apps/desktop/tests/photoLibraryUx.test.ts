@@ -14,7 +14,7 @@ function operation(overrides: Partial<OperationState> = {}): OperationState {
     task_kind: "photo_scan",
     task_scope: "library-a",
     state: "running",
-    operation: "initial_index",
+    operation: "photo_scan",
     started_at: "2026-08-09 22:00:00",
     finished_at: null,
     progress: null,
@@ -40,13 +40,13 @@ test("photo operation progress presents known totals", () => {
       unit: "photos",
     },
   });
-  assert.equal(describePhotoOperation(value), "indexing_photo_metadata: 1,200 / 5,000");
+  assert.equal(describePhotoOperation(value), "Reading photo metadata: 1,200 / 5,000");
   assert.deepEqual(photoOperationProgress(value), { value: 1200, max: 5000 });
 });
 
 test("photo operation progress supports phase-only updates", () => {
   const value = operation();
-  assert.equal(describePhotoOperation(value), "initial_index");
+  assert.equal(describePhotoOperation(value), "Starting");
   assert.equal(photoOperationProgress(value), null);
 });
 

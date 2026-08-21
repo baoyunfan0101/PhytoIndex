@@ -77,6 +77,8 @@ import { TaxonomyHierarchyPage } from "../features/taxonomy/TaxonomyHierarchyPag
 import { CustomSqlView } from "../features/taxonomy/CustomSqlView";
 import { OperationHistoryView } from "../features/operations/OperationHistoryView";
 import { useOperationObserver } from "./useOperationObserver";
+import { BackgroundTasks } from "./BackgroundTasks";
+import { backgroundActiveCount } from "./backgroundPresentation";
 import { ViewStateProvider, type ViewStateStore } from "../shared/viewState";
 import {
   dependsOnReplacedTaxonomy,
@@ -194,6 +196,7 @@ export function DesktopShell({
   const runningOperations = Object.values(operations).filter((operation) => (
     operation.state === "queued" || operation.state === "running"
   ));
+  const activeOperationCount = backgroundActiveCount(operations);
   const latestPhotoOperation = latestOperationForModule(operations, "photos");
   const latestMappingOperation = latestOperationForModule(operations, "mapping");
   const observedStartedPhotoOperation = operationByTaskId(
@@ -209,7 +212,7 @@ export function DesktopShell({
         ? latestMappingOperation
         : null;
   const photoLibraryOperationError = latestPhotoOperation
-    && ["initial_index", "photo_library_index", "photo_scan", "metadata_index"].includes(latestPhotoOperation.operation ?? "")
+    && ["photo_scan", "metadata_index"].includes(latestPhotoOperation.operation ?? "")
     && latestPhotoOperation.error
     ? `Photo Library indexing failed: ${latestPhotoOperation.error}. Retry the active library or reopen it.`
     : "";
@@ -713,27 +716,13 @@ export function DesktopShell({
           {status}
           <span className="status-title">{active?.title ?? ""}</span>
           <div className="status-operations" ref={operationsMenuRef}>
-            <IconButton aria-label="Background" className={runningOperations.length > 0 ? "running" : ""} title="Background" onClick={() => {
+            <IconButton aria-label="Background" className={activeOperationCount > 0 ? "running" : ""} title="Background" onClick={() => {
               setOperationsOpen((current) => !current);
             }}>
-              <Activity size={12} /><span>{runningOperations.length}</span>
+              <Activity size={12} /><span>{activeOperationCount}</span>
             </IconButton>
             {operationsOpen && (
-              <div className="toolbar-popover operations-popover">
-                <strong>Background</strong>
-                {Object.values(operations).length === 0 && <span className="operations-empty">No background tasks</span>}
-                {Object.values(operations).sort(compareBackgroundOperations).map((operation) => (
-                  <div key={operation.task_id ?? `${operation.module}-${operation.started_at}`}>
-                    <b>{backgroundTaskName(operation)}</b>
-                    <span>{backgroundTaskStage(operation)}</span>
-                    {operation.state === "running" && operation.progress?.current != null && operation.progress.total != null && (
-                      <progress value={operation.progress.current} max={operation.progress.total} />
-                    )}
-                    {operation.state === "running" && operation.progress?.total == null && <progress />}
-                    {operation.error && <small className="operation-error">{operation.error}</small>}
-                  </div>
-                ))}
-              </div>
+              <BackgroundTasks operations={operations} />
             )}
           </div>
         </footer>
@@ -748,40 +737,6 @@ export function DesktopShell({
       {aboutOpen && <NativeAboutOverlay onClose={() => setAboutOpen(false)} />}
     </div>
   );
-}
-
-function compareBackgroundOperations(left: OperationState, right: OperationState) {
-  const leftActive = left.state === "queued" || left.state === "running";
-  const rightActive = right.state === "queued" || right.state === "running";
-  if (leftActive !== rightActive) return leftActive ? -1 : 1;
-  return (right.started_at ?? "").localeCompare(left.started_at ?? "");
-}
-
-function backgroundTaskName(operation: OperationState) {
-  const names: Record<string, string> = {
-    photo_scan: "Photo scan",
-    metadata_index: "Photo metadata index",
-    photo_mapping: "Photo mapping",
-    initial_index: "Photo Library indexing",
-    photo_library_index: "Photo Library indexing",
-    refresh: "Photo Library refresh",
-    rename_from_taxonomy: "Rename photos",
-    rename_directory_from_taxonomy: "Rename photos recursively",
-    taxonomy_sync: "Photo mapping",
-    match: "Photo mapping",
-    apply_sql_import: "SQL import",
-    apply_direct_import: "Direct import",
-  };
-  return names[operation.operation ?? ""] ?? operation.operation?.split("_").join(" ") ?? operation.module;
-}
-
-function backgroundTaskStage(operation: OperationState) {
-  const stage = operation.progress?.stage ?? operation.operation ?? operation.module;
-  if (operation.state === "queued") return "Queued";
-  if (operation.state === "running" && operation.progress?.current != null && operation.progress.total !== null) {
-    return `${stage} · ${operation.progress.current.toLocaleString()} / ${operation.progress.total.toLocaleString()}`;
-  }
-  return stage;
 }
 
 function TabBody({

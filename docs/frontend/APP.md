@@ -72,6 +72,14 @@ completion invalidations. It registers `operation-progress` before relying on
 live updates and fetches a status snapshot only for startup, window-focus or
 visibility recovery; Background progress does not use a fixed polling loop.
 
+`BackgroundTasks` owns the bottom-right task popover. Active queued and running
+tasks appear before a Recent section containing at most ten completed or failed
+tasks ordered by finish time. Task titles, stage labels, progress units,
+determinate and indeterminate modes, byte counts, and elapsed or finished
+duration are defined by `backgroundPresentation`. Running elapsed time updates
+once per second in the frontend. The status-bar count includes only queued and
+running tasks.
+
 ### `useNativeMenu(handler)`
 
 Parameters: a handler receiving one typed native `File` menu action.
