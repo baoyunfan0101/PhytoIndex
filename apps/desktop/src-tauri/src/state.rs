@@ -158,6 +158,15 @@ impl AppState {
         }
         Ok(())
     }
+
+    #[cfg(test)]
+    pub fn has_formatted_update_preview(&self, owner_id: &str) -> bool {
+        self.formatted_update_preview
+            .lock()
+            .ok()
+            .and_then(|current| current.as_ref().map(|value| value.owner_id == owner_id))
+            .unwrap_or(false)
+    }
 }
 
 #[derive(Clone, Default)]
@@ -485,6 +494,56 @@ impl OperationManager {
             .lock()
             .expect("operation state lock poisoned")
             .clone()
+    }
+
+    #[cfg(test)]
+    pub fn start_with_progress_for_test<F>(
+        &self,
+        module: &'static str,
+        operation: &'static str,
+        callback: F,
+    ) -> Result<(OperationState, std::sync::mpsc::Receiver<OperationState>), String>
+    where
+        F: FnOnce(&mut (dyn FnMut(OperationProgress) + Send)) -> Result<Value, String>
+            + Send
+            + 'static,
+    {
+        let task_id = Uuid::new_v4().simple().to_string();
+        let state = {
+            let mut states = self.states.lock().map_err(|error| error.to_string())?;
+            if let Some(blocked_by) = blocked_by(&states, module) {
+                return Err(format!("{module} is blocked by {blocked_by}"));
+            }
+            let state = OperationState {
+                module: module.into(),
+                task_id: Some(task_id.clone()),
+                task_kind: None,
+                task_scope: None,
+                state: BackgroundTaskState::Running,
+                operation: Some(operation.into()),
+                started_at: Some(now()),
+                finished_at: None,
+                progress: None,
+                result: None,
+                error: None,
+            };
+            states.insert(task_id.clone(), state.clone());
+            state
+        };
+        let (terminal_sender, terminal_receiver) = std::sync::mpsc::channel();
+        let manager = self.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            let progress_manager = manager.clone();
+            let progress_task_id = task_id.clone();
+            let mut progress = move |progress: OperationProgress| {
+                let _ = progress_manager.update_progress(&progress_task_id, &progress, false);
+            };
+            let result = callback(&mut progress);
+            if let Some(finished) = manager.finish(&task_id, result) {
+                let _ = terminal_sender.send(finished);
+            }
+        });
+        Ok((state, terminal_receiver))
     }
 
     pub fn start_with_progress<F>(

@@ -39,6 +39,104 @@ use crate::updater::{AppUpdateEvent, AppUpdateInfo, PendingAppUpdate};
 pub mod map;
 
 type CommandResult<T> = Result<T, String>;
+type ProgressCallback =
+    Box<dyn FnOnce(&mut (dyn FnMut(OperationProgress) + Send)) -> CommandResult<Value> + Send>;
+
+#[cfg(test)]
+mod cancellation_test_support {
+    use std::sync::{Arc, Barrier, Mutex, MutexGuard, OnceLock, mpsc};
+    use std::time::Duration;
+
+    #[derive(Clone)]
+    struct PauseHook {
+        stage: &'static str,
+        owner_id: String,
+        entered: mpsc::SyncSender<()>,
+        proceed: Arc<Barrier>,
+    }
+
+    static TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    static PAUSE_HOOKS: OnceLock<Mutex<Vec<PauseHook>>> = OnceLock::new();
+
+    pub struct TestHarness {
+        _guard: MutexGuard<'static, ()>,
+    }
+
+    impl TestHarness {
+        pub fn new() -> Self {
+            Self {
+                _guard: TEST_LOCK
+                    .get_or_init(|| Mutex::new(()))
+                    .lock()
+                    .expect("cancellation test lock is poisoned"),
+            }
+        }
+    }
+
+    pub struct Pause {
+        hook: PauseHook,
+        receiver: mpsc::Receiver<()>,
+    }
+
+    impl Pause {
+        pub fn install(stage: &'static str, owner_id: impl Into<String>) -> Self {
+            let (entered, receiver) = mpsc::sync_channel(1);
+            let hook = PauseHook {
+                stage,
+                owner_id: owner_id.into(),
+                entered,
+                proceed: Arc::new(Barrier::new(2)),
+            };
+            PAUSE_HOOKS
+                .get_or_init(|| Mutex::new(Vec::new()))
+                .lock()
+                .expect("cancellation pause hook lock is poisoned")
+                .push(hook.clone());
+            Self { hook, receiver }
+        }
+
+        pub fn wait_until_entered(&self) {
+            self.receiver
+                .recv_timeout(Duration::from_secs(5))
+                .expect("worker did not reach cancellation pause");
+        }
+
+        pub fn resume(&self) {
+            self.hook.proceed.wait();
+        }
+    }
+
+    impl Drop for Pause {
+        fn drop(&mut self) {
+            if let Some(hooks) = PAUSE_HOOKS.get()
+                && let Ok(mut hooks) = hooks.lock()
+            {
+                hooks.retain(|hook| {
+                    !(hook.stage == self.hook.stage
+                        && hook.owner_id == self.hook.owner_id
+                        && Arc::ptr_eq(&hook.proceed, &self.hook.proceed))
+                });
+            }
+        }
+    }
+
+    pub fn pause(stage: &'static str, owner_id: &str) {
+        let hook = PAUSE_HOOKS.get().and_then(|hooks| {
+            hooks.lock().ok().and_then(|hooks| {
+                hooks
+                    .iter()
+                    .find(|hook| hook.stage == stage && hook.owner_id == owner_id)
+                    .cloned()
+            })
+        });
+        if let Some(hook) = hook {
+            hook.entered
+                .send(())
+                .expect("cancellation test stopped waiting for worker");
+            hook.proceed.wait();
+        }
+    }
+}
 
 #[derive(Debug, Serialize)]
 pub struct PhotoLibraryWorkspace {
@@ -87,9 +185,13 @@ pub fn cancel_active_tab_tasks(
     state: State<'_, AppState>,
     owner_id: String,
 ) -> CommandResult<usize> {
+    cancel_owner_tasks(&state, &owner_id)
+}
+
+fn cancel_owner_tasks(state: &AppState, owner_id: &str) -> CommandResult<usize> {
     let cancelled = state.active_tasks.cancel_owner(&owner_id)?;
     state
-        .clear_formatted_update_preview(&owner_id)
+        .clear_formatted_update_preview(owner_id)
         .map_err(error)?;
     Ok(cancelled)
 }
@@ -1007,35 +1109,55 @@ pub fn execute_custom_taxonomy_sql(
     request: CustomTaxonomySqlRequest,
     owner_id: String,
 ) -> CommandResult<OperationState> {
-    let active_task = state.active_tasks.start(owner_id)?;
-    let cancellation = active_task.cancellation();
-    let database = state.database.clone();
     let background_state = state.inner().clone();
+    let operations = state.operations.clone();
     let sync_app = app.clone();
-    state.operations.start_with_progress(
-        app,
-        "taxonomy",
-        "execute_custom_taxonomy_sql",
-        move |progress| {
-            let _active_task = active_task;
-            progress(OperationProgress {
-                stage: "executing_custom_sql".into(),
-                current: None,
-                total: None,
-                unit: None,
-            });
-            let result = taxonomy::execute_custom_taxonomy_sql_with_cancellation(
-                &database,
-                &request,
-                &cancellation,
-            )
-            .map_err(error)?;
-            if result.changeset_size > 0 {
-                schedule_taxonomy_sync(sync_app, &background_state);
-            }
-            serde_json::to_value(result).map_err(error)
+    start_custom_taxonomy_sql_workflow(
+        &state,
+        request,
+        owner_id,
+        move || schedule_taxonomy_sync(sync_app, &background_state),
+        move |callback| {
+            operations.start_with_progress(app, "taxonomy", "execute_custom_taxonomy_sql", callback)
         },
     )
+}
+
+fn start_custom_taxonomy_sql_workflow<R, S, H>(
+    state: &AppState,
+    request: CustomTaxonomySqlRequest,
+    owner_id: String,
+    on_taxonomy_changed: H,
+    start: S,
+) -> CommandResult<R>
+where
+    S: FnOnce(ProgressCallback) -> CommandResult<R>,
+    H: FnOnce() + Send + 'static,
+{
+    let active_task = state.active_tasks.start(owner_id.clone())?;
+    let cancellation = active_task.cancellation();
+    let database = state.database.clone();
+    start(Box::new(move |progress| {
+        let _active_task = active_task;
+        progress(OperationProgress {
+            stage: "executing_custom_sql".into(),
+            current: None,
+            total: None,
+            unit: None,
+        });
+        #[cfg(test)]
+        cancellation_test_support::pause("custom_sql", &owner_id);
+        let result = taxonomy::execute_custom_taxonomy_sql_with_cancellation(
+            &database,
+            &request,
+            &cancellation,
+        )
+        .map_err(error)?;
+        if result.changeset_size > 0 {
+            on_taxonomy_changed();
+        }
+        serde_json::to_value(result).map_err(error)
+    }))
 }
 
 #[tauri::command]
@@ -1123,42 +1245,52 @@ pub fn preview_taxonomy_rows(
     rows: Vec<TaxonInputRow>,
     owner_id: String,
 ) -> CommandResult<OperationState> {
+    let operations = state.operations.clone();
+    start_taxonomy_preview_workflow(&state, rows, owner_id, move |callback| {
+        operations.start_with_progress(app, "taxonomy", "preview_taxonomy_rows", callback)
+    })
+}
+
+fn start_taxonomy_preview_workflow<R, S>(
+    state: &AppState,
+    rows: Vec<TaxonInputRow>,
+    owner_id: String,
+    start: S,
+) -> CommandResult<R>
+where
+    S: FnOnce(ProgressCallback) -> CommandResult<R>,
+{
     state
         .clear_formatted_update_preview(&owner_id)
         .map_err(error)?;
     let active_task = state.active_tasks.start(owner_id.clone())?;
     let cancellation = active_task.cancellation();
     let database = state.database.clone();
-    let background_state = state.inner().clone();
-    state.operations.start_with_progress(
-        app,
-        "taxonomy",
-        "preview_taxonomy_rows",
-        move |progress| {
-            let _active_task = active_task;
-            progress(OperationProgress {
-                stage: "preparing_formatted_update".into(),
-                current: None,
-                total: None,
-                unit: None,
-            });
-            let prepared =
-                taxonomy::prepare_rows_with_cancellation(&database, &rows, &cancellation)
-                    .map_err(error)?;
-            cancellation.check().map_err(error)?;
-            let (preview_id, preview) = background_state
-                .replace_formatted_update_preview(owner_id.clone(), prepared)
+    let background_state = state.clone();
+    start(Box::new(move |progress| {
+        let _active_task = active_task;
+        progress(OperationProgress {
+            stage: "preparing_formatted_update".into(),
+            current: None,
+            total: None,
+            unit: None,
+        });
+        #[cfg(test)]
+        cancellation_test_support::pause("formatted_preview", &owner_id);
+        let prepared = taxonomy::prepare_rows_with_cancellation(&database, &rows, &cancellation)
+            .map_err(error)?;
+        cancellation.check().map_err(error)?;
+        let (preview_id, preview) = background_state
+            .replace_formatted_update_preview(owner_id.clone(), prepared)
+            .map_err(error)?;
+        if cancellation.is_cancelled() {
+            background_state
+                .clear_formatted_update_preview(&owner_id)
                 .map_err(error)?;
-            if cancellation.is_cancelled() {
-                background_state
-                    .clear_formatted_update_preview(&owner_id)
-                    .map_err(error)?;
-                return Err(error(vividarium_core::CoreError::Cancelled));
-            }
-            serde_json::to_value(FormattedUpdatePreviewResult::new(preview_id, preview))
-                .map_err(error)
-        },
-    )
+            return Err(error(vividarium_core::CoreError::Cancelled));
+        }
+        serde_json::to_value(FormattedUpdatePreviewResult::new(preview_id, preview)).map_err(error)
+    }))
 }
 
 #[tauri::command]
@@ -1168,30 +1300,54 @@ pub fn apply_taxonomy_rows(
     preview_id: String,
     owner_id: String,
 ) -> CommandResult<OperationState> {
+    let background_state = state.inner().clone();
+    let operations = state.operations.clone();
+    let sync_app = app.clone();
+    start_taxonomy_apply_workflow(
+        &state,
+        preview_id,
+        owner_id,
+        move || schedule_taxonomy_sync(sync_app, &background_state),
+        move |callback| {
+            operations.start_with_progress(app, "taxonomy", "apply_taxonomy_rows", callback)
+        },
+    )
+}
+
+fn start_taxonomy_apply_workflow<R, S, H>(
+    state: &AppState,
+    preview_id: String,
+    owner_id: String,
+    on_success: H,
+    start: S,
+) -> CommandResult<R>
+where
+    S: FnOnce(ProgressCallback) -> CommandResult<R>,
+    H: FnOnce() + Send + 'static,
+{
     let active_task = state.active_tasks.start(owner_id.clone())?;
     let cancellation = active_task.cancellation();
     let database = state.database.clone();
-    let background_state = state.inner().clone();
-    let sync_app = app.clone();
-    state
-        .operations
-        .start_with_progress(app, "taxonomy", "apply_taxonomy_rows", move |progress| {
-            let _active_task = active_task;
-            progress(OperationProgress {
-                stage: "applying_formatted_update".into(),
-                current: None,
-                total: None,
-                unit: None,
-            });
-            let prepared = background_state
-                .take_formatted_update_preview(&owner_id, &preview_id)
+    let background_state = state.clone();
+    start(Box::new(move |progress| {
+        let _active_task = active_task;
+        progress(OperationProgress {
+            stage: "applying_formatted_update".into(),
+            current: None,
+            total: None,
+            unit: None,
+        });
+        let prepared = background_state
+            .take_formatted_update_preview(&owner_id, &preview_id)
+            .map_err(error)?;
+        #[cfg(test)]
+        cancellation_test_support::pause("formatted_apply", &owner_id);
+        let result =
+            taxonomy::apply_prepared_rows_with_cancellation(&database, prepared, &cancellation)
                 .map_err(error)?;
-            let result =
-                taxonomy::apply_prepared_rows_with_cancellation(&database, prepared, &cancellation)
-                    .map_err(error)?;
-            schedule_taxonomy_sync(sync_app, &background_state);
-            serde_json::to_value(result).map_err(error)
-        })
+        on_success();
+        serde_json::to_value(result).map_err(error)
+    }))
 }
 
 #[tauri::command]
@@ -1387,29 +1543,45 @@ pub fn inspect_direct_import_database(
     source_path: String,
     owner_id: String,
 ) -> CommandResult<OperationState> {
-    let active_task = state.active_tasks.start(owner_id)?;
+    let operations = state.operations.clone();
+    start_direct_import_inspection_workflow(&state, source_path, owner_id, move |callback| {
+        operations.start_with_progress(
+            app,
+            "direct_import",
+            "inspect_direct_import_database",
+            callback,
+        )
+    })
+}
+
+fn start_direct_import_inspection_workflow<R, S>(
+    state: &AppState,
+    source_path: String,
+    owner_id: String,
+    start: S,
+) -> CommandResult<R>
+where
+    S: FnOnce(ProgressCallback) -> CommandResult<R>,
+{
+    let active_task = state.active_tasks.start(owner_id.clone())?;
     let cancellation = active_task.cancellation();
     let database = state.database.clone();
-    state.operations.start_with_progress(
-        app,
-        "direct_import",
-        "inspect_direct_import_database",
-        move |progress| {
-            let _active_task = active_task;
-            progress(OperationProgress {
-                stage: "validating_direct_import_database".into(),
-                current: None,
-                total: None,
-                unit: None,
-            });
-            cancellation.check().map_err(error)?;
-            let result =
-                taxonomy::inspect_direct_import_database(&database, Path::new(&source_path))
-                    .map_err(error)?;
-            cancellation.check().map_err(error)?;
-            serde_json::to_value(result).map_err(error)
-        },
-    )
+    start(Box::new(move |progress| {
+        let _active_task = active_task;
+        progress(OperationProgress {
+            stage: "validating_direct_import_database".into(),
+            current: None,
+            total: None,
+            unit: None,
+        });
+        #[cfg(test)]
+        cancellation_test_support::pause("direct_import_inspection", &owner_id);
+        cancellation.check().map_err(error)?;
+        let result = taxonomy::inspect_direct_import_database(&database, Path::new(&source_path))
+            .map_err(error)?;
+        cancellation.check().map_err(error)?;
+        serde_json::to_value(result).map_err(error)
+    }))
 }
 
 #[tauri::command]
@@ -1887,4 +2059,331 @@ pub fn get_operations_status(state: State<'_, AppState>) -> OperationsStatus {
 
 fn error(error: impl ToString) -> String {
     error.to_string()
+}
+
+#[cfg(test)]
+mod cancellation_integration_tests {
+    use std::fs;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Duration;
+
+    use super::*;
+    use crate::commands::cancellation_test_support::{Pause, TestHarness};
+
+    fn test_state() -> AppState {
+        let data_dir = std::env::temp_dir().join(format!(
+            "vividarium-cancellation-test-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        fs::create_dir_all(&data_dir).unwrap();
+        AppState::new(data_dir).unwrap()
+    }
+
+    fn task_id(operation: &OperationState) -> String {
+        operation
+            .task_id
+            .clone()
+            .expect("operation task id is present")
+    }
+
+    fn wait_for_terminal(receiver: std::sync::mpsc::Receiver<OperationState>) -> OperationState {
+        receiver
+            .recv_timeout(Duration::from_secs(5))
+            .expect("operation did not finish")
+    }
+
+    fn assert_cancelled(operation: &OperationState) {
+        assert_eq!(
+            operation.state,
+            vividarium_core::BackgroundTaskState::Failed
+        );
+        assert!(operation.result.is_none());
+        assert!(
+            operation
+                .error
+                .as_deref()
+                .is_some_and(|error| error.to_ascii_lowercase().contains("cancel"))
+        );
+    }
+
+    fn custom_sql(sql: &str) -> CustomTaxonomySqlRequest {
+        CustomTaxonomySqlRequest {
+            sql: sql.into(),
+            maximum_result_rows: None,
+        }
+    }
+
+    #[test]
+    fn custom_sql_cancellation_fails_the_exact_task_without_committing() {
+        let _harness = TestHarness::new();
+        let state = test_state();
+        let seeded = taxonomy::apply_rows(
+            &state.database,
+            &[TaxonInputRow {
+                kingdom: Some("Animalia".into()),
+                ..TaxonInputRow::default()
+            }],
+        )
+        .unwrap();
+        let taxon_id = seeded.rows[0].target.as_ref().unwrap().taxon_id;
+        let operation_count = taxonomy::list_operations(&state.database, None, 20)
+            .unwrap()
+            .items
+            .len();
+        let owner_id = "custom-sql-owner";
+        let pause = Pause::install("custom_sql", owner_id);
+        let (operation, terminal) = start_custom_taxonomy_sql_workflow(
+            &state,
+            custom_sql(&format!(
+                "UPDATE taxa SET geological_range = 'cancelled' WHERE taxon_id = {taxon_id}"
+            )),
+            owner_id.into(),
+            || {},
+            |callback| {
+                state.operations.start_with_progress_for_test(
+                    "taxonomy",
+                    "execute_custom_taxonomy_sql",
+                    callback,
+                )
+            },
+        )
+        .unwrap();
+        let task_id = task_id(&operation);
+
+        pause.wait_until_entered();
+        assert_eq!(
+            state.operations.status().get(&task_id).unwrap().state,
+            vividarium_core::BackgroundTaskState::Running
+        );
+        assert_eq!(cancel_owner_tasks(&state, owner_id).unwrap(), 1);
+        pause.resume();
+
+        assert_cancelled(&wait_for_terminal(terminal));
+        assert_eq!(
+            taxonomy::get_taxon_detail(&state.database, taxon_id)
+                .unwrap()
+                .unwrap()
+                .geological_range,
+            None
+        );
+        assert_eq!(
+            taxonomy::list_operations(&state.database, None, 20)
+                .unwrap()
+                .items
+                .len(),
+            operation_count
+        );
+    }
+
+    #[test]
+    fn formatted_update_preview_cancellation_leaves_no_staged_preview() {
+        let _harness = TestHarness::new();
+        let state = test_state();
+        let owner_id = "formatted-preview-owner";
+        let pause = Pause::install("formatted_preview", owner_id);
+        let (operation, terminal) = start_taxonomy_preview_workflow(
+            &state,
+            vec![TaxonInputRow {
+                kingdom: Some("Preview cancellation kingdom".into()),
+                ..TaxonInputRow::default()
+            }],
+            owner_id.into(),
+            |callback| {
+                state.operations.start_with_progress_for_test(
+                    "taxonomy",
+                    "preview_taxonomy_rows",
+                    callback,
+                )
+            },
+        )
+        .unwrap();
+        let task_id = task_id(&operation);
+
+        pause.wait_until_entered();
+        assert_eq!(
+            state.operations.status().get(&task_id).unwrap().state,
+            vividarium_core::BackgroundTaskState::Running
+        );
+        assert_eq!(cancel_owner_tasks(&state, owner_id).unwrap(), 1);
+        pause.resume();
+
+        assert_cancelled(&wait_for_terminal(terminal));
+        assert!(!state.has_formatted_update_preview(owner_id));
+        assert!(
+            taxonomy::search_taxa(&state.database, "Preview cancellation kingdom", 10)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn formatted_update_apply_cancellation_keeps_taxonomy_and_sync_unchanged() {
+        let _harness = TestHarness::new();
+        let state = test_state();
+        let owner_id = "formatted-apply-owner";
+        let rows = vec![TaxonInputRow {
+            kingdom: Some("Apply cancellation kingdom".into()),
+            ..TaxonInputRow::default()
+        }];
+        let (preview, preview_terminal) =
+            start_taxonomy_preview_workflow(&state, rows, owner_id.into(), |callback| {
+                state.operations.start_with_progress_for_test(
+                    "taxonomy",
+                    "preview_taxonomy_rows",
+                    callback,
+                )
+            })
+            .unwrap();
+        let preview_task_id = task_id(&preview);
+        let preview_result = wait_for_terminal(preview_terminal);
+        assert_eq!(
+            state
+                .operations
+                .status()
+                .get(&preview_task_id)
+                .unwrap()
+                .state,
+            vividarium_core::BackgroundTaskState::Completed
+        );
+        assert_eq!(
+            preview_result.state,
+            vividarium_core::BackgroundTaskState::Completed
+        );
+        let preview_id = preview_result
+            .result
+            .as_ref()
+            .and_then(|result| result.get("preview_id"))
+            .and_then(Value::as_str)
+            .expect("preview result contains a preview id")
+            .to_string();
+        let operation_count = taxonomy::list_operations(&state.database, None, 20)
+            .unwrap()
+            .items
+            .len();
+        let pause = Pause::install("formatted_apply", owner_id);
+        let sync_scheduled = Arc::new(AtomicBool::new(false));
+        let (operation, terminal) = start_taxonomy_apply_workflow(
+            &state,
+            preview_id,
+            owner_id.into(),
+            {
+                let sync_scheduled = sync_scheduled.clone();
+                move || sync_scheduled.store(true, Ordering::SeqCst)
+            },
+            |callback| {
+                state.operations.start_with_progress_for_test(
+                    "taxonomy",
+                    "apply_taxonomy_rows",
+                    callback,
+                )
+            },
+        )
+        .unwrap();
+        let task_id = task_id(&operation);
+
+        pause.wait_until_entered();
+        assert_eq!(
+            state.operations.status().get(&task_id).unwrap().state,
+            vividarium_core::BackgroundTaskState::Running
+        );
+        assert_eq!(cancel_owner_tasks(&state, owner_id).unwrap(), 1);
+        pause.resume();
+
+        assert_cancelled(&wait_for_terminal(terminal));
+        assert!(
+            taxonomy::search_taxa(&state.database, "Apply cancellation kingdom", 10)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            taxonomy::list_operations(&state.database, None, 20)
+                .unwrap()
+                .items
+                .len(),
+            operation_count
+        );
+        assert!(!sync_scheduled.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn cancelling_one_owner_does_not_affect_a_concurrent_direct_import_task() {
+        let _harness = TestHarness::new();
+        let state = test_state();
+        let owner_a = "owner-a";
+        let owner_b = "owner-b";
+        let pause_a = Pause::install("custom_sql", owner_a);
+        let pause_b = Pause::install("direct_import_inspection", owner_b);
+        let (first, first_terminal) = start_custom_taxonomy_sql_workflow(
+            &state,
+            custom_sql("SELECT 1"),
+            owner_a.into(),
+            || {},
+            |callback| {
+                state.operations.start_with_progress_for_test(
+                    "taxonomy",
+                    "execute_custom_taxonomy_sql",
+                    callback,
+                )
+            },
+        )
+        .unwrap();
+        let first_task_id = task_id(&first);
+        pause_a.wait_until_entered();
+        let source_path = state
+            .database
+            .taxonomy_path()
+            .unwrap()
+            .with_file_name("owner-isolation-direct-import.db");
+        fs::copy(state.database.taxonomy_path().unwrap(), &source_path).unwrap();
+        let (second, second_terminal) = start_direct_import_inspection_workflow(
+            &state,
+            source_path.to_string_lossy().into_owned(),
+            owner_b.into(),
+            |callback| {
+                state.operations.start_with_progress_for_test(
+                    "direct_import",
+                    "inspect_direct_import_database",
+                    callback,
+                )
+            },
+        )
+        .unwrap();
+        let second_task_id = task_id(&second);
+        pause_b.wait_until_entered();
+
+        assert_eq!(cancel_owner_tasks(&state, owner_a).unwrap(), 1);
+        assert_eq!(
+            state.operations.status().get(&first_task_id).unwrap().state,
+            vividarium_core::BackgroundTaskState::Running
+        );
+        assert_eq!(
+            state
+                .operations
+                .status()
+                .get(&second_task_id)
+                .unwrap()
+                .state,
+            vividarium_core::BackgroundTaskState::Running
+        );
+        pause_a.resume();
+        assert_cancelled(&wait_for_terminal(first_terminal));
+        assert_eq!(
+            state
+                .operations
+                .status()
+                .get(&second_task_id)
+                .unwrap()
+                .state,
+            vividarium_core::BackgroundTaskState::Running
+        );
+        pause_b.resume();
+        let second_result = wait_for_terminal(second_terminal);
+        assert_eq!(
+            second_result.state,
+            vividarium_core::BackgroundTaskState::Completed
+        );
+        assert!(second_result.result.is_some());
+        assert!(second_result.error.is_none());
+    }
 }
