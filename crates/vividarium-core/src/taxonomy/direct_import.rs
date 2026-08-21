@@ -10,7 +10,10 @@ use super::sql::{SqlDataSource, SqlSourceSchema, inspect_sql_data_source};
 use super::sync;
 use crate::db::LOCAL_TAXON_ID_FLOOR;
 use crate::naming::normalize_taxonomy_name;
-use crate::{CancellationToken, CoreError, CoreResult, Database};
+use crate::{CancellationToken, CoreError, CoreResult, Database, OperationProgress};
+
+const VALIDATING_DIRECT_IMPORT_DATABASE: &str = "validating_direct_import_database";
+const APPLYING_DIRECT_IMPORT: &str = "applying_direct_import";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TaxonomyImportMetadata {
@@ -81,14 +84,40 @@ pub fn apply_direct_import_with_cancellation(
     source_path: &Path,
     cancellation: &CancellationToken,
 ) -> CoreResult<TaxonomyImportResult> {
+    apply_direct_import_with_progress_and_cancellation(
+        database,
+        source_path,
+        &mut |_| {},
+        cancellation,
+    )
+}
+
+pub fn apply_direct_import_with_progress_and_cancellation(
+    database: &Database,
+    source_path: &Path,
+    progress: &mut (dyn FnMut(OperationProgress) + Send),
+    cancellation: &CancellationToken,
+) -> CoreResult<TaxonomyImportResult> {
     cancellation.check()?;
     let _guard = database.try_taxonomy_replacement()?;
+    progress(OperationProgress {
+        stage: VALIDATING_DIRECT_IMPORT_DATABASE.into(),
+        current: None,
+        total: None,
+        unit: None,
+    });
     let source_path =
         validated_direct_import_path_with_cancellation(database, source_path, cancellation)?;
     let source_path = source_path_string(&source_path)?;
     let mut connection = database.connect_taxonomy_metadata_context()?;
     cancellation.install_sqlite_progress_handler(&connection);
     connection.execute("ATTACH DATABASE ? AS direct_import_source", [&source_path])?;
+    progress(OperationProgress {
+        stage: APPLYING_DIRECT_IMPORT.into(),
+        current: None,
+        total: None,
+        unit: None,
+    });
     let result = replace_from_attached_database(&mut connection, &source_path, cancellation);
     let detach_result = connection.execute_batch("DETACH DATABASE direct_import_source");
     cancellation.normalize(match (result, detach_result) {

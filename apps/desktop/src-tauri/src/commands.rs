@@ -1456,20 +1456,12 @@ pub fn apply_sql_import(
         .operations
         .start_with_progress(app, "sql_import", "apply_sql_import", move |progress| {
             let _active_task = active_task;
-            progress(OperationProgress {
-                stage: "validating_sql_import_candidate".into(),
-                current: None,
-                total: None,
-                unit: None,
-            });
-            let result = taxonomy::apply_sql_import_with_cancellation(&database, &cancellation)
-                .map_err(error)?;
-            progress(OperationProgress {
-                stage: "applying_sql_import".into(),
-                current: None,
-                total: None,
-                unit: None,
-            });
+            let result = taxonomy::apply_sql_import_with_progress_and_cancellation(
+                &database,
+                progress,
+                &cancellation,
+            )
+            .map_err(error)?;
             schedule_taxonomy_sync(sync_app, &background_state);
             serde_json::to_value(result).map_err(error)
         })
@@ -1493,24 +1485,13 @@ pub fn apply_direct_import(
         "apply_direct_import",
         move |progress| {
             let _active_task = active_task;
-            progress(OperationProgress {
-                stage: "validating_direct_import_database".into(),
-                current: None,
-                total: None,
-                unit: None,
-            });
-            let result = taxonomy::apply_direct_import_with_cancellation(
+            let result = taxonomy::apply_direct_import_with_progress_and_cancellation(
                 &database,
                 Path::new(&source_path),
+                progress,
                 &cancellation,
             )
             .map_err(error)?;
-            progress(OperationProgress {
-                stage: "applying_direct_import".into(),
-                current: None,
-                total: None,
-                unit: None,
-            });
             schedule_taxonomy_sync(sync_app, &background_state);
             serde_json::to_value(result).map_err(error)
         },

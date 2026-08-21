@@ -53,8 +53,10 @@ values; browser development uses the browser's ordinary external navigation.
 
 SQL Import validation returns a `sql_import` operation handle. Its structured
 progress contains a machine-readable stage, optional current and total values,
-and an optional progress unit. Statement execution uses the shared current,
-total, and `statements` unit fields.
+and an optional progress unit. Statement execution uses `statements`, staging
+fingerprinting uses `bytes`, name processing uses `names`, and candidate taxon
+construction uses `taxa`. Integrity, schema, and taxonomy checks are
+indeterminate stages when no reliable total is available.
 The completed result distinguishes a valid candidate from structured taxonomy
 validation issues; execution failures remain operation errors.
 Direct Import first calls `inspect_direct_import_database`, which performs a

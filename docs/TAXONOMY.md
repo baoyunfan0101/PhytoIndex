@@ -372,11 +372,14 @@ candidate-build failures remain interface errors. The result contains
 authoritative totals and bounded warning and error samples. Any later source
 or SQL change requires validation again.
 
-The progress callback reports a stage plus optional row counts and SQL
-statement indexes. Stages cover input preparation, SQL execution, staging,
-name normalization, candidate taxa and names, taxonomy validation, and the
-terminal validation result. Missing counts mean that only the stage is known;
-they do not represent a percentage.
+The progress callback reports stable stages for input preparation, SQL
+execution, staging finalization, staging fingerprinting, staging integrity and
+schema checks, name normalization, staging taxonomy validation, candidate taxa
+and name construction, candidate database validation, and the terminal
+validation result. SQL execution uses statement counts. Fingerprinting uses
+the staging file size and bytes read. Name work uses name counts, and candidate
+taxa report their final taxon count after the bulk insert. Missing counts mean
+that only the active stage is known; they do not represent a percentage.
 
 `apply_sql_import` accepts only the latest successfully validated candidate.
 Successful replacement assigns a new taxonomy identity, clears taxonomy

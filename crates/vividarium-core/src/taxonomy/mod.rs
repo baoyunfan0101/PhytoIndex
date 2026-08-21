@@ -27,8 +27,8 @@ pub use actions::{
 };
 pub use direct_import::{
     DirectImportDatabase, TaxonomyImportMetadata, TaxonomyImportResult, apply_direct_import,
-    apply_direct_import_with_cancellation, get_taxonomy_import_metadata,
-    inspect_direct_import_database,
+    apply_direct_import_with_cancellation, apply_direct_import_with_progress_and_cancellation,
+    get_taxonomy_import_metadata, inspect_direct_import_database,
 };
 pub(crate) use exact_match::match_exact_taxonomy_name;
 pub use formatted::{
@@ -60,10 +60,10 @@ pub use sql::{
 pub use sql_import::{
     NameTypeCount, SqlImportExecutionResult, SqlImportIssue, SqlImportValidationResult,
     ValidateSqlImportRequest, ValidateSqlImportResult, add_sql_import_input, apply_sql_import,
-    apply_sql_import_with_cancellation, get_sql_import_sql, list_sql_import_database_schemas,
-    list_sql_import_inputs, list_sql_import_staging_schemas, remove_sql_import_input,
-    validate_sql_import, validate_sql_import_with_progress,
-    validate_sql_import_with_progress_and_cancellation,
+    apply_sql_import_with_cancellation, apply_sql_import_with_progress_and_cancellation,
+    get_sql_import_sql, list_sql_import_database_schemas, list_sql_import_inputs,
+    list_sql_import_staging_schemas, remove_sql_import_input, validate_sql_import,
+    validate_sql_import_with_progress, validate_sql_import_with_progress_and_cancellation,
 };
 pub use sql_inputs::{
     AddSqlInputRequest, AddSqlInputResult, PersistentSqlInput, RemoveSqlInputRequest,

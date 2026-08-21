@@ -252,11 +252,15 @@ fn validate_reports_real_stages_and_sql_statement_progress() {
     let expected = [
         PREPARING_INPUT_SOURCES,
         EXECUTING_SQL,
-        BUILDING_STAGING_DATABASE,
+        FINALIZING_STAGING_DATABASE,
+        FINGERPRINTING_STAGING,
+        CHECKING_STAGING_DATABASE,
+        INSPECTING_STAGING_SCHEMA,
         NORMALIZING_NAMES,
+        VALIDATING_STAGING_TAXONOMY,
         BUILDING_CANDIDATE_TAXA,
         BUILDING_CANDIDATE_NAMES,
-        VALIDATING_TAXONOMY,
+        VALIDATING_CANDIDATE_DATABASE,
         READY_TO_APPLY,
     ];
     let mut previous = 0;
@@ -273,14 +277,51 @@ fn validate_reports_real_stages_and_sql_statement_progress() {
         .filter(|event| event.stage == EXECUTING_SQL)
         .collect::<Vec<_>>();
     assert!(!sql_events.is_empty());
-    assert_eq!(sql_events[0].current, Some(1));
+    assert_eq!(sql_events[0].current, Some(0));
     assert_eq!(
         sql_events[0].total,
         Some(result.execution.statements_executed as u64)
     );
     assert_eq!(sql_events[0].unit, Some(OperationProgressUnit::Statements));
+    assert_eq!(sql_events.last().unwrap().current, sql_events[0].total);
+    let fingerprint_events = progress
+        .iter()
+        .filter(|event| event.stage == FINGERPRINTING_STAGING)
+        .collect::<Vec<_>>();
+    assert!(!fingerprint_events.is_empty());
+    assert_eq!(fingerprint_events[0].current, Some(0));
+    assert!(
+        fingerprint_events
+            .iter()
+            .all(|event| event.unit == Some(OperationProgressUnit::Bytes))
+    );
+    assert!(fingerprint_events.windows(2).all(|events| {
+        events[0].current.unwrap() <= events[1].current.unwrap()
+            && events[0].total == events[1].total
+    }));
+    let fingerprint_final = fingerprint_events.last().unwrap();
+    assert_eq!(fingerprint_final.current, fingerprint_final.total);
+    let normalization_events = progress
+        .iter()
+        .filter(|event| event.stage == NORMALIZING_NAMES)
+        .collect::<Vec<_>>();
+    assert!(normalization_events.windows(2).all(|events| {
+        events[0].current.unwrap() <= events[1].current.unwrap()
+            && events[0].total == events[1].total
+    }));
     assert!(progress.iter().any(|event| {
         event.stage == NORMALIZING_NAMES && event.current == event.total && event.total == Some(1)
+    }));
+    assert!(progress.iter().any(|event| {
+        event.stage == BUILDING_CANDIDATE_TAXA
+            && event.current.is_none()
+            && event.total.is_none()
+            && event.unit == Some(OperationProgressUnit::Taxa)
+    }));
+    assert!(progress.iter().any(|event| {
+        event.stage == BUILDING_CANDIDATE_TAXA
+            && event.current == event.total
+            && event.total == Some(1)
     }));
     assert!(progress.iter().any(|event| {
         event.stage == BUILDING_CANDIDATE_NAMES
@@ -293,6 +334,37 @@ fn validate_reports_real_stages_and_sql_statement_progress() {
 fn sql_statement_count_uses_sqlite_statement_boundaries() {
     assert_eq!(count_sql_statements("SELECT ';'; SELECT 2;").unwrap(), 2);
     assert_eq!(count_sql_statements("SELECT 1").unwrap(), 1);
+}
+
+#[test]
+fn sql_statement_progress_counts_only_completed_statements() {
+    for (sql, expected) in [
+        ("SELECT 1;", vec![0, 1]),
+        ("SELECT 1; SELECT 2;", vec![0, 1, 2]),
+    ] {
+        let connection = Connection::open_in_memory().unwrap();
+        let mut progress = Vec::new();
+        let messages = execute_sql_import_script(
+            &connection,
+            sql,
+            "unused.db",
+            &mut |event| progress.push(event),
+            &CancellationToken::new(),
+        )
+        .unwrap();
+        assert_eq!(messages.len(), expected.len() - 1);
+        assert_eq!(
+            progress
+                .iter()
+                .map(|event| event.current.unwrap())
+                .collect::<Vec<_>>(),
+            expected
+        );
+        assert!(progress.iter().all(|event| {
+            event.total == Some(messages.len() as u64)
+                && event.unit == Some(OperationProgressUnit::Statements)
+        }));
+    }
 }
 
 #[test]
@@ -337,11 +409,48 @@ fn persistent_inputs_and_successful_sql_survive_apply_and_reopen() {
     assert!(execution.warnings.is_empty());
     let validation = validate_sql_import_candidate(&database).unwrap();
     assert!(validation.can_apply, "{:?}", validation.errors);
-    let result = apply_sql_import(&database).unwrap();
+    let mut progress = Vec::new();
+    let result = apply_sql_import_with_progress_and_cancellation(
+        &database,
+        &mut |event| {
+            if event.stage == APPLYING_SQL_IMPORT {
+                assert_eq!(database.taxonomy_identity().unwrap(), old_identity);
+            }
+            progress.push(event);
+        },
+        &CancellationToken::new(),
+    )
+    .unwrap();
 
     assert_eq!(result.metadata.taxa_count, 1);
     assert!(result.warnings.is_empty());
     assert_ne!(database.taxonomy_identity().unwrap(), old_identity);
+    let stages = progress
+        .iter()
+        .map(|event| event.stage.as_str())
+        .collect::<Vec<_>>();
+    let validating = stages
+        .iter()
+        .position(|stage| *stage == VALIDATING_SQL_IMPORT_CANDIDATE)
+        .unwrap();
+    let fingerprinting = stages
+        .iter()
+        .position(|stage| *stage == FINGERPRINTING_STAGING)
+        .unwrap();
+    let applying = stages
+        .iter()
+        .position(|stage| *stage == APPLYING_SQL_IMPORT)
+        .unwrap();
+    assert!(validating < fingerprinting && fingerprinting < applying);
+    let fingerprint = progress
+        .iter()
+        .filter(|event| event.stage == FINGERPRINTING_STAGING)
+        .collect::<Vec<_>>();
+    assert_eq!(fingerprint.first().unwrap().current, Some(0));
+    assert_eq!(
+        fingerprint.last().unwrap().current,
+        fingerprint.last().unwrap().total
+    );
     assert_eq!(
         get_taxon_detail(&database, 101)
             .unwrap()
@@ -434,7 +543,7 @@ COMMIT;"#,
     assert!(
         progress
             .iter()
-            .any(|event| event.stage == VALIDATING_TAXONOMY)
+            .any(|event| event.stage == VALIDATING_STAGING_TAXONOMY)
     );
     assert_eq!(progress.last().unwrap().stage, VALIDATION_FAILED);
 }
