@@ -1751,9 +1751,53 @@ pub(super) struct TaxonomyValidationIssue {
     pub related_taxon_id: Option<i64>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct TaxonomyValidationOptions {
+    pub check_parent_structure: bool,
+    pub check_scientific_name_count: bool,
+    pub check_localized_accepted_name_count: bool,
+    pub check_duplicate_name_family: bool,
+    pub check_orphan_names: bool,
+    pub require_normalized_names: bool,
+}
+
+impl TaxonomyValidationOptions {
+    pub const fn full() -> Self {
+        Self {
+            check_parent_structure: true,
+            check_scientific_name_count: true,
+            check_localized_accepted_name_count: true,
+            check_duplicate_name_family: true,
+            check_orphan_names: true,
+            require_normalized_names: true,
+        }
+    }
+
+    pub const fn sql_import_staging() -> Self {
+        Self {
+            check_parent_structure: true,
+            check_scientific_name_count: true,
+            check_localized_accepted_name_count: true,
+            check_duplicate_name_family: false,
+            check_orphan_names: true,
+            require_normalized_names: false,
+        }
+    }
+}
+
 pub(super) fn visit_taxonomy_validation_issues(
     connection: &Connection,
     require_normalized_names: bool,
+    visit: impl FnMut(TaxonomyValidationIssue) -> bool,
+) -> CoreResult<()> {
+    let mut options = TaxonomyValidationOptions::full();
+    options.require_normalized_names = require_normalized_names;
+    visit_taxonomy_validation_issues_with_options(connection, options, visit)
+}
+
+pub(super) fn visit_taxonomy_validation_issues_with_options(
+    connection: &Connection,
+    options: TaxonomyValidationOptions,
     mut visit: impl FnMut(TaxonomyValidationIssue) -> bool,
 ) -> CoreResult<()> {
     let taxa = connection
@@ -1770,69 +1814,72 @@ pub(super) fn visit_taxonomy_validation_issues(
         .iter()
         .map(|(taxon_id, parent_taxon_id, rank)| (*taxon_id, (*parent_taxon_id, *rank)))
         .collect::<HashMap<_, _>>();
-    let cycle_taxa = cycle_taxon_ids(&by_id);
-    for (taxon_id, parent_taxon_id, rank) in taxa {
-        if cycle_taxa.contains(&taxon_id) {
-            if !visit(TaxonomyValidationIssue {
-                code: "parent_cycle",
-                message: format!("Taxon {taxon_id} belongs to a cyclic parent relationship."),
-                taxon_id: Some(taxon_id),
-                related_taxon_id: parent_taxon_id,
-            }) {
-                return Ok(());
+    if options.check_parent_structure {
+        let cycle_taxa = cycle_taxon_ids(&by_id);
+        for (taxon_id, parent_taxon_id, rank) in &taxa {
+            if cycle_taxa.contains(&taxon_id) {
+                if !visit(TaxonomyValidationIssue {
+                    code: "parent_cycle",
+                    message: format!("Taxon {taxon_id} belongs to a cyclic parent relationship."),
+                    taxon_id: Some(*taxon_id),
+                    related_taxon_id: *parent_taxon_id,
+                }) {
+                    return Ok(());
+                }
+                continue;
             }
-            continue;
-        }
-        if rank == TaxonRank::Kingdom.code() {
-            if parent_taxon_id.is_some()
+            if *rank == TaxonRank::Kingdom.code() {
+                if parent_taxon_id.is_some()
+                    && !visit(TaxonomyValidationIssue {
+                        code: "kingdom_has_parent",
+                        message: format!("Kingdom taxon {taxon_id} must be a root taxon."),
+                        taxon_id: Some(*taxon_id),
+                        related_taxon_id: *parent_taxon_id,
+                    })
+                {
+                    return Ok(());
+                }
+                continue;
+            }
+            let Some(parent_taxon_id) = parent_taxon_id else {
+                if !visit(TaxonomyValidationIssue {
+                    code: "missing_parent",
+                    message: format!("Taxon {taxon_id} must have a parent taxon."),
+                    taxon_id: Some(*taxon_id),
+                    related_taxon_id: None,
+                }) {
+                    return Ok(());
+                }
+                continue;
+            };
+            let Some((_, parent_rank)) = by_id.get(parent_taxon_id) else {
+                if !visit(TaxonomyValidationIssue {
+                    code: "parent_not_found",
+                    message: format!(
+                        "Taxon {taxon_id} references missing parent taxon {parent_taxon_id}."
+                    ),
+                    taxon_id: Some(*taxon_id),
+                    related_taxon_id: Some(*parent_taxon_id),
+                }) {
+                    return Ok(());
+                }
+                continue;
+            };
+            if *parent_rank >= *rank
                 && !visit(TaxonomyValidationIssue {
-                    code: "kingdom_has_parent",
-                    message: format!("Kingdom taxon {taxon_id} must be a root taxon."),
-                    taxon_id: Some(taxon_id),
-                    related_taxon_id: parent_taxon_id,
+                    code: "invalid_parent_rank",
+                    message: format!("Taxon {taxon_id} must have a parent with a higher rank."),
+                    taxon_id: Some(*taxon_id),
+                    related_taxon_id: Some(*parent_taxon_id),
                 })
             {
                 return Ok(());
             }
-            continue;
-        }
-        let Some(parent_taxon_id) = parent_taxon_id else {
-            if !visit(TaxonomyValidationIssue {
-                code: "missing_parent",
-                message: format!("Taxon {taxon_id} must have a parent taxon."),
-                taxon_id: Some(taxon_id),
-                related_taxon_id: None,
-            }) {
-                return Ok(());
-            }
-            continue;
-        };
-        let Some((_, parent_rank)) = by_id.get(&parent_taxon_id) else {
-            if !visit(TaxonomyValidationIssue {
-                code: "parent_not_found",
-                message: format!(
-                    "Taxon {taxon_id} references missing parent taxon {parent_taxon_id}."
-                ),
-                taxon_id: Some(taxon_id),
-                related_taxon_id: Some(parent_taxon_id),
-            }) {
-                return Ok(());
-            }
-            continue;
-        };
-        if *parent_rank >= rank
-            && !visit(TaxonomyValidationIssue {
-                code: "invalid_parent_rank",
-                message: format!("Taxon {taxon_id} must have a parent with a higher rank."),
-                taxon_id: Some(taxon_id),
-                related_taxon_id: Some(parent_taxon_id),
-            })
-        {
-            return Ok(());
         }
     }
-    let mut invalid_sci_names = connection.prepare(
-        r#"
+    if options.check_scientific_name_count {
+        let mut invalid_sci_names = connection.prepare(
+            r#"
             SELECT taxa.taxon_id
             FROM taxa
             LEFT JOIN taxon_names
@@ -1842,20 +1889,22 @@ pub(super) fn visit_taxonomy_validation_issues(
             HAVING COUNT(taxon_names.name_id) != 1
             ORDER BY taxa.taxon_id
             "#,
-    )?;
-    for row in invalid_sci_names.query_map([], |row| row.get::<_, i64>(0))? {
-        let taxon_id = row?;
-        if !visit(TaxonomyValidationIssue {
-            code: "invalid_sci_name_count",
-            message: format!("Taxon {taxon_id} must have exactly one scientific name."),
-            taxon_id: Some(taxon_id),
-            related_taxon_id: None,
-        }) {
-            return Ok(());
+        )?;
+        for row in invalid_sci_names.query_map([], |row| row.get::<_, i64>(0))? {
+            let taxon_id = row?;
+            if !visit(TaxonomyValidationIssue {
+                code: "invalid_sci_name_count",
+                message: format!("Taxon {taxon_id} must have exactly one scientific name."),
+                taxon_id: Some(taxon_id),
+                related_taxon_id: None,
+            }) {
+                return Ok(());
+            }
         }
     }
-    let mut duplicate_accepted_names = connection.prepare(
-        r#"
+    if options.check_localized_accepted_name_count {
+        let mut duplicate_accepted_names = connection.prepare(
+            r#"
             SELECT taxon_id, name_type
             FROM taxon_names
             WHERE name_type IN (?, ?)
@@ -1863,82 +1912,89 @@ pub(super) fn visit_taxonomy_validation_issues(
             HAVING COUNT(name_id) > 1
             ORDER BY taxon_id, name_type
             "#,
-    )?;
-    for row in duplicate_accepted_names.query_map(
-        params![
-            TaxonomyNameType::ZhName.code(),
-            TaxonomyNameType::EnName.code()
-        ],
-        |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
-    )? {
-        let (taxon_id, name_type) = row?;
-        let (code, language) = if name_type == TaxonomyNameType::ZhName.code() {
-            ("invalid_zh_name_count", "Chinese")
-        } else {
-            ("invalid_en_name_count", "English")
-        };
-        if !visit(TaxonomyValidationIssue {
-            code,
-            message: format!("Taxon {taxon_id} must have at most one {language} accepted name."),
-            taxon_id: Some(taxon_id),
-            related_taxon_id: None,
-        }) {
-            return Ok(());
+        )?;
+        for row in duplicate_accepted_names.query_map(
+            params![
+                TaxonomyNameType::ZhName.code(),
+                TaxonomyNameType::EnName.code()
+            ],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+        )? {
+            let (taxon_id, name_type) = row?;
+            let (code, language) = if name_type == TaxonomyNameType::ZhName.code() {
+                ("invalid_zh_name_count", "Chinese")
+            } else {
+                ("invalid_en_name_count", "English")
+            };
+            if !visit(TaxonomyValidationIssue {
+                code,
+                message: format!(
+                    "Taxon {taxon_id} must have at most one {language} accepted name."
+                ),
+                taxon_id: Some(taxon_id),
+                related_taxon_id: None,
+            }) {
+                return Ok(());
+            }
         }
     }
-    let mut duplicate_family_names = connection.prepare(
-        r#"
+    if options.check_duplicate_name_family {
+        let mut duplicate_family_names = connection.prepare(
+            r#"
             SELECT taxon_id, (name_type + 1) / 2 AS name_family, name
             FROM taxon_names
             GROUP BY taxon_id, name_family, name
             HAVING COUNT(name_id) > 1
             ORDER BY taxon_id, name_family, name
             "#,
-    )?;
-    for row in duplicate_family_names.query_map([], |row| {
-        Ok((
-            row.get::<_, i64>(0)?,
-            row.get::<_, i64>(1)?,
-            row.get::<_, String>(2)?,
-        ))
-    })? {
-        let (taxon_id, name_family, name) = row?;
-        let family = match name_family {
-            1 => "scientific",
-            2 => "Chinese",
-            3 => "English",
-            _ => "invalid",
-        };
-        if !visit(TaxonomyValidationIssue {
-            code: "duplicate_name_family",
-            message: format!("Taxon {taxon_id} contains duplicate {family} name '{name}'."),
-            taxon_id: Some(taxon_id),
-            related_taxon_id: None,
-        }) {
-            return Ok(());
+        )?;
+        for row in duplicate_family_names.query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })? {
+            let (taxon_id, name_family, name) = row?;
+            let family = match name_family {
+                1 => "scientific",
+                2 => "Chinese",
+                3 => "English",
+                _ => "invalid",
+            };
+            if !visit(TaxonomyValidationIssue {
+                code: "duplicate_name_family",
+                message: format!("Taxon {taxon_id} contains duplicate {family} name '{name}'."),
+                taxon_id: Some(taxon_id),
+                related_taxon_id: None,
+            }) {
+                return Ok(());
+            }
         }
     }
-    let mut orphan_name_taxa = connection.prepare(
-        r#"
+    if options.check_orphan_names {
+        let mut orphan_name_taxa = connection.prepare(
+            r#"
             SELECT DISTINCT taxon_names.taxon_id
             FROM taxon_names
             LEFT JOIN taxa ON taxa.taxon_id = taxon_names.taxon_id
             WHERE taxa.taxon_id IS NULL
             ORDER BY taxon_names.taxon_id
             "#,
-    )?;
-    for row in orphan_name_taxa.query_map([], |row| row.get::<_, i64>(0))? {
-        let taxon_id = row?;
-        if !visit(TaxonomyValidationIssue {
-            code: "name_taxon_not_found",
-            message: format!("Taxon names reference missing taxon {taxon_id}."),
-            taxon_id: Some(taxon_id),
-            related_taxon_id: None,
-        }) {
-            return Ok(());
+        )?;
+        for row in orphan_name_taxa.query_map([], |row| row.get::<_, i64>(0))? {
+            let taxon_id = row?;
+            if !visit(TaxonomyValidationIssue {
+                code: "name_taxon_not_found",
+                message: format!("Taxon names reference missing taxon {taxon_id}."),
+                taxon_id: Some(taxon_id),
+                related_taxon_id: None,
+            }) {
+                return Ok(());
+            }
         }
     }
-    if require_normalized_names {
+    if options.require_normalized_names {
         let mut statement =
             connection.prepare("SELECT name_id, taxon_id, name FROM taxon_names")?;
         for row in statement.query_map([], |row| {

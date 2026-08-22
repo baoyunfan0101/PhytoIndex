@@ -297,6 +297,35 @@ fn taxonomy_validation_rejects_duplicate_names_within_a_family() {
 }
 
 #[test]
+fn staging_validation_skips_duplicate_name_family_checks() {
+    let (_directory, database) = database();
+    let connection = database.connect_taxonomy_metadata_context().unwrap();
+    connection
+        .execute_batch(
+            r#"
+            DROP INDEX idx_taxon_names_scientific_family_name;
+            INSERT INTO taxa (taxon_id, rank) VALUES (1, 1);
+            INSERT INTO taxon_names (taxon_id, name_type, name) VALUES
+                (1, 1, 'Animalia'),
+                (1, 2, 'Animalia');
+            "#,
+        )
+        .unwrap();
+    let mut issues = Vec::new();
+    visit_taxonomy_validation_issues_with_options(
+        &connection,
+        TaxonomyValidationOptions::sql_import_staging(),
+        |issue| {
+            issues.push(issue);
+            true
+        },
+    )
+    .unwrap();
+
+    assert!(issues.is_empty());
+}
+
+#[test]
 fn name_type_codes_follow_public_name_order() {
     for (index, name_type) in TaxonomyNameType::ALL.into_iter().enumerate() {
         let code = index as i64 + 1;

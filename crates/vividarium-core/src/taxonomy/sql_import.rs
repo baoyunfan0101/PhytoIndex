@@ -15,7 +15,8 @@ use sha2::{Digest, Sha256};
 
 use super::direct_import::{TaxonomyImportMetadata, TaxonomyImportResult};
 use super::formatted::{
-    TaxonomyNameType, TaxonomyValidationIssue, validate_taxonomy, visit_taxonomy_validation_issues,
+    TaxonomyNameType, TaxonomyValidationIssue, TaxonomyValidationOptions, validate_taxonomy,
+    visit_taxonomy_validation_issues_with_options,
 };
 use super::sql::{
     SqlSourceSchema, SqlStatementMessage, attach_read_only_sqlite, detach_sources, prepare_sources,
@@ -442,12 +443,14 @@ fn validate_sql_import_candidate_in_workspace(
             Some(OperationProgressUnit::Names),
         );
         report_progress(progress, VALIDATING_STAGING_TAXONOMY, None, None, None);
-        visit_taxonomy_validation_issues(&connection, false, |issue| {
-            if issue.code != "duplicate_name_family" {
+        visit_taxonomy_validation_issues_with_options(
+            &connection,
+            TaxonomyValidationOptions::sql_import_staging(),
+            |issue| {
                 record_taxonomy_error(&mut validation, issue);
-            }
-            true
-        })?;
+                true
+            },
+        )?;
     }
     drop(connection);
     if validation.total_error_count == 0 {

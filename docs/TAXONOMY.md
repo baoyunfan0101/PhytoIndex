@@ -23,6 +23,12 @@ relationships in memory. Each taxon that belongs to a cycle is reported as a
 `parent_cycle` issue; taxa that only descend from a cycle retain their own
 parent relationship validation results.
 
+Validation checks cover parent structure, accepted-name counts, name-family
+uniqueness, orphan names, and normalized stored names. General taxonomy writes
+use the complete validation set. SQL Import staging uses the same checks except
+raw name-family uniqueness, because its canonical duplicate validation covers
+that condition before candidate construction.
+
 `TaxonomyNameType` values are:
 
 | Value | Stored code | Meaning |
