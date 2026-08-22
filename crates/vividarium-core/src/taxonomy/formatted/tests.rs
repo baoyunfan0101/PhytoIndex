@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use tempfile::TempDir;
 
 use super::*;
@@ -83,6 +85,41 @@ fn parentage_validation_rejects_a_missing_parent() {
 fn parentage_validation_rejects_a_cycle() {
     let error = validate_parentage(&[(1, Some(2), 2), (2, Some(1), 3)]).unwrap_err();
     assert!(error.to_string().contains("cyclic parent relationship"));
+}
+
+fn cycle_ids(rows: &[(i64, Option<i64>)]) -> HashSet<i64> {
+    cycle_taxon_ids(
+        &rows
+            .iter()
+            .map(|(taxon_id, parent_taxon_id)| (*taxon_id, (*parent_taxon_id, 1)))
+            .collect(),
+    )
+}
+
+#[test]
+fn cycle_detection_handles_roots_missing_parents_and_disconnected_components() {
+    assert!(cycle_ids(&[(1, None), (2, Some(1)), (3, Some(99)), (4, None)]).is_empty());
+}
+
+#[test]
+fn cycle_detection_reports_only_members_of_each_cycle() {
+    assert_eq!(cycle_ids(&[(1, Some(1))]), HashSet::from([1]));
+    assert_eq!(
+        cycle_ids(&[(1, Some(2)), (2, Some(1))]),
+        HashSet::from([1, 2])
+    );
+    assert_eq!(
+        cycle_ids(&[(1, Some(2)), (2, Some(3)), (3, Some(1)), (4, Some(2))]),
+        HashSet::from([1, 2, 3])
+    );
+}
+
+#[test]
+fn cycle_detection_handles_a_deep_valid_lineage_once() {
+    let rows = (1..=10_000)
+        .map(|taxon_id| (taxon_id, (taxon_id > 1).then_some(taxon_id - 1)))
+        .collect::<Vec<_>>();
+    assert!(cycle_ids(&rows).is_empty());
 }
 
 #[test]

@@ -18,6 +18,11 @@ rank is strictly higher than the child rank. Intermediate ranks may be
 omitted; equal-rank, reversed-rank, missing-parent, and cyclic relationships
 are invalid.
 
+Taxonomy validation loads the parent graph once and checks cyclic parent
+relationships in memory. Each taxon that belongs to a cycle is reported as a
+`parent_cycle` issue; taxa that only descend from a cycle retain their own
+parent relationship validation results.
+
 `TaxonomyNameType` values are:
 
 | Value | Stored code | Meaning |

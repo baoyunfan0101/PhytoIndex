@@ -1770,26 +1770,7 @@ pub(super) fn visit_taxonomy_validation_issues(
         .iter()
         .map(|(taxon_id, parent_taxon_id, rank)| (*taxon_id, (*parent_taxon_id, *rank)))
         .collect::<HashMap<_, _>>();
-    let cycle_taxa = connection
-        .prepare(
-            r#"
-            WITH RECURSIVE ancestry(origin_taxon_id, ancestor_taxon_id) AS (
-                SELECT taxon_id, parent_taxon_id
-                FROM taxa
-                WHERE parent_taxon_id IS NOT NULL
-                UNION
-                SELECT ancestry.origin_taxon_id, parent.parent_taxon_id
-                FROM ancestry
-                JOIN taxa AS parent ON parent.taxon_id = ancestry.ancestor_taxon_id
-                WHERE parent.parent_taxon_id IS NOT NULL
-            )
-            SELECT DISTINCT origin_taxon_id
-            FROM ancestry
-            WHERE origin_taxon_id = ancestor_taxon_id
-            "#,
-        )?
-        .query_map([], |row| row.get::<_, i64>(0))?
-        .collect::<Result<HashSet<_>, _>>()?;
+    let cycle_taxa = cycle_taxon_ids(&by_id);
     for (taxon_id, parent_taxon_id, rank) in taxa {
         if cycle_taxa.contains(&taxon_id) {
             if !visit(TaxonomyValidationIssue {
@@ -1981,6 +1962,42 @@ pub(super) fn visit_taxonomy_validation_issues(
         }
     }
     Ok(())
+}
+
+fn cycle_taxon_ids(by_id: &HashMap<i64, (Option<i64>, i64)>) -> HashSet<i64> {
+    let mut states = HashMap::<i64, VisitState>::new();
+    let mut cycle_taxa = HashSet::new();
+    for &origin_taxon_id in by_id.keys() {
+        if states.get(&origin_taxon_id) == Some(&VisitState::Done) {
+            continue;
+        }
+        let mut path = Vec::new();
+        let mut path_positions = HashMap::new();
+        let mut current_taxon_id = Some(origin_taxon_id);
+        while let Some(taxon_id) = current_taxon_id {
+            if let Some(&position) = path_positions.get(&taxon_id) {
+                cycle_taxa.extend(path[position..].iter().copied());
+                break;
+            }
+            if states.get(&taxon_id) == Some(&VisitState::Done) || !by_id.contains_key(&taxon_id) {
+                break;
+            }
+            states.insert(taxon_id, VisitState::Visiting);
+            path_positions.insert(taxon_id, path.len());
+            path.push(taxon_id);
+            current_taxon_id = by_id[&taxon_id].0;
+        }
+        for taxon_id in path {
+            states.insert(taxon_id, VisitState::Done);
+        }
+    }
+    cycle_taxa
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VisitState {
+    Visiting,
+    Done,
 }
 
 pub(super) fn validate_taxonomy(connection: &Connection) -> CoreResult<()> {
