@@ -127,6 +127,8 @@ CREATE UNIQUE INDEX sql_import.idx_taxon_names_chinese_family_name
     ON taxon_names(taxon_id, name) WHERE name_type IN (3, 4);
 CREATE UNIQUE INDEX sql_import.idx_taxon_names_english_family_name
     ON taxon_names(taxon_id, name) WHERE name_type IN (5, 6);
+CREATE INDEX sql_import.idx_taxon_names_taxon_type
+    ON taxon_names(taxon_id, name_type);
 
 -- ============================================================
 

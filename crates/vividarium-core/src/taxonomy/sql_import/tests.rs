@@ -34,6 +34,8 @@ CREATE UNIQUE INDEX sql_import.idx_taxon_names_chinese_family_name
     ON taxon_names(taxon_id, name) WHERE name_type IN (3, 4);
 CREATE UNIQUE INDEX sql_import.idx_taxon_names_english_family_name
     ON taxon_names(taxon_id, name) WHERE name_type IN (5, 6);
+CREATE INDEX sql_import.idx_taxon_names_taxon_type
+    ON taxon_names(taxon_id, name_type);
 INSERT INTO sql_import.taxa
 SELECT CAST(taxon_id AS INTEGER), NULL, CAST(rank AS INTEGER), geological_range
 FROM source_taxa;
@@ -124,6 +126,97 @@ fn sql_import_staging_schemas_follow_the_staging_database() {
             .objects
             .iter()
             .any(|object| object.name == "taxon_names")
+    );
+}
+
+#[test]
+fn staging_schema_indexes_scientific_name_validation_by_taxon_and_type() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = Database::open(directory.path().join("metadata.db")).unwrap();
+    add_simple_input(&directory, &database);
+    execute_simple(&database);
+    let connection =
+        Connection::open(workspace(&database).unwrap().join(STAGING_DATABASE)).unwrap();
+    let columns = connection
+        .prepare("PRAGMA index_info('idx_taxon_names_taxon_type')")
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(2))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(columns, ["taxon_id", "name_type"]);
+    let plan = connection
+        .prepare(
+            r#"
+            EXPLAIN QUERY PLAN
+            SELECT taxa.taxon_id
+            FROM taxa
+            LEFT JOIN taxon_names
+              ON taxon_names.taxon_id = taxa.taxon_id
+             AND taxon_names.name_type = 1
+            GROUP BY taxa.taxon_id
+            HAVING COUNT(taxon_names.name_id) != 1
+            ORDER BY taxa.taxon_id
+            "#,
+        )
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(3))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert!(
+        plan.iter()
+            .any(|detail| detail.contains("idx_taxon_names_taxon_type"))
+    );
+    assert!(
+        plan.iter()
+            .all(|detail| !detail.to_ascii_uppercase().contains("AUTOMATIC"))
+    );
+}
+
+#[test]
+fn staging_access_index_preserves_name_family_uniqueness() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = Database::open(directory.path().join("metadata.db")).unwrap();
+    add_simple_input(&directory, &database);
+    execute_simple(&database);
+    let connection =
+        Connection::open(workspace(&database).unwrap().join(STAGING_DATABASE)).unwrap();
+    assert!(
+        connection
+            .execute(
+                "INSERT INTO taxon_names (taxon_id, name_type, name) VALUES (101, 2, 'Animalia')",
+                [],
+            )
+            .is_err()
+    );
+    connection
+        .execute(
+            "INSERT INTO taxon_names (taxon_id, name_type, name) VALUES (101, 3, 'Animal')",
+            [],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO taxon_names (taxon_id, name_type, name) VALUES (101, 5, 'Animal')",
+            [],
+        )
+        .unwrap();
+    assert!(
+        connection
+            .execute(
+                "INSERT INTO taxon_names (taxon_id, name_type, name) VALUES (101, 4, 'Animal')",
+                [],
+            )
+            .is_err()
+    );
+    assert!(
+        connection
+            .execute(
+                "INSERT INTO taxon_names (taxon_id, name_type, name) VALUES (101, 6, 'Animal')",
+                [],
+            )
+            .is_err()
     );
 }
 

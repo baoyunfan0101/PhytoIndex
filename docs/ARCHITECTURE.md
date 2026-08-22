@@ -126,7 +126,8 @@ that identity so independently numbered photos cannot share cached content.
 Formatted taxonomy updates are preview-first. Preview prepares a candidate and
 Apply consumes that prepared state, subject to taxonomy revision validation.
 SQL Import and Direct Import also separate inspection or validation from the
-final replacement action.
+final replacement action. SQL Import staging maintains validation-oriented
+indexes independently from the final taxonomy database indexes.
 
 ## Verification
 
