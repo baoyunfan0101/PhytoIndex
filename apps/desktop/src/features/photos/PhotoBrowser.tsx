@@ -117,7 +117,7 @@ export function PhotoBrowser({
           />
         </aside>)}
         second={(<main className="photo-browser-main">
-          <header className="pane-header">
+          <header className="pane-header photo-pane-heading">
             {interaction.selected ? <PhotoPaneHeader photo={interaction.selected} /> : <div><strong>Photos</strong><span>{status}</span></div>}
             {page.loading && photos.length > 0 && <small className="pane-loading-label">Loading...</small>}
             <PhotoDisplayToggle mode={mode} onChange={setMode} />

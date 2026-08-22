@@ -16,8 +16,9 @@ virtual list or grid with a shared photo stage. It requests a lightweight
 taxonomy display summary only for the selected photo in the active tab and
 publishes that path to the right side of the application status bar.
 
-Every main current-photo pane uses `PhotoPaneHeader`: the filename on the
-first line and formatted file size and modification time on the second line.
+Every main current-photo pane uses one shared `PhotoPaneHeader` presentation:
+the filename on the first line and formatted file size and modification time
+on the second line, with consistent typography and spacing.
 
 ### `PhotoSet(props)`
 

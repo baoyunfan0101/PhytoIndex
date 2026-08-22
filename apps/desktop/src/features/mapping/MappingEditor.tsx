@@ -109,7 +109,7 @@ export function MappingEditor({
 
   const photoPane = (
     <div className="editor-photo-column">
-      <div className="two-line-heading">
+      <div className="photo-pane-heading">
         <PhotoPaneHeader photo={photo} />
       </div>
       <PhotoStage photo={photo} />

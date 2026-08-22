@@ -66,7 +66,7 @@ export function PhotoDetailView({
 
   return (
     <div className="photo-detail-view">
-      <header className="two-line-heading">
+      <header className="photo-pane-heading">
         <PhotoPaneHeader photo={photo} />
       </header>
       <ResizablePanels

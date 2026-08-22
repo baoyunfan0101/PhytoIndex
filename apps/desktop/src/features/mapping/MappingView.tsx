@@ -181,7 +181,7 @@ export function MappingView({
           separatorLabel="Resize mapping photo and editor"
           stateKey="mapping.editor"
           first={(<main className={`mapping-photo-stage${interaction.selected ? " with-header" : ""}`}>
-            {interaction.selected ? <PhotoPaneHeader photo={interaction.selected} /> : null}
+            {interaction.selected ? <header className="photo-pane-heading"><PhotoPaneHeader photo={interaction.selected} /></header> : null}
             <PhotoStage photo={interaction.selected} onContextMenu={interaction.openContextMenu} />
           </main>)}
           second={(<aside className="mapping-editor-pane">

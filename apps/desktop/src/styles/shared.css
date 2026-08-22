@@ -1,4 +1,4 @@
-.workbench-toolbar, .section-header, .pane-header {
+.workbench-toolbar, .section-header, .pane-header, .photo-pane-heading {
   display: flex;
   min-height: 42px;
   align-items: center;
@@ -13,6 +13,7 @@
 .section-header span, .pane-header span { overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
 .photo-pane-header { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
 .photo-pane-header strong, .photo-pane-header span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.photo-pane-header strong { color: var(--text); font-size: 12px; }
 .photo-pane-header span { color: var(--muted); }
 .section-actions { display: flex; align-items: center; gap: 6px; }
 .button, .record-actions button {
