@@ -1401,8 +1401,6 @@ fn build_official_taxonomy(
         );
     }
     drop(insert);
-    report_progress(progress, VALIDATING_CANDIDATE_DATABASE, None, None, None);
-    validate_taxonomy_with_progress(&transaction, &mut |value| progress(value))?;
     transaction.execute(
         r#"
         UPDATE sqlite_sequence

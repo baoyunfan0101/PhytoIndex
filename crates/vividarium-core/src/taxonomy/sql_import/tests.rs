@@ -325,6 +325,13 @@ fn validate_reports_real_stages_and_sql_statement_progress() {
             })
             .all(|event| event.current.is_none() && event.total.is_none() && event.unit.is_none())
     );
+    for stage in ["checking_duplicate_names", "checking_normalized_names"] {
+        assert_eq!(
+            progress.iter().filter(|event| event.stage == stage).count(),
+            1,
+            "candidate validation stage {stage} should run once"
+        );
+    }
     let fingerprint_events = progress
         .iter()
         .filter(|event| event.stage == FINGERPRINTING_STAGING)

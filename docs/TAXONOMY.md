@@ -385,7 +385,8 @@ reported through `script_saved = false` and `warnings` without changing the
 execution result. A failed execution restores the prior staging and validation
 artifacts and stops before candidate validation.
 
-After SQL succeeds, validation builds the candidate and checks file integrity,
+After SQL succeeds, validation checks staging data, builds the candidate, and
+performs one authoritative candidate validation covering file integrity,
 required schema and constraints, supported ranks and name types, canonical
 normalization, name-family uniqueness, and the complete taxonomy invariants.
 Stored and normalization-derived name-family duplicates are reported once as
