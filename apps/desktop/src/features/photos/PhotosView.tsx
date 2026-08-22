@@ -17,7 +17,8 @@ import {
 import { errorMessage } from "../../api/common";
 import { getMapPhotoBounds, getMapSettings, listMapPhotos, type MapBounds, type MapPhoto } from "../../api/map";
 import { browsePhotoTaxon, type PhotoTaxonItem, type PhotoTaxonUsage } from "../../api/mapping";
-import type { TaxonTreeNameParts } from "../../api/general";
+import type { TaxonNameParts } from "../../api/general";
+import { formatTaxonName } from "../taxonomy/taxonNameFormatting";
 import type { OperationState } from "../../api/tasks";
 import { EmptyState, IconButton, SectionHeader, VirtualList } from "../../shared/ui";
 import { DirectoryContextMenu } from "./DirectoryContextMenu";
@@ -93,18 +94,6 @@ function flattenTaxonItems(
       : [];
     return [row, ...descendants, ...more];
   });
-}
-
-function formatTaxonTreeName(taxon: PhotoTaxonUsage, parts: TaxonTreeNameParts) {
-  const selected = [
-    parts.sci_name ? taxon.names.sci_name : null,
-    parts.zh_name ? taxon.names.zh_name : null,
-    parts.en_name ? taxon.names.en_name : null,
-  ].filter(Boolean);
-  const names = selected.length > 0
-    ? selected
-    : [taxon.names.sci_name, taxon.names.zh_name, taxon.names.en_name].filter(Boolean);
-  return names.length > 0 ? names.join(" \u00b7 ") : `Taxon ${taxon.taxon_id}`;
 }
 
 function normalizeLongitude(value: number) {
@@ -420,7 +409,7 @@ export function TaxonPhotosView({
   backgroundOperation,
 }: {
   handlers: PhotoOpenHandlers;
-  nameParts: TaxonTreeNameParts;
+  nameParts: TaxonNameParts;
   backgroundOperation?: OperationState | null;
 }) {
   const [trail, setTrail] = useViewState<PhotoTaxonUsage[]>("photo-taxonomy.trail", []);
@@ -606,9 +595,9 @@ export function TaxonPhotosView({
                   >
                     {tree.nodes.get(item.taxon.taxon_id)?.expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
                   </IconButton>
-                  <button className="tree-node-button" type="button" title={formatTaxonTreeName(item.taxon, nameParts)} onClick={() => enterTaxon(item.taxon)}>
+                  <button className="tree-node-button" type="button" title={formatTaxonName(item.taxon.names, nameParts, `Taxon ${item.taxon.taxon_id}`)} onClick={() => enterTaxon(item.taxon)}>
                     <Network size={14} />
-                    <span className="tree-label">{formatTaxonTreeName(item.taxon, nameParts)}</span>
+                    <span className="tree-label">{formatTaxonName(item.taxon.names, nameParts, `Taxon ${item.taxon.taxon_id}`)}</span>
                   </button>
                 </div>
               ) : item.kind === "photo" ? (

@@ -267,20 +267,18 @@ function GeneralSettings({
     }
   }
 
-  function changeTaxonTreeNamePart(
-    key: keyof GeneralSettingsValue["taxon_tree_name_parts"],
+  function changeTaxonNamePart(
+    field: "photos_taxon_name_parts" | "taxonomy_taxon_name_parts",
+    key: keyof GeneralSettingsValue["photos_taxon_name_parts"],
     checked: boolean,
   ) {
     const next = {
-      ...settings.taxon_tree_name_parts,
+      ...settings[field],
       [key]: checked,
     };
     if (!next.sci_name && !next.zh_name && !next.en_name) return;
-    void change({ ...settings, taxon_tree_name_parts: next });
+    void change({ ...settings, [field]: next });
   }
-
-  const visibleTaxonTreeNameCount = Object.values(settings.taxon_tree_name_parts)
-    .filter(Boolean).length;
 
   return (
     <div className="settings-section">
@@ -357,31 +355,39 @@ function GeneralSettings({
           </select>
         </label>
       </section>
-      <section className="settings-group" aria-labelledby="general-taxon-tree-heading">
-        <h3 id="general-taxon-tree-heading">Taxon Tree</h3>
-        <div className="general-setting-row">
-          <span><strong>Visible taxon names</strong><small>Choose which names are shown in photo taxon tree rows.</small></span>
-          <div className="general-checkbox-row" role="group" aria-label="Visible taxon names">
-            {([
-              ["sci_name", "Scientific"],
-              ["zh_name", "Chinese"],
-              ["en_name", "English"],
-            ] as const).map(([key, label]) => {
-              const checked = settings.taxon_tree_name_parts[key];
-              return (
-                <label key={key}>
-                  <input
-                    type="checkbox"
-                    disabled={saving || (checked && visibleTaxonTreeNameCount === 1)}
-                    checked={checked}
-                    onChange={(event) => changeTaxonTreeNamePart(key, event.target.checked)}
-                  />
-                  <span>{label}</span>
-                </label>
-              );
-            })}
-          </div>
-        </div>
+      <section className="settings-group" aria-labelledby="general-taxon-names-heading">
+        <h3 id="general-taxon-names-heading">Taxon names</h3>
+        {([
+          ["photos_taxon_name_parts", "Photos", "Choose which accepted names are shown while browsing photos."],
+          ["taxonomy_taxon_name_parts", "Taxonomy", "Choose which accepted names are shown in taxonomy navigation."],
+        ] as const).map(([field, label, detail]) => {
+          const visibleCount = Object.values(settings[field]).filter(Boolean).length;
+          return (
+            <div className="general-setting-row" key={field}>
+              <span><strong>{label}</strong><small>{detail}</small></span>
+              <div className="general-checkbox-row" role="group" aria-label={`${label} visible taxon names`}>
+                {([
+                  ["sci_name", "Scientific"],
+                  ["zh_name", "Chinese"],
+                  ["en_name", "English"],
+                ] as const).map(([key, nameLabel]) => {
+                  const checked = settings[field][key];
+                  return (
+                    <label key={key}>
+                      <input
+                        type="checkbox"
+                        disabled={saving || (checked && visibleCount === 1)}
+                        checked={checked}
+                        onChange={(event) => changeTaxonNamePart(field, key, event.target.checked)}
+                      />
+                      <span>{nameLabel}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
       </section>
       {(saving || message) && (
         <div className={saving ? "editor-message" : "inline-error"} role={saving ? "status" : "alert"}>

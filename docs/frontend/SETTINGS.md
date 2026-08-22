@@ -38,6 +38,11 @@ templates and imports, SQL CSV sources and exports, and every history CSV
 export. Changes are persisted immediately; there is no page-level Save action.
 Recent-search contents remain in browser-local storage.
 
+Visible taxon names are configured independently for Photos and Taxonomy.
+Each context can show scientific, Chinese, and English accepted names. Photos
+controls photo taxonomy rows, breadcrumbs, and current-photo summaries;
+Taxonomy controls hierarchy breadcrumbs, headings, and child navigation.
+
 ### Storage
 
 Shows the metadata database, current taxonomy database, default Photo Library
