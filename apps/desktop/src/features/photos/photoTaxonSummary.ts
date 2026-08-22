@@ -53,3 +53,20 @@ export function usePhotoTaxonDisplaySummary(photoId: number | null): TaxonDispla
 
   return loaded.key === selectionKey ? loaded.summary : null;
 }
+
+export function usePublishedPhotoTaxonSummary({
+  photoId,
+  active,
+  onChange,
+}: {
+  photoId: number | null;
+  active: boolean;
+  onChange: (summary: TaxonDisplaySummary | null) => void;
+}): void {
+  const summary = usePhotoTaxonDisplaySummary(active ? photoId : null);
+
+  useEffect(() => {
+    onChange(summary);
+  }, [onChange, summary]);
+  useEffect(() => () => onChange(null), [onChange]);
+}

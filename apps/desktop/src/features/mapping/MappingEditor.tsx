@@ -9,10 +9,10 @@ import {
 } from "../../api/mapping";
 import type { Photo } from "../../api/photos";
 import {
-  displayTaxonDetail,
   getTaxonDetail,
   type TaxonDetail,
 } from "../../api/taxonomy";
+import type { TaxonDisplaySummary } from "../../api/taxonomy";
 import { errorMessage } from "../../api/common";
 import { Busy, Button, EmptyState, VirtualList } from "../../shared/ui";
 import { PhotoStage } from "../photos/PhotoMedia";
@@ -22,15 +22,23 @@ import { emitPhotoMutation, usePhotoMutation } from "../photos/photoMutations";
 import { useTaxonSearch } from "../taxonomy/useTaxonSearch";
 import { useViewState } from "../../shared/viewState";
 import { ResizablePanels } from "../../shared/ResizablePanels";
+import { PhotoPaneHeader } from "../photos/PhotoPaneHeader";
+import { usePublishedPhotoTaxonSummary } from "../photos/photoTaxonSummary";
+
+const ignoreTaxonSummary = (_summary: TaxonDisplaySummary | null) => {};
 
 export function MappingEditor({
   photo,
   embedded = false,
+  active = false,
+  onTaxonSummaryChange = ignoreTaxonSummary,
   onOpenTaxon,
   refreshKey = 0,
 }: {
   photo: Photo;
   embedded?: boolean;
+  active?: boolean;
+  onTaxonSummaryChange?: (summary: TaxonDisplaySummary | null) => void;
   onOpenTaxon: (taxonId: number) => void;
   refreshKey?: number;
 }) {
@@ -52,6 +60,11 @@ export function MappingEditor({
     ) {
       setMappingRefresh((current) => current + 1);
     }
+  });
+  usePublishedPhotoTaxonSummary({
+    photoId: embedded ? null : photo.photo_id,
+    active: active && !embedded,
+    onChange: onTaxonSummaryChange,
   });
 
   const reload = useCallback(async () => {
@@ -97,8 +110,7 @@ export function MappingEditor({
   const photoPane = (
     <div className="editor-photo-column">
       <div className="two-line-heading">
-        <strong>{photo.filename}</strong>
-        <span>{mappedTaxon ? displayTaxonDetail(mappedTaxon) : match?.mapping.taxon_id ? `Taxon ${match.mapping.taxon_id}` : "No mapped taxon"}</span>
+        <PhotoPaneHeader photo={photo} />
       </div>
       <PhotoStage photo={photo} />
     </div>

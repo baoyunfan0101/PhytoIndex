@@ -16,6 +16,9 @@ virtual list or grid with a shared photo stage. It requests a lightweight
 taxonomy display summary only for the selected photo in the active tab and
 publishes that path to the right side of the application status bar.
 
+Every main current-photo pane uses `PhotoPaneHeader`: the filename on the
+first line and formatted file size and modification time on the second line.
+
 ### `PhotoSet(props)`
 
 Parameters: either a search `query` with an optional transient `refreshKey`, or
@@ -60,6 +63,9 @@ markers are mounted. Selecting a marker reuses one bottom-right thumbnail and
 filename preview. Selecting another marker replaces its contents, selecting
 the map closes it, and selecting the preview opens Photo Detail.
 
+Only the selected marker requests and publishes a taxonomy display summary to
+the status bar. Browsing the map viewport does not request taxonomy summaries.
+
 Metadata progress invalidations are coalesced into periodic page reloads. While
 the user has not dragged or zoomed the map, newly discovered GPS bounds may
 refit the initial viewport. The first manual map interaction disables automatic
@@ -70,11 +76,11 @@ refitting so background work cannot move the user's chosen view.
 Parameters: one `Photo`.
 
 Returns: a photo stage and copyable file and EXIF metadata. The heading shows
-the filename followed by the mapped taxon's lightweight family-to-current
-display path when available; every node uses the Photos visible-name
-preference. Width, height, longitude, and latitude are separate detail rows.
-The photo stage exposes the shared photo context menu, which loads mapping
-state on demand when opened.
+the filename followed by formatted file size and modification time. The active
+view publishes the mapped taxon's lightweight family-to-current display path
+to the status bar when available. Width, height, longitude, and latitude are
+separate detail rows. The photo stage exposes the shared photo context menu,
+which loads mapping state on demand when opened.
 
 ### `PhotoStage` and `PhotoThumb`
 
@@ -148,3 +154,9 @@ loads only that photo, repeated selection reuses the cache, and mapping or
 taxonomy mutations invalidate affected values. Unmapped, ambiguous, and
 processing photos publish no summary. Status paths stay on one line and give
 the finest node the highest space priority.
+
+`usePublishedPhotoTaxonSummary({ photoId, active, onChange })` connects that
+on-demand summary to the status bar. Photo Browser, Folder, photographed
+taxonomy, Photo Set, Photo Detail, Mapping, standalone Mapping Editor, and
+Map views use it for their current photo. Embedded Mapping Editor delegates
+publication to its Mapping page.

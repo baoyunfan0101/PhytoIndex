@@ -1,5 +1,5 @@
 import { Image as ImageIcon, Rows3 } from "lucide-react";
-import { useEffect, useMemo } from "react";
+import { useMemo } from "react";
 import type { Photo } from "../../api/photos";
 import {
   Busy,
@@ -11,9 +11,9 @@ import { findTypeSelectIndex, nextListIndex } from "./photoListNavigation";
 import type { CursorPageController } from "../../shared/useCursorPage";
 import { ResizablePanels } from "../../shared/ResizablePanels";
 import { PhotoDisplay, PhotoDisplayToggle, usePhotoActivation, usePhotoDisplayMode } from "./PhotoDisplay";
-import { formatPhotoSummary } from "./photoFormatting";
+import { PhotoPaneHeader } from "./PhotoPaneHeader";
 import type { TaxonDisplaySummary } from "../../api/taxonomy";
-import { usePhotoTaxonDisplaySummary } from "./photoTaxonSummary";
+import { usePublishedPhotoTaxonSummary } from "./photoTaxonSummary";
 
 export function PhotoBrowser({
   title,
@@ -39,11 +39,11 @@ export function PhotoBrowser({
     handlers,
     stateKey: "photo-browser.interaction",
   });
-  const taxonSummary = usePhotoTaxonDisplaySummary(active ? interaction.selectedId : null);
-  useEffect(() => {
-    onTaxonSummaryChange(taxonSummary);
-  }, [onTaxonSummaryChange, taxonSummary]);
-  useEffect(() => () => onTaxonSummaryChange(null), [onTaxonSummaryChange]);
+  usePublishedPhotoTaxonSummary({
+    photoId: interaction.selectedId,
+    active,
+    onChange: onTaxonSummaryChange,
+  });
   const activation = usePhotoActivation({
     onSelect: interaction.selectPhoto,
     onOpenImage: () => setMode("image"),
@@ -118,7 +118,7 @@ export function PhotoBrowser({
         </aside>)}
         second={(<main className="photo-browser-main">
           <header className="pane-header">
-            <div><strong>{interaction.selected?.filename ?? "Photos"}</strong><span>{interaction.selected ? formatPhotoSummary(interaction.selected) : status}</span></div>
+            {interaction.selected ? <PhotoPaneHeader photo={interaction.selected} /> : <div><strong>Photos</strong><span>{status}</span></div>}
             {page.loading && photos.length > 0 && <small className="pane-loading-label">Loading...</small>}
             <PhotoDisplayToggle mode={mode} onChange={setMode} />
           </header>

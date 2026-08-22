@@ -19,6 +19,9 @@ import { findTypeSelectIndex, nextListIndex } from "../photos/photoListNavigatio
 import { useDeferredPhotoMutation } from "../photos/photoMutations";
 import { useCursorPage } from "../../shared/useCursorPage";
 import { ResizablePanels } from "../../shared/ResizablePanels";
+import type { TaxonDisplaySummary } from "../../api/taxonomy";
+import { PhotoPaneHeader } from "../photos/PhotoPaneHeader";
+import { usePublishedPhotoTaxonSummary } from "../photos/photoTaxonSummary";
 
 const statuses = ["matched", "ambiguous", "unmatched", "processing"] as const;
 const emptyMetadata: MappingMetadata = {
@@ -32,10 +35,12 @@ const emptyMetadata: MappingMetadata = {
 export function MappingView({
   active,
   onStatus,
+  onTaxonSummaryChange,
   handlers,
 }: {
   active: boolean;
   onStatus: (message: string, busy?: boolean) => void;
+  onTaxonSummaryChange: (summary: TaxonDisplaySummary | null) => void;
   handlers: PhotoOpenHandlers;
 }) {
   const [status, setStatus] = useState<PhotoTaxonStatus>("ambiguous");
@@ -65,6 +70,11 @@ export function MappingView({
     photos,
     handlers,
     knownMapping,
+  });
+  usePublishedPhotoTaxonSummary({
+    photoId: interaction.selectedId,
+    active,
+    onChange: onTaxonSummaryChange,
   });
   useDeferredPhotoMutation(active, () => {
     void page.reload();
@@ -170,7 +180,8 @@ export function MappingView({
           minSecond={320}
           separatorLabel="Resize mapping photo and editor"
           stateKey="mapping.editor"
-          first={(<main className="mapping-photo-stage">
+          first={(<main className={`mapping-photo-stage${interaction.selected ? " with-header" : ""}`}>
+            {interaction.selected ? <PhotoPaneHeader photo={interaction.selected} /> : null}
             <PhotoStage photo={interaction.selected} onContextMenu={interaction.openContextMenu} />
           </main>)}
           second={(<aside className="mapping-editor-pane">

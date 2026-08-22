@@ -8,24 +8,23 @@ import {
 import { errorMessage, formatBytes } from "../../api/common";
 import { Busy, Button } from "../../shared/ui";
 import { PhotoStage } from "./PhotoMedia";
-import { formatPhotoModifiedAt } from "./photoFormatting";
 import { useViewState } from "../../shared/viewState";
 import { ResizablePanels } from "../../shared/ResizablePanels";
 import { usePhotoInteraction, type PhotoOpenHandlers } from "./PhotoInteraction";
-import type { TaxonNameParts } from "../../api/general";
-import { TaxonDisplayPath } from "../taxonomy/TaxonDisplayPath";
-import { usePhotoTaxonDisplaySummary } from "./photoTaxonSummary";
+import type { TaxonDisplaySummary } from "../../api/taxonomy";
+import { PhotoPaneHeader } from "./PhotoPaneHeader";
+import { usePublishedPhotoTaxonSummary } from "./photoTaxonSummary";
 
 export function PhotoDetailView({
   photo,
   handlers,
   active,
-  nameParts,
+  onTaxonSummaryChange,
 }: {
   photo: Photo;
   handlers: PhotoOpenHandlers;
   active: boolean;
-  nameParts: TaxonNameParts;
+  onTaxonSummaryChange: (summary: TaxonDisplaySummary | null) => void;
 }) {
   const [metadata, setMetadata] = useViewState<PhotoMetadata | null>("photo-detail.metadata", null);
   const [detailScrollTop, setDetailScrollTop] = useViewState("photo-detail.scroll-top", 0);
@@ -37,7 +36,11 @@ export function PhotoDetailView({
     handlers,
     stateKey: "photo-detail.interaction",
   });
-  const taxonSummary = usePhotoTaxonDisplaySummary(active ? photo.photo_id : null);
+  usePublishedPhotoTaxonSummary({
+    photoId: photo.photo_id,
+    active,
+    onChange: onTaxonSummaryChange,
+  });
 
   useEffect(() => {
     let active = true;
@@ -64,12 +67,7 @@ export function PhotoDetailView({
   return (
     <div className="photo-detail-view">
       <header className="two-line-heading">
-        <strong>{photo.filename}</strong>
-        {taxonSummary ? (
-          <TaxonDisplayPath summary={taxonSummary} nameParts={nameParts} />
-        ) : (
-          <span>{formatBytes(photo.file_size)} {"\u00b7"} {formatPhotoModifiedAt(photo.modified_at_ns)}</span>
-        )}
+        <PhotoPaneHeader photo={photo} />
       </header>
       <ResizablePanels
         className="photo-detail-content"

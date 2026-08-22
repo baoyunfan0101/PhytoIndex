@@ -11,6 +11,9 @@
 .section-header > div:first-child, .pane-header > div:first-child { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
 .section-header strong, .pane-header strong { font-size: 12px; color: var(--text); }
 .section-header span, .pane-header span { overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
+.photo-pane-header { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
+.photo-pane-header strong, .photo-pane-header span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.photo-pane-header span { color: var(--muted); }
 .section-actions { display: flex; align-items: center; gap: 6px; }
 .button, .record-actions button {
   display: inline-flex;

@@ -8,6 +8,8 @@
 .mapping-summary-button > span:last-child { min-width: 1.5em; text-align: right; }
 .mapping-three-columns, .mapping-content-columns { min-height: 0; }
 .mapping-photo-list, .mapping-photo-stage { height: 100%; min-height: 0; }
+.mapping-photo-stage.with-header { display: grid; grid-template-rows: 52px minmax(0, 1fr); }
+.mapping-photo-stage.with-header > .photo-pane-header { justify-content: center; padding: 7px 12px; border-bottom: 1px solid var(--line); }
 .mapping-photo-list { position: relative; }
 .mapping-editor-pane { width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden; }
 .mapping-badge { display: inline-flex; align-items: center; padding: 2px 6px; border: 1px solid currentColor; border-radius: 999px; font-size: 10px; line-height: 1.2; text-transform: capitalize; }
