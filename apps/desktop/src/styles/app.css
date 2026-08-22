@@ -90,6 +90,12 @@
 .tab-panel.active { display: block; pointer-events: auto; }
 .status-bar { display: flex; align-items: center; gap: 7px; padding: 0 0 0 9px; border-top: 1px solid var(--line); color: var(--muted); background: var(--activity); }
 .status-title { min-width: 0; margin-left: auto; overflow: hidden; color: var(--quiet); text-overflow: ellipsis; white-space: nowrap; }
+.taxon-display-path { display: flex; min-width: 0; overflow: hidden; white-space: nowrap; }
+.taxon-display-segment { display: flex; min-width: 0; flex: 0 1 auto; align-items: center; overflow: hidden; }
+.taxon-display-segment:last-child { max-width: 100%; }
+.taxon-display-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.taxon-display-separator { flex: 0 0 auto; padding: 0 5px; color: var(--quiet); }
+.status-title.taxon-display-path { text-overflow: clip; }
 .status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent-bright); }
 
 .toolbar-navigation {

@@ -12,8 +12,21 @@ import { formatPhotoModifiedAt } from "./photoFormatting";
 import { useViewState } from "../../shared/viewState";
 import { ResizablePanels } from "../../shared/ResizablePanels";
 import { usePhotoInteraction, type PhotoOpenHandlers } from "./PhotoInteraction";
+import type { TaxonNameParts } from "../../api/general";
+import { TaxonDisplayPath } from "../taxonomy/TaxonDisplayPath";
+import { usePhotoTaxonDisplaySummary } from "./photoTaxonSummary";
 
-export function PhotoDetailView({ photo, handlers }: { photo: Photo; handlers: PhotoOpenHandlers }) {
+export function PhotoDetailView({
+  photo,
+  handlers,
+  active,
+  nameParts,
+}: {
+  photo: Photo;
+  handlers: PhotoOpenHandlers;
+  active: boolean;
+  nameParts: TaxonNameParts;
+}) {
   const [metadata, setMetadata] = useViewState<PhotoMetadata | null>("photo-detail.metadata", null);
   const [detailScrollTop, setDetailScrollTop] = useViewState("photo-detail.scroll-top", 0);
   const [error, setError] = useState("");
@@ -24,6 +37,7 @@ export function PhotoDetailView({ photo, handlers }: { photo: Photo; handlers: P
     handlers,
     stateKey: "photo-detail.interaction",
   });
+  const taxonSummary = usePhotoTaxonDisplaySummary(active ? photo.photo_id : null);
 
   useEffect(() => {
     let active = true;
@@ -51,7 +65,11 @@ export function PhotoDetailView({ photo, handlers }: { photo: Photo; handlers: P
     <div className="photo-detail-view">
       <header className="two-line-heading">
         <strong>{photo.filename}</strong>
-        <span>{formatBytes(photo.file_size)} {"\u00b7"} {formatPhotoModifiedAt(photo.modified_at_ns)}</span>
+        {taxonSummary ? (
+          <TaxonDisplayPath summary={taxonSummary} nameParts={nameParts} />
+        ) : (
+          <span>{formatBytes(photo.file_size)} {"\u00b7"} {formatPhotoModifiedAt(photo.modified_at_ns)}</span>
+        )}
       </header>
       <ResizablePanels
         className="photo-detail-content"

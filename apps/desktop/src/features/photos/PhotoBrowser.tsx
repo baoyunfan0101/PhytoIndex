@@ -1,5 +1,5 @@
 import { Image as ImageIcon, Rows3 } from "lucide-react";
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import type { Photo } from "../../api/photos";
 import {
   Busy,
@@ -12,6 +12,8 @@ import type { CursorPageController } from "../../shared/useCursorPage";
 import { ResizablePanels } from "../../shared/ResizablePanels";
 import { PhotoDisplay, PhotoDisplayToggle, usePhotoActivation, usePhotoDisplayMode } from "./PhotoDisplay";
 import { formatPhotoSummary } from "./photoFormatting";
+import type { TaxonDisplaySummary } from "../../api/taxonomy";
+import { usePhotoTaxonDisplaySummary } from "./photoTaxonSummary";
 
 export function PhotoBrowser({
   title,
@@ -19,12 +21,16 @@ export function PhotoBrowser({
   loadingLabel = "Loading photos...",
   page,
   handlers,
+  active,
+  onTaxonSummaryChange,
 }: {
   title: string;
   detail?: string;
   loadingLabel?: string;
   page: CursorPageController<Photo>;
   handlers: PhotoOpenHandlers;
+  active: boolean;
+  onTaxonSummaryChange: (summary: TaxonDisplaySummary | null) => void;
 }) {
   const photos = page.items;
   const [mode, setMode] = usePhotoDisplayMode();
@@ -33,6 +39,11 @@ export function PhotoBrowser({
     handlers,
     stateKey: "photo-browser.interaction",
   });
+  const taxonSummary = usePhotoTaxonDisplaySummary(active ? interaction.selectedId : null);
+  useEffect(() => {
+    onTaxonSummaryChange(taxonSummary);
+  }, [onTaxonSummaryChange, taxonSummary]);
+  useEffect(() => () => onTaxonSummaryChange(null), [onTaxonSummaryChange]);
   const activation = usePhotoActivation({
     onSelect: interaction.selectPhoto,
     onOpenImage: () => setMode("image"),

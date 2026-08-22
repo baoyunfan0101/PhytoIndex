@@ -1,8 +1,6 @@
 import { ChevronDown, ChevronRight, Images, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import {
-  displayTaxon,
-  displayTaxonDetail,
   deleteTaxon,
   deleteTaxonName,
   getTaxonDetail,
@@ -14,6 +12,7 @@ import {
   type TaxonDetail,
   type TaxonNameDetail,
 } from "../../api/taxonomy";
+import type { TaxonNameParts } from "../../api/general";
 import { errorMessage } from "../../api/common";
 import { Busy, Button, EmptyState } from "../../shared/ui";
 import { useCursorPage } from "../../shared/useCursorPage";
@@ -32,11 +31,13 @@ import {
   taxonNameGroupLabels,
   type TaxonNameGroupKind,
 } from "./taxonEditing";
+import { formatTaxonName } from "./taxonNameFormatting";
 
 type TaxonomyHierarchyPageProps = {
   initialTaxonId: number;
   onTaxonChange?: (taxonId: number, label: string) => void;
   onOpenPhotos: (taxonId: number, label: string) => void;
+  nameParts: TaxonNameParts;
   mutationDisabled?: boolean;
 };
 
@@ -54,6 +55,7 @@ export function TaxonomyHierarchyPage({
   initialTaxonId,
   onTaxonChange,
   onOpenPhotos,
+  nameParts,
   mutationDisabled = false,
 }: TaxonomyHierarchyPageProps) {
   const [navigation, dispatch] = useReducer(
@@ -92,7 +94,10 @@ export function TaxonomyHierarchyPage({
       const next = await getTaxonDetail(taxonId);
       if (request !== detailRequest.current) return;
       setDetail(next);
-      onTaxonChangeRef.current?.(next.taxon_id, displayTaxonDetail(next));
+      onTaxonChangeRef.current?.(
+        next.taxon_id,
+        formatTaxonName(detailDisplayNames(next), nameParts, `Taxon ${next.taxon_id}`),
+      );
     } catch (nextError) {
       if (request !== detailRequest.current) return;
       setDetailError(errorMessage(nextError));
@@ -100,7 +105,7 @@ export function TaxonomyHierarchyPage({
     } finally {
       if (request === detailRequest.current) setLoading(false);
     }
-  }, []);
+  }, [nameParts]);
 
   useEffect(() => {
     dispatch({ type: "navigate", taxonId: initialTaxonId });
@@ -120,7 +125,10 @@ export function TaxonomyHierarchyPage({
     if (mutation.kind === "update" && mutation.deletedTaxonId === currentTaxonId) {
       const parent = detail?.breadcrumb[detail.breadcrumb.length - 1];
       detailRequest.current += 1;
-      setDeletedParent(parent ? { taxonId: parent.taxon_id, label: displayTaxon(parent) } : null);
+      setDeletedParent(parent ? {
+        taxonId: parent.taxon_id,
+        label: formatTaxonName(parent.names, nameParts, `Taxon ${parent.taxon_id}`),
+      } : null);
       setDetail(null);
       setDetailError("This taxon was deleted.");
       setLoading(false);
@@ -178,7 +186,7 @@ export function TaxonomyHierarchyPage({
         emitTaxonomyMutation({ kind: "update", taxonId: detail.taxon_id });
       } else {
         await deleteTaxon(detail.taxon_id);
-        setMutationStatus(`Deleted ${displayTaxonDetail(detail)}.`);
+        setMutationStatus(`Deleted ${formatTaxonName(detailDisplayNames(detail), nameParts, `Taxon ${detail.taxon_id}`)}.`);
         emitTaxonomyMutation({
           kind: "update",
           taxonId: detail.taxon_id,
@@ -212,7 +220,11 @@ export function TaxonomyHierarchyPage({
     );
   }
 
-  const currentLabel = displayTaxonDetail(detail);
+  const currentLabel = formatTaxonName(
+    detailDisplayNames(detail),
+    nameParts,
+    `Taxon ${detail.taxon_id}`,
+  );
   const nameGroups: NameGroup[] = [
     { kind: "sci_name", records: detail.names.sci_name ? [detail.names.sci_name] : [] },
     { kind: "synonym", records: detail.names.synonyms },
@@ -237,8 +249,11 @@ export function TaxonomyHierarchyPage({
         <nav className="taxonomy-hierarchy-breadcrumb" aria-label="Taxonomy breadcrumb">
           {detail.breadcrumb.map((item) => (
             <span key={item.taxon_id}>
-              <button type="button" onClick={() => navigateTo(item.taxon_id, displayTaxon(item))}>
-                {displayTaxon(item)}
+              <button type="button" onClick={() => navigateTo(
+                item.taxon_id,
+                formatTaxonName(item.names, nameParts, `Taxon ${item.taxon_id}`),
+              )}>
+                {formatTaxonName(item.names, nameParts, `Taxon ${item.taxon_id}`)}
               </button>
               <ChevronRight size={12} />
             </span>
@@ -327,11 +342,14 @@ export function TaxonomyHierarchyPage({
                   className="taxonomy-child-button"
                   type="button"
                   key={child.taxon_id}
-                  onClick={() => navigateTo(child.taxon_id, displayTaxon(child))}
+                  onClick={() => navigateTo(
+                    child.taxon_id,
+                    formatTaxonName(child.names, nameParts, `Taxon ${child.taxon_id}`),
+                  )}
                 >
                   <span className="taxon-rank">{child.rank}</span>
-                  <strong>{displayTaxon(child)}</strong>
-                  <span>{[child.names.zh_name, child.names.en_name].filter(Boolean).join(" \u00b7 ") || "-"}</span>
+                  <strong>{formatTaxonName(child.names, nameParts, `Taxon ${child.taxon_id}`)}</strong>
+                  <span>Taxon {child.taxon_id}</span>
                   <ChevronRight size={14} />
                 </button>
               ))}
@@ -361,4 +379,12 @@ export function TaxonomyHierarchyPage({
 
 function yieldToPaint(): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, 0));
+}
+
+function detailDisplayNames(detail: TaxonDetail) {
+  return {
+    sci_name: detail.names.sci_name?.name ?? null,
+    zh_name: detail.names.zh_name?.name ?? null,
+    en_name: detail.names.en_name?.name ?? null,
+  };
 }

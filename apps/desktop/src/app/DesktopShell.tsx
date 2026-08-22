@@ -94,7 +94,8 @@ import {
 } from "./tabState";
 import { nativeMenuActions, useNativeMenu } from "./nativeMenu";
 import { NativeAboutOverlay } from "./NativeAboutOverlay";
-import { getTaxonDetail } from "../api/taxonomy";
+import { getTaxonDetail, type TaxonDisplaySummary } from "../api/taxonomy";
+import { TaxonDisplayPath } from "../features/taxonomy/TaxonDisplayPath";
 import {
   restoreWorkspaceState,
   serializeWorkspaceState,
@@ -177,6 +178,7 @@ export function DesktopShell({
     loadRecentSearches(undefined, generalSettings.recent_searches_limit)
   ));
   const [tabStatuses, setTabStatuses] = useState<TabStatusMap>({});
+  const [photoTaxonSummaries, setPhotoTaxonSummaries] = useState<Record<string, TaxonDisplaySummary | null>>({});
   const [startedPhotoOperation, setStartedPhotoOperation] = useState<OperationState | null>(null);
   const startedPhotoOperationTabId = useRef<string | null>(null);
   const emptySearchInputRef = useRef<HTMLInputElement>(null);
@@ -226,9 +228,16 @@ export function DesktopShell({
   const backTarget = findNavigationTarget(navigationHistory, existingTabIds, -1);
   const forwardTarget = findNavigationTarget(navigationHistory, existingTabIds, 1);
   const status = getCurrentTabStatus(tabStatuses, activeId);
+  const activePhotoTaxonSummary = activeId === null ? null : photoTaxonSummaries[activeId] ?? null;
 
   const reportTabStatus = useCallback((tabId: string, message: string) => {
     setTabStatuses((current) => updateTabStatus(current, tabId, message));
+  }, []);
+
+  const reportPhotoTaxonSummary = useCallback((tabId: string, summary: TaxonDisplaySummary | null) => {
+    setPhotoTaxonSummaries((current) => current[tabId] === summary
+      ? current
+      : { ...current, [tabId]: summary });
   }, []);
 
   const reportActiveStatus = useCallback((message: string) => {
@@ -686,6 +695,7 @@ export function DesktopShell({
                       taskOwnerId={taskOwnerId(tab.id)}
                       handlers={handlers}
                       onTabStatus={reportTabStatus}
+                      onPhotoTaxonSummary={reportPhotoTaxonSummary}
                       openTab={openTab}
                       updateTaxonTab={updateTaxonTab}
                       updateSettingsTab={updateSettingsTab}
@@ -714,7 +724,15 @@ export function DesktopShell({
         <footer className="status-bar">
           <span className="status-dot" />
           {status}
-          <span className="status-title">{active?.title ?? ""}</span>
+          {activePhotoTaxonSummary ? (
+            <TaxonDisplayPath
+              className="status-title"
+              summary={activePhotoTaxonSummary}
+              nameParts={generalSettings.photos_taxon_name_parts}
+            />
+          ) : (
+            <span className="status-title">{active?.title ?? ""}</span>
+          )}
           <div className="status-operations" ref={operationsMenuRef}>
             <IconButton aria-label="Background" className={activeOperationCount > 0 ? "running" : ""} title="Background" onClick={() => {
               setOperationsOpen((current) => !current);
@@ -745,6 +763,7 @@ function TabBody({
   taskOwnerId,
   handlers,
   onTabStatus,
+  onPhotoTaxonSummary,
   openTab,
   updateTaxonTab,
   updateSettingsTab,
@@ -766,6 +785,7 @@ function TabBody({
   taskOwnerId: string;
   handlers: PhotoOpenHandlers;
   onTabStatus: (tabId: string, message: string, busy?: boolean) => void;
+  onPhotoTaxonSummary: (tabId: string, summary: TaxonDisplaySummary | null) => void;
   openTab: (tab: AppTab, singleton?: boolean) => void;
   updateTaxonTab: (id: string, taxonId: number, title: string) => void;
   updateSettingsTab: (id: string, section: SettingsSection) => void;
@@ -786,6 +806,10 @@ function TabBody({
     (message: string, busy?: boolean) => onTabStatus(tab.id, message, busy),
     [onTabStatus, tab.id],
   );
+  const onCurrentPhotoTaxonSummary = useCallback(
+    (summary: TaxonDisplaySummary | null) => onPhotoTaxonSummary(tab.id, summary),
+    [onPhotoTaxonSummary, tab.id],
+  );
   if (photoTabKinds.has(tab.kind) && !workspaceAvailable) {
     return (
       <EmptyState
@@ -803,21 +827,21 @@ function TabBody({
       />
     );
   }
-  if (tab.kind === "folders") return <FolderPhotosView handlers={handlers} onStatus={onStatus} backgroundOperation={photoLibraryOperation} />;
-  if (tab.kind === "photo-taxonomy") return <TaxonPhotosView handlers={handlers} nameParts={generalSettings.photos_taxon_name_parts} backgroundOperation={photoLibraryOperation} />;
+  if (tab.kind === "folders") return <FolderPhotosView active={active} handlers={handlers} onStatus={onStatus} onTaxonSummaryChange={onCurrentPhotoTaxonSummary} backgroundOperation={photoLibraryOperation} />;
+  if (tab.kind === "photo-taxonomy") return <TaxonPhotosView active={active} handlers={handlers} nameParts={generalSettings.photos_taxon_name_parts} onTaxonSummaryChange={onCurrentPhotoTaxonSummary} backgroundOperation={photoLibraryOperation} />;
   if (tab.kind === "map") return <PhotoMapView active={active} handlers={handlers} backgroundOperation={photoLibraryOperation} />;
   if (tab.kind === "photo-history") return <OperationHistoryView domain="photo" onStatus={onStatus} />;
   if (tab.kind === "mapping") return <MappingView active={active} onStatus={onStatus} handlers={handlers} />;
-  if (tab.kind === "taxonomy-search") return <TaxonomySearchView mutationDisabled={taxonomyMutationLocked} onOpenPhotos={(taxonId, label) => openTab({ id: `taxon-photos:${taxonId}`, kind: "taxon-photos", title: label, taxonId })} />;
-  if (tab.kind === "taxon-detail" && tab.taxonId !== undefined) return <TaxonomyHierarchyPage initialTaxonId={tab.taxonId} mutationDisabled={taxonomyMutationLocked} onTaxonChange={(taxonId, label) => updateTaxonTab(tab.id, taxonId, label)} onOpenPhotos={(taxonId, label) => openTab({ id: `taxon-photos:${taxonId}`, kind: "taxon-photos", title: label, taxonId })} />;
+  if (tab.kind === "taxonomy-search") return <TaxonomySearchView nameParts={generalSettings.taxonomy_taxon_name_parts} mutationDisabled={taxonomyMutationLocked} onOpenPhotos={(taxonId, label) => openTab({ id: `taxon-photos:${taxonId}`, kind: "taxon-photos", title: label, taxonId })} />;
+  if (tab.kind === "taxon-detail" && tab.taxonId !== undefined) return <TaxonomyHierarchyPage initialTaxonId={tab.taxonId} nameParts={generalSettings.taxonomy_taxon_name_parts} mutationDisabled={taxonomyMutationLocked} onTaxonChange={(taxonId, label) => updateTaxonTab(tab.id, taxonId, label)} onOpenPhotos={(taxonId, label) => openTab({ id: `taxon-photos:${taxonId}`, kind: "taxon-photos", title: label, taxonId })} />;
   if (tab.kind === "formatted-update") return <FormattedUpdateView onStatus={onStatus} taskOwnerId={taskOwnerId} mutationDisabled={taxonomyMutationLocked} />;
   if (tab.kind === "custom-sql") return <CustomSqlView onStatus={onStatus} taskOwnerId={taskOwnerId} mutationDisabled={taxonomyMutationLocked} />;
   if (tab.kind === "taxonomy-history") return <OperationHistoryView domain="taxonomy" onStatus={onStatus} />;
   if (tab.kind === "settings") return <SettingsView section={tab.settingsSection ?? "General"} taskOwnerId={taskOwnerId} onSectionChange={(section) => updateSettingsTab(tab.id, section)} onTaxonomyImported={onTaxonomyImported} onWorkspaceChanged={onWorkspaceChanged} onOpenPhotoLibrary={onOpenPhotoLibrary} onPhotoOperationStarted={onPhotoOperationStarted} photoLibraryOperation={photoLibraryOperation} photoLibraryOperationError={photoLibraryOperationError} generalSettings={generalSettings} generalSettingsLoadError={generalSettingsLoadError} onGeneralSettingsChange={onGeneralSettingsChange} />;
-  if (tab.kind === "photo-detail" && tab.photo) return <PhotoDetailView photo={tab.photo} handlers={handlers} />;
+  if (tab.kind === "photo-detail" && tab.photo) return <PhotoDetailView active={active} photo={tab.photo} handlers={handlers} nameParts={generalSettings.photos_taxon_name_parts} />;
   if (tab.kind === "mapping-editor" && tab.photo) return <MappingEditor photo={tab.photo} onOpenTaxon={handlers.openTaxon} />;
-  if (tab.kind === "search-photos" && tab.query) return <PhotoSet query={tab.query} refreshKey={tab.refreshKey} handlers={handlers} />;
-  if (tab.kind === "taxon-photos" && tab.taxonId !== undefined) return <PhotoSet taxonId={tab.taxonId} handlers={handlers} />;
+  if (tab.kind === "search-photos" && tab.query) return <PhotoSet active={active} query={tab.query} refreshKey={tab.refreshKey} handlers={handlers} onTaxonSummaryChange={onCurrentPhotoTaxonSummary} />;
+  if (tab.kind === "taxon-photos" && tab.taxonId !== undefined) return <PhotoSet active={active} taxonId={tab.taxonId} handlers={handlers} onTaxonSummaryChange={onCurrentPhotoTaxonSummary} />;
   return null;
 }
 

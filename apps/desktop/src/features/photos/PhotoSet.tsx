@@ -3,17 +3,22 @@ import { listTaxonPhotos } from "../../api/taxonomy";
 import { useCursorPage } from "../../shared/useCursorPage";
 import { PhotoBrowser } from "./PhotoBrowser";
 import type { PhotoOpenHandlers } from "./PhotoInteraction";
+import type { TaxonDisplaySummary } from "../../api/taxonomy";
 
 export function PhotoSet({
   query,
   taxonId,
   refreshKey,
   handlers,
+  active,
+  onTaxonSummaryChange,
 }: {
   query?: string;
   taxonId?: number;
   refreshKey?: number;
   handlers: PhotoOpenHandlers;
+  active: boolean;
+  onTaxonSummaryChange: (summary: TaxonDisplaySummary | null) => void;
 }) {
   const params = query !== undefined
     ? { kind: "search" as const, query }
@@ -34,6 +39,8 @@ export function PhotoSet({
       loadingLabel={query !== undefined ? "Searching photos..." : "Loading photos..."}
       page={page}
       handlers={handlers}
+      active={active}
+      onTaxonSummaryChange={onTaxonSummaryChange}
     />
   );
 }

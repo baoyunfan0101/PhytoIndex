@@ -23,6 +23,11 @@ until results resolve. Every formal submission starts a fresh request even
 when the normalized query is unchanged, and the result list returns to its
 first row for the new response.
 
+Hierarchy breadcrumbs, the current heading, and child navigation use the
+Taxonomy visible-name preference for scientific, Chinese, and English accepted
+names. The complete name-group editor always shows the stored records and is
+independent of this display preference.
+
 ### `FormattedUpdateView({ onStatus, mutationDisabled })`
 
 Parameters: a status callback and optional mutation guard.
@@ -88,7 +93,8 @@ types.
 
 `TaxonCard` renders a `TaxonSummary` with optional selection and actions. Its
 third line displays available Chinese and English names separated by a middle
-dot, or a dash when both names are absent.
+dot, or a dash when both names are absent. Taxon cards always retain this full
+accepted-name presentation and do not use visible-name preferences.
 `useTaxonSuggestions(query, enabled)` returns lightweight suggestions after a
 260 ms input pause; only the latest request may publish its low-priority
 result. `useTaxonSearch(query, options)` returns submitted search results,

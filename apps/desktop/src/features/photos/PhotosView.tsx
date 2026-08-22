@@ -33,6 +33,8 @@ import { useCursorPage } from "../../shared/useCursorPage";
 import { useCursorTree, type CursorTreeNode } from "../../shared/useCursorTree";
 import { useViewState } from "../../shared/viewState";
 import { ResizablePanels } from "../../shared/ResizablePanels";
+import type { TaxonDisplaySummary } from "../../api/taxonomy";
+import { usePhotoTaxonDisplaySummary } from "./photoTaxonSummary";
 
 type DirectoryTreeRow =
   | { kind: "directory"; directory: PhotoDirectory; depth: number }
@@ -115,10 +117,14 @@ function readMapBounds(value: maplibregl.LngLatBounds): MapBounds {
 export function FolderPhotosView({
   handlers,
   onStatus,
+  active,
+  onTaxonSummaryChange,
   backgroundOperation,
 }: {
   handlers: PhotoOpenHandlers;
   onStatus: (message: string, busy?: boolean) => void;
+  active: boolean;
+  onTaxonSummaryChange: (summary: TaxonDisplaySummary | null) => void;
   backgroundOperation?: OperationState | null;
 }) {
   const [library, setLibrary] = useViewState<PhotoLibrary | null>("folders.library", null);
@@ -165,6 +171,11 @@ export function FolderPhotosView({
     selectFirst: false,
     stateKey: "folders.interaction",
   });
+  const taxonSummary = usePhotoTaxonDisplaySummary(active ? interaction.selectedId : null);
+  useEffect(() => {
+    onTaxonSummaryChange(taxonSummary);
+  }, [onTaxonSummaryChange, taxonSummary]);
+  useEffect(() => () => onTaxonSummaryChange(null), [onTaxonSummaryChange]);
   const [displayMode, setDisplayMode] = usePhotoDisplayMode();
   const activation = usePhotoActivation({
     onSelect: selectDirectoryPhoto,
@@ -406,10 +417,14 @@ export function FolderPhotosView({
 export function TaxonPhotosView({
   handlers,
   nameParts,
+  active,
+  onTaxonSummaryChange,
   backgroundOperation,
 }: {
   handlers: PhotoOpenHandlers;
   nameParts: TaxonNameParts;
+  active: boolean;
+  onTaxonSummaryChange: (summary: TaxonDisplaySummary | null) => void;
   backgroundOperation?: OperationState | null;
 }) {
   const [trail, setTrail] = useViewState<PhotoTaxonUsage[]>("photo-taxonomy.trail", []);
@@ -446,6 +461,11 @@ export function TaxonPhotosView({
     selectFirst: false,
     stateKey: "photo-taxonomy.interaction",
   });
+  const taxonSummary = usePhotoTaxonDisplaySummary(active ? interaction.selectedId : null);
+  useEffect(() => {
+    onTaxonSummaryChange(taxonSummary);
+  }, [onTaxonSummaryChange, taxonSummary]);
+  useEffect(() => () => onTaxonSummaryChange(null), [onTaxonSummaryChange]);
   const [displayMode, setDisplayMode] = usePhotoDisplayMode();
   const activation = usePhotoActivation({
     onSelect: selectTaxonPhoto,
@@ -557,7 +577,7 @@ export function TaxonPhotosView({
             <span key={item.taxon_id}><ChevronRight size={12} /><button type="button" onClick={() => {
               tree.clear();
               setTrail(trail.slice(0, index + 1));
-            }}>{item.names.sci_name ?? `Taxon ${item.taxon_id}`}</button></span>
+            }}>{formatTaxonName(item.names, nameParts, `Taxon ${item.taxon_id}`)}</button></span>
           ))}
         </div>
         <PhotoDisplayToggle mode={displayMode} onChange={setDisplayMode} />

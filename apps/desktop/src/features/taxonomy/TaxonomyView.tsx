@@ -41,12 +41,15 @@ import {
   taxonSearchMatchExplanation,
   type HierarchyPositions,
 } from "./hierarchyNavigation";
+import type { TaxonNameParts } from "../../api/general";
 
 export function TaxonomySearchView({
   onOpenPhotos,
+  nameParts,
   mutationDisabled = false,
 }: {
   onOpenPhotos: (taxonId: number, label: string) => void;
+  nameParts: TaxonNameParts;
   mutationDisabled?: boolean;
 }) {
   const [query, setQuery] = useViewState("taxonomy-search.query", "");
@@ -162,6 +165,7 @@ export function TaxonomySearchView({
             recordHierarchyPosition(current, selectedResult.taxon_id, currentTaxonId)
           ))}
           onOpenPhotos={onOpenPhotos}
+          nameParts={nameParts}
           mutationDisabled={mutationDisabled}
         />
       )}

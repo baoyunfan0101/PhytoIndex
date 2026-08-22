@@ -12,7 +12,9 @@ context menu share the same selection and mutation behavior.
 
 Parameters include a cursor page controller, optional title, and
 `PhotoOpenHandlers` for opening details, taxonomy, or mapping. Returns a
-virtual list or grid with a shared photo stage.
+virtual list or grid with a shared photo stage. It requests a lightweight
+taxonomy display summary only for the selected photo in the active tab and
+publishes that path to the right side of the application status bar.
 
 ### `PhotoSet(props)`
 
@@ -43,7 +45,8 @@ near the visible grid area.
 Parameters: `handlers: PhotoOpenHandlers` and the optional active background
 photo operation.
 
-Returns: an expandable photographed-taxonomy tree and photo stage.
+Returns: an expandable photographed-taxonomy tree and photo stage. Tree rows
+and every clickable breadcrumb node use the Photos visible-name preference.
 
 ### `PhotoMapView(props)`
 
@@ -67,11 +70,11 @@ refitting so background work cannot move the user's chosen view.
 Parameters: one `Photo`.
 
 Returns: a photo stage and copyable file and EXIF metadata. The heading shows
-the filename followed by file size, a middle dot, and the modified time from
-the supplied `Photo`; the page does not request mapping data on load. Width,
-height, longitude, and latitude are separate detail rows. The photo stage
-exposes the shared photo context menu, which loads mapping state on demand when
-opened.
+the filename followed by the mapped taxon's lightweight family-to-current
+display path when available; every node uses the Photos visible-name
+preference. Width, height, longitude, and latitude are separate detail rows.
+The photo stage exposes the shared photo context menu, which loads mapping
+state on demand when opened.
 
 ### `PhotoStage` and `PhotoThumb`
 
@@ -138,3 +141,10 @@ context menu opens and routes context actions through those handlers.
 `usePhotoMutation(listener)` receives it immediately.
 `useDeferredPhotoMutation(listener, active)` defers refresh work while a view
 is hidden and delivers one invalidation when it becomes active.
+
+`usePhotoTaxonDisplaySummary(photoId)` caches lightweight summaries for the
+current view. A missing selection performs no query. Selecting another photo
+loads only that photo, repeated selection reuses the cache, and mapping or
+taxonomy mutations invalidate affected values. Unmapped, ambiguous, and
+processing photos publish no summary. Status paths stay on one line and give
+the finest node the highest space priority.
