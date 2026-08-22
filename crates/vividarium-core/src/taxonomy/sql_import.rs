@@ -15,8 +15,8 @@ use sha2::{Digest, Sha256};
 
 use super::direct_import::{TaxonomyImportMetadata, TaxonomyImportResult};
 use super::formatted::{
-    TaxonomyNameType, TaxonomyValidationIssue, TaxonomyValidationOptions, validate_taxonomy,
-    visit_taxonomy_validation_issues_with_options,
+    TaxonomyNameType, TaxonomyValidationIssue, TaxonomyValidationOptions,
+    validate_taxonomy_with_progress, visit_taxonomy_validation_issues_with_progress,
 };
 use super::sql::{
     SqlSourceSchema, SqlStatementMessage, attach_read_only_sqlite, detach_sources, prepare_sources,
@@ -331,6 +331,7 @@ fn validate_sql_import_candidate_in_workspace(
         if validate_candidate_database_with_cancellation(
             &workspace.join(CANDIDATE_DATABASE),
             cancellation,
+            progress,
         )
         .is_ok()
         {
@@ -443,9 +444,10 @@ fn validate_sql_import_candidate_in_workspace(
             Some(OperationProgressUnit::Names),
         );
         report_progress(progress, VALIDATING_STAGING_TAXONOMY, None, None, None);
-        visit_taxonomy_validation_issues_with_options(
+        visit_taxonomy_validation_issues_with_progress(
             &connection,
             TaxonomyValidationOptions::sql_import_staging(),
+            &mut |value| progress(value),
             |issue| {
                 record_taxonomy_error(&mut validation, issue);
                 true
@@ -465,7 +467,7 @@ fn validate_sql_import_candidate_in_workspace(
         )
         .and_then(|_| {
             report_progress(progress, VALIDATING_CANDIDATE_DATABASE, None, None, None);
-            validate_candidate_database_with_cancellation(&candidate_build, cancellation)
+            validate_candidate_database_with_cancellation(&candidate_build, cancellation, progress)
         });
         if let Err(error) = build {
             remove_file_if_exists(&candidate_build)?;
@@ -581,7 +583,8 @@ fn apply_sql_import_with_guard(
     }
     let candidate_path = workspace.join(CANDIDATE_DATABASE);
     report_progress(progress, VALIDATING_SQL_IMPORT_CANDIDATE, None, None, None);
-    if let Err(error) = validate_candidate_database_with_cancellation(&candidate_path, cancellation)
+    if let Err(error) =
+        validate_candidate_database_with_cancellation(&candidate_path, cancellation, progress)
     {
         clear_validation_artifacts(&workspace)?;
         return Err(error);
@@ -829,6 +832,7 @@ fn workspace_fingerprint_with_progress(
 fn validate_candidate_database_with_cancellation(
     path: &Path,
     cancellation: &CancellationToken,
+    progress: &mut dyn FnMut(OperationProgress),
 ) -> CoreResult<()> {
     cancellation.check()?;
     let connection = Connection::open_with_flags(
@@ -851,7 +855,7 @@ fn validate_candidate_database_with_cancellation(
             "candidate foreign key check failed".into(),
         ));
     }
-    validate_taxonomy(&connection)?;
+    validate_taxonomy_with_progress(&connection, progress)?;
     let identity = connection
         .query_row(
             "SELECT taxonomy_identity FROM taxonomy_identity WHERE identity_id = 1",
@@ -1398,7 +1402,7 @@ fn build_official_taxonomy(
     }
     drop(insert);
     report_progress(progress, VALIDATING_CANDIDATE_DATABASE, None, None, None);
-    validate_taxonomy(&transaction)?;
+    validate_taxonomy_with_progress(&transaction, &mut |value| progress(value))?;
     transaction.execute(
         r#"
         UPDATE sqlite_sequence

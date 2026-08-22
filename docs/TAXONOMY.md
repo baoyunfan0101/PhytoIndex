@@ -29,6 +29,12 @@ use the complete validation set. SQL Import staging uses the same checks except
 raw name-family uniqueness, because its canonical duplicate validation covers
 that condition before candidate construction.
 
+Background SQL Import reports taxonomy validation as separate stages for
+loading structure, parent cycles, parent relationships, scientific names,
+localized names, duplicate names, orphan names, and normalized names. Staging
+omits the duplicate-name and normalized-name stages; candidate validation uses
+the complete set.
+
 `TaxonomyNameType` values are:
 
 | Value | Stored code | Meaning |

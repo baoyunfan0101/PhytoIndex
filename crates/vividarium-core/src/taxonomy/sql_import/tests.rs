@@ -258,9 +258,17 @@ fn validate_reports_real_stages_and_sql_statement_progress() {
         INSPECTING_STAGING_SCHEMA,
         NORMALIZING_NAMES,
         VALIDATING_STAGING_TAXONOMY,
+        "loading_taxonomy_structure",
+        "checking_parent_cycles",
+        "checking_parent_relationships",
+        "checking_scientific_names",
+        "checking_localized_names",
+        "checking_orphan_names",
         BUILDING_CANDIDATE_TAXA,
         BUILDING_CANDIDATE_NAMES,
         VALIDATING_CANDIDATE_DATABASE,
+        "checking_duplicate_names",
+        "checking_normalized_names",
         READY_TO_APPLY,
     ];
     let mut previous = 0;
@@ -284,6 +292,39 @@ fn validate_reports_real_stages_and_sql_statement_progress() {
     );
     assert_eq!(sql_events[0].unit, Some(OperationProgressUnit::Statements));
     assert_eq!(sql_events.last().unwrap().current, sql_events[0].total);
+    for stage in ["checking_parent_cycles", "checking_parent_relationships"] {
+        let events = progress
+            .iter()
+            .filter(|event| event.stage == stage)
+            .collect::<Vec<_>>();
+        let mut start = 0;
+        for index in 1..=events.len() {
+            if index == events.len() || events[index - 1].current > events[index].current {
+                let run = &events[start..index];
+                assert!(
+                    run.windows(2)
+                        .all(|events| events[0].current <= events[1].current)
+                );
+                let final_event = run.last().unwrap();
+                assert_eq!(final_event.current, final_event.total);
+                assert_eq!(final_event.unit, Some(OperationProgressUnit::Taxa));
+                start = index;
+            }
+        }
+    }
+    assert!(
+        progress
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event.stage.as_str(),
+                    "checking_scientific_names"
+                        | "checking_localized_names"
+                        | "checking_orphan_names"
+                )
+            })
+            .all(|event| event.current.is_none() && event.total.is_none() && event.unit.is_none())
+    );
     let fingerprint_events = progress
         .iter()
         .filter(|event| event.stage == FINGERPRINTING_STAGING)

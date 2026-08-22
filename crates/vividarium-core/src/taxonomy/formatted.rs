@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use super::match_exact_taxonomy_name;
 use super::view::{TaxonSummary, load_taxon_summaries, load_taxon_summary};
+use crate::models::{OperationProgress, OperationProgressUnit};
 use crate::naming::{SynonymAuthorityParser, normalize_taxonomy_name};
 use crate::operations::{
     self, NewAuditRow, NewOperation, OperationAuditRow, OperationPage, OperationSummary,
@@ -1792,14 +1793,30 @@ pub(super) fn visit_taxonomy_validation_issues(
 ) -> CoreResult<()> {
     let mut options = TaxonomyValidationOptions::full();
     options.require_normalized_names = require_normalized_names;
-    visit_taxonomy_validation_issues_with_options(connection, options, visit)
+    visit_taxonomy_validation_issues_with_progress(connection, options, |_| {}, visit)
 }
 
+#[cfg(test)]
 pub(super) fn visit_taxonomy_validation_issues_with_options(
     connection: &Connection,
     options: TaxonomyValidationOptions,
+    visit: impl FnMut(TaxonomyValidationIssue) -> bool,
+) -> CoreResult<()> {
+    visit_taxonomy_validation_issues_with_progress(connection, options, |_| {}, visit)
+}
+
+pub(super) fn visit_taxonomy_validation_issues_with_progress(
+    connection: &Connection,
+    options: TaxonomyValidationOptions,
+    mut progress: impl FnMut(OperationProgress),
     mut visit: impl FnMut(TaxonomyValidationIssue) -> bool,
 ) -> CoreResult<()> {
+    progress(validation_progress(
+        "loading_taxonomy_structure",
+        None,
+        None,
+        None,
+    ));
     let taxa = connection
         .prepare("SELECT taxon_id, parent_taxon_id, rank FROM taxa ORDER BY taxon_id")?
         .query_map([], |row| {
@@ -1814,9 +1831,43 @@ pub(super) fn visit_taxonomy_validation_issues_with_options(
         .iter()
         .map(|(taxon_id, parent_taxon_id, rank)| (*taxon_id, (*parent_taxon_id, *rank)))
         .collect::<HashMap<_, _>>();
+    let total_taxa = taxa.len() as u64;
+    progress(validation_progress(
+        "loading_taxonomy_structure",
+        Some(total_taxa),
+        Some(total_taxa),
+        Some(OperationProgressUnit::Taxa),
+    ));
     if options.check_parent_structure {
-        let cycle_taxa = cycle_taxon_ids(&by_id);
-        for (taxon_id, parent_taxon_id, rank) in &taxa {
+        progress(validation_progress(
+            "checking_parent_cycles",
+            Some(0),
+            Some(total_taxa),
+            Some(OperationProgressUnit::Taxa),
+        ));
+        let cycle_taxa = cycle_taxon_ids_with_progress(&by_id, |current, total| {
+            progress(validation_progress(
+                "checking_parent_cycles",
+                Some(current),
+                Some(total),
+                Some(OperationProgressUnit::Taxa),
+            ));
+        });
+        progress(validation_progress(
+            "checking_parent_relationships",
+            Some(0),
+            Some(total_taxa),
+            Some(OperationProgressUnit::Taxa),
+        ));
+        for (index, (taxon_id, parent_taxon_id, rank)) in taxa.iter().enumerate() {
+            if (index + 1).is_multiple_of(10_000) {
+                progress(validation_progress(
+                    "checking_parent_relationships",
+                    Some((index + 1) as u64),
+                    Some(total_taxa),
+                    Some(OperationProgressUnit::Taxa),
+                ));
+            }
             if cycle_taxa.contains(&taxon_id) {
                 if !visit(TaxonomyValidationIssue {
                     code: "parent_cycle",
@@ -1876,8 +1927,20 @@ pub(super) fn visit_taxonomy_validation_issues_with_options(
                 return Ok(());
             }
         }
+        progress(validation_progress(
+            "checking_parent_relationships",
+            Some(total_taxa),
+            Some(total_taxa),
+            Some(OperationProgressUnit::Taxa),
+        ));
     }
     if options.check_scientific_name_count {
+        progress(validation_progress(
+            "checking_scientific_names",
+            None,
+            None,
+            None,
+        ));
         let mut invalid_sci_names = connection.prepare(
             r#"
             SELECT taxa.taxon_id
@@ -1903,6 +1966,12 @@ pub(super) fn visit_taxonomy_validation_issues_with_options(
         }
     }
     if options.check_localized_accepted_name_count {
+        progress(validation_progress(
+            "checking_localized_names",
+            None,
+            None,
+            None,
+        ));
         let mut duplicate_accepted_names = connection.prepare(
             r#"
             SELECT taxon_id, name_type
@@ -1939,6 +2008,12 @@ pub(super) fn visit_taxonomy_validation_issues_with_options(
         }
     }
     if options.check_duplicate_name_family {
+        progress(validation_progress(
+            "checking_duplicate_names",
+            None,
+            None,
+            None,
+        ));
         let mut duplicate_family_names = connection.prepare(
             r#"
             SELECT taxon_id, (name_type + 1) / 2 AS name_family, name
@@ -1973,6 +2048,12 @@ pub(super) fn visit_taxonomy_validation_issues_with_options(
         }
     }
     if options.check_orphan_names {
+        progress(validation_progress(
+            "checking_orphan_names",
+            None,
+            None,
+            None,
+        ));
         let mut orphan_name_taxa = connection.prepare(
             r#"
             SELECT DISTINCT taxon_names.taxon_id
@@ -1995,6 +2076,12 @@ pub(super) fn visit_taxonomy_validation_issues_with_options(
         }
     }
     if options.require_normalized_names {
+        progress(validation_progress(
+            "checking_normalized_names",
+            None,
+            None,
+            None,
+        ));
         let mut statement =
             connection.prepare("SELECT name_id, taxon_id, name FROM taxon_names")?;
         for row in statement.query_map([], |row| {
@@ -2020,9 +2107,33 @@ pub(super) fn visit_taxonomy_validation_issues_with_options(
     Ok(())
 }
 
+fn validation_progress(
+    stage: &str,
+    current: Option<u64>,
+    total: Option<u64>,
+    unit: Option<OperationProgressUnit>,
+) -> OperationProgress {
+    OperationProgress {
+        stage: stage.into(),
+        current,
+        total,
+        unit,
+    }
+}
+
+#[cfg(test)]
 fn cycle_taxon_ids(by_id: &HashMap<i64, (Option<i64>, i64)>) -> HashSet<i64> {
+    cycle_taxon_ids_with_progress(by_id, |_, _| {})
+}
+
+fn cycle_taxon_ids_with_progress(
+    by_id: &HashMap<i64, (Option<i64>, i64)>,
+    mut progress: impl FnMut(u64, u64),
+) -> HashSet<i64> {
     let mut states = HashMap::<i64, VisitState>::new();
     let mut cycle_taxa = HashSet::new();
+    let total = by_id.len() as u64;
+    let mut completed = 0_u64;
     for &origin_taxon_id in by_id.keys() {
         if states.get(&origin_taxon_id) == Some(&VisitState::Done) {
             continue;
@@ -2045,8 +2156,13 @@ fn cycle_taxon_ids(by_id: &HashMap<i64, (Option<i64>, i64)>) -> HashSet<i64> {
         }
         for taxon_id in path {
             states.insert(taxon_id, VisitState::Done);
+            completed += 1;
+            if completed.is_multiple_of(10_000) {
+                progress(completed, total);
+            }
         }
     }
+    progress(total, total);
     cycle_taxa
 }
 
@@ -2062,6 +2178,26 @@ pub(super) fn validate_taxonomy(connection: &Connection) -> CoreResult<()> {
         first_issue = Some(issue);
         false
     })?;
+    if let Some(issue) = first_issue {
+        return Err(CoreError::InvalidArgument(issue.message));
+    }
+    Ok(())
+}
+
+pub(super) fn validate_taxonomy_with_progress(
+    connection: &Connection,
+    progress: impl FnMut(OperationProgress),
+) -> CoreResult<()> {
+    let mut first_issue = None;
+    visit_taxonomy_validation_issues_with_progress(
+        connection,
+        TaxonomyValidationOptions::full(),
+        progress,
+        |issue| {
+            first_issue = Some(issue);
+            false
+        },
+    )?;
     if let Some(issue) = first_issue {
         return Err(CoreError::InvalidArgument(issue.message));
     }
