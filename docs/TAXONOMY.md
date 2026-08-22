@@ -63,6 +63,8 @@ and parent resource. Page limits are clamped to `1..=500`.
 | `TaxonDisplayNames` | `sci_name`, `zh_name`, `en_name` | Compact accepted names. |
 | `TaxonBreadcrumbItem` | `taxon_id`, `rank`, `names` | One ancestor. |
 | `TaxonSummary` | `taxon_id`, `rank`, `breadcrumb`, `names` | Compact taxon and lineage. |
+| `TaxonDisplayItem` | `taxon_id`, `rank`, `names` | One lightweight accepted-name display node. |
+| `TaxonDisplaySummary` | `current_rank`, `items` | Family-to-current display path, or only the current node above family. |
 | `TaxonChild` | `taxon_id`, `rank`, `names` | Compact direct child. |
 | `TaxonNameDetail` | `name_id`, `name`, `authority_year`, `source` | One stable name record. |
 | `TaxonNamesDetail` | `sci_name`, `synonyms`, `zh_name`, `zh_aliases`, `en_name`, `en_aliases` | Names grouped by type. |
@@ -71,6 +73,7 @@ and parent resource. Page limits are clamped to `1..=500`.
 | Function | Parameters after `database` | Return |
 | --- | --- | --- |
 | `get_taxon_summary` | `taxon_id: i64` | `Option<TaxonSummary>` |
+| `get_taxon_display_summary` | `taxon_id: i64` | `Option<TaxonDisplaySummary>` |
 | `get_taxon_detail` | `taxon_id: i64` | `Option<TaxonDetail>` |
 | `list_taxon_children` | `taxon_id: i64`, `cursor: Option<&str>`, `limit: usize` | `TaxonomyPage<TaxonChild>` |
 
@@ -78,6 +81,11 @@ and parent resource. Page limits are clamped to `1..=500`.
 the immediate parent. It does not repeat the current taxon. Children are
 loaded separately with `list_taxon_children`; they are not embedded in the
 detail response.
+
+`TaxonDisplaySummary` is independent from the complete `TaxonSummary`. It
+contains accepted scientific, Chinese, and English names only. Family, genus,
+and species targets include the available path from family through the target;
+kingdom and order targets include only the target itself.
 
 ## Search
 

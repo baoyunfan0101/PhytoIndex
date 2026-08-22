@@ -534,6 +534,103 @@ fn does_not_synthesize_processing_for_a_missing_photo() {
 }
 
 #[test]
+fn photo_display_summary_requires_a_unique_current_mapping() {
+    let data = tempfile::tempdir().unwrap();
+    let database = Database::open_test(data.path().join("vividarium.db")).unwrap();
+    let connection = database.connect().unwrap();
+    connection
+        .execute_batch(
+            r#"
+            INSERT INTO taxa (taxon_id, parent_taxon_id, rank) VALUES
+                (1, NULL, 1),
+                (2, 1, 2),
+                (3, 2, 3),
+                (4, 3, 4),
+                (5, 4, 5);
+            INSERT INTO taxon_names (taxon_id, name_type, name) VALUES
+                (1, 1, 'Animalia'),
+                (2, 1, 'Carnivora'),
+                (3, 1, 'Felidae'),
+                (4, 1, 'Panthera'),
+                (5, 1, 'Panthera leo'),
+                (5, 2, 'Felis leo'),
+                (5, 5, 'Lion');
+            INSERT INTO photo_directories (
+                parent_directory_id, name, relative_path
+            ) VALUES (NULL, '', '');
+            "#,
+        )
+        .unwrap();
+    let directory_id = connection.last_insert_rowid();
+    let species_photo_id = insert_test_photo(&connection, directory_id, "species.jpg");
+    let order_photo_id = insert_test_photo(&connection, directory_id, "order.jpg");
+    let unmatched_photo_id = insert_test_photo(&connection, directory_id, "unmatched.jpg");
+    let ambiguous_photo_id = insert_test_photo(&connection, directory_id, "ambiguous.jpg");
+    for (photo_id, taxon_id, status) in [
+        (species_photo_id, Some(5), "matched"),
+        (order_photo_id, Some(2), "matched"),
+        (unmatched_photo_id, None, "unmatched"),
+        (ambiguous_photo_id, None, "ambiguous"),
+    ] {
+        connection
+            .execute(
+                r#"
+                INSERT INTO photo_taxon_mapping (photo_id, taxon_id, status)
+                VALUES (?, ?, ?)
+                "#,
+                params![photo_id, taxon_id, status],
+            )
+            .unwrap();
+    }
+
+    let species = get_photo_taxon_display_summary(&database, species_photo_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(species.current_rank, TaxonRank::Species);
+    assert_eq!(
+        species
+            .items
+            .iter()
+            .map(|item| (item.rank, item.names.sci_name.as_deref()))
+            .collect::<Vec<_>>(),
+        vec![
+            (TaxonRank::Family, Some("Felidae")),
+            (TaxonRank::Genus, Some("Panthera")),
+            (TaxonRank::Species, Some("Panthera leo")),
+        ]
+    );
+    assert_eq!(species.items[2].names.en_name.as_deref(), Some("Lion"));
+
+    let order = get_photo_taxon_display_summary(&database, order_photo_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(order.items.len(), 1);
+    assert_eq!(order.items[0].rank, TaxonRank::Order);
+    assert!(
+        get_photo_taxon_display_summary(&database, unmatched_photo_id)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        get_photo_taxon_display_summary(&database, ambiguous_photo_id)
+            .unwrap()
+            .is_none()
+    );
+
+    connection
+        .execute(
+            "INSERT INTO photo_mapping_queue (photo_id, reason) VALUES (?, 'refresh')",
+            [species_photo_id],
+        )
+        .unwrap();
+    assert!(
+        get_photo_taxon_display_summary(&database, species_photo_id)
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
 fn rejects_a_photo_without_mapping_state() {
     let data = tempfile::tempdir().unwrap();
     let root = tempfile::tempdir().unwrap();

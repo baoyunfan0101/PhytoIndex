@@ -27,7 +27,7 @@ mod tree;
 
 pub use actions::{
     clear_photo_mapping, get_metadata, get_photo_mapping, get_photo_mapping_candidates,
-    remap_photo, set_photo_mapping,
+    get_photo_taxon_display_summary, remap_photo, set_photo_mapping,
 };
 pub use name_match::{
     PhotoNameField, PhotoNameMatchSettings, get_photo_name_match_settings,

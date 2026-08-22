@@ -42,6 +42,7 @@ whose state `changed`, and the number still `pending`.
 | Function | Parameters after `database` | Return | Description |
 | --- | --- | --- | --- |
 | `get_photo_mapping` | `photo_id: i64` | `PhotoMappingSummary` | Read the lightweight current state. Missing photos and broken state invariants are errors. |
+| `get_photo_taxon_display_summary` | `photo_id: i64` | `Option<TaxonDisplaySummary>` | Read the compact display path for a uniquely mapped photo. Unmapped, ambiguous, and processing photos return `None`. |
 | `get_photo_mapping_candidates` | `photo_id: i64` | `Vec<PhotoTaxonCandidate>` | Read persisted candidates for an ambiguous photo; otherwise return an empty vector. |
 | `set_photo_mapping` | `photo_id: i64`, `taxon_id: i64` | `PhotoMappingSummary` | Force or replace a mapping, including choosing an ambiguous candidate. |
 | `clear_photo_mapping` | `photo_id: i64` | `PhotoMappingSummary` | Set the photo to `unmatched`. |

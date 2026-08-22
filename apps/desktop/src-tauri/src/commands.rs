@@ -1023,6 +1023,21 @@ pub async fn get_taxon_detail(
 }
 
 #[tauri::command]
+pub async fn get_taxon_display_summary(
+    state: State<'_, AppState>,
+    taxon_id: i64,
+) -> CommandResult<taxonomy::TaxonDisplaySummary> {
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        taxonomy::get_taxon_display_summary(&database, taxon_id)
+            .map_err(error)?
+            .ok_or_else(|| format!("taxon {taxon_id} not found"))
+    })
+    .await
+    .map_err(error)?
+}
+
+#[tauri::command]
 pub async fn list_taxon_children(
     state: State<'_, AppState>,
     taxon_id: i64,
@@ -1934,6 +1949,14 @@ pub fn get_photo_mapping(
     photo_id: i64,
 ) -> CommandResult<PhotoMappingSummary> {
     mapping::get_photo_mapping(&state.database, photo_id).map_err(error)
+}
+
+#[tauri::command]
+pub fn get_photo_taxon_display_summary(
+    state: State<'_, AppState>,
+    photo_id: i64,
+) -> CommandResult<Option<taxonomy::TaxonDisplaySummary>> {
+    mapping::get_photo_taxon_display_summary(&state.database, photo_id).map_err(error)
 }
 
 #[tauri::command]

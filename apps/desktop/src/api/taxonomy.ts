@@ -20,6 +20,8 @@ export type TaxonSummary = {
   breadcrumb: TaxonBreadcrumbItem[];
   names: TaxonDisplayNames;
 };
+export type TaxonDisplayItem = { taxon_id: number; rank: TaxonRank; names: TaxonDisplayNames };
+export type TaxonDisplaySummary = { current_rank: TaxonRank; items: TaxonDisplayItem[] };
 export type TaxonNameDetail = {
   name_id: number;
   name: string;
@@ -250,6 +252,30 @@ export function demoTaxonSummary(taxon: TaxonSearchResult): TaxonSummary {
   };
 }
 
+export function demoTaxonDisplaySummary(taxonId: number): TaxonDisplaySummary | null {
+  const current = demoTaxonomy.find((taxon) => taxon.taxon_id === taxonId);
+  if (!current) return null;
+  const lineage: DemoTaxonDefinition[] = [];
+  let item: DemoTaxonDefinition | undefined = current;
+  while (item) {
+    lineage.push(item);
+    item = item.parent_taxon_id === null
+      ? undefined
+      : demoTaxonomy.find((taxon) => taxon.taxon_id === item!.parent_taxon_id);
+  }
+  const items = lineage
+    .reverse()
+    .filter((taxon) => current.rank === "kingdom" || current.rank === "order"
+      ? taxon.taxon_id === current.taxon_id
+      : demoRankOrder[taxon.rank] >= demoRankOrder.family)
+    .map((taxon) => ({
+      taxon_id: taxon.taxon_id,
+      rank: taxon.rank,
+      names: { sci_name: taxon.scientific, zh_name: null, en_name: taxon.english },
+    }));
+  return { current_rank: current.rank, items };
+}
+
 export const searchTaxa = (query: string, limit = 80) =>
   call<TaxonSearchResult[]>("search_taxa", { query, limit }, () =>
     demoTaxa.flatMap((taxon) => {
@@ -272,6 +298,12 @@ export const getTaxonDetail = (taxonId: number) =>
     const detail = demoTaxonDetails.get(taxonId);
     if (!detail) throw new Error(`taxon ${taxonId} not found`);
     return detail;
+  });
+export const getTaxonDisplaySummary = (taxonId: number) =>
+  call<TaxonDisplaySummary>("get_taxon_display_summary", { taxonId }, () => {
+    const summary = demoTaxonDisplaySummary(taxonId);
+    if (!summary) throw new Error(`taxon ${taxonId} not found`);
+    return summary;
   });
 export const listTaxonChildren = (taxonId: number, cursor: string | null = null, limit = 80) =>
   call<Page<TaxonChild>>("list_taxon_children", { taxonId, cursor, limit }, () => {

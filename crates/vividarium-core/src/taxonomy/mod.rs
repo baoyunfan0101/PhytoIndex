@@ -73,8 +73,10 @@ pub use sync::{
     TaxonomySyncResult, TaxonomySyncRun, has_pending_photo_library_sync,
     synchronize_pending_photo_libraries,
 };
+pub(crate) use view::load_taxon_display_summary;
 pub(crate) use view::load_taxon_summaries;
 pub use view::{
-    TaxonBreadcrumbItem, TaxonChild, TaxonDetail, TaxonDisplayNames, TaxonNameDetail,
-    TaxonNamesDetail, TaxonSummary, get_taxon_detail, get_taxon_summary, list_taxon_children,
+    TaxonBreadcrumbItem, TaxonChild, TaxonDetail, TaxonDisplayItem, TaxonDisplayNames,
+    TaxonDisplaySummary, TaxonNameDetail, TaxonNamesDetail, TaxonSummary, get_taxon_detail,
+    get_taxon_display_summary, get_taxon_summary, list_taxon_children,
 };

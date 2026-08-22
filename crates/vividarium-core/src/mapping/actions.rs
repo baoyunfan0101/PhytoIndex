@@ -7,6 +7,7 @@ use super::{
     delete_queued_photo_ids, mapping_from_row, remap_photo_ids,
 };
 use crate::models::MappingMetadata;
+use crate::taxonomy::{TaxonDisplaySummary, load_taxon_display_summary};
 use crate::{CoreError, CoreResult, Database};
 
 pub fn get_metadata(database: &Database) -> CoreResult<MappingMetadata> {
@@ -82,6 +83,34 @@ pub fn get_photo_mapping(database: &Database, photo_id: i64) -> CoreResult<Photo
             ))
         })
     }
+}
+
+pub fn get_photo_taxon_display_summary(
+    database: &Database,
+    photo_id: i64,
+) -> CoreResult<Option<TaxonDisplaySummary>> {
+    let connection = database.connect()?;
+    let taxon_id = connection
+        .query_row(
+            r#"
+            SELECT photo_taxon_mapping.taxon_id
+            FROM photo_taxon_mapping
+            WHERE photo_taxon_mapping.photo_id = ?
+              AND photo_taxon_mapping.status = 'matched'
+              AND photo_taxon_mapping.taxon_id IS NOT NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM photo_mapping_queue
+                  WHERE photo_mapping_queue.photo_id = photo_taxon_mapping.photo_id
+              )
+            "#,
+            [photo_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()?;
+    taxon_id
+        .map(|taxon_id| load_taxon_display_summary(&connection, taxon_id))
+        .transpose()
+        .map(Option::flatten)
 }
 
 pub fn get_photo_mapping_candidates(

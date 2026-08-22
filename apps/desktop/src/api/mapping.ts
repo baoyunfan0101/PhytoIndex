@@ -3,7 +3,9 @@ import type { Page } from "./common";
 import { demoPhotos, type Photo } from "./photos";
 import {
   demoTaxa,
+  demoTaxonDisplaySummary,
   demoTaxonSummary,
+  type TaxonDisplaySummary,
   type TaxonDisplayNames,
   type TaxonRank,
   type TaxonSummary,
@@ -55,6 +57,13 @@ export const startPhotoMapping = () =>
 export const getPhotoMapping = (photoId: number) =>
   call<PhotoMappingSummary>("get_photo_mapping", { photoId }, () =>
     demoMappings.get(photoId) ?? { photo_id: photoId, taxon_id: null, status: "unmatched" });
+export const getPhotoTaxonDisplaySummary = (photoId: number) =>
+  call<TaxonDisplaySummary | null>("get_photo_taxon_display_summary", { photoId }, () => {
+    const mapping = demoMappings.get(photoId);
+    return mapping?.status === "matched" && mapping.taxon_id !== null
+      ? demoTaxonDisplaySummary(mapping.taxon_id)
+      : null;
+  });
 export const getPhotoMappingCandidates = (photoId: number) =>
   call<PhotoTaxonCandidate[]>("get_photo_mapping_candidates", { photoId }, () => {
     const mapping = demoMappings.get(photoId);
