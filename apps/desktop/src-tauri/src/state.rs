@@ -433,7 +433,7 @@ impl BackgroundTaskScheduler {
             };
             while self
                 .operations
-                .blocked_by_other(work.pending.module, &work.task_id)
+                .blocked_by_running_other(work.pending.module, &work.task_id)
                 .is_some()
             {
                 std::thread::sleep(Duration::from_millis(25));
@@ -668,9 +668,9 @@ impl OperationManager {
         Ok(state)
     }
 
-    fn blocked_by_other(&self, module: &str, task_id: &str) -> Option<String> {
+    fn blocked_by_running_other(&self, module: &str, task_id: &str) -> Option<String> {
         let states = self.states.lock().ok()?;
-        blocked_by_excluding(&states, module, Some(task_id))
+        blocked_by_running_excluding(&states, module, Some(task_id))
     }
 
     fn run_queued(&self, app: AppHandle, task_id: &str, callback: BackgroundCallback) {
@@ -738,16 +738,29 @@ fn blocked_by_excluding(
         if state.task_id.as_deref() == excluded_task_id {
             return None;
         }
-        let other = state.module.as_str();
-        let taxonomy_import_conflict = matches!(module, "sql_import" | "direct_import")
-            && matches!(other, "sql_import" | "direct_import");
-        (state.is_active()
-            && (module == other
-                || module == "mapping"
-                || other == "mapping"
-                || taxonomy_import_conflict))
-            .then(|| other.to_string())
+        (state.is_active() && modules_conflict(module, &state.module)).then(|| state.module.clone())
     })
+}
+
+fn blocked_by_running_excluding(
+    states: &BTreeMap<String, OperationState>,
+    module: &str,
+    excluded_task_id: Option<&str>,
+) -> Option<String> {
+    states.values().find_map(|state| {
+        if state.task_id.as_deref() == excluded_task_id
+            || state.state != BackgroundTaskState::Running
+        {
+            return None;
+        }
+        modules_conflict(module, &state.module).then(|| state.module.clone())
+    })
+}
+
+fn modules_conflict(module: &str, other: &str) -> bool {
+    let taxonomy_import_conflict = matches!(module, "sql_import" | "direct_import")
+        && matches!(other, "sql_import" | "direct_import");
+    module == other || module == "mapping" || other == "mapping" || taxonomy_import_conflict
 }
 
 fn now() -> String {
@@ -1006,6 +1019,183 @@ mod tests {
         );
     }
 
+    #[test]
+    fn queued_background_tasks_do_not_block_the_fifo_head() {
+        let mut states = OperationsStatus::new();
+        let mut scan = running_state("photos");
+        scan.task_id = Some("scan".into());
+        scan.state = BackgroundTaskState::Queued;
+        let mut metadata = running_state("photos");
+        metadata.task_id = Some("metadata".into());
+        metadata.state = BackgroundTaskState::Queued;
+        let mut mapping = running_state("mapping");
+        mapping.task_id = Some("mapping".into());
+        mapping.state = BackgroundTaskState::Queued;
+        states.insert("scan".into(), scan);
+        states.insert("metadata".into(), metadata);
+        states.insert("mapping".into(), mapping);
+
+        assert_eq!(
+            blocked_by_running_excluding(&states, "photos", Some("scan")),
+            None
+        );
+        assert_eq!(
+            blocked_by_running_excluding(&states, "mapping", Some("mapping")),
+            None
+        );
+    }
+
+    #[test]
+    fn running_foreground_conflicts_block_background_work() {
+        let mut states = OperationsStatus::new();
+        states.insert("photos".into(), running_state("photos"));
+        assert_eq!(
+            blocked_by_running_excluding(&states, "photos", Some("scan")).as_deref(),
+            Some("photos")
+        );
+        states.clear();
+        states.insert("mapping".into(), running_state("mapping"));
+        assert_eq!(
+            blocked_by_running_excluding(&states, "photos", Some("scan")).as_deref(),
+            Some("mapping")
+        );
+        states.get_mut("mapping").unwrap().state = BackgroundTaskState::Completed;
+        assert_eq!(
+            blocked_by_running_excluding(&states, "photos", Some("scan")),
+            None
+        );
+    }
+
+    #[test]
+    fn queued_and_running_states_remain_globally_active() {
+        for state in [BackgroundTaskState::Queued, BackgroundTaskState::Running] {
+            let mut operation = running_state("photos");
+            operation.state = state;
+            assert!(operation.is_active());
+        }
+        for state in [BackgroundTaskState::Completed, BackgroundTaskState::Failed] {
+            let mut operation = running_state("photos");
+            operation.state = state;
+            assert!(!operation.is_active());
+        }
+    }
+
+    #[test]
+    fn photo_pipeline_queue_drains_in_fifo_order() {
+        let manager = OperationManager::new();
+        let scheduler = BackgroundTaskScheduler::new(manager.clone());
+        let executed = Arc::new(Mutex::new(Vec::new()));
+        for (kind, module, label) in [
+            (BackgroundTaskKind::PhotoScan, "photos", "scan"),
+            (BackgroundTaskKind::MetadataIndex, "photos", "metadata"),
+            (BackgroundTaskKind::PhotoMapping, "mapping", "mapping"),
+        ] {
+            let key = BackgroundTaskKey::new(kind, "library-a");
+            let state = manager.queue_background(module, label, &key).unwrap();
+            let task_id = state.task_id.unwrap();
+            let executed = executed.clone();
+            scheduler
+                .queue
+                .lock()
+                .unwrap()
+                .push(scheduled_work_with_module(
+                    &task_id,
+                    key,
+                    module,
+                    Box::new(move |_| {
+                        executed.lock().unwrap().push(label);
+                        Ok(Value::Null)
+                    }),
+                ))
+                .unwrap();
+        }
+
+        loop {
+            let work = scheduler.queue.lock().unwrap().queued.pop_front();
+            let Some(work) = work else { break };
+            assert_eq!(
+                manager.blocked_by_running_other(work.pending.module, &work.task_id),
+                None
+            );
+            manager.mark_running(&work.task_id).unwrap();
+            let mut progress = |_| {};
+            let result = (work.pending.callback)(&mut progress);
+            manager.finish(&work.task_id, result).unwrap();
+            scheduler.queue.lock().unwrap().complete(&work.pending.key);
+        }
+
+        assert_eq!(*executed.lock().unwrap(), ["scan", "metadata", "mapping"]);
+        assert!(
+            manager
+                .status()
+                .values()
+                .all(|state| { state.state == BackgroundTaskState::Completed })
+        );
+    }
+
+    #[test]
+    fn background_queue_continues_after_a_task_failure() {
+        let manager = OperationManager::new();
+        let scheduler = BackgroundTaskScheduler::new(manager.clone());
+        let continued = Arc::new(Mutex::new(false));
+        for (kind, operation, callback) in [
+            (
+                BackgroundTaskKind::PhotoScan,
+                "scan",
+                Box::new(|_: &mut (dyn FnMut(OperationProgress) + Send)| Err("scan failed".into()))
+                    as BackgroundCallback,
+            ),
+            (BackgroundTaskKind::MetadataIndex, "metadata", {
+                let continued = continued.clone();
+                Box::new(move |_| {
+                    *continued.lock().unwrap() = true;
+                    Ok(Value::Null)
+                })
+            }),
+        ] {
+            let key = BackgroundTaskKey::new(kind, "library-a");
+            let state = manager.queue_background("photos", operation, &key).unwrap();
+            scheduler
+                .queue
+                .lock()
+                .unwrap()
+                .push(scheduled_work_with_module(
+                    state.task_id.as_deref().unwrap(),
+                    key,
+                    "photos",
+                    callback,
+                ))
+                .unwrap();
+        }
+
+        loop {
+            let work = scheduler.queue.lock().unwrap().queued.pop_front();
+            let Some(work) = work else { break };
+            manager.mark_running(&work.task_id).unwrap();
+            let mut progress = |_| {};
+            let result = (work.pending.callback)(&mut progress);
+            manager.finish(&work.task_id, result).unwrap();
+            scheduler.queue.lock().unwrap().complete(&work.pending.key);
+        }
+
+        assert!(*continued.lock().unwrap());
+        let states = manager.status();
+        assert_eq!(
+            states
+                .values()
+                .filter(|state| state.state == BackgroundTaskState::Failed)
+                .count(),
+            1
+        );
+        assert_eq!(
+            states
+                .values()
+                .filter(|state| state.state == BackgroundTaskState::Completed)
+                .count(),
+            1
+        );
+    }
+
     fn running_state(module: &str) -> OperationState {
         OperationState {
             module: module.into(),
@@ -1023,13 +1213,22 @@ mod tests {
     }
 
     fn scheduled_work(task_id: &str, key: BackgroundTaskKey) -> ScheduledBackgroundWork {
+        scheduled_work_with_module(task_id, key, "photos", Box::new(|_| Ok(Value::Null)))
+    }
+
+    fn scheduled_work_with_module(
+        task_id: &str,
+        key: BackgroundTaskKey,
+        module: &'static str,
+        callback: BackgroundCallback,
+    ) -> ScheduledBackgroundWork {
         ScheduledBackgroundWork {
             task_id: task_id.into(),
             pending: PendingBackgroundWork {
                 key,
-                module: "photos",
+                module,
                 operation: "test",
-                callback: Box::new(|_| Ok(Value::Null)),
+                callback,
             },
         }
     }

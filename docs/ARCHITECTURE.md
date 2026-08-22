@@ -68,8 +68,10 @@ task-keyed status map is the single source for the bottom-right Background UI,
 and foreground workflows wait for the exact returned `task_id`.
 `BackgroundTaskScheduler` identifies
 photo work by `(kind, scope)`, coalesces duplicate queued or running work, and
-runs Photo Scan, Metadata Index, and Photo Mapping through one conservative
-worker. Each stage uses bounded database batches and yields between batches.
+runs Photo Scan, Metadata Index, and Photo Mapping through one FIFO worker.
+Queued work never blocks the queue head; only an incompatible operation that is
+already running delays execution. Each stage uses bounded database batches and
+yields between batches.
 Photo Library lifecycle changes and task startup share one coordinator lock;
 short foreground queries remain ordinary asynchronous commands. Native paths,
 dialogs, the private
