@@ -274,9 +274,10 @@ Custom SQL and SQL Import keep separate source registries. Sources persist
 across database reopen until explicitly removed. Once registry removal
 commits, managed-file cleanup errors are warnings and do not change success.
 
-`CustomTaxonomySqlRequest` contains one statement in `sql` and optional
-`maximum_result_rows`. `CustomTaxonomySqlExportRequest` contains one read-only
-query in `sql` and an absolute `destination_path`.
+`CustomTaxonomySqlRequest` contains an SQL script and optional
+`maximum_result_rows`. `CustomTaxonomySqlExportRequest` contains the executed
+script, a 1-based executable `statement_index`, and an absolute
+`destination_path`.
 
 ### SQL result types
 
@@ -315,15 +316,20 @@ Schema changes, transaction control, attachment control, internal-table
 writes, unsafe pragmas, and extension loading are denied while each statement
 executes.
 
-The statement succeeds or fails as one unit and the resulting taxonomy must
-remain valid. A pure query creates no operation. A successful mutation creates
-a rollbackable operation without formatted input and records photo-library
-synchronization. SQL is saved only after prepare, execution, and transaction
-commit succeed. A script-save failure returns the committed execution with
-`script_saved = false` and a warning; an execution failure does not replace
-the last successful SQL. Export accepts exactly one
-read-only query and streams its rows to the destination CSV using the
-application-wide delimiter.
+Custom SQL accepts one or more executable statements and runs them sequentially
+in one transaction. Whitespace and comments do not increment the 1-based
+statement indexes retained by result sets and messages. The script succeeds or
+fails as one unit and the resulting taxonomy must remain valid. A pure query
+creates no operation. A successful mutation script creates one rollbackable
+operation without formatted input and records photo-library synchronization.
+SQL is saved only after prepare, execution, and transaction commit succeed. A
+script-save failure returns the committed execution with `script_saved = false`
+and a warning; an execution failure does not replace the last successful SQL.
+Export locates one result-producing read-only statement by its executable index,
+executes only that statement, and streams its complete rows to the destination
+CSV using the application-wide delimiter. Export re-executes the query against
+the current taxonomy and input sources rather than materializing a database
+snapshot.
 Desktop SQL execution and query export return operation handles and run file
 and database work on blocking workers. They keep owner-scoped cancellation,
 publish indeterminate execution or export stages, and expose their exact result

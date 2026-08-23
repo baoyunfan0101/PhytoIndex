@@ -114,9 +114,14 @@ export const executeCustomSql = (
     script_saved: true,
     warnings: [],
   }));
-export const exportCustomSqlQuery = (sql: string, destinationPath: string, ownerId: string) =>
+export const exportCustomSqlQuery = (
+  sql: string,
+  statementIndex: number,
+  destinationPath: string,
+  ownerId: string,
+) =>
   call<OperationState>("export_custom_taxonomy_query", {
-    request: { sql, destination_path: destinationPath },
+    request: { sql, statement_index: statementIndex, destination_path: destinationPath },
     ownerId,
   }, () => demoCompletedOperation("taxonomy", "export_custom_taxonomy_query", {
     path: destinationPath,

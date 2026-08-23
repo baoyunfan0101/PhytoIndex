@@ -1,9 +1,7 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
-use std::ffi::{CStr, CString};
 use std::fs::File;
 use std::io::BufWriter;
 use std::path::{Path, PathBuf};
-use std::ptr;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use rusqlite::ffi;
@@ -21,7 +19,8 @@ use super::sql_inputs::{
     RemoveSqlInputResult, SqlInputScope,
 };
 use super::sql_support::{
-    RawStatement, execute_preview_statement_raw, sqlite_error, statement_columns, statement_row,
+    execute_preview_statement_raw, prepare_statement_raw, sqlite_error, statement_columns,
+    statement_row,
 };
 use crate::metadata::{self, MetadataKey};
 use crate::operations::{self, NewAuditRow, NewOperation};
@@ -46,6 +45,7 @@ pub struct CustomTaxonomySqlRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CustomTaxonomySqlExportRequest {
     pub sql: String,
+    pub statement_index: usize,
     pub destination_path: PathBuf,
 }
 
@@ -239,7 +239,13 @@ pub fn export_custom_taxonomy_query_with_cancellation(
     let sources = sql_inputs::stored_sources(database, SqlInputScope::CustomSql)?;
     let delimiter = crate::general::get_csv_delimiter_byte(database)?;
     let attached = prepare_sources(&mut connection, &sources, delimiter)?;
-    let export = export_single_query(&connection, sql, &request.destination_path, delimiter);
+    let export = export_query_statement(
+        &connection,
+        sql,
+        request.statement_index,
+        &request.destination_path,
+        delimiter,
+    );
     let detach = detach_sources(&connection, &attached);
     let result = cancellation.normalize(match (export, detach) {
         (Ok(result), Ok(())) => Ok(result),
@@ -371,9 +377,9 @@ where
             message,
         });
     }
-    if statement_index != 1 {
+    if statement_index == 0 {
         return Err(CoreError::InvalidArgument(
-            "custom taxonomy SQL requires exactly one statement".into(),
+            "custom taxonomy SQL requires at least one executable statement".into(),
         ));
     }
     Ok(CustomSqlExecutionResult {
@@ -386,61 +392,67 @@ where
     })
 }
 
-fn export_single_query(
+fn export_query_statement(
     connection: &Connection,
     sql: &str,
+    statement_index: usize,
     destination_path: &Path,
     delimiter: u8,
 ) -> CoreResult<SqlExportResult> {
     connection.authorizer(Some(custom_sql_authorizer()));
-    let result = unsafe { export_single_query_raw(connection, sql, destination_path, delimiter) };
+    let result = unsafe {
+        export_query_statement_raw(
+            connection,
+            sql,
+            statement_index,
+            destination_path,
+            delimiter,
+        )
+    };
     connection.authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
     result
 }
 
-unsafe fn export_single_query_raw(
+unsafe fn export_query_statement_raw(
     connection: &Connection,
     sql: &str,
+    target_statement_index: usize,
     destination_path: &Path,
     delimiter: u8,
 ) -> CoreResult<SqlExportResult> {
-    let database = unsafe { connection.handle() };
-    let sql = CString::new(sql)
-        .map_err(|error| CoreError::InvalidArgument(format!("invalid sql: {error}")))?;
-    let mut statement = ptr::null_mut();
-    let mut tail = ptr::null();
-    let code =
-        unsafe { ffi::sqlite3_prepare_v2(database, sql.as_ptr(), -1, &mut statement, &mut tail) };
-    if code != ffi::SQLITE_OK {
-        return Err(sqlite_error(database, code));
-    }
-    if statement.is_null() {
+    if target_statement_index == 0 {
         return Err(CoreError::InvalidArgument(
-            "sql export requires one query statement".into(),
+            "sql export statement index must be at least 1".into(),
         ));
     }
-    let statement = RawStatement(statement);
+    let database = unsafe { connection.handle() };
+    let mut offset = 0;
+    let mut statement_index = 0;
+    let statement = loop {
+        if offset >= sql.len() {
+            return Err(CoreError::InvalidArgument(format!(
+                "sql export statement {target_statement_index} does not exist"
+            )));
+        }
+        let prepared = unsafe { prepare_statement_raw(connection, &sql[offset..]) }?;
+        offset += prepared.tail_offset;
+        let Some(statement) = prepared.statement else {
+            continue;
+        };
+        statement_index += 1;
+        if statement_index == target_statement_index {
+            break statement;
+        }
+    };
     if unsafe { ffi::sqlite3_stmt_readonly(statement.0) } == 0 {
         return Err(CoreError::InvalidArgument(
-            "sql export only accepts a read-only query".into(),
+            "sql export target must be a read-only query".into(),
         ));
     }
     let column_count = unsafe { ffi::sqlite3_column_count(statement.0) as usize };
     if column_count == 0 {
         return Err(CoreError::InvalidArgument(
             "sql export query has no result columns".into(),
-        ));
-    }
-    let tail = if tail.is_null() {
-        ""
-    } else {
-        unsafe { CStr::from_ptr(tail) }.to_str().map_err(|error| {
-            CoreError::InvalidArgument(format!("invalid sql after query: {error}"))
-        })?
-    };
-    if !tail.trim().is_empty() {
-        return Err(CoreError::InvalidArgument(
-            "sql export accepts exactly one query statement".into(),
         ));
     }
     let file = File::create(destination_path)?;

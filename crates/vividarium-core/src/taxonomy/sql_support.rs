@@ -12,6 +12,11 @@ pub(super) struct RawScriptStep {
     pub(super) statement: Option<RawStatementExecution>,
 }
 
+pub(super) struct RawPreparedStatement {
+    pub(super) tail_offset: usize,
+    pub(super) statement: Option<RawStatement>,
+}
+
 pub(super) struct RawStatementExecution {
     pub(super) columns: Vec<SqlColumn>,
     pub(super) rows: Vec<Vec<SqlValue>>,
@@ -43,6 +48,55 @@ unsafe fn execute_one_statement_raw(
     stop_read_only_after_preview: bool,
 ) -> CoreResult<RawScriptStep> {
     let database = unsafe { connection.handle() };
+    let prepared = unsafe { prepare_statement_raw(connection, sql_tail) }?;
+    let Some(statement) = prepared.statement else {
+        return Ok(RawScriptStep {
+            tail_offset: prepared.tail_offset,
+            statement: None,
+        });
+    };
+    let column_count = unsafe { ffi::sqlite3_column_count(statement.0) as usize };
+    let columns = unsafe { statement_columns(statement.0, column_count) };
+    let read_only = unsafe { ffi::sqlite3_stmt_readonly(statement.0) != 0 };
+    let mut rows = Vec::new();
+    let mut returned_rows = 0_u64;
+    let mut truncated = false;
+    loop {
+        let step = unsafe { ffi::sqlite3_step(statement.0) };
+        match step {
+            ffi::SQLITE_ROW => {
+                returned_rows += 1;
+                if rows.len() < maximum_result_rows {
+                    rows.push(unsafe { statement_row(statement.0, column_count) });
+                } else {
+                    truncated = true;
+                    if read_only && stop_read_only_after_preview {
+                        break;
+                    }
+                }
+            }
+            ffi::SQLITE_DONE => break,
+            code => return Err(sqlite_error(database, code)),
+        }
+    }
+    Ok(RawScriptStep {
+        tail_offset: prepared.tail_offset,
+        statement: Some(RawStatementExecution {
+            columns,
+            rows,
+            returned_rows,
+            truncated,
+            read_only,
+            affected_rows: unsafe { ffi::sqlite3_changes64(database) }.max(0) as u64,
+        }),
+    })
+}
+
+pub(super) unsafe fn prepare_statement_raw(
+    connection: &Connection,
+    sql_tail: &str,
+) -> CoreResult<RawPreparedStatement> {
+    let database = unsafe { connection.handle() };
     let sql_tail = CString::new(sql_tail)
         .map_err(|error| CoreError::InvalidArgument(format!("invalid sql: {error}")))?;
     let mut raw_statement = ptr::null_mut();
@@ -70,46 +124,14 @@ unsafe fn execute_one_statement_raw(
         ));
     }
     if raw_statement.is_null() {
-        return Ok(RawScriptStep {
+        return Ok(RawPreparedStatement {
             tail_offset,
             statement: None,
         });
     }
-    let statement = RawStatement(raw_statement);
-    let column_count = unsafe { ffi::sqlite3_column_count(statement.0) as usize };
-    let columns = unsafe { statement_columns(statement.0, column_count) };
-    let read_only = unsafe { ffi::sqlite3_stmt_readonly(statement.0) != 0 };
-    let mut rows = Vec::new();
-    let mut returned_rows = 0_u64;
-    let mut truncated = false;
-    loop {
-        let step = unsafe { ffi::sqlite3_step(statement.0) };
-        match step {
-            ffi::SQLITE_ROW => {
-                returned_rows += 1;
-                if rows.len() < maximum_result_rows {
-                    rows.push(unsafe { statement_row(statement.0, column_count) });
-                } else {
-                    truncated = true;
-                    if read_only && stop_read_only_after_preview {
-                        break;
-                    }
-                }
-            }
-            ffi::SQLITE_DONE => break,
-            code => return Err(sqlite_error(database, code)),
-        }
-    }
-    Ok(RawScriptStep {
+    Ok(RawPreparedStatement {
         tail_offset,
-        statement: Some(RawStatementExecution {
-            columns,
-            rows,
-            returned_rows,
-            truncated,
-            read_only,
-            affected_rows: unsafe { ffi::sqlite3_changes64(database) }.max(0) as u64,
-        }),
+        statement: Some(RawStatement(raw_statement)),
     })
 }
 

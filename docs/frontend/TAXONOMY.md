@@ -56,12 +56,22 @@ matching, ancestor disambiguation, and strict-parent recursive creation.
 Parameters include a status callback and optional mutation guard.
 
 Returns: a SQL editor, execution messages, typed result sets, warnings, and
-full export for truncated read-only queries. Its source sidebar has two
-mutually exclusive VS Code-style groups: Input sources is expanded by default,
-and All accessible tables shows only the complete readable internal `main`
-taxonomy schema. Uploaded sources remain exclusively in Input sources. The
-expanded group body scrolls independently.
-CSV sources and exports use the application-wide CSV delimiter.
+complete CSV export for every read-only query result. Multi-statement output is
+grouped by executable statement index. Result tables share an execution-wide
+minimum width determined by the largest result column count; each statement
+still displays only its real columns. Long values remain single-line and use
+ellipsis without changing row-specific column widths. The latest successful
+execution and its SQL remain visible while the editor changes or a later Run
+fails, and every Export action uses that executed SQL snapshot and its result
+statement index. The script-level execution summary is reported through the tab
+status bar. The output pane scrolls across statement sections that exceed the
+available height, while each result table scrolls its own rows. A statement
+that both mutates and returns rows uses one combined result header. Its source
+sidebar has two mutually exclusive VS Code-style
+groups: Input sources is expanded by default, and All accessible tables shows
+only the complete readable internal `main` taxonomy schema. Uploaded sources
+remain exclusively in Input sources. The expanded group body scrolls
+independently. CSV sources and exports use the application-wide CSV delimiter.
 The leading Help action opens the integer mappings for `taxa.rank` and
 `taxon_names.name_type`.
 

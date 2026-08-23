@@ -72,14 +72,15 @@ fn returns_typed_results_and_only_logs_actual_mutations() {
 }
 
 #[test]
-fn saves_only_successful_single_statements() {
+fn saves_only_successful_scripts() {
     let (_directory, database) = database();
     let initial = get_custom_taxonomy_sql(&database).unwrap();
 
-    let multiple =
-        execute_custom_taxonomy_sql(&database, &request("SELECT 1; SELECT 2")).unwrap_err();
-    assert!(multiple.to_string().contains("exactly one statement"));
-    assert_eq!(get_custom_taxonomy_sql(&database).unwrap(), initial);
+    execute_custom_taxonomy_sql(&database, &request("SELECT 1; SELECT 2")).unwrap();
+    assert_eq!(
+        get_custom_taxonomy_sql(&database).unwrap(),
+        "SELECT 1; SELECT 2"
+    );
 
     execute_custom_taxonomy_sql(&database, &request("SELECT taxon_id FROM taxa")).unwrap();
     assert_eq!(
@@ -91,6 +92,112 @@ fn saves_only_successful_single_statements() {
     assert_eq!(
         get_custom_taxonomy_sql(&database).unwrap(),
         "SELECT taxon_id FROM taxa"
+    );
+    assert_ne!(get_custom_taxonomy_sql(&database).unwrap(), initial);
+}
+
+#[test]
+fn multiple_queries_use_executable_statement_indexes() {
+    let (_directory, database) = database();
+    let result = execute_custom_taxonomy_sql(
+        &database,
+        &request(
+            r#"
+            -- first query
+            SELECT 1 AS value;
+
+            /* second query */
+            SELECT 2 AS value;
+            "#,
+        ),
+    )
+    .unwrap();
+
+    assert_eq!(
+        result
+            .result_sets
+            .iter()
+            .map(|result_set| result_set.statement_index)
+            .collect::<Vec<_>>(),
+        vec![1, 2]
+    );
+    assert_eq!(result.result_sets[0].rows, vec![vec![SqlValue::Integer(1)]]);
+    assert_eq!(result.result_sets[1].rows, vec![vec![SqlValue::Integer(2)]]);
+    assert_eq!(
+        result
+            .messages
+            .iter()
+            .map(|message| message.statement_index)
+            .collect::<Vec<_>>(),
+        vec![1, 2]
+    );
+}
+
+#[test]
+fn mixed_scripts_create_one_operation_and_keep_statement_indexes() {
+    let (_directory, database) = database();
+    let before = list_operations(&database, None, 20).unwrap().items.len();
+
+    let result = execute_custom_taxonomy_sql(
+        &database,
+        &request(
+            "UPDATE taxa SET geological_range = 'Recent'; SELECT taxon_id, geological_range FROM taxa",
+        ),
+    )
+    .unwrap();
+
+    assert!(result.operation_id.is_some());
+    assert_eq!(result.messages[0].statement_index, 1);
+    assert_eq!(result.messages[0].affected_rows, Some(1));
+    assert_eq!(result.result_sets[0].statement_index, 2);
+    assert_eq!(result.messages[1].affected_rows, None);
+    assert_eq!(
+        list_operations(&database, None, 20).unwrap().items.len(),
+        before + 1
+    );
+}
+
+#[test]
+fn a_later_statement_failure_rolls_back_the_entire_script() {
+    let (_directory, database) = database();
+    let saved = get_custom_taxonomy_sql(&database).unwrap();
+    let before = list_operations(&database, None, 20).unwrap().items.len();
+
+    execute_custom_taxonomy_sql(
+        &database,
+        &request("UPDATE taxa SET geological_range = 'Recent'; SELECT missing_column FROM taxa"),
+    )
+    .unwrap_err();
+
+    assert_eq!(
+        database
+            .connect_taxonomy()
+            .unwrap()
+            .query_row("SELECT geological_range FROM taxa", [], |row| {
+                row.get::<_, Option<String>>(0)
+            })
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        list_operations(&database, None, 20).unwrap().items.len(),
+        before
+    );
+    assert_eq!(get_custom_taxonomy_sql(&database).unwrap(), saved);
+}
+
+#[test]
+fn comment_only_scripts_are_not_executable() {
+    let (_directory, database) = database();
+
+    let error =
+        execute_custom_taxonomy_sql(&database, &request("-- no statement\n/* still empty */"))
+            .unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("at least one executable statement")
     );
 }
 
@@ -368,6 +475,7 @@ fn streams_one_query_to_csv() {
         &database,
         &CustomTaxonomySqlExportRequest {
             sql: "SELECT rank, name FROM taxa JOIN taxon_names USING (taxon_id)".into(),
+            statement_index: 1,
             destination_path: destination.clone(),
         },
     )
@@ -377,6 +485,140 @@ fn streams_one_query_to_csv() {
         std::fs::read_to_string(destination).unwrap(),
         "rank,name\n1,Animalia\n"
     );
+}
+
+#[test]
+fn exports_a_complete_result_beyond_the_preview_limit() {
+    let (directory, database) = database();
+    let sql = r#"
+        WITH RECURSIVE values_cte(value) AS (
+            VALUES (1)
+            UNION ALL
+            SELECT value + 1 FROM values_cte WHERE value < 1500
+        )
+        SELECT value FROM values_cte
+    "#;
+    let mut preview_request = request(sql);
+    preview_request.maximum_result_rows = Some(20);
+    let preview = execute_custom_taxonomy_sql(&database, &preview_request).unwrap();
+    assert_eq!(preview.result_sets[0].rows.len(), 20);
+    assert!(preview.result_sets[0].truncated);
+
+    let destination = directory.path().join("complete-query.csv");
+    let exported = export_custom_taxonomy_query(
+        &database,
+        &CustomTaxonomySqlExportRequest {
+            sql: sql.into(),
+            statement_index: 1,
+            destination_path: destination.clone(),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(exported.row_count, 1500);
+    assert_eq!(
+        std::fs::read_to_string(destination)
+            .unwrap()
+            .lines()
+            .count(),
+        1501
+    );
+}
+
+#[test]
+fn exports_only_the_selected_read_only_statement() {
+    let (directory, database) = database();
+    let destination = directory.path().join("second-statement.csv");
+    let result = export_custom_taxonomy_query(
+        &database,
+        &CustomTaxonomySqlExportRequest {
+            sql: "UPDATE taxa SET geological_range = 'Changed'; SELECT name FROM taxon_names ORDER BY name".into(),
+            statement_index: 2,
+            destination_path: destination.clone(),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(result.row_count, 1);
+    assert_eq!(
+        std::fs::read_to_string(destination).unwrap(),
+        "name\nAnimalia\n"
+    );
+    assert_eq!(
+        database
+            .connect_taxonomy()
+            .unwrap()
+            .query_row("SELECT geological_range FROM taxa", [], |row| {
+                row.get::<_, Option<String>>(0)
+            })
+            .unwrap(),
+        None
+    );
+}
+
+#[test]
+fn empty_query_export_contains_only_the_header() {
+    let (directory, database) = database();
+    let destination = directory.path().join("empty-query.csv");
+    let result = export_custom_taxonomy_query(
+        &database,
+        &CustomTaxonomySqlExportRequest {
+            sql: "SELECT taxon_id, rank FROM taxa WHERE 1 = 0".into(),
+            statement_index: 1,
+            destination_path: destination.clone(),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(result.row_count, 0);
+    assert_eq!(
+        std::fs::read_to_string(destination).unwrap(),
+        "taxon_id,rank\n"
+    );
+}
+
+#[test]
+fn export_rejects_mutations_and_invalid_statement_indexes() {
+    let (directory, database) = database();
+    let mutation_destination = directory.path().join("mutation.csv");
+    let mutation_error = export_custom_taxonomy_query(
+        &database,
+        &CustomTaxonomySqlExportRequest {
+            sql: "UPDATE taxa SET geological_range = 'Changed' RETURNING taxon_id".into(),
+            statement_index: 1,
+            destination_path: mutation_destination,
+        },
+    )
+    .unwrap_err();
+    assert!(mutation_error.to_string().contains("read-only query"));
+
+    let missing_destination = directory.path().join("missing.csv");
+    let missing_error = export_custom_taxonomy_query(
+        &database,
+        &CustomTaxonomySqlExportRequest {
+            sql: "SELECT taxon_id FROM taxa; SELECT name FROM taxon_names".into(),
+            statement_index: 99,
+            destination_path: missing_destination,
+        },
+    )
+    .unwrap_err();
+    assert!(
+        missing_error
+            .to_string()
+            .contains("statement 99 does not exist")
+    );
+
+    let zero_destination = directory.path().join("zero.csv");
+    let zero_error = export_custom_taxonomy_query(
+        &database,
+        &CustomTaxonomySqlExportRequest {
+            sql: "SELECT taxon_id FROM taxa".into(),
+            statement_index: 0,
+            destination_path: zero_destination,
+        },
+    )
+    .unwrap_err();
+    assert!(zero_error.to_string().contains("must be at least 1"));
 }
 
 #[test]
@@ -421,6 +663,7 @@ fn configured_csv_delimiter_controls_sql_sources_and_exports() {
         &database,
         &CustomTaxonomySqlExportRequest {
             sql: "SELECT name, value FROM csv_input".into(),
+            statement_index: 1,
             destination_path: destination.clone(),
         },
     )
