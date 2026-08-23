@@ -28,6 +28,7 @@ import {
 import { TaxonNameGroupEditor } from "./TaxonNameGroupEditor";
 import {
   acceptedTaxonNameGroup,
+  canDeleteTaxonName,
   taxonNameGroupLabels,
   type TaxonNameGroupKind,
 } from "./taxonEditing";
@@ -241,6 +242,14 @@ export function TaxonomyHierarchyPage({
     en_name: detail.names.en_name !== null,
     en_alias: detail.names.en_name !== null,
   };
+  const deleteAllowed: Record<TaxonNameGroupKind, boolean> = {
+    sci_name: canDeleteTaxonName("sci_name", false),
+    synonym: canDeleteTaxonName("synonym", false),
+    zh_name: canDeleteTaxonName("zh_name", detail.names.zh_aliases.length > 0),
+    zh_alias: canDeleteTaxonName("zh_alias", false),
+    en_name: canDeleteTaxonName("en_name", detail.names.en_aliases.length > 0),
+    en_alias: canDeleteTaxonName("en_alias", false),
+  };
 
   return (
     <>
@@ -307,6 +316,7 @@ export function TaxonomyHierarchyPage({
               kind={group.kind}
               records={group.records}
               primaryExists={primaryExists[acceptedTaxonNameGroup(group.kind)]}
+              deleteAllowed={deleteAllowed[group.kind]}
               active={editing?.kind === "name-group" && editing.group === group.kind}
               busy={mutationBusy}
               error={editing?.kind === "name-group" && editing.group === group.kind ? mutationError : ""}

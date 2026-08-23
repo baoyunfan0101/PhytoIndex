@@ -1757,6 +1757,7 @@ pub(super) struct TaxonomyValidationOptions {
     pub check_parent_structure: bool,
     pub check_scientific_name_count: bool,
     pub check_localized_accepted_name_count: bool,
+    pub check_localized_alias_dependencies: bool,
     pub check_duplicate_name_family: bool,
     pub check_orphan_names: bool,
     pub require_normalized_names: bool,
@@ -1768,6 +1769,7 @@ impl TaxonomyValidationOptions {
             check_parent_structure: true,
             check_scientific_name_count: true,
             check_localized_accepted_name_count: true,
+            check_localized_alias_dependencies: true,
             check_duplicate_name_family: true,
             check_orphan_names: true,
             require_normalized_names: true,
@@ -1779,6 +1781,7 @@ impl TaxonomyValidationOptions {
             check_parent_structure: true,
             check_scientific_name_count: true,
             check_localized_accepted_name_count: true,
+            check_localized_alias_dependencies: true,
             check_duplicate_name_family: false,
             check_orphan_names: true,
             require_normalized_names: false,
@@ -1965,13 +1968,15 @@ pub(super) fn visit_taxonomy_validation_issues_with_progress(
             }
         }
     }
-    if options.check_localized_accepted_name_count {
+    if options.check_localized_accepted_name_count || options.check_localized_alias_dependencies {
         progress(validation_progress(
             "checking_localized_names",
             None,
             None,
             None,
         ));
+    }
+    if options.check_localized_accepted_name_count {
         let mut duplicate_accepted_names = connection.prepare(
             r#"
             SELECT taxon_id, name_type
@@ -2004,6 +2009,55 @@ pub(super) fn visit_taxonomy_validation_issues_with_progress(
                 related_taxon_id: None,
             }) {
                 return Ok(());
+            }
+        }
+    }
+    if options.check_localized_alias_dependencies {
+        let localized_name_types = [
+            (
+                TaxonomyNameType::ZhAlias,
+                TaxonomyNameType::ZhName,
+                "zh_alias_without_accepted_name",
+                "Chinese",
+            ),
+            (
+                TaxonomyNameType::EnAlias,
+                TaxonomyNameType::EnName,
+                "en_alias_without_accepted_name",
+                "English",
+            ),
+        ];
+        let mut aliases_without_accepted_name = connection.prepare(
+            r#"
+            SELECT DISTINCT alias.taxon_id
+            FROM taxon_names AS alias
+            WHERE alias.name_type = ?
+              AND NOT EXISTS (
+                SELECT 1
+                FROM taxon_names AS accepted
+                WHERE accepted.taxon_id = alias.taxon_id
+                  AND accepted.name_type = ?
+              )
+            ORDER BY alias.taxon_id
+            "#,
+        )?;
+        for (alias_type, accepted_type, code, language) in localized_name_types {
+            for row in aliases_without_accepted_name
+                .query_map(params![alias_type.code(), accepted_type.code()], |row| {
+                    row.get::<_, i64>(0)
+                })?
+            {
+                let taxon_id = row?;
+                if !visit(TaxonomyValidationIssue {
+                    code,
+                    message: format!(
+                        "Taxon {taxon_id} has {language} aliases but no {language} accepted name."
+                    ),
+                    taxon_id: Some(taxon_id),
+                    related_taxon_id: None,
+                }) {
+                    return Ok(());
+                }
             }
         }
     }

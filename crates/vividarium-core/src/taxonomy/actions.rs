@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use rusqlite::{OptionalExtension, TransactionBehavior, params};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 
 use super::formatted::{start_taxonomy_session, validate_taxonomy};
@@ -455,6 +455,34 @@ fn normalized_optional(value: Option<&str>) -> Option<String> {
         .map(str::to_string)
 }
 
+fn validate_taxon_name_deletion(
+    connection: &Connection,
+    taxon_id: i64,
+    name_type: TaxonomyNameType,
+) -> CoreResult<()> {
+    if name_type == TaxonomyNameType::SciName {
+        return Err(CoreError::InvalidArgument(
+            "the unique sci_name cannot be deleted".into(),
+        ));
+    }
+    let (alias_type, language) = match name_type {
+        TaxonomyNameType::ZhName => (TaxonomyNameType::ZhAlias, "Chinese"),
+        TaxonomyNameType::EnName => (TaxonomyNameType::EnAlias, "English"),
+        _ => return Ok(()),
+    };
+    let aliases_exist = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM taxon_names WHERE taxon_id = ? AND name_type = ?)",
+        params![taxon_id, alias_type.code()],
+        |row| row.get::<_, bool>(0),
+    )?;
+    if aliases_exist {
+        return Err(CoreError::InvalidArgument(format!(
+            "{language} accepted name cannot be deleted while {language} aliases exist"
+        )));
+    }
+    Ok(())
+}
+
 pub fn delete_taxon_name(database: &Database, input: DeleteTaxonNameInput) -> CoreResult<()> {
     let _guard = database.try_taxonomy_mutation()?;
     let mut connection = database.connect_taxonomy_metadata_context()?;
@@ -472,11 +500,11 @@ pub fn delete_taxon_name(database: &Database, input: DeleteTaxonNameInput) -> Co
                 input.name_id, input.taxon_id
             ))
         })?;
-    if TaxonomyNameType::from_code(name_type)? == TaxonomyNameType::SciName {
-        return Err(CoreError::InvalidArgument(
-            "the unique sci_name cannot be deleted".into(),
-        ));
-    }
+    validate_taxon_name_deletion(
+        &transaction,
+        input.taxon_id,
+        TaxonomyNameType::from_code(name_type)?,
+    )?;
     let mut session = start_taxonomy_session(&transaction)?;
     let deleted = transaction.execute(
         "DELETE FROM taxon_names WHERE taxon_id = ? AND name_id = ?",
@@ -984,6 +1012,163 @@ mod tests {
                 )
                 .unwrap(),
             TaxonomyNameType::Synonym.code()
+        );
+    }
+
+    #[test]
+    fn deleting_localized_accepted_names_without_aliases_succeeds() {
+        let (_directory, database) = database();
+        apply_rows(
+            &database,
+            &[TaxonInputRow {
+                kingdom: Some("Animalia".into()),
+                zh_name: Some("Animal".into()),
+                en_name: Some("Animal kingdom".into()),
+                ..TaxonInputRow::default()
+            }],
+        )
+        .unwrap();
+        let connection = database.connect_taxonomy_metadata_context().unwrap();
+        let taxon_id: i64 = connection
+            .query_row(
+                "SELECT taxon_id FROM taxon_names WHERE name = 'Animalia'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let zh_name_id: i64 = connection
+            .query_row(
+                "SELECT name_id FROM taxon_names WHERE taxon_id = ? AND name_type = ?",
+                params![taxon_id, TaxonomyNameType::ZhName.code()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let en_name_id: i64 = connection
+            .query_row(
+                "SELECT name_id FROM taxon_names WHERE taxon_id = ? AND name_type = ?",
+                params![taxon_id, TaxonomyNameType::EnName.code()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        drop(connection);
+
+        delete_taxon_name(
+            &database,
+            DeleteTaxonNameInput {
+                taxon_id,
+                name_id: zh_name_id,
+            },
+        )
+        .unwrap();
+        delete_taxon_name(
+            &database,
+            DeleteTaxonNameInput {
+                taxon_id,
+                name_id: en_name_id,
+            },
+        )
+        .unwrap();
+
+        let connection = database.connect_taxonomy_metadata_context().unwrap();
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT COUNT(*) FROM taxon_names WHERE taxon_id = ? AND name_type IN (?, ?)",
+                    params![
+                        taxon_id,
+                        TaxonomyNameType::ZhName.code(),
+                        TaxonomyNameType::EnName.code()
+                    ],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            0
+        );
+        validate_taxonomy(&connection).unwrap();
+    }
+
+    #[test]
+    fn localized_aliases_block_accepted_name_deletion_until_removed() {
+        let (_directory, database) = database();
+        apply_rows(
+            &database,
+            &[TaxonInputRow {
+                kingdom: Some("Animalia".into()),
+                zh_name: Some("Animal".into()),
+                zh_alias: vec!["Creature".into()],
+                en_name: Some("Animal kingdom".into()),
+                en_alias: vec!["Animals".into()],
+                ..TaxonInputRow::default()
+            }],
+        )
+        .unwrap();
+        let connection = database.connect_taxonomy_metadata_context().unwrap();
+        let taxon_id: i64 = connection
+            .query_row(
+                "SELECT taxon_id FROM taxon_names WHERE name = 'Animalia'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let name_id = |name_type: TaxonomyNameType| {
+            connection
+                .query_row(
+                    "SELECT name_id FROM taxon_names WHERE taxon_id = ? AND name_type = ?",
+                    params![taxon_id, name_type.code()],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap()
+        };
+        let zh_name_id = name_id(TaxonomyNameType::ZhName);
+        let zh_alias_id = name_id(TaxonomyNameType::ZhAlias);
+        let en_name_id = name_id(TaxonomyNameType::EnName);
+        let en_alias_id = name_id(TaxonomyNameType::EnAlias);
+        drop(connection);
+
+        let zh_error = delete_taxon_name(
+            &database,
+            DeleteTaxonNameInput {
+                taxon_id,
+                name_id: zh_name_id,
+            },
+        )
+        .unwrap_err();
+        assert_eq!(
+            zh_error.to_string(),
+            "invalid argument: Chinese accepted name cannot be deleted while Chinese aliases exist"
+        );
+        let en_error = delete_taxon_name(
+            &database,
+            DeleteTaxonNameInput {
+                taxon_id,
+                name_id: en_name_id,
+            },
+        )
+        .unwrap_err();
+        assert_eq!(
+            en_error.to_string(),
+            "invalid argument: English accepted name cannot be deleted while English aliases exist"
+        );
+
+        for name_id in [zh_alias_id, zh_name_id, en_alias_id, en_name_id] {
+            delete_taxon_name(&database, DeleteTaxonNameInput { taxon_id, name_id }).unwrap();
+        }
+        let connection = database.connect_taxonomy_metadata_context().unwrap();
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT COUNT(*) FROM taxon_names WHERE taxon_id = ? AND name_type IN (?, ?, ?, ?)",
+                    params![
+                        taxon_id,
+                        TaxonomyNameType::ZhName.code(),
+                        TaxonomyNameType::ZhAlias.code(),
+                        TaxonomyNameType::EnName.code(),
+                        TaxonomyNameType::EnAlias.code()
+                    ],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            0
         );
     }
 

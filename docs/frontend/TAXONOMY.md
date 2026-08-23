@@ -30,6 +30,12 @@ Taxonomy visible-name preference for scientific, Chinese, and English accepted
 names. The complete name-group editor always shows the stored records and is
 independent of this display preference.
 
+Every taxon requires one scientific accepted name, which cannot be deleted.
+Chinese and English accepted names are optional and unique. A localized
+accepted name can be deleted only while its corresponding alias group is
+empty. Chinese and English aliases require their corresponding accepted name.
+Synonyms and localized aliases remain independently deletable and promotable.
+
 ### `FormattedUpdateView({ onStatus, mutationDisabled })`
 
 Parameters: a status callback and optional mutation guard.

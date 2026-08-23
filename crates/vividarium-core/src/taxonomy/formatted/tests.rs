@@ -219,11 +219,97 @@ fn taxonomy_validation_allows_multiple_alias_names() {
                 (1, 1, 'Animalia'),
                 (1, 2, 'Scientific alias one'),
                 (1, 2, 'Scientific alias two'),
+                (1, 3, 'Chinese accepted name'),
                 (1, 4, 'Chinese alias one'),
                 (1, 4, 'Chinese alias two'),
+                (1, 5, 'English accepted name'),
                 (1, 6, 'English alias one'),
                 (1, 6, 'English alias two');
             "#,
+        )
+        .unwrap();
+
+    validate_taxonomy(&connection).unwrap();
+}
+
+fn localized_alias_dependency_issues(
+    alias_type: TaxonomyNameType,
+    options: TaxonomyValidationOptions,
+) -> Vec<TaxonomyValidationIssue> {
+    let (_directory, database) = database();
+    let connection = database.connect_taxonomy_metadata_context().unwrap();
+    connection
+        .execute_batch(
+            "INSERT INTO taxa (taxon_id, rank) VALUES (1, 1);\n\
+             INSERT INTO taxon_names (taxon_id, name_type, name) VALUES (1, 1, 'Animalia');",
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO taxon_names (taxon_id, name_type, name) VALUES (1, ?, 'Localized alias')",
+            [alias_type.code()],
+        )
+        .unwrap();
+    let mut issues = Vec::new();
+    visit_taxonomy_validation_issues_with_options(&connection, options, |issue| {
+        issues.push(issue);
+        true
+    })
+    .unwrap();
+    issues
+}
+
+#[test]
+fn taxonomy_validation_rejects_chinese_aliases_without_an_accepted_name() {
+    let issues = localized_alias_dependency_issues(
+        TaxonomyNameType::ZhAlias,
+        TaxonomyValidationOptions::full(),
+    );
+
+    assert_eq!(issues.len(), 1);
+    assert_eq!(issues[0].code, "zh_alias_without_accepted_name");
+    assert_eq!(issues[0].taxon_id, Some(1));
+    assert_eq!(
+        issues[0].message,
+        "Taxon 1 has Chinese aliases but no Chinese accepted name."
+    );
+}
+
+#[test]
+fn taxonomy_validation_rejects_english_aliases_without_an_accepted_name() {
+    let issues = localized_alias_dependency_issues(
+        TaxonomyNameType::EnAlias,
+        TaxonomyValidationOptions::full(),
+    );
+
+    assert_eq!(issues.len(), 1);
+    assert_eq!(issues[0].code, "en_alias_without_accepted_name");
+    assert_eq!(issues[0].taxon_id, Some(1));
+    assert_eq!(
+        issues[0].message,
+        "Taxon 1 has English aliases but no English accepted name."
+    );
+}
+
+#[test]
+fn staging_validation_checks_localized_alias_dependencies() {
+    let issues = localized_alias_dependency_issues(
+        TaxonomyNameType::ZhAlias,
+        TaxonomyValidationOptions::sql_import_staging(),
+    );
+
+    assert_eq!(issues.len(), 1);
+    assert_eq!(issues[0].code, "zh_alias_without_accepted_name");
+}
+
+#[test]
+fn taxonomy_validation_allows_empty_localized_name_families() {
+    let (_directory, database) = database();
+    let connection = database.connect_taxonomy_metadata_context().unwrap();
+    connection
+        .execute_batch(
+            "INSERT INTO taxa (taxon_id, rank) VALUES (1, 1);\n\
+             INSERT INTO taxon_names (taxon_id, name_type, name) VALUES (1, 1, 'Animalia');",
         )
         .unwrap();
 

@@ -46,8 +46,10 @@ the complete set.
 | `en_name` | `5` | Unique accepted English name. |
 | `en_alias` | `6` | English alias. |
 
-Every taxon has exactly one `sci_name`, at most one `zh_name`, and at most one
-`en_name`. Synonyms and Chinese or English aliases have no count limit.
+Every taxon has exactly one `sci_name`. A taxon may have zero or one `zh_name`
+and zero or one `en_name`. Synonyms and Chinese or English aliases have no
+count limit. Chinese aliases require a Chinese accepted name, and English
+aliases require an English accepted name.
 Within a taxon, the same case-sensitive stored `name` may appear only once in
 each name family: scientific (`sci_name` and `synonym`), Chinese (`zh_name` and
 `zh_alias`), or English (`en_name` and `en_alias`).
@@ -244,7 +246,7 @@ rejected without applying any part of the group save.
 | --- | --- | --- | --- |
 | `promote_taxon_name` | `input: PromoteTaxonNameInput` | `()` | Exchange an alias type with its accepted type. |
 | `save_taxon_name_group` | `input: SaveTaxonNameGroupInput` | `()` | Atomically update metadata and append records in one name group. |
-| `delete_taxon_name` | `input: DeleteTaxonNameInput` | `()` | Delete a non-`sci_name` record. |
+| `delete_taxon_name` | `input: DeleteTaxonNameInput` | `()` | Delete an alias, synonym, or localized accepted name whose alias group is empty. Scientific accepted names cannot be deleted. |
 | `delete_taxon` | `taxon_id: i64` | `()` | Delete a childless taxon. |
 
 Group saves, promotion, and deletion create rollbackable audit operations
