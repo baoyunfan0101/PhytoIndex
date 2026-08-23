@@ -2,8 +2,7 @@ import { Link, Search, Sparkles, Unlink } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import {
   clearPhotoMapping,
-  getPhotoMapping,
-  getPhotoMappingCandidates,
+  getPhotoMappingDetail,
   setPhotoMapping,
   type PhotoMappingDetail,
 } from "../../api/mapping";
@@ -16,6 +15,7 @@ import { errorMessage } from "../../api/common";
 import { Busy, Button, EmptyState, VirtualList } from "../../shared/ui";
 import { PhotoStage } from "../photos/PhotoMedia";
 import { TaxonCard } from "../taxonomy/TaxonCard";
+import { taxonMatchExplanation } from "../taxonomy/taxonMatchExplanation";
 import { MappingBadge } from "./MappingBadge";
 import { emitPhotoMutation, usePhotoMutation } from "../photos/photoMutations";
 import { useTaxonSearch } from "../taxonomy/useTaxonSearch";
@@ -98,11 +98,7 @@ export function MappingEditor({
     setLoading(true);
     setError("");
     try {
-      const [mapping, candidates] = await Promise.all([
-        getPhotoMapping(photo.photo_id),
-        getPhotoMappingCandidates(photo.photo_id),
-      ]);
-      const nextMatch = { mapping, candidates };
+      const nextMatch = await getPhotoMappingDetail(photo.photo_id);
       setMatch(nextMatch);
       if (nextMatch.mapping.status === "matched" && nextMatch.mapping.taxon_id !== null) {
         setMappedTaxon(await getTaxonDetail(nextMatch.mapping.taxon_id));
@@ -156,6 +152,8 @@ export function MappingEditor({
         <TaxonCard
           compact
           taxon={currentTaxon}
+          description={taxonMatchExplanation(match.matched_names)}
+          onClick={() => handlers.openTaxon(currentTaxon.taxon_id)}
           actions={(
             <Button
               size="small"
@@ -177,6 +175,8 @@ export function MappingEditor({
             <TaxonCard
               compact
               taxon={candidate.summary}
+              description={taxonMatchExplanation(candidate.matched_names)}
+              onClick={() => handlers.openTaxon(candidate.summary.taxon_id)}
               actions={
                 <Button
                   size="small"
@@ -205,12 +205,13 @@ export function MappingEditor({
         resetKey={query.trim()}
         className="mapping-search-results"
         items={taxonomySearch.results}
-        rowHeight={58}
+        rowHeight={60}
         itemKey={(item) => item.taxon_id}
         renderItem={(item) => (
           <TaxonCard
             compact
             taxon={item}
+            description={taxonMatchExplanation(item.matches)}
             onClick={() => handlers.openTaxon(item.taxon_id)}
             actions={
               <Button size="small" disabled={Boolean(busy)} onClick={() => void mutate(`Mapping ${item.taxon_id}`, () => setPhotoMapping(photo.photo_id, item.taxon_id))}>

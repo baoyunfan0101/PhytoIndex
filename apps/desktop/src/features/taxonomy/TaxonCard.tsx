@@ -33,6 +33,8 @@ export function TaxonCard({
       onClick={onClick ? (event) => {
         const target = event.target;
         if (target instanceof Element && target.closest(".taxon-card-actions button")) return;
+        const selection = window.getSelection();
+        if (selection && !selection.isCollapsed && selection.toString().length > 0) return;
         onClick();
       } : undefined}
     >

@@ -21,17 +21,21 @@ Parameters:
 
 - `photo`: the photo being edited.
 - `embedded`: whether the editor is placed inside the Mapping workspace.
-- `onOpenTaxon`: opens the requested search-result taxon.
+- `active`: whether the editor is currently active.
+- `onPhotoTaxonDisplayState`: receives the current photo taxonomy display state.
+- `handlers`: shared `PhotoOpenHandlers`; the editor uses its taxon-opening
+  handler for Current mapping, ambiguous candidates, and taxonomy search results.
 - `refreshKey`: optional external invalidation value.
 
 Returns: current mapping details, persisted Ambiguous candidates, taxonomy
 search, and controls to clear, assign, replace, or automatically remap. Current
-mapping and search results use the same taxon-card structure. Selecting any
-non-action area of a search result opens that taxon in Taxonomy; its compact
-Map button changes the photo mapping without triggering navigation. The
-taxonomy search receives the larger default share of the vertical editor
-split, and its result rows use the same immediate hover and pressed states as
-Taxonomy Search.
+mapping, ambiguous candidates, and search results use the same taxon-card
+interaction: selecting the card opens Taxon Detail, while Map, Select, and
+Unmap perform only their mapping action. Non-primary names that produced a
+match are shown beneath accepted names with the shared taxonomy-search
+explanation. Accepted-name matches and explicit manual mappings have no
+redundant explanation. Taxon-card text is selectable and copyable without
+triggering navigation.
 
 The Mapping workspace exposes independent dividers between the photo list,
 preview, and editor. The standalone editor also separates its photo from the

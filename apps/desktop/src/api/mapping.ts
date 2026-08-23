@@ -7,6 +7,7 @@ import {
   demoTaxonSummary,
   type TaxonDisplaySummary,
   type TaxonDisplayNames,
+  type TaxonomyNameType,
   type TaxonRank,
   type TaxonSummary,
 } from "./taxonomy";
@@ -15,13 +16,17 @@ import { demoOperation, type OperationState } from "./tasks";
 export type PhotoTaxonStatus = "matched" | "ambiguous" | "unmatched" | "processing";
 export type PhotoMappingSummary = { photo_id: number; taxon_id: number | null; status: PhotoTaxonStatus };
 export type PhotoMappingListItem = { photo: Photo; mapping: PhotoMappingSummary };
-export type PhotoMatchedName = { name_id: number; name_type: string; name: string };
+export type PhotoMatchedName = { name_id: number; name_type: TaxonomyNameType; name: string };
 export type PhotoTaxonCandidate = {
   summary: TaxonSummary;
   matched_names: PhotoMatchedName[];
   accepted_names: TaxonDisplayNames;
 };
-export type PhotoMappingDetail = { mapping: PhotoMappingSummary; candidates: PhotoTaxonCandidate[] };
+export type PhotoMappingDetail = {
+  mapping: PhotoMappingSummary;
+  matched_names: PhotoMatchedName[];
+  candidates: PhotoTaxonCandidate[];
+};
 export type MappingMetadata = {
   mapped_photo_count: number;
   unmatched_photo_count: number;
@@ -65,16 +70,21 @@ export const getPhotoTaxonDisplaySummary = (photoId: number) =>
       ? demoTaxonDisplaySummary(mapping.taxon_id)
       : null;
   });
-export const getPhotoMappingCandidates = (photoId: number) =>
-  call<PhotoTaxonCandidate[]>("get_photo_mapping_candidates", { photoId }, () => {
+export const getPhotoMappingDetail = (photoId: number) =>
+  call<PhotoMappingDetail>("get_photo_mapping_detail", { photoId }, () => {
     const mapping = demoMappings.get(photoId);
-    return mapping?.status === "ambiguous"
+    const candidates = mapping?.status === "ambiguous"
       ? demoTaxa.slice(0, 3).map((taxon) => ({
           summary: demoTaxonSummary(taxon),
           matched_names: taxon.matches,
           accepted_names: taxon.names,
         }))
       : [];
+    return {
+      mapping: mapping ?? { photo_id: photoId, taxon_id: null, status: "unmatched" },
+      matched_names: [],
+      candidates,
+    };
   });
 export const clearPhotoMapping = (photoId: number) =>
   call<PhotoMappingSummary>("clear_photo_mapping", { photoId }, () => {

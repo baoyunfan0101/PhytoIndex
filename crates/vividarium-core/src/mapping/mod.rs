@@ -20,13 +20,14 @@ use crate::taxonomy::{
 
 mod actions;
 mod candidates;
+mod matched_names;
 mod name_match;
 mod navigation;
 mod status;
 mod tree;
 
 pub use actions::{
-    clear_photo_mapping, get_metadata, get_photo_mapping, get_photo_mapping_candidates,
+    clear_photo_mapping, get_metadata, get_photo_mapping, get_photo_mapping_detail,
     get_photo_taxon_display_summary, remap_photo, set_photo_mapping,
 };
 pub use name_match::{
@@ -74,6 +75,13 @@ pub struct PhotoMappingSummary {
     pub photo_id: i64,
     pub taxon_id: Option<i64>,
     pub status: PhotoTaxonStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PhotoMappingDetail {
+    pub mapping: PhotoMappingSummary,
+    pub matched_names: Vec<PhotoMatchedName>,
+    pub candidates: Vec<PhotoTaxonCandidate>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -317,6 +325,23 @@ fn remap_photo_ids_with(
             )?;
             changed += 1;
         }
+        let stable_matched_names: &[PhotoMatchedName] = if new_status == PhotoTaxonStatus::Matched {
+            let taxon_id = new_taxon_id.ok_or_else(|| {
+                CoreError::Consistency(format!("matched photo {photo_id} has no resolved taxon"))
+            })?;
+            &results
+                .iter()
+                .find(|result| result.summary.taxon_id == taxon_id)
+                .ok_or_else(|| {
+                    CoreError::Consistency(format!(
+                        "matched photo {photo_id} has no candidate for taxon {taxon_id}"
+                    ))
+                })?
+                .matched_names
+        } else {
+            &[]
+        };
+        matched_names::replace(transaction, photo_id, stable_matched_names)?;
         if new_status == PhotoTaxonStatus::Ambiguous {
             candidates::replace(transaction, photo_id, &results)?;
         } else {

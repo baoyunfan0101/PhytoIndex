@@ -7,8 +7,8 @@ use serde_json::{Value, json};
 use tauri::{AppHandle, State, ipc::Channel};
 use vividarium_core::general::{GeneralSettings, WorkspaceState};
 use vividarium_core::mapping::{
-    PhotoMappingListItem, PhotoMappingListStatus, PhotoMappingSummary, PhotoNameMatchSettings,
-    PhotoTaxonCandidate, PhotoTaxonEntryCounts, PhotoTaxonItem, PhotoTaxonNode,
+    PhotoMappingDetail, PhotoMappingListItem, PhotoMappingListStatus, PhotoMappingSummary,
+    PhotoNameMatchSettings, PhotoTaxonEntryCounts, PhotoTaxonItem, PhotoTaxonNode,
 };
 use vividarium_core::models::{
     DatabaseLocations, DirectoryEntryCounts, MappingMetadata, OperationProgress, OperationState,
@@ -1960,11 +1960,11 @@ pub fn get_photo_taxon_display_summary(
 }
 
 #[tauri::command]
-pub fn get_photo_mapping_candidates(
+pub fn get_photo_mapping_detail(
     state: State<'_, AppState>,
     photo_id: i64,
-) -> CommandResult<Vec<PhotoTaxonCandidate>> {
-    mapping::get_photo_mapping_candidates(&state.database, photo_id).map_err(error)
+) -> CommandResult<PhotoMappingDetail> {
+    mapping::get_photo_mapping_detail(&state.database, photo_id).map_err(error)
 }
 
 #[tauri::command]

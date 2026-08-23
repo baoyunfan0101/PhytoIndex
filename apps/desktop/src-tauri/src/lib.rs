@@ -133,7 +133,7 @@ pub fn run() {
             commands::suggest_photo_taxa,
             commands::get_photo_mapping,
             commands::get_photo_taxon_display_summary,
-            commands::get_photo_mapping_candidates,
+            commands::get_photo_mapping_detail,
             commands::clear_photo_mapping,
             commands::set_photo_mapping,
             commands::remap_photo,

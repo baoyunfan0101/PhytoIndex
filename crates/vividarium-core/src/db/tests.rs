@@ -562,7 +562,56 @@ fn rejects_any_other_schema_version() {
         .unwrap();
     drop(connection);
     let error = Database::open(path).unwrap_err();
-    assert!(error.to_string().contains("expected 3"));
+    assert!(error.to_string().contains("expected 4"));
+}
+
+#[test]
+fn migrates_v3_photo_libraries_with_empty_mapping_provenance() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("photos.db");
+    initialize_file(&path, PHOTO_SCHEMA).unwrap();
+    let connection = open_existing_connection(&path).unwrap();
+    connection
+        .execute_batch(
+            r#"
+            DROP TRIGGER photo_taxon_mapping_au_names;
+            DROP TABLE photo_taxon_mapping_names;
+            INSERT INTO photo_directories (relative_path, name) VALUES ('', 'root');
+            INSERT INTO photos (
+                directory_id, filename, file_size, modified_at_ns
+            ) VALUES (1, 'mapped.jpg', 1, 1);
+            INSERT INTO photo_taxon_mapping (photo_id, taxon_id, status)
+            VALUES (1, 99, 'matched');
+            PRAGMA user_version = 3;
+            "#,
+        )
+        .unwrap();
+    drop(connection);
+
+    initialize_existing_file(&path, PHOTO_SCHEMA).unwrap();
+
+    let connection = open_existing_connection(&path).unwrap();
+    assert_eq!(schema_version(&connection), SCHEMA_VERSION);
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM photo_taxon_mapping_names",
+                [],
+                |row| { row.get::<_, i64>(0) }
+            )
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT taxon_id FROM photo_taxon_mapping WHERE photo_id = 1",
+                [],
+                |row| { row.get::<_, i64>(0) }
+            )
+            .unwrap(),
+        99
+    );
 }
 
 #[test]

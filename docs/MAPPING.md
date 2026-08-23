@@ -34,6 +34,12 @@ If a photo is queued, its public status is immediately `processing` and
 produced the candidate, and `accepted_names`. Candidates are returned only
 for an `ambiguous` mapping.
 
+`PhotoMappingDetail` contains the lightweight `mapping`, stable
+`matched_names`, and ambiguous `candidates`. Automatic stable mappings retain
+the matched-name snapshot that produced the mapping. Selecting a persisted
+ambiguous candidate copies its snapshot into the stable mapping. Explicitly
+mapping any other taxon stores no automatic match provenance.
+
 `PhotoMappingRunResult` contains the number of `processed` photos, mappings
 whose state `changed`, and the number still `pending`.
 
@@ -43,15 +49,16 @@ whose state `changed`, and the number still `pending`.
 | --- | --- | --- | --- |
 | `get_photo_mapping` | `photo_id: i64` | `PhotoMappingSummary` | Read the lightweight current state. Missing photos and broken state invariants are errors. |
 | `get_photo_taxon_display_summary` | `photo_id: i64` | `Option<TaxonDisplaySummary>` | Read the compact display path for a uniquely mapped photo. Unmapped, ambiguous, and processing photos return `None`. |
-| `get_photo_mapping_candidates` | `photo_id: i64` | `Vec<PhotoTaxonCandidate>` | Read persisted candidates for an ambiguous photo; otherwise return an empty vector. |
+| `get_photo_mapping_detail` | `photo_id: i64` | `PhotoMappingDetail` | Read stable matched-name provenance or persisted ambiguous candidates with the current mapping state. |
 | `set_photo_mapping` | `photo_id: i64`, `taxon_id: i64` | `PhotoMappingSummary` | Force or replace a mapping, including choosing an ambiguous candidate. |
 | `clear_photo_mapping` | `photo_id: i64` | `PhotoMappingSummary` | Set the photo to `unmatched`. |
 | `remap_photo` | `photo_id: i64` | `PhotoMappingSummary` | Automatically remap one photo from its current filename. |
 | `process_pending_photo_matches` | `progress: &mut MappingProgressCallback` | `PhotoMappingRunResult` | Process the active library queue. |
 | `get_metadata` | none | `MappingMetadata` | Return counts for each logical state and the photo taxonomy tree. |
 
-Automatic mapping candidates are retrieved separately from the lightweight
-mapping state.
+`get_photo_mapping` remains the lightweight status read for context menus and
+status presentation. `get_photo_mapping_detail` loads provenance and candidates
+only for editing views that require them.
 
 ## Mapping status list and search
 

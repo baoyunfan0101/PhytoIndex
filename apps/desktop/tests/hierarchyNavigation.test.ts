@@ -8,6 +8,7 @@ import {
   recordHierarchyPosition,
   taxonSearchMatchExplanation,
 } from "../src/features/taxonomy/hierarchyNavigation.ts";
+import { taxonMatchExplanation } from "../src/features/taxonomy/taxonMatchExplanation.ts";
 
 test("stores an independent current taxon for each search root", () => {
   let positions = {};
@@ -64,4 +65,31 @@ test("explains alias matches but not accepted-name matches", () => {
       { name_id: 2, name_type: "synonym", name: "Canis lycaon" },
     ],
   }), null);
+});
+
+test("shares accepted-name suppression and alias explanations", () => {
+  assert.equal(taxonMatchExplanation([{ name_type: "sci_name", name: "Panthera leo" }]), null);
+  assert.equal(taxonMatchExplanation([{ name_type: "zh_name", name: "lion" }]), null);
+  assert.equal(taxonMatchExplanation([{ name_type: "en_name", name: "Lion" }]), null);
+  assert.equal(
+    taxonMatchExplanation([{ name_type: "synonym", name: "Felis leo" }]),
+    "Matched synonym: Felis leo",
+  );
+  assert.equal(
+    taxonMatchExplanation([{ name_type: "zh_alias", name: "old lion" }]),
+    "Matched Chinese alias: old lion",
+  );
+  assert.equal(
+    taxonMatchExplanation([{ name_type: "en_alias", name: "Cave lion" }]),
+    "Matched English alias: Cave lion",
+  );
+  assert.equal(taxonMatchExplanation([
+    { name_type: "sci_name", name: "Panthera leo" },
+    { name_type: "synonym", name: "Felis leo" },
+  ]), null);
+  assert.equal(taxonMatchExplanation([
+    { name_type: "synonym", name: "Felis leo" },
+    { name_type: "synonym", name: "Felis leo" },
+    { name_type: "en_alias", name: "Cave lion" },
+  ]), "Matched synonym: Felis leo; Matched English alias: Cave lion");
 });

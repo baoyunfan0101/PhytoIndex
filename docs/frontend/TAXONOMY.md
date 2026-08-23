@@ -97,6 +97,10 @@ types.
 third line displays available Chinese and English names separated by a middle
 dot, or a dash when both names are absent. Taxon cards always retain this full
 accepted-name presentation and do not use visible-name preferences.
+Taxon-card text is selectable and copyable. Dragging a text selection does not
+run card navigation, and action buttons remain isolated from the card action.
+Search and Mapping surfaces share one matched-name explanation for synonyms and
+Chinese or English aliases; accepted-name matches omit the explanation.
 `useTaxonSuggestions(query, enabled)` returns lightweight suggestions after a
 260 ms input pause; only the latest request may publish its low-priority
 result. `useTaxonSearch(query, options)` returns submitted search results,

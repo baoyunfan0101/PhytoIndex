@@ -119,8 +119,9 @@ fn six_dimension_priority_controls_photo_mapping() {
     let species_mapping = get_photo_mapping(&database, photo.photo_id).unwrap();
     assert_eq!(species_mapping.status, PhotoTaxonStatus::Matched);
     assert!(
-        get_photo_mapping_candidates(&database, photo.photo_id)
+        get_photo_mapping_detail(&database, photo.photo_id)
             .unwrap()
+            .candidates
             .is_empty()
     );
     let species_summary =
@@ -147,8 +148,9 @@ fn six_dimension_priority_controls_photo_mapping() {
     let family_mapping = get_photo_mapping(&database, photo.photo_id).unwrap();
     assert_eq!(family_mapping.status, PhotoTaxonStatus::Matched);
     assert!(
-        get_photo_mapping_candidates(&database, photo.photo_id)
+        get_photo_mapping_detail(&database, photo.photo_id)
             .unwrap()
+            .candidates
             .is_empty()
     );
     let family_summary =
@@ -204,11 +206,11 @@ fn matches_the_filename_stem_and_builds_sparse_usage() {
     let photo = photos::list_photos(&database).unwrap().remove(0);
     let mapping = get_photo_mapping(&database, photo.photo_id).unwrap();
     assert_eq!(mapping.status, PhotoTaxonStatus::Matched);
-    assert!(
-        get_photo_mapping_candidates(&database, photo.photo_id)
-            .unwrap()
-            .is_empty()
-    );
+    let detail = get_photo_mapping_detail(&database, photo.photo_id).unwrap();
+    assert!(detail.candidates.is_empty());
+    assert_eq!(detail.matched_names.len(), 1);
+    assert_eq!(detail.matched_names[0].name_type, TaxonomyNameType::SciName);
+    assert_eq!(detail.matched_names[0].name, "Canis lupus");
     let species_id = mapping.taxon_id.unwrap();
     let species_summary = crate::taxonomy::get_taxon_summary(&database, species_id)
         .unwrap()
@@ -333,6 +335,106 @@ fn accepted_name_match_wins_and_alias_is_an_exact_fallback() {
 }
 
 #[test]
+fn stable_mapping_provenance_replaces_a_synonym_with_an_accepted_match() {
+    let data = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    fs::write(root.path().join("Felis leo.jpg"), b"photo").unwrap();
+    let database = Database::open_test(data.path().join("vividarium.db")).unwrap();
+    let connection = database.connect().unwrap();
+    connection
+        .execute_batch(
+            r#"
+            INSERT INTO taxa (taxon_id, rank) VALUES (1, 5);
+            INSERT INTO taxon_names (taxon_id, name_type, name) VALUES
+                (1, 1, 'Panthera leo'),
+                (1, 2, 'Felis leo');
+            "#,
+        )
+        .unwrap();
+    drop(connection);
+    let library = open_library(&database, root.path().to_str().unwrap()).unwrap();
+    refresh_directory(&database, library.root_directory_id).unwrap();
+    let photo = photos::list_photos(&database).unwrap().remove(0);
+    let mut progress = |_: OperationProgress| {};
+    process_pending_photo_matches(&database, &mut progress).unwrap();
+
+    let synonym_detail = get_photo_mapping_detail(&database, photo.photo_id).unwrap();
+    assert_eq!(synonym_detail.mapping.status, PhotoTaxonStatus::Matched);
+    assert_eq!(synonym_detail.matched_names.len(), 1);
+    assert_eq!(
+        synonym_detail.matched_names[0].name_type,
+        TaxonomyNameType::Synonym
+    );
+    assert_eq!(synonym_detail.matched_names[0].name, "Felis leo");
+
+    database
+        .connect()
+        .unwrap()
+        .execute_batch(
+            r#"
+            DELETE FROM taxon_names WHERE taxon_id = 1 AND name_type = 2;
+            UPDATE taxon_names
+            SET name = 'Felis leo'
+            WHERE taxon_id = 1 AND name_type = 1;
+            "#,
+        )
+        .unwrap();
+    remap_photo(&database, photo.photo_id).unwrap();
+
+    let accepted_detail = get_photo_mapping_detail(&database, photo.photo_id).unwrap();
+    assert_eq!(accepted_detail.matched_names.len(), 1);
+    assert_eq!(
+        accepted_detail.matched_names[0].name_type,
+        TaxonomyNameType::SciName
+    );
+    assert_eq!(accepted_detail.matched_names[0].name, "Felis leo");
+}
+
+#[test]
+fn stable_mapping_persists_chinese_alias_provenance() {
+    let data = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    fs::write(root.path().join("input.jpg"), b"photo").unwrap();
+    let database = Database::open_test(data.path().join("vividarium.db")).unwrap();
+    database
+        .connect()
+        .unwrap()
+        .execute_batch(
+            r#"
+            INSERT INTO taxa (taxon_id, rank) VALUES (1, 5);
+            INSERT INTO taxon_names (taxon_id, name_type, name) VALUES
+                (1, 1, 'Panthera leo'),
+                (1, 3, 'lion'),
+                (1, 4, 'old lion');
+            "#,
+        )
+        .unwrap();
+    set_naming_hook(
+        &database,
+        NamingHookKind::PhotoFilename,
+        Some(
+            r#"
+            fn parse_photo_filename(filename) {
+                #{ info: #{ species_zh: "old lion" }, suffix: ".jpg" }
+            }
+            "#,
+        ),
+    )
+    .unwrap();
+    let library = open_library(&database, root.path().to_str().unwrap()).unwrap();
+    refresh_directory(&database, library.root_directory_id).unwrap();
+    let photo = photos::list_photos(&database).unwrap().remove(0);
+    let mut progress = |_: OperationProgress| {};
+    process_pending_photo_matches(&database, &mut progress).unwrap();
+
+    let detail = get_photo_mapping_detail(&database, photo.photo_id).unwrap();
+    assert_eq!(detail.mapping.status, PhotoTaxonStatus::Matched);
+    assert_eq!(detail.matched_names.len(), 1);
+    assert_eq!(detail.matched_names[0].name_type, TaxonomyNameType::ZhAlias);
+    assert_eq!(detail.matched_names[0].name, "old lion");
+}
+
+#[test]
 fn candidate_limit_is_applied_before_loading_taxon_summaries() {
     let data = tempfile::tempdir().unwrap();
     let database = Database::open_test(data.path().join("vividarium.db")).unwrap();
@@ -422,7 +524,9 @@ fn persists_ambiguous_candidates_and_accepts_a_forced_mapping() {
     let mut progress = |_: OperationProgress| {};
     process_pending_photo_matches(&database, &mut progress).unwrap();
     let mapping = get_photo_mapping(&database, photo.photo_id).unwrap();
-    let candidates = get_photo_mapping_candidates(&database, photo.photo_id).unwrap();
+    let ambiguous_detail = get_photo_mapping_detail(&database, photo.photo_id).unwrap();
+    assert!(ambiguous_detail.matched_names.is_empty());
+    let candidates = ambiguous_detail.candidates;
     assert_eq!(mapping.status, PhotoTaxonStatus::Ambiguous);
     assert_eq!(candidates.len(), 2);
     assert_eq!(candidates[0].matched_names.len(), 1);
@@ -464,18 +568,33 @@ fn persists_ambiguous_candidates_and_accepts_a_forced_mapping() {
     assert_eq!(processing.status, PhotoTaxonStatus::Processing);
     assert_eq!(processing.taxon_id, None);
     assert!(
-        get_photo_mapping_candidates(&database, photo.photo_id)
+        get_photo_mapping_detail(&database, photo.photo_id)
             .unwrap()
+            .candidates
             .is_empty()
     );
     process_pending_photo_matches(&database, &mut progress).unwrap();
     let mapping = get_photo_mapping(&database, photo.photo_id).unwrap();
-    let candidates = get_photo_mapping_candidates(&database, photo.photo_id).unwrap();
+    let candidates = get_photo_mapping_detail(&database, photo.photo_id)
+        .unwrap()
+        .candidates;
     assert_eq!(mapping.status, PhotoTaxonStatus::Ambiguous);
     assert_eq!(candidates.len(), 2);
     let selected = set_photo_mapping(&database, photo.photo_id, selected_taxon_id).unwrap();
     assert_eq!(selected.status, PhotoTaxonStatus::Matched);
     assert_eq!(selected.taxon_id, Some(selected_taxon_id));
+    let selected_detail = get_photo_mapping_detail(&database, photo.photo_id).unwrap();
+    assert_eq!(selected_detail.matched_names.len(), 1);
+    assert_eq!(selected_detail.matched_names, candidates[0].matched_names);
+    let preserved = remap_photo(&database, photo.photo_id).unwrap();
+    assert_eq!(preserved.status, PhotoTaxonStatus::Matched);
+    assert_eq!(preserved.taxon_id, Some(selected_taxon_id));
+    assert_eq!(
+        get_photo_mapping_detail(&database, photo.photo_id)
+            .unwrap()
+            .matched_names,
+        candidates[0].matched_names
+    );
     assert_eq!(
         database
             .connect()
@@ -525,6 +644,12 @@ fn clears_forces_and_automatically_recomputes_one_mapping() {
     let forced = set_photo_mapping(&database, photo.photo_id, 2).unwrap();
     assert_eq!(forced.status, PhotoTaxonStatus::Matched);
     assert_eq!(forced.taxon_id, Some(2));
+    assert!(
+        get_photo_mapping_detail(&database, photo.photo_id)
+            .unwrap()
+            .matched_names
+            .is_empty()
+    );
     assert!(get_photo_taxon_node(&database, Some(1), false).is_err());
     assert_eq!(
         get_photo_taxon_node(&database, Some(2), false)
@@ -541,9 +666,17 @@ fn clears_forces_and_automatically_recomputes_one_mapping() {
     let remapped = remap_photo(&database, photo.photo_id).unwrap();
     assert_eq!(remapped.status, PhotoTaxonStatus::Matched);
     assert_eq!(remapped.taxon_id, Some(1));
-    assert!(
-        get_photo_mapping_candidates(&database, photo.photo_id)
+    assert_eq!(
+        get_photo_mapping_detail(&database, photo.photo_id)
             .unwrap()
+            .matched_names[0]
+            .name_type,
+        TaxonomyNameType::SciName
+    );
+    assert!(
+        get_photo_mapping_detail(&database, photo.photo_id)
+            .unwrap()
+            .candidates
             .is_empty()
     );
     assert!(set_photo_mapping(&database, photo.photo_id, i64::MAX).is_err());
@@ -685,7 +818,7 @@ fn rejects_a_photo_without_mapping_state() {
             .contains("neither a mapping nor a mapping queue entry")
     );
 
-    let candidates_error = get_photo_mapping_candidates(&database, photo.photo_id).unwrap_err();
+    let candidates_error = get_photo_mapping_detail(&database, photo.photo_id).unwrap_err();
     assert!(matches!(candidates_error, CoreError::Consistency(_)));
 }
 
