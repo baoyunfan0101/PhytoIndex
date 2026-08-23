@@ -7,7 +7,7 @@ theme, application shell, shared UI, and business-domain styles.
 
 | File | Ownership |
 | --- | --- |
-| `theme.css` | Color variables, typography, reset, and focus behavior. |
+| `theme.css` | Color variables, typography, reset, focus behavior, and Light/Dark editor palettes. |
 | `app.css` | Desktop shell, activity bar, tabs, toolbar, native About, popovers, and status bar. |
 | `shared.css` | Buttons, virtual collections, segmented controls, editor, modal, loading, and empty states. |
 | `photos.css` | Photo search, empty workspace, browsers, media, folder tree, detail view, map, and photo context menu. |
@@ -34,3 +34,8 @@ returns a square button with the shared icon click target and accessible name.
 Button colors, radius, focus ring, transition duration, pressed transform, and
 disabled behavior are global. Domain styles may define layout and selected-row
 states, but do not redefine ordinary button interaction states.
+
+Application chrome, context menus, overlays, and CodeMirror use shared theme
+tokens in Dark theme, explicit Light theme, and system Light mode. Photo media
+canvas backgrounds and map marker contrast colors remain independent visual
+surfaces.

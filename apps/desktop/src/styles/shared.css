@@ -132,7 +132,7 @@
 .empty-state strong { color: var(--muted); }
 .empty-state-actions { display: flex; gap: 6px; }
 .busy { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); }
-.floating-progress { position: absolute; right: 8px; bottom: 8px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 3px; background: #222; }
+.floating-progress { position: absolute; right: 8px; bottom: 8px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 3px; color: var(--text); background: var(--popover); }
 .empty-copy { display: grid; height: 100%; place-items: center; color: var(--quiet); }
 .spin { animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }

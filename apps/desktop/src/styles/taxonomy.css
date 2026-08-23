@@ -117,7 +117,7 @@
 .log-row { display: grid; height: 100%; grid-template-columns: 36px minmax(160px, 30%) minmax(0, 1fr); align-items: center; gap: 8px; padding: 5px 10px; border-bottom: 1px solid var(--line); }
 .log-row > div { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
 .log-row span { color: var(--muted); }
-.log-row code { overflow: hidden; color: #b6b6b6; text-overflow: ellipsis; white-space: nowrap; }
+.log-row code { overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
 .file-button { position: relative; overflow: hidden; }
 .file-button.disabled { opacity: .55; pointer-events: none; }
 .file-button input { position: absolute; inset: 0; opacity: 0; }
