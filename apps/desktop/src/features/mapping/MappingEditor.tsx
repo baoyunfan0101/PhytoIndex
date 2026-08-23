@@ -24,22 +24,50 @@ import { useViewState } from "../../shared/viewState";
 import { ResizablePanels } from "../../shared/ResizablePanels";
 import { PhotoPaneHeader } from "../photos/PhotoPaneHeader";
 import { usePublishedPhotoTaxonSummary } from "../photos/photoTaxonSummary";
+import { usePhotoInteraction, type PhotoOpenHandlers } from "../photos/PhotoInteraction";
 
 const ignoreTaxonSummary = (_summary: TaxonDisplaySummary | null) => {};
+
+function StandaloneMappingPhotoPane({
+  photo,
+  handlers,
+}: {
+  photo: Photo;
+  handlers: PhotoOpenHandlers;
+}) {
+  const interaction = usePhotoInteraction({
+    photos: [photo],
+    handlers,
+    selectFirst: false,
+    stateKey: "mapping-editor.interaction",
+  });
+
+  return (
+    <>
+      <div className="editor-photo-column">
+        <div className="photo-pane-heading">
+          <PhotoPaneHeader photo={photo} />
+        </div>
+        <PhotoStage photo={photo} onContextMenu={interaction.openContextMenu} />
+      </div>
+      {interaction.contextMenu}
+    </>
+  );
+}
 
 export function MappingEditor({
   photo,
   embedded = false,
   active = false,
   onTaxonSummaryChange = ignoreTaxonSummary,
-  onOpenTaxon,
+  handlers,
   refreshKey = 0,
 }: {
   photo: Photo;
   embedded?: boolean;
   active?: boolean;
   onTaxonSummaryChange?: (summary: TaxonDisplaySummary | null) => void;
-  onOpenTaxon: (taxonId: number) => void;
+  handlers: PhotoOpenHandlers;
   refreshKey?: number;
 }) {
   const [match, setMatch] = useViewState<PhotoMappingDetail | null>("mapping-editor.match", null);
@@ -107,14 +135,7 @@ export function MappingEditor({
     }
   }
 
-  const photoPane = (
-    <div className="editor-photo-column">
-      <div className="photo-pane-heading">
-        <PhotoPaneHeader photo={photo} />
-      </div>
-      <PhotoStage photo={photo} />
-    </div>
-  );
+  const photoPane = <StandaloneMappingPhotoPane photo={photo} handlers={handlers} />;
   const currentTaxon = mappedTaxon ? {
     taxon_id: mappedTaxon.taxon_id,
     rank: mappedTaxon.rank,
@@ -191,7 +212,7 @@ export function MappingEditor({
           <TaxonCard
             compact
             taxon={item}
-            onClick={() => onOpenTaxon(item.taxon_id)}
+            onClick={() => handlers.openTaxon(item.taxon_id)}
             actions={
               <Button size="small" disabled={Boolean(busy)} onClick={() => void mutate(`Mapping ${item.taxon_id}`, () => setPhotoMapping(photo.photo_id, item.taxon_id))}>
                 <Link size={12} /> {busy === `Mapping ${item.taxon_id}` ? "Mapping..." : "Map"}

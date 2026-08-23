@@ -6,6 +6,10 @@ The Photos domain owns photo browsing and interactions. Folder, photographed
 taxonomy, map, search Photo Sets, detail views, media rendering, and the photo
 context menu share the same selection and mutation behavior.
 
+Native desktop context menus are disabled across the application. Every main
+full-photo view uses the Vividarium Photo Context Menu; the Map preview remains
+a lightweight preview without a photo context menu.
+
 ## Public pages and components
 
 ### `PhotoBrowser(props)`

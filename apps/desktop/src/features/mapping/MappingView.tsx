@@ -185,7 +185,7 @@ export function MappingView({
             <PhotoStage photo={interaction.selected} onContextMenu={interaction.openContextMenu} />
           </main>)}
           second={(<aside className="mapping-editor-pane">
-            {selected ? <MappingEditor photo={selected.photo} embedded onOpenTaxon={handlers.openTaxon} refreshKey={editorRevision} /> : <div className="empty-copy">Select a photo</div>}
+            {selected ? <MappingEditor photo={selected.photo} embedded handlers={handlers} refreshKey={editorRevision} /> : <div className="empty-copy">Select a photo</div>}
           </aside>)}
         />)}
       />

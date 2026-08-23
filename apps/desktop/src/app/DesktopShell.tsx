@@ -606,7 +606,7 @@ export function DesktopShell({
   });
 
   return (
-    <div className="desktop-shell">
+    <div className="desktop-shell" onContextMenu={(event) => event.preventDefault()}>
       <aside className="activity-bar">
         <ActivityButton icon={Search} label="Search photos" active={searchOpen || active === null} onClick={openGlobalSearch} />
         <div className="activity-divider" />
@@ -839,7 +839,7 @@ function TabBody({
   if (tab.kind === "taxonomy-history") return <OperationHistoryView domain="taxonomy" onStatus={onStatus} />;
   if (tab.kind === "settings") return <SettingsView section={tab.settingsSection ?? "General"} taskOwnerId={taskOwnerId} onSectionChange={(section) => updateSettingsTab(tab.id, section)} onTaxonomyImported={onTaxonomyImported} onWorkspaceChanged={onWorkspaceChanged} onOpenPhotoLibrary={onOpenPhotoLibrary} onPhotoOperationStarted={onPhotoOperationStarted} photoLibraryOperation={photoLibraryOperation} photoLibraryOperationError={photoLibraryOperationError} generalSettings={generalSettings} generalSettingsLoadError={generalSettingsLoadError} onGeneralSettingsChange={onGeneralSettingsChange} />;
   if (tab.kind === "photo-detail" && tab.photo) return <PhotoDetailView active={active} photo={tab.photo} handlers={handlers} onTaxonSummaryChange={onCurrentPhotoTaxonSummary} />;
-  if (tab.kind === "mapping-editor" && tab.photo) return <MappingEditor active={active} photo={tab.photo} onTaxonSummaryChange={onCurrentPhotoTaxonSummary} onOpenTaxon={handlers.openTaxon} />;
+  if (tab.kind === "mapping-editor" && tab.photo) return <MappingEditor active={active} photo={tab.photo} onTaxonSummaryChange={onCurrentPhotoTaxonSummary} handlers={handlers} />;
   if (tab.kind === "search-photos" && tab.query) return <PhotoSet active={active} query={tab.query} refreshKey={tab.refreshKey} handlers={handlers} onTaxonSummaryChange={onCurrentPhotoTaxonSummary} />;
   if (tab.kind === "taxon-photos" && tab.taxonId !== undefined) return <PhotoSet active={active} taxonId={tab.taxonId} handlers={handlers} onTaxonSummaryChange={onCurrentPhotoTaxonSummary} />;
   return null;
