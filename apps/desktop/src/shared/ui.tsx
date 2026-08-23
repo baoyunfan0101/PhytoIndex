@@ -431,24 +431,26 @@ export function Modal({
   actions,
   onClose,
   width = 520,
+  dismissible = true,
 }: {
   title: string;
   children: ReactNode;
   actions?: ReactNode;
   onClose: () => void;
   width?: number;
+  dismissible?: boolean;
 }) {
   const titleId = useId();
   useEffect(() => {
     const close = (event: globalThis.KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape" && dismissible) onClose();
     };
     window.addEventListener("keydown", close);
     return () => window.removeEventListener("keydown", close);
-  }, [onClose]);
+  }, [dismissible, onClose]);
 
   return (
-    <div className="modal-backdrop" onMouseDown={onClose}>
+    <div className="modal-backdrop" onMouseDown={() => dismissible && onClose()}>
       <section
         className="modal-card"
         style={{ "--modal-width": `${width}px` } as CSSProperties}
@@ -459,7 +461,7 @@ export function Modal({
       >
         <header>
           <strong id={titleId}>{title}</strong>
-          <IconButton onClick={onClose} aria-label="Close"><X size={15} /></IconButton>
+          <IconButton onClick={onClose} disabled={!dismissible} aria-label="Close"><X size={15} /></IconButton>
         </header>
         <div className="modal-body">{children}</div>
         {actions && <footer>{actions}</footer>}

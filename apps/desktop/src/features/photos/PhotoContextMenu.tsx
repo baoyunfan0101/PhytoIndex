@@ -55,7 +55,7 @@ export function PhotoContextMenu({
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (renaming) return;
+    if (renaming || busy) return;
     const close = (event: MouseEvent) => {
       if (!menuRef.current?.contains(event.target as Node)) onClose();
     };
@@ -68,7 +68,7 @@ export function PhotoContextMenu({
       window.removeEventListener("mousedown", close);
       window.removeEventListener("keydown", closeKey);
     };
-  }, [onClose, renaming]);
+  }, [busy, onClose, renaming]);
 
   useEffect(() => {
     if (!renaming || !inputRef.current) return;
@@ -123,7 +123,7 @@ export function PhotoContextMenu({
           })}
         />
         <MenuSeparator />
-        <MenuButton icon={FilePenLine} label="Rename" onClick={() => setRenaming(true)} />
+        <MenuButton icon={FilePenLine} label="Rename" disabled={Boolean(busy)} onClick={() => setRenaming(true)} />
         <MenuButton
           icon={FileInput}
           label="Rename from taxonomy"
@@ -143,16 +143,17 @@ export function PhotoContextMenu({
       {renaming && (
         <Modal
           title="Rename photo"
+          dismissible={!busy}
           onClose={() => setRenaming(false)}
           actions={
             <>
-              <Button onClick={() => setRenaming(false)}>Cancel</Button>
+              <Button disabled={Boolean(busy)} onClick={() => setRenaming(false)}>Cancel</Button>
               <Button
                 variant="primary"
                 disabled={!newFilename.trim() || Boolean(busy)}
                 onClick={() => void run("Renaming", async () => onChanged(await renamePhoto(photo.photo_id, newFilename.trim())))}
               >
-                Rename
+                {busy === "Renaming" ? "Renaming..." : "Rename"}
               </Button>
             </>
           }

@@ -15,7 +15,10 @@ row when a query or filter changes.
 
 `SectionHeader`, `EmptyState`, `Modal`, `Segmented`, `Disclosure`, and `Busy`
 provide domain-neutral presentation. `CodeEditor` provides the common SQL and
-Rhai editing surface with syntax highlighting.
+Rhai editing surface with syntax highlighting. `Modal` defaults to dismissible
+through its close action, Escape, and backdrop. Non-cancellable mutations pass
+`dismissible={false}` while running, which disables all three dismissal paths
+until the owning interaction completes.
 
 `ResizablePanels(props)` returns two panes separated by a pointer- and
 keyboard-adjustable divider. Parameters select horizontal or vertical layout,

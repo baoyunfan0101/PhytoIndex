@@ -202,3 +202,7 @@ details`. The action is enabled only for a stable mapped taxon; the status
 remains visible when the action is disabled. Its actions are `View photo
 details`, `View taxon details`, `Edit mapping`, `Remap from filename`, `Rename`,
 `Rename from taxonomy`, and `Reveal in Finder / Explorer`.
+
+Non-cancellable photo and directory context-menu mutations lock manual menu
+and rename-modal dismissal while running. Tab-owned background tasks remain
+cancellable by closing their owning tab.

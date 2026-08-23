@@ -264,7 +264,8 @@ export function SqlImportSettings({
       {confirming && (
         <Modal
           title="Apply SQL import"
-          onClose={() => !busy && setConfirming(false)}
+          dismissible={!busy}
+          onClose={() => setConfirming(false)}
           actions={(
             <>
               <Button disabled={Boolean(busy)} onClick={() => setConfirming(false)}>Cancel</Button>
