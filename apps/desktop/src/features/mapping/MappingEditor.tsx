@@ -12,7 +12,6 @@ import {
   getTaxonDetail,
   type TaxonDetail,
 } from "../../api/taxonomy";
-import type { TaxonDisplaySummary } from "../../api/taxonomy";
 import { errorMessage } from "../../api/common";
 import { Busy, Button, EmptyState, VirtualList } from "../../shared/ui";
 import { PhotoStage } from "../photos/PhotoMedia";
@@ -23,10 +22,10 @@ import { useTaxonSearch } from "../taxonomy/useTaxonSearch";
 import { useViewState } from "../../shared/viewState";
 import { ResizablePanels } from "../../shared/ResizablePanels";
 import { PhotoPaneHeader } from "../photos/PhotoPaneHeader";
-import { usePublishedPhotoTaxonSummary } from "../photos/photoTaxonSummary";
+import { usePublishedPhotoTaxonSummary, type PhotoTaxonDisplayState } from "../photos/photoTaxonSummary";
 import { usePhotoInteraction, type PhotoOpenHandlers } from "../photos/PhotoInteraction";
 
-const ignoreTaxonSummary = (_summary: TaxonDisplaySummary | null) => {};
+const ignorePhotoTaxonDisplayState = (_state: PhotoTaxonDisplayState | null) => {};
 
 function StandaloneMappingPhotoPane({
   photo,
@@ -59,14 +58,14 @@ export function MappingEditor({
   photo,
   embedded = false,
   active = false,
-  onTaxonSummaryChange = ignoreTaxonSummary,
+  onPhotoTaxonDisplayState = ignorePhotoTaxonDisplayState,
   handlers,
   refreshKey = 0,
 }: {
   photo: Photo;
   embedded?: boolean;
   active?: boolean;
-  onTaxonSummaryChange?: (summary: TaxonDisplaySummary | null) => void;
+  onPhotoTaxonDisplayState?: (state: PhotoTaxonDisplayState | null) => void;
   handlers: PhotoOpenHandlers;
   refreshKey?: number;
 }) {
@@ -92,7 +91,7 @@ export function MappingEditor({
   usePublishedPhotoTaxonSummary({
     photoId: embedded ? null : photo.photo_id,
     active: active && !embedded,
-    onChange: onTaxonSummaryChange,
+    onChange: onPhotoTaxonDisplayState,
   });
 
   const reload = useCallback(async () => {

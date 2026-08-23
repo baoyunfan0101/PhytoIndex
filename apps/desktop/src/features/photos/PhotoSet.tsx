@@ -3,7 +3,7 @@ import { listTaxonPhotos } from "../../api/taxonomy";
 import { useCursorPage } from "../../shared/useCursorPage";
 import { PhotoBrowser } from "./PhotoBrowser";
 import type { PhotoOpenHandlers } from "./PhotoInteraction";
-import type { TaxonDisplaySummary } from "../../api/taxonomy";
+import type { PhotoTaxonDisplayState } from "./photoTaxonSummary";
 
 export function PhotoSet({
   query,
@@ -11,14 +11,14 @@ export function PhotoSet({
   refreshKey,
   handlers,
   active,
-  onTaxonSummaryChange,
+  onPhotoTaxonDisplayState,
 }: {
   query?: string;
   taxonId?: number;
   refreshKey?: number;
   handlers: PhotoOpenHandlers;
   active: boolean;
-  onTaxonSummaryChange: (summary: TaxonDisplaySummary | null) => void;
+  onPhotoTaxonDisplayState: (state: PhotoTaxonDisplayState | null) => void;
 }) {
   const params = query !== undefined
     ? { kind: "search" as const, query }
@@ -40,7 +40,7 @@ export function PhotoSet({
       page={page}
       handlers={handlers}
       active={active}
-      onTaxonSummaryChange={onTaxonSummaryChange}
+      onPhotoTaxonDisplayState={onPhotoTaxonDisplayState}
     />
   );
 }

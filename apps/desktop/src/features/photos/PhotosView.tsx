@@ -33,8 +33,7 @@ import { useCursorPage } from "../../shared/useCursorPage";
 import { useCursorTree, type CursorTreeNode } from "../../shared/useCursorTree";
 import { useViewState } from "../../shared/viewState";
 import { ResizablePanels } from "../../shared/ResizablePanels";
-import type { TaxonDisplaySummary } from "../../api/taxonomy";
-import { usePublishedPhotoTaxonSummary } from "./photoTaxonSummary";
+import { usePublishedPhotoTaxonSummary, type PhotoTaxonDisplayState } from "./photoTaxonSummary";
 
 type DirectoryTreeRow =
   | { kind: "directory"; directory: PhotoDirectory; depth: number }
@@ -118,13 +117,13 @@ export function FolderPhotosView({
   handlers,
   onStatus,
   active,
-  onTaxonSummaryChange,
+  onPhotoTaxonDisplayState,
   backgroundOperation,
 }: {
   handlers: PhotoOpenHandlers;
   onStatus: (message: string, busy?: boolean) => void;
   active: boolean;
-  onTaxonSummaryChange: (summary: TaxonDisplaySummary | null) => void;
+  onPhotoTaxonDisplayState: (state: PhotoTaxonDisplayState | null) => void;
   backgroundOperation?: OperationState | null;
 }) {
   const [library, setLibrary] = useViewState<PhotoLibrary | null>("folders.library", null);
@@ -174,7 +173,7 @@ export function FolderPhotosView({
   usePublishedPhotoTaxonSummary({
     photoId: interaction.selectedId,
     active,
-    onChange: onTaxonSummaryChange,
+    onChange: onPhotoTaxonDisplayState,
   });
   const [displayMode, setDisplayMode] = usePhotoDisplayMode();
   const activation = usePhotoActivation({
@@ -418,13 +417,13 @@ export function TaxonPhotosView({
   handlers,
   nameParts,
   active,
-  onTaxonSummaryChange,
+  onPhotoTaxonDisplayState,
   backgroundOperation,
 }: {
   handlers: PhotoOpenHandlers;
   nameParts: TaxonNameParts;
   active: boolean;
-  onTaxonSummaryChange: (summary: TaxonDisplaySummary | null) => void;
+  onPhotoTaxonDisplayState: (state: PhotoTaxonDisplayState | null) => void;
   backgroundOperation?: OperationState | null;
 }) {
   const [trail, setTrail] = useViewState<PhotoTaxonUsage[]>("photo-taxonomy.trail", []);
@@ -464,7 +463,7 @@ export function TaxonPhotosView({
   usePublishedPhotoTaxonSummary({
     photoId: interaction.selectedId,
     active,
-    onChange: onTaxonSummaryChange,
+    onChange: onPhotoTaxonDisplayState,
   });
   const [displayMode, setDisplayMode] = usePhotoDisplayMode();
   const activation = usePhotoActivation({
@@ -674,12 +673,12 @@ export function TaxonPhotosView({
 export function PhotoMapView({
   active,
   handlers,
-  onTaxonSummaryChange,
+  onPhotoTaxonDisplayState,
   backgroundOperation,
 }: {
   active: boolean;
   handlers: PhotoOpenHandlers;
-  onTaxonSummaryChange: (summary: TaxonDisplaySummary | null) => void;
+  onPhotoTaxonDisplayState: (state: PhotoTaxonDisplayState | null) => void;
   backgroundOperation?: OperationState | null;
 }) {
   const libraryUuid = usePhotoLibraryIdentity();
@@ -719,7 +718,7 @@ export function PhotoMapView({
   usePublishedPhotoTaxonSummary({
     photoId: interaction.selectedId,
     active,
-    onChange: onTaxonSummaryChange,
+    onChange: onPhotoTaxonDisplayState,
   });
   useDeferredPhotoMutation(active, () => {
     if (refitTimer.current) return;

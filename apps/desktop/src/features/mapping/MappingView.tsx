@@ -19,9 +19,8 @@ import { findTypeSelectIndex, nextListIndex } from "../photos/photoListNavigatio
 import { useDeferredPhotoMutation } from "../photos/photoMutations";
 import { useCursorPage } from "../../shared/useCursorPage";
 import { ResizablePanels } from "../../shared/ResizablePanels";
-import type { TaxonDisplaySummary } from "../../api/taxonomy";
 import { PhotoPaneHeader } from "../photos/PhotoPaneHeader";
-import { usePublishedPhotoTaxonSummary } from "../photos/photoTaxonSummary";
+import { usePublishedPhotoTaxonSummary, type PhotoTaxonDisplayState } from "../photos/photoTaxonSummary";
 
 const statuses = ["matched", "ambiguous", "unmatched", "processing"] as const;
 const emptyMetadata: MappingMetadata = {
@@ -35,12 +34,12 @@ const emptyMetadata: MappingMetadata = {
 export function MappingView({
   active,
   onStatus,
-  onTaxonSummaryChange,
+  onPhotoTaxonDisplayState,
   handlers,
 }: {
   active: boolean;
   onStatus: (message: string, busy?: boolean) => void;
-  onTaxonSummaryChange: (summary: TaxonDisplaySummary | null) => void;
+  onPhotoTaxonDisplayState: (state: PhotoTaxonDisplayState | null) => void;
   handlers: PhotoOpenHandlers;
 }) {
   const [status, setStatus] = useState<PhotoTaxonStatus>("ambiguous");
@@ -74,7 +73,7 @@ export function MappingView({
   usePublishedPhotoTaxonSummary({
     photoId: interaction.selectedId,
     active,
-    onChange: onTaxonSummaryChange,
+    onChange: onPhotoTaxonDisplayState,
   });
   useDeferredPhotoMutation(active, () => {
     void page.reload();

@@ -11,20 +11,19 @@ import { PhotoStage } from "./PhotoMedia";
 import { useViewState } from "../../shared/viewState";
 import { ResizablePanels } from "../../shared/ResizablePanels";
 import { usePhotoInteraction, type PhotoOpenHandlers } from "./PhotoInteraction";
-import type { TaxonDisplaySummary } from "../../api/taxonomy";
 import { PhotoPaneHeader } from "./PhotoPaneHeader";
-import { usePublishedPhotoTaxonSummary } from "./photoTaxonSummary";
+import { usePublishedPhotoTaxonSummary, type PhotoTaxonDisplayState } from "./photoTaxonSummary";
 
 export function PhotoDetailView({
   photo,
   handlers,
   active,
-  onTaxonSummaryChange,
+  onPhotoTaxonDisplayState,
 }: {
   photo: Photo;
   handlers: PhotoOpenHandlers;
   active: boolean;
-  onTaxonSummaryChange: (summary: TaxonDisplaySummary | null) => void;
+  onPhotoTaxonDisplayState: (state: PhotoTaxonDisplayState | null) => void;
 }) {
   const [metadata, setMetadata] = useViewState<PhotoMetadata | null>("photo-detail.metadata", null);
   const [detailScrollTop, setDetailScrollTop] = useViewState("photo-detail.scroll-top", 0);
@@ -39,7 +38,7 @@ export function PhotoDetailView({
   usePublishedPhotoTaxonSummary({
     photoId: photo.photo_id,
     active,
-    onChange: onTaxonSummaryChange,
+    onChange: onPhotoTaxonDisplayState,
   });
 
   useEffect(() => {

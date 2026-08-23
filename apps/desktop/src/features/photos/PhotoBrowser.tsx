@@ -12,8 +12,10 @@ import type { CursorPageController } from "../../shared/useCursorPage";
 import { ResizablePanels } from "../../shared/ResizablePanels";
 import { PhotoDisplay, PhotoDisplayToggle, usePhotoActivation, usePhotoDisplayMode } from "./PhotoDisplay";
 import { PhotoPaneHeader } from "./PhotoPaneHeader";
-import type { TaxonDisplaySummary } from "../../api/taxonomy";
-import { usePublishedPhotoTaxonSummary } from "./photoTaxonSummary";
+import {
+  usePublishedPhotoTaxonSummary,
+  type PhotoTaxonDisplayState,
+} from "./photoTaxonSummary";
 
 export function PhotoBrowser({
   title,
@@ -22,7 +24,7 @@ export function PhotoBrowser({
   page,
   handlers,
   active,
-  onTaxonSummaryChange,
+  onPhotoTaxonDisplayState,
 }: {
   title: string;
   detail?: string;
@@ -30,7 +32,7 @@ export function PhotoBrowser({
   page: CursorPageController<Photo>;
   handlers: PhotoOpenHandlers;
   active: boolean;
-  onTaxonSummaryChange: (summary: TaxonDisplaySummary | null) => void;
+  onPhotoTaxonDisplayState: (state: PhotoTaxonDisplayState | null) => void;
 }) {
   const photos = page.items;
   const [mode, setMode] = usePhotoDisplayMode();
@@ -42,7 +44,7 @@ export function PhotoBrowser({
   usePublishedPhotoTaxonSummary({
     photoId: interaction.selectedId,
     active,
-    onChange: onTaxonSummaryChange,
+    onChange: onPhotoTaxonDisplayState,
   });
   const activation = usePhotoActivation({
     onSelect: interaction.selectPhoto,

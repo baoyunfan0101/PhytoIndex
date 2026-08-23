@@ -50,3 +50,7 @@ The UI treats `matched`, `ambiguous`, and `unmatched` as long-lived states and
 `processing` as the visible state while a photo is queued. Navigation to a
 taxon is enabled only when the lightweight mapping response contains Matched
 state and a taxon ID.
+
+Photo mapping status is reused by the current-photo status bar and the photo
+context menu. `View taxon details` is enabled only when the photo has `matched`
+state with a taxon ID.

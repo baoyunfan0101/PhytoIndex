@@ -35,3 +35,34 @@ test("every interactive full-photo view supplies the shared context menu handler
     assert.match(source(path), /onContextMenu=\{interaction\.openContextMenu\}/);
   }
 });
+
+test("photo context menu uses the current mapping status in its taxon action", () => {
+  const menu = source("../src/features/photos/PhotoContextMenu.tsx");
+  assert.doesNotMatch(menu, /Mapping state/);
+  assert.match(menu, /label="View photo details"/);
+  assert.match(menu, /label="View taxon details"/);
+  assert.match(menu, /trailing=\{mapping \? <MappingBadge status=\{mapping\.status\}/);
+  assert.match(menu, /const matched = mapping\?\.status === "matched" && mapping\.taxon_id !== null;/);
+  assert.match(menu, /label="View taxon details"[\s\S]*disabled=\{!matched\}/);
+
+  const labels = [
+    "View photo details",
+    "View taxon details",
+    "Edit mapping",
+    "Remap from filename",
+    "Rename",
+    "Rename from taxonomy",
+    "Reveal in Finder / Explorer",
+  ];
+  const positions = labels.map((label) => menu.indexOf(`label="${label}"`));
+  assert.ok(positions.every((position) => position >= 0));
+  assert.deepEqual([...positions].sort((left, right) => left - right), positions);
+
+  const [details, taxon, edit, remap, rename, renameFromTaxonomy, reveal] = positions;
+  const firstSeparator = menu.indexOf("<MenuSeparator />", details);
+  const secondSeparator = menu.indexOf("<MenuSeparator />", remap);
+  const thirdSeparator = menu.indexOf("<MenuSeparator />", renameFromTaxonomy);
+  assert.ok(details < firstSeparator && firstSeparator < taxon);
+  assert.ok(remap < secondSeparator && secondSeparator < rename);
+  assert.ok(renameFromTaxonomy < thirdSeparator && thirdSeparator < reveal);
+});

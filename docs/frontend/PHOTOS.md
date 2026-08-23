@@ -16,9 +16,12 @@ a lightweight preview without a photo context menu.
 
 Parameters include a cursor page controller, optional title, and
 `PhotoOpenHandlers` for opening details, taxonomy, or mapping. Returns a
-virtual list or grid with a shared photo stage. It requests a lightweight
-taxonomy display summary only for the selected photo in the active tab and
-publishes that path to the right side of the application status bar.
+virtual list or grid with a shared photo stage. The active photo publishes a
+current-photo display state. Stable matched photos show their lightweight
+taxonomy display path in the status bar. Unmatched, ambiguous, and processing
+photos show their mapping status instead. `TaxonDisplaySummary` remains
+taxonomy-only; mapping status is carried separately by the current-photo
+display state.
 
 Every main current-photo pane uses one shared `PhotoPaneHeader` presentation:
 the filename on the first line and formatted file size and modification time
@@ -68,8 +71,8 @@ markers are mounted. Selecting a marker reuses one bottom-right thumbnail and
 filename preview. Selecting another marker replaces its contents, selecting
 the map closes it, and selecting the preview opens Photo Detail.
 
-Only the selected marker requests and publishes a taxonomy display summary to
-the status bar. Browsing the map viewport does not request taxonomy summaries.
+Only the selected marker publishes current-photo display state to the status
+bar. Browsing the map viewport does not request current-photo state.
 
 Metadata progress invalidations are coalesced into periodic page reloads. While
 the user has not dragged or zoomed the map, newly discovered GPS bounds may
@@ -82,9 +85,8 @@ Parameters: one `Photo`.
 
 Returns: a photo stage and copyable file and EXIF metadata. The heading shows
 the filename followed by formatted file size and modification time. The active
-view publishes the mapped taxon's lightweight family-to-current display path
-to the status bar when available. Width, height, longitude, and latitude are
-separate detail rows. The photo stage exposes the shared photo context menu,
+view publishes current-photo display state to the status bar. Width, height,
+longitude, and latitude are separate detail rows. The photo stage exposes the shared photo context menu,
 which loads mapping state on demand when opened.
 
 ### `PhotoStage` and `PhotoThumb`
@@ -153,15 +155,20 @@ context menu opens and routes context actions through those handlers.
 `useDeferredPhotoMutation(listener, active)` defers refresh work while a view
 is hidden and delivers one invalidation when it becomes active.
 
-`usePhotoTaxonDisplaySummary(photoId)` caches lightweight summaries for the
-current view. A missing selection performs no query. Selecting another photo
-loads only that photo, repeated selection reuses the cache, and mapping or
-taxonomy mutations invalidate affected values. Unmapped, ambiguous, and
-processing photos publish no summary. Status paths stay on one line and give
-the finest node the highest space priority.
+`usePhotoTaxonDisplaySummary(photoId)` caches lightweight taxonomy summaries
+for the current view. A missing selection performs no query. Selecting another
+photo loads only that photo, repeated selection reuses the cache, and mapping
+or taxonomy mutations invalidate affected values. Status paths stay on one line
+and give the finest node the highest space priority.
 
 `usePublishedPhotoTaxonSummary({ photoId, active, onChange })` connects that
-on-demand summary to the status bar. Photo Browser, Folder, photographed
+on-demand current-photo display state to the status bar. Photo Browser, Folder, photographed
 taxonomy, Photo Set, Photo Detail, Mapping, standalone Mapping Editor, and
 Map views use it for their current photo. Embedded Mapping Editor delegates
 publication to its Mapping page.
+
+The photo context menu places the current mapping status beside `View taxon
+details`. The action is enabled only for a stable mapped taxon; the status
+remains visible when the action is disabled. Its actions are `View photo
+details`, `View taxon details`, `Edit mapping`, `Remap from filename`, `Rename`,
+`Rename from taxonomy`, and `Reveal in Finder / Explorer`.
