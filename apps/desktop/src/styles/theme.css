@@ -44,6 +44,8 @@
   --scrollbar: #484848;
   --danger-bg: #492626;
   --danger-text: #ef9a9a;
+  --success: #78b58d;
+  --danger: #ef9a9a;
   --overlay: #0008;
   --overlay-surface: #181818dd;
   --overlay-surface-text: #d4d4d4;
@@ -98,6 +100,8 @@
   --scrollbar: #aaa;
   --danger-bg: #f9dddd;
   --danger-text: #8f2424;
+  --success: #28643e;
+  --danger: #a83232;
   --overlay: #0005;
   --overlay-surface: #f5f5f5e8;
   --overlay-surface-text: #282828;
@@ -153,6 +157,8 @@
     --scrollbar: #aaa;
     --danger-bg: #f9dddd;
     --danger-text: #8f2424;
+    --success: #28643e;
+    --danger: #a83232;
     --overlay: #0005;
     --overlay-surface: #f5f5f5e8;
     --overlay-surface-text: #282828;

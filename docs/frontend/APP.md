@@ -17,7 +17,10 @@ Parameters: none.
 
 Returns: the React application tree containing `DesktopShell`.
 
-`App` is the composition entry point and contains no page or domain logic.
+`App` is the composition entry point and contains no page or domain logic. It
+suppresses the native WebView context menu for the entire application
+lifecycle, including startup loading. Feature-owned custom context menus still
+receive their context-menu events and render normally.
 
 ### `DesktopShell(props)`
 

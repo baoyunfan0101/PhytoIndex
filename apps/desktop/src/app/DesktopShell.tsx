@@ -606,7 +606,7 @@ export function DesktopShell({
   });
 
   return (
-    <div className="desktop-shell" onContextMenu={(event) => event.preventDefault()}>
+    <div className="desktop-shell">
       <aside className="activity-bar">
         <ActivityButton icon={Search} label="Search photos" active={searchOpen || active === null} onClick={openGlobalSearch} />
         <div className="activity-divider" />

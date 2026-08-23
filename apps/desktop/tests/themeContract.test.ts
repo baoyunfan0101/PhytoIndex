@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import test from "node:test";
 
 const theme = readFileSync(new URL("../src/styles/theme.css", import.meta.url), "utf8");
@@ -21,6 +21,8 @@ const requiredThemeTokens = [
   "code-function",
   "code-variable",
   "code-operator",
+  "success",
+  "danger",
 ];
 
 function themeBlock(start: string, end: string | null) {
@@ -54,4 +56,22 @@ test("uses theme tokens for menus, overlays, buttons, logs, and CodeMirror", () 
   for (const token of requiredThemeTokens.filter((token) => token.startsWith("code-"))) {
     assert.match(codeEditor, new RegExp(`var\\(--${token}\\)`));
   }
+});
+
+test("defines every referenced style theme variable", () => {
+  const definitions = new Set([...theme.matchAll(/--([a-z0-9-]+):/g)].map((match) => match[1]));
+  const nonThemeVariables = new Set(["modal-width"]);
+  const references = new Set<string>();
+  const stylesDirectory = new URL("../src/styles/", import.meta.url);
+
+  for (const entry of readdirSync(stylesDirectory)) {
+    if (!entry.endsWith(".css")) continue;
+    const style = readFileSync(new URL(entry, stylesDirectory), "utf8");
+    for (const match of style.matchAll(/var\(--([a-z0-9-]+)/g)) references.add(match[1]);
+  }
+
+  const undefinedVariables = [...references]
+    .filter((name) => !definitions.has(name) && !nonThemeVariables.has(name))
+    .sort();
+  assert.deepEqual(undefinedVariables, []);
 });

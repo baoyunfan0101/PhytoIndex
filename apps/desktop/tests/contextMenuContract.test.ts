@@ -6,10 +6,14 @@ function source(path: string) {
   return readFileSync(new URL(path, import.meta.url), "utf8");
 }
 
-test("the desktop shell suppresses native context menus without blocking bubbling", () => {
+test("the application suppresses native context menus without blocking bubbling", () => {
+  const app = source("../src/App.tsx");
   const shell = source("../src/app/DesktopShell.tsx");
-  assert.match(shell, /className="desktop-shell" onContextMenu=\{\(event\) => event\.preventDefault\(\)\}/);
-  assert.doesNotMatch(shell, /onContextMenu=.*stopPropagation/);
+  assert.match(app, /document\.addEventListener\("contextmenu", preventNativeContextMenu\)/);
+  assert.match(app, /document\.removeEventListener\("contextmenu", preventNativeContextMenu\)/);
+  assert.match(app, /event\.preventDefault\(\)/);
+  assert.doesNotMatch(app, /stop(?:Immediate)?Propagation/);
+  assert.doesNotMatch(shell, /desktop-shell" onContextMenu/);
 });
 
 test("standalone mapping editor owns the shared photo context menu", () => {

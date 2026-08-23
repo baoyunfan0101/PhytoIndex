@@ -39,3 +39,6 @@ Application chrome, context menus, overlays, and CodeMirror use shared theme
 tokens in Dark theme, explicit Light theme, and system Light mode. Photo media
 canvas backgrounds and map marker contrast colors remain independent visual
 surfaces.
+
+Semantic success and danger foreground colors use shared theme tokens in every
+theme mode.
