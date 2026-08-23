@@ -9,6 +9,7 @@ export type PhotoOpenHandlers = {
   openDetails: (photo: Photo) => void;
   openTaxon: (taxonId: number) => void;
   openMappingEditor: (photo: Photo) => void;
+  openFullscreen: (photo: Photo) => void;
 };
 
 type PhotoContextState = {
@@ -74,6 +75,7 @@ export function usePhotoInteraction({
       }}
       onMappingChanged={() => emitPhotoMutation({ photoId: context.photo.photo_id, kind: "mapping" })}
       onOpenDetails={() => handlers.openDetails(context.photo)}
+      onOpenFullscreen={() => handlers.openFullscreen(context.photo)}
       onOpenTaxon={handlers.openTaxon}
       onOpenMappingEditor={() => handlers.openMappingEditor(context.photo)}
     />

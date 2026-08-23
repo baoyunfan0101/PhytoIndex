@@ -241,6 +241,9 @@ export function FolderPhotosView({
   });
   const [displayMode, setDisplayMode] = usePhotoDisplayMode({
     onEscapeToThumbnails: () => listRef.current?.focus(),
+    onEnterFullscreen: () => {
+      if (interaction.selected) handlers.openFullscreen(interaction.selected);
+    },
   });
   const activation = usePhotoActivation({
     onSelect: selectDirectoryPhoto,
@@ -550,6 +553,9 @@ export function TaxonPhotosView({
   });
   const [displayMode, setDisplayMode] = usePhotoDisplayMode({
     onEscapeToThumbnails: () => listRef.current?.focus(),
+    onEnterFullscreen: () => {
+      if (interaction.selected) handlers.openFullscreen(interaction.selected);
+    },
   });
   const activation = usePhotoActivation({
     onSelect: selectTaxonPhoto,

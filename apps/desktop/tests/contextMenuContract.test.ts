@@ -40,6 +40,7 @@ test("photo context menu uses the current mapping status in its taxon action", (
   const menu = source("../src/features/photos/PhotoContextMenu.tsx");
   assert.doesNotMatch(menu, /Mapping state/);
   assert.match(menu, /label="View photo details"/);
+  assert.match(menu, /label="View fullscreen"/);
   assert.match(menu, /label="View taxon details"/);
   assert.match(menu, /trailing=\{mapping \? <MappingBadge status=\{mapping\.status\}/);
   assert.match(menu, /const matched = mapping\?\.status === "matched" && mapping\.taxon_id !== null;/);
@@ -47,6 +48,7 @@ test("photo context menu uses the current mapping status in its taxon action", (
 
   const labels = [
     "View photo details",
+    "View fullscreen",
     "View taxon details",
     "Edit mapping",
     "Remap from filename",
@@ -58,11 +60,16 @@ test("photo context menu uses the current mapping status in its taxon action", (
   assert.ok(positions.every((position) => position >= 0));
   assert.deepEqual([...positions].sort((left, right) => left - right), positions);
 
-  const [details, taxon, edit, remap, rename, renameFromTaxonomy, reveal] = positions;
+  const [details, fullscreen, taxon, edit, remap, rename, renameFromTaxonomy, reveal] = positions;
   const firstSeparator = menu.indexOf("<MenuSeparator />", details);
   const secondSeparator = menu.indexOf("<MenuSeparator />", remap);
   const thirdSeparator = menu.indexOf("<MenuSeparator />", renameFromTaxonomy);
-  assert.ok(details < firstSeparator && firstSeparator < taxon);
+  assert.ok(details < fullscreen && fullscreen < firstSeparator && firstSeparator < taxon);
   assert.ok(remap < secondSeparator && secondSeparator < rename);
   assert.ok(renameFromTaxonomy < thirdSeparator && thirdSeparator < reveal);
+});
+
+test("photo context fullscreen uses the context-menu target photo", () => {
+  const interaction = source("../src/features/photos/PhotoInteraction.tsx");
+  assert.match(interaction, /onOpenFullscreen=\{\(\) => handlers\.openFullscreen\(context\.photo\)\}/);
 });

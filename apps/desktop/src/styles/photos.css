@@ -131,6 +131,7 @@
   background: #101010;
 }
 .photo-stage.empty { align-content: center; gap: 8px; color: var(--quiet); }
+.photo-fullscreen-presentation { position: fixed; z-index: 1000; inset: 0; background: #000; }
 .photo-stage-frame { position: absolute; inset: 0; overflow: hidden; touch-action: none; }
 .photo-stage-frame.pannable { cursor: grab; }
 .photo-stage-frame.dragging { cursor: grabbing; }
@@ -145,8 +146,6 @@
   object-fit: initial;
   user-select: none;
   transform-origin: center center;
-  backface-visibility: hidden;
-  will-change: transform;
 }
 .photo-stage.compact { min-height: 240px; }
 .photo-loader { position: absolute; }

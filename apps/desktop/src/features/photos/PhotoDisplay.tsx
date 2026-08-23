@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react
 import type { Photo } from "../../api/photos";
 import { IconButton, VirtualGrid } from "../../shared/ui";
 import { PhotoStage, PhotoThumb } from "./PhotoMedia";
+import { isPhotoFullscreenActive } from "./photoFullscreenState";
 
 export type PhotoDisplayMode = "thumbnails" | "image";
 const photoDoubleClickDelayMs = 250;
@@ -45,18 +46,30 @@ export function usePhotoActivation({
 
 export function usePhotoDisplayMode({
   onEscapeToThumbnails,
+  onEnterFullscreen,
 }: {
   onEscapeToThumbnails?: () => void;
+  onEnterFullscreen?: () => void;
 } = {}) {
   const [mode, setMode] = useState<PhotoDisplayMode>("thumbnails");
   const modeRef = useRef(mode);
   const onEscapeToThumbnailsRef = useRef(onEscapeToThumbnails);
+  const onEnterFullscreenRef = useRef(onEnterFullscreen);
   modeRef.current = mode;
   onEscapeToThumbnailsRef.current = onEscapeToThumbnails;
+  onEnterFullscreenRef.current = onEnterFullscreen;
 
   useEffect(() => {
     const returnToThumbnails = (event: KeyboardEvent) => {
+      if (modeRef.current === "image" && event.key === "Enter" && !event.defaultPrevented) {
+        const target = event.target;
+        if (target instanceof HTMLElement && target.closest("button, input, textarea, select, [contenteditable=true]")) return;
+        event.preventDefault();
+        onEnterFullscreenRef.current?.();
+        return;
+      }
       if (modeRef.current !== "image" || event.key !== "Escape" || event.defaultPrevented) return;
+      if (isPhotoFullscreenActive()) return;
       event.preventDefault();
       setMode("thumbnails");
       onEscapeToThumbnailsRef.current?.();

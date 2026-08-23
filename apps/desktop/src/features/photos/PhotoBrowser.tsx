@@ -35,11 +35,15 @@ export function PhotoBrowser({
   onPhotoTaxonDisplayState: (state: PhotoTaxonDisplayState | null) => void;
 }) {
   const photos = page.items;
-  const [mode, setMode] = usePhotoDisplayMode();
   const interaction = usePhotoInteraction({
     photos,
     handlers,
     stateKey: "photo-browser.interaction",
+  });
+  const [mode, setMode] = usePhotoDisplayMode({
+    onEnterFullscreen: () => {
+      if (interaction.selected) handlers.openFullscreen(interaction.selected);
+    },
   });
   usePublishedPhotoTaxonSummary({
     photoId: interaction.selectedId,

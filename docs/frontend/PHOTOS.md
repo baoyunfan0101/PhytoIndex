@@ -96,6 +96,11 @@ thumbnail. Returns media UI using the desktop photo URI, active Photo Library
 UUID, and file identity. This prevents cached media from crossing library
 boundaries.
 
+Full-image zoom and pan use the normal two-dimensional transform path. Pressing
+Enter in image mode enters native fullscreen. Escape exits fullscreen back to
+image mode, and another Escape returns to thumbnails. Photo context menus place
+`View fullscreen` directly below `View photo details`.
+
 Folder, photographed-taxonomy, and Map pages render a non-blocking indexing
 notice while relevant background work is active. Existing results stay
 interactive. An initial empty pane has a pane-local Loading state; refresh and

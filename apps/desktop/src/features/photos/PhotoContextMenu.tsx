@@ -6,6 +6,7 @@ import {
   Info,
   Link,
   Link2,
+  Maximize,
 } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
@@ -29,6 +30,7 @@ export function PhotoContextMenu({
   onChanged,
   onMappingChanged,
   onOpenDetails,
+  onOpenFullscreen,
   onOpenTaxon,
   onOpenMappingEditor,
 }: {
@@ -41,6 +43,7 @@ export function PhotoContextMenu({
   onChanged: (photo: Photo) => void;
   onMappingChanged: () => void;
   onOpenDetails: () => void;
+  onOpenFullscreen: () => void;
   onOpenTaxon: (taxonId: number) => void;
   onOpenMappingEditor: () => void;
 }) {
@@ -97,6 +100,10 @@ export function PhotoContextMenu({
         role="menu"
       >
         <MenuButton icon={Info} label="View photo details" onClick={onOpenDetails} />
+        <MenuButton icon={Maximize} label="View fullscreen" onClick={() => {
+          onOpenFullscreen();
+          onClose();
+        }} />
         <MenuSeparator />
         <MenuButton
           icon={Database}

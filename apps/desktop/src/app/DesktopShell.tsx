@@ -20,12 +20,14 @@ import {
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   getWorkspaceState,
   saveWorkspaceState,
   type GeneralSettings,
 } from "../api/general";
 import type { OperationState } from "../api/tasks";
+import { errorMessage } from "../api/common";
 import { cancelActiveTabTasks } from "../api/activeTasks";
 import {
   getPhoto,
@@ -61,6 +63,8 @@ import {
   trimRecentSearches,
 } from "../features/photos/search/recentSearchStorage";
 import type { PhotoOpenHandlers } from "../features/photos/PhotoInteraction";
+import { PhotoFullscreenPresentation } from "../features/photos/PhotoFullscreenPresentation";
+import { setPhotoFullscreenActive } from "../features/photos/photoFullscreenState";
 import { emitPhotoMutation, usePhotoMutation } from "../features/photos/photoMutations";
 import {
   FolderPhotosView,
@@ -178,6 +182,7 @@ export function DesktopShell({
   const [workspaceReady, setWorkspaceReady] = useState(false);
   const [operationsOpen, setOperationsOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
+  const [fullscreenPhoto, setFullscreenPhoto] = useState<Photo | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [recentSearches, setRecentSearches] = useState(() => (
     loadRecentSearches(undefined, generalSettings.recent_searches_limit)
@@ -466,11 +471,32 @@ export function DesktopShell({
     if (next.activeId === null) setSearchOpen(false);
   }
 
+  const openPhotoFullscreen = useCallback(async (photo: Photo) => {
+    try {
+      await getCurrentWindow().setFullscreen(true);
+      setPhotoFullscreenActive(true);
+      setFullscreenPhoto(photo);
+    } catch (nextError) {
+      reportActiveStatus(errorMessage(nextError));
+    }
+  }, [reportActiveStatus]);
+
+  const exitPhotoFullscreen = useCallback(async () => {
+    try {
+      await getCurrentWindow().setFullscreen(false);
+      setPhotoFullscreenActive(false);
+      setFullscreenPhoto(null);
+    } catch (nextError) {
+      reportActiveStatus(errorMessage(nextError));
+    }
+  }, [reportActiveStatus]);
+
   const handlers: PhotoOpenHandlers = useMemo(() => ({
     openDetails: (photo) => openTab({ id: `photo:${photo.photo_id}`, kind: "photo-detail", title: photo.filename, photo }),
     openTaxon: (taxonId) => openTab({ id: `taxon-detail:${crypto.randomUUID()}`, kind: "taxon-detail", title: String(taxonId), taxonId }),
     openMappingEditor: (photo) => openTab({ id: `mapping:${photo.photo_id}`, kind: "mapping-editor", title: photo.filename, photo }),
-  }), [tabs]);
+    openFullscreen: (photo) => void openPhotoFullscreen(photo),
+  }), [openPhotoFullscreen, tabs]);
 
   async function submitSearch(query: string) {
     const value = normalizeSearchQuery(query);
@@ -762,6 +788,15 @@ export function DesktopShell({
         />
       )}
       {aboutOpen && <NativeAboutOverlay onClose={() => setAboutOpen(false)} />}
+      {fullscreenPhoto && (
+        <PhotoLibraryIdentityProvider libraryUuid={activeLibrary?.library_uuid ?? null}>
+          <PhotoFullscreenPresentation
+            photo={fullscreenPhoto}
+            handlers={handlers}
+            onExit={exitPhotoFullscreen}
+          />
+        </PhotoLibraryIdentityProvider>
+      )}
     </div>
   );
 }
