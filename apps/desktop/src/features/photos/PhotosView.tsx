@@ -16,9 +16,15 @@ import {
 } from "../../api/photos";
 import { errorMessage } from "../../api/common";
 import { getMapPhotoBounds, getMapSettings, listMapPhotos, type MapBounds, type MapPhoto } from "../../api/map";
-import { browsePhotoTaxon, type PhotoTaxonItem, type PhotoTaxonUsage } from "../../api/mapping";
+import {
+  browsePhotoTaxon,
+  getPhotoTaxonCounts,
+  type PhotoTaxonItem,
+  type PhotoTaxonUsage,
+} from "../../api/mapping";
 import type { TaxonNameParts } from "../../api/general";
 import { formatTaxonName } from "../taxonomy/taxonNameFormatting";
+import { useTaxonomyMutation } from "../taxonomy/taxonomyMutations";
 import type { OperationState } from "../../api/tasks";
 import {
   EmptyState,
@@ -491,12 +497,14 @@ export function TaxonPhotosView({
   handlers,
   nameParts,
   active,
+  onStatus,
   onPhotoTaxonDisplayState,
   backgroundOperation,
 }: {
   handlers: PhotoOpenHandlers;
   nameParts: TaxonNameParts;
   active: boolean;
+  onStatus: (message: string) => void;
   onPhotoTaxonDisplayState: (state: PhotoTaxonDisplayState | null) => void;
   backgroundOperation?: OperationState | null;
 }) {
@@ -553,6 +561,22 @@ export function TaxonPhotosView({
   usePhotoMutation((mutation) => {
     if (mutation.kind === "metadata") return;
     void Promise.all([page.reload(), tree.reloadExpanded()]);
+  });
+
+  const reportTaxonCounts = useCallback(async (taxonId: number | null) => {
+    try {
+      const counts = await getPhotoTaxonCounts(taxonId);
+      onStatus(`${counts.taxon_count} taxa, ${counts.photo_count} photos`);
+    } catch {}
+  }, [onStatus]);
+
+  useEffect(() => {
+    if (active) void reportTaxonCounts(currentId);
+  }, [active, currentId, reportTaxonCounts, page.items]);
+
+  useTaxonomyMutation(() => {
+    void Promise.all([page.reload(), tree.reloadExpanded()]);
+    if (active) void reportTaxonCounts(currentId);
   });
 
   function enterTaxon(taxon: PhotoTaxonUsage) {
@@ -764,11 +788,13 @@ export function TaxonPhotosView({
 export function PhotoMapView({
   active,
   handlers,
+  onStatus,
   onPhotoTaxonDisplayState,
   backgroundOperation,
 }: {
   active: boolean;
   handlers: PhotoOpenHandlers;
+  onStatus: (message: string) => void;
   onPhotoTaxonDisplayState: (state: PhotoTaxonDisplayState | null) => void;
   backgroundOperation?: OperationState | null;
 }) {
@@ -920,6 +946,10 @@ export function PhotoMapView({
     if (page.hasMore && !page.loading) void page.loadMore();
   }, [page.hasMore, page.loadMore, page.loading]);
 
+  useEffect(() => {
+    if (active) onStatus(`${page.items.length} photos in view`);
+  }, [active, onStatus, page.items.length]);
+
   return (
     <div
       className="map-view"
@@ -944,7 +974,6 @@ export function PhotoMapView({
           <span>{interaction.selected.filename}</span>
         </button>
       )}
-      <span className="map-count">{page.items.length} photos in view{page.loading ? " loading" : ""}</span>
       {interaction.contextMenu}
     </div>
   );

@@ -35,7 +35,7 @@ pub use name_match::{
 };
 pub use navigation::{list_taxon_photos, search_photo_taxa, suggest_photo_taxa};
 pub use status::{list_photos_by_mapping_status, search_photos_by_mapping_status};
-pub use tree::{browse_photo_taxon, get_photo_taxon_node};
+pub use tree::{browse_photo_taxon, get_photo_taxon_counts, get_photo_taxon_node};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -103,6 +103,12 @@ pub struct PhotoTaxonUsage {
 pub struct PhotoTaxonNode {
     pub taxon: Option<PhotoTaxonUsage>,
     pub subtree_photo_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PhotoTaxonEntryCounts {
+    pub taxon_count: i64,
+    pub photo_count: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

@@ -109,6 +109,12 @@ the last photo.
 Returning from full-image mode with Escape restores keyboard focus to the left
 browser at the current selection.
 
+Folder browsing reports direct folder and photo counts for the current
+directory. Photographed-taxonomy browsing reports direct child-taxon and
+direct-photo counts for the current taxon. Map browsing reports the number of
+currently loaded photos in the visible map area through the status bar and does
+not duplicate that count in the map overlay.
+
 ### `EmptyWorkspace(props)`
 
 Parameters: the recent-search list, recent-search mutation callbacks, a search

@@ -837,11 +837,11 @@ function TabBody({
     );
   }
   if (tab.kind === "folders") return <FolderPhotosView active={active} handlers={handlers} onStatus={onStatus} onPhotoTaxonDisplayState={onCurrentPhotoTaxonDisplayState} backgroundOperation={photoLibraryOperation} />;
-  if (tab.kind === "photo-taxonomy") return <TaxonPhotosView active={active} handlers={handlers} nameParts={generalSettings.photos_taxon_name_parts} onPhotoTaxonDisplayState={onCurrentPhotoTaxonDisplayState} backgroundOperation={photoLibraryOperation} />;
-  if (tab.kind === "map") return <PhotoMapView active={active} handlers={handlers} onPhotoTaxonDisplayState={onCurrentPhotoTaxonDisplayState} backgroundOperation={photoLibraryOperation} />;
+  if (tab.kind === "photo-taxonomy") return <TaxonPhotosView active={active} handlers={handlers} nameParts={generalSettings.photos_taxon_name_parts} onStatus={onStatus} onPhotoTaxonDisplayState={onCurrentPhotoTaxonDisplayState} backgroundOperation={photoLibraryOperation} />;
+  if (tab.kind === "map") return <PhotoMapView active={active} handlers={handlers} onStatus={onStatus} onPhotoTaxonDisplayState={onCurrentPhotoTaxonDisplayState} backgroundOperation={photoLibraryOperation} />;
   if (tab.kind === "photo-history") return <OperationHistoryView domain="photo" onStatus={onStatus} />;
   if (tab.kind === "mapping") return <MappingView active={active} onStatus={onStatus} onPhotoTaxonDisplayState={onCurrentPhotoTaxonDisplayState} handlers={handlers} />;
-  if (tab.kind === "taxonomy-search") return <TaxonomySearchView nameParts={generalSettings.taxonomy_taxon_name_parts} mutationDisabled={taxonomyMutationLocked} onOpenPhotos={(taxonId, label) => openTab({ id: `taxon-photos:${taxonId}`, kind: "taxon-photos", title: label, taxonId })} />;
+  if (tab.kind === "taxonomy-search") return <TaxonomySearchView nameParts={generalSettings.taxonomy_taxon_name_parts} mutationDisabled={taxonomyMutationLocked} onStatus={onStatus} onOpenPhotos={(taxonId, label) => openTab({ id: `taxon-photos:${taxonId}`, kind: "taxon-photos", title: label, taxonId })} />;
   if (tab.kind === "taxon-detail" && tab.taxonId !== undefined) return <TaxonomyHierarchyPage initialTaxonId={tab.taxonId} nameParts={generalSettings.taxonomy_taxon_name_parts} mutationDisabled={taxonomyMutationLocked} onTaxonChange={(taxonId, label) => updateTaxonTab(tab.id, taxonId, label)} onOpenPhotos={(taxonId, label) => openTab({ id: `taxon-photos:${taxonId}`, kind: "taxon-photos", title: label, taxonId })} />;
   if (tab.kind === "formatted-update") return <FormattedUpdateView onStatus={onStatus} taskOwnerId={taskOwnerId} mutationDisabled={taxonomyMutationLocked} />;
   if (tab.kind === "custom-sql") return <CustomSqlView onStatus={onStatus} taskOwnerId={taskOwnerId} mutationDisabled={taxonomyMutationLocked} />;

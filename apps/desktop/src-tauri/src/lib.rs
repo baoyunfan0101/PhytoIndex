@@ -139,6 +139,7 @@ pub fn run() {
             commands::remap_photo,
             commands::list_taxon_photos,
             commands::get_photo_taxon_node,
+            commands::get_photo_taxon_counts,
             commands::browse_photo_taxon,
             commands::list_photos_by_mapping_status,
             commands::search_photos_by_mapping_status,

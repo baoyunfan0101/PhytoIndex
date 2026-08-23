@@ -22,6 +22,8 @@ names followed by rank. Submitted searches show a centered searching status
 until results resolve. Every formal submission starts a fresh request even
 when the normalized query is unchanged, and the result list returns to its
 first row for the new response.
+Taxonomy Search reports searching state and the number of results currently
+shown in the status bar.
 
 Hierarchy breadcrumbs, the current heading, and child navigation use the
 Taxonomy visible-name preference for scientific, Chinese, and English accepted

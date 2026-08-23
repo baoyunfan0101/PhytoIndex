@@ -246,7 +246,6 @@
 .map-photo-preview:hover:not(:disabled) { border-color: var(--accent-bright); color: var(--text); background-color: var(--panel); box-shadow: 0 0 0 2px var(--accent-bright), 0 12px 34px var(--shadow); filter: none; transform: none; }
 .map-photo-preview img { display: block; width: 100%; height: min(190px, 24vh); object-fit: cover; }
 .map-photo-preview span { min-width: 0; padding: 9px 10px; overflow: hidden; color: var(--text); text-overflow: ellipsis; white-space: nowrap; background: var(--panel); }
-.map-count { position: absolute; z-index: 4; bottom: 12px; left: 12px; padding: 5px 8px; border-radius: 3px; color: var(--overlay-surface-text); background: var(--overlay-surface); }
 
 .context-menu {
   position: fixed;

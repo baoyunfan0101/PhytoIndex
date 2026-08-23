@@ -45,10 +45,12 @@ import type { TaxonNameParts } from "../../api/general";
 
 export function TaxonomySearchView({
   onOpenPhotos,
+  onStatus,
   nameParts,
   mutationDisabled = false,
 }: {
   onOpenPhotos: (taxonId: number, label: string) => void;
+  onStatus: (message: string) => void;
   nameParts: TaxonNameParts;
   mutationDisabled?: boolean;
 }) {
@@ -75,6 +77,20 @@ export function TaxonomySearchView({
   useTaxonomyMutation(() => {
     setRefreshKey((current) => current + 1);
   });
+
+  useEffect(() => {
+    if (!submittedQuery.trim()) {
+      onStatus("Ready");
+      return;
+    }
+    if (taxonomySearch.loading) {
+      onStatus("Searching...");
+    } else if (!taxonomySearch.error) {
+      onStatus(taxonomySearch.results.length === 0
+        ? "No results"
+        : `${taxonomySearch.results.length} results shown`);
+    }
+  }, [onStatus, submittedQuery, taxonomySearch.error, taxonomySearch.loading, taxonomySearch.results.length]);
 
   useEffect(() => {
     setSelectedSuggestionIndex(-1);

@@ -8,7 +8,7 @@ use tauri::{AppHandle, State, ipc::Channel};
 use vividarium_core::general::{GeneralSettings, WorkspaceState};
 use vividarium_core::mapping::{
     PhotoMappingListItem, PhotoMappingListStatus, PhotoMappingSummary, PhotoNameMatchSettings,
-    PhotoTaxonCandidate, PhotoTaxonItem, PhotoTaxonNode,
+    PhotoTaxonCandidate, PhotoTaxonEntryCounts, PhotoTaxonItem, PhotoTaxonNode,
 };
 use vividarium_core::models::{
     DatabaseLocations, DirectoryEntryCounts, MappingMetadata, OperationProgress, OperationState,
@@ -2016,6 +2016,14 @@ pub fn get_photo_taxon_node(
 ) -> CommandResult<PhotoTaxonNode> {
     mapping::get_photo_taxon_node(&state.database, taxon_id, show_empty.unwrap_or(false))
         .map_err(error)
+}
+
+#[tauri::command]
+pub fn get_photo_taxon_counts(
+    state: State<'_, AppState>,
+    taxon_id: Option<i64>,
+) -> CommandResult<PhotoTaxonEntryCounts> {
+    mapping::get_photo_taxon_counts(&state.database, taxon_id).map_err(error)
 }
 
 #[tauri::command]

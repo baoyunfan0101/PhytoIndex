@@ -74,6 +74,7 @@ states search filename only.
 | `suggest_photo_taxa` | `query: &str`, `limit: usize` | `Vec<TaxonSuggestion>` | Lightweight autocomplete restricted to taxa with photos. |
 | `list_taxon_photos` | `taxon_id: i64`, `cursor: Option<&str>`, `limit: usize` | `PhotoPage<Photo>` | List current matched photos for the taxon and descendants. |
 | `get_photo_taxon_node` | `taxon_id: Option<i64>`, `show_empty: bool` | `PhotoTaxonNode` | Load one photo taxonomy node or the virtual root. |
+| `get_photo_taxon_counts` | `taxon_id: Option<i64>` | `PhotoTaxonEntryCounts` | Count direct photographed child taxa and directly mapped photos for a photo taxonomy node. |
 | `browse_photo_taxon` | `taxon_id: Option<i64>`, `show_empty: bool`, `cursor: Option<&str>`, `limit: usize` | `PhotoPage<PhotoTaxonItem>` | Browse direct child taxa followed by directly mapped photos. |
 
 Photo-taxon search and suggestions use the same complete ranked taxonomy
@@ -89,6 +90,8 @@ blocking worker and resolves asynchronously.
 `PhotoTaxonNode` contains the optional selected `taxon` and its
 `subtree_photo_count`. `PhotoTaxonItem` is a tagged enum containing either a
 child `taxon` or a `photo`.
+`PhotoTaxonEntryCounts` contains `taxon_count` for direct photographed child
+taxa and `photo_count` for photos directly mapped to the requested taxon.
 
 ## Name matching settings
 

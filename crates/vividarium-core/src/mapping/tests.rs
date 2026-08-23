@@ -231,6 +231,35 @@ fn matches_the_filename_stem_and_builds_sparse_usage() {
             .iter()
             .all(|item| matches!(item, PhotoTaxonItem::Taxon { .. }))
     );
+    assert_eq!(
+        get_photo_taxon_counts(&database, None).unwrap(),
+        PhotoTaxonEntryCounts {
+            taxon_count: 1,
+            photo_count: 0
+        }
+    );
+    let connection = database.connect().unwrap();
+    let genus_id: i64 = connection
+        .query_row(
+            "SELECT parent_taxon_id FROM taxa WHERE taxon_id = ?",
+            [species_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        get_photo_taxon_counts(&database, genus_id.into()).unwrap(),
+        PhotoTaxonEntryCounts {
+            taxon_count: 1,
+            photo_count: 0
+        }
+    );
+    assert_eq!(
+        get_photo_taxon_counts(&database, species_id.into()).unwrap(),
+        PhotoTaxonEntryCounts {
+            taxon_count: 0,
+            photo_count: 1
+        }
+    );
     let page = browse_photo_taxon(&database, mapping.taxon_id, false, None, 20).unwrap();
     assert_eq!(
         page.items,

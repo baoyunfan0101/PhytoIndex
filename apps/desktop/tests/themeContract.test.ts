@@ -47,7 +47,7 @@ test("uses theme tokens for menus, overlays, buttons, logs, and CodeMirror", () 
   assert.match(photoStyles, /\.context-menu \{[^}]*border: 1px solid var\(--line-strong\)[^}]*background: var\(--popover\)[^}]*box-shadow: 0 10px 30px var\(--shadow\)/);
   assert.match(photoStyles, /\.context-menu > button:hover:not\(:disabled\) \{ background: var\(--hover\); \}/);
   assert.match(photoStyles, /\.pane-overlay[^}]*color: var\(--overlay-surface-text\)[^}]*background: var\(--overlay-surface\)/);
-  assert.match(photoStyles, /\.map-count[^}]*color: var\(--overlay-surface-text\)[^}]*background: var\(--overlay-surface\)/);
+  assert.doesNotMatch(photoStyles, /\.map-count/);
   assert.match(sharedStyles, /\.floating-progress[^}]*background: var\(--popover\)/);
   assert.match(theme, /button:hover:not\(:disabled\), \.button:hover \{ background-color: var\(--button-plain-hover\)/);
   assert.match(theme, /button:active:not\(:disabled\), \.button:active \{ background-color: var\(--button-plain-active\)/);

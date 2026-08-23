@@ -37,6 +37,7 @@ export type PhotoTaxonUsage = {
   subtree_photo_count: number;
 };
 export type PhotoTaxonNode = { taxon: PhotoTaxonUsage | null; subtree_photo_count: number };
+export type PhotoTaxonEntryCounts = { taxon_count: number; photo_count: number };
 export type PhotoTaxonItem =
   | { kind: "taxon"; taxon: PhotoTaxonUsage }
   | { kind: "photo"; photo: Photo };
@@ -123,6 +124,11 @@ export const getPhotoTaxonNode = (taxonId: number | null, showEmpty = false) =>
       ? { taxon_id: taxonId, rank: "species", names: demoTaxa[0].names, direct_photo_count: 12, subtree_photo_count: 12 }
       : null,
     subtree_photo_count: demoPhotos.length,
+  }));
+export const getPhotoTaxonCounts = (taxonId: number | null) =>
+  call<PhotoTaxonEntryCounts>("get_photo_taxon_counts", { taxonId }, () => ({
+    taxon_count: taxonId === null ? demoTaxa.length : 0,
+    photo_count: taxonId === null ? 0 : demoPhotos.filter((photo) => demoMappings.get(photo.photo_id)?.taxon_id === taxonId).length,
   }));
 export const browsePhotoTaxon = (
   taxonId: number | null,
