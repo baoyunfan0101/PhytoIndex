@@ -7,12 +7,15 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import {
+  forwardRef,
   useEffect,
   useId,
+  useImperativeHandle,
   useRef,
   useState,
   type ButtonHTMLAttributes,
   type CSSProperties,
+  type ForwardedRef,
   type KeyboardEvent,
   type MouseEvent,
   type ReactNode,
@@ -26,6 +29,7 @@ export type IconComponent = LucideIcon;
 
 export type ButtonVariant = "primary" | "secondary" | "ghost";
 export type ButtonSize = "default" | "small";
+export type VirtualListHandle = { focus: () => void };
 
 export function Button({
   className = "",
@@ -73,25 +77,7 @@ export function IconButton({
   );
 }
 
-export function VirtualList<T>({
-  items,
-  activeIndex = null,
-  focusWhen = false,
-  rowHeight = 42,
-  className = "",
-  overscan = 8,
-  itemKey,
-  renderItem,
-  onActivateActive,
-  onClearActive,
-  onMoveHorizontal,
-  onMoveActive,
-  onNearEnd,
-  onContextMenu,
-  onTypeSelect,
-  resetKey,
-  stateKey,
-}: {
+type VirtualListProps<T> = {
   items: T[];
   activeIndex?: number | null;
   focusWhen?: boolean;
@@ -109,7 +95,27 @@ export function VirtualList<T>({
   onTypeSelect?: (query: string, shouldCycle: boolean) => void;
   resetKey?: string | number | boolean | null;
   stateKey?: string;
-}) {
+};
+
+function VirtualListInner<T>({
+  items,
+  activeIndex = null,
+  focusWhen = false,
+  rowHeight = 42,
+  className = "",
+  overscan = 8,
+  itemKey,
+  renderItem,
+  onActivateActive,
+  onClearActive,
+  onMoveHorizontal,
+  onMoveActive,
+  onNearEnd,
+  onContextMenu,
+  onTypeSelect,
+  resetKey,
+  stateKey,
+}: VirtualListProps<T>, ref: ForwardedRef<VirtualListHandle>) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const previousResetKey = useRef(resetKey);
   const typeBuffer = useRef("");
@@ -120,6 +126,10 @@ export function VirtualList<T>({
     stateKey ? `${stateKey}.scroll-top` : null,
     0,
   );
+
+  useImperativeHandle(ref, () => ({
+    focus: () => viewportRef.current?.focus({ preventScroll: true }),
+  }), []);
 
   useEffect(() => {
     const element = viewportRef.current;
@@ -249,6 +259,10 @@ export function VirtualList<T>({
     </div>
   );
 }
+
+export const VirtualList = forwardRef(VirtualListInner) as <T>(
+  props: VirtualListProps<T> & { ref?: ForwardedRef<VirtualListHandle> },
+) => JSX.Element;
 
 export function VirtualGrid<T>({
   items,

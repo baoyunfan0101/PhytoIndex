@@ -43,16 +43,23 @@ export function usePhotoActivation({
   return { clickPhoto, doubleClickPhoto };
 }
 
-export function usePhotoDisplayMode() {
+export function usePhotoDisplayMode({
+  onEscapeToThumbnails,
+}: {
+  onEscapeToThumbnails?: () => void;
+} = {}) {
   const [mode, setMode] = useState<PhotoDisplayMode>("thumbnails");
   const modeRef = useRef(mode);
+  const onEscapeToThumbnailsRef = useRef(onEscapeToThumbnails);
   modeRef.current = mode;
+  onEscapeToThumbnailsRef.current = onEscapeToThumbnails;
 
   useEffect(() => {
     const returnToThumbnails = (event: KeyboardEvent) => {
       if (modeRef.current !== "image" || event.key !== "Escape" || event.defaultPrevented) return;
       event.preventDefault();
       setMode("thumbnails");
+      onEscapeToThumbnailsRef.current?.();
     };
     window.addEventListener("keydown", returnToThumbnails, true);
     return () => window.removeEventListener("keydown", returnToThumbnails, true);

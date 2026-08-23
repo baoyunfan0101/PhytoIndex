@@ -2,7 +2,7 @@ import "maplibre-gl/dist/maplibre-gl.css";
 
 import { ChevronDown, ChevronRight, Folder, Images, Network } from "lucide-react";
 import maplibregl, { type Map as MapLibreMap } from "maplibre-gl";
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type RefObject } from "react";
 import {
   browsePhotoDirectory,
   getPhotoDirectoryCounts,
@@ -20,7 +20,13 @@ import { browsePhotoTaxon, type PhotoTaxonItem, type PhotoTaxonUsage } from "../
 import type { TaxonNameParts } from "../../api/general";
 import { formatTaxonName } from "../taxonomy/taxonNameFormatting";
 import type { OperationState } from "../../api/tasks";
-import { EmptyState, IconButton, SectionHeader, VirtualList } from "../../shared/ui";
+import {
+  EmptyState,
+  IconButton,
+  SectionHeader,
+  VirtualList,
+  type VirtualListHandle,
+} from "../../shared/ui";
 import { DirectoryContextMenu } from "./DirectoryContextMenu";
 import { PhotoStage } from "./PhotoMedia";
 import { usePhotoLibraryIdentity } from "./PhotoLibraryIdentity";
@@ -28,7 +34,12 @@ import { PhotoDisplay, PhotoDisplayToggle, usePhotoActivation, usePhotoDisplayMo
 import { usePhotoInteraction, type PhotoOpenHandlers } from "./PhotoInteraction";
 import { TaxonContextMenu } from "./TaxonContextMenu";
 import { emitPhotoMutation, useDeferredPhotoMutation, usePhotoMutation } from "./photoMutations";
-import { findTypeSelectIndex, nextListIndex, treeArrowAction } from "./photoListNavigation";
+import {
+  findTypeSelectIndex,
+  nextListIndex,
+  resolvePhotoListEntryIndex,
+  treeArrowAction,
+} from "./photoListNavigation";
 import { useCursorPage } from "../../shared/useCursorPage";
 import { useCursorTree, type CursorTreeNode } from "../../shared/useCursorTree";
 import { useViewState } from "../../shared/viewState";
@@ -44,6 +55,52 @@ type TaxonTreeRow =
   | { kind: "taxon"; taxon: PhotoTaxonUsage; depth: number }
   | { kind: "photo"; photo: Photo; depth: number }
   | { kind: "more"; parentId: number; depth: number; loading: boolean };
+
+function isProtectedTreeEntryTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return true;
+  if (target.closest(".virtual-viewport, input, textarea, select, [contenteditable=true], .modal-card, [role=dialog], .context-menu")) return true;
+  return Boolean(target.closest("button, a, [tabindex]")) && !target.closest(".breadcrumbs");
+}
+
+function hasBlockingTreeEntryOverlay(): boolean {
+  return Boolean(document.querySelector(".context-menu, [role='dialog'], .modal-card"));
+}
+
+function usePhotoTreeListEntry<T>({
+  active,
+  rows,
+  selectedPhotoId,
+  listRef,
+  getPhotoId,
+  selectRow,
+}: {
+  active: boolean;
+  rows: T[];
+  selectedPhotoId: number | null;
+  listRef: RefObject<VirtualListHandle | null>;
+  getPhotoId: (row: T) => number | null;
+  selectRow: (row: T) => void;
+}): void {
+  useEffect(() => {
+    if (!active) return;
+    const enterList = (event: globalThis.KeyboardEvent) => {
+      if (event.defaultPrevented || (event.key !== "ArrowUp" && event.key !== "ArrowDown")) return;
+      if (hasBlockingTreeEntryOverlay()) return;
+      if (isProtectedTreeEntryTarget(event.target)) return;
+      event.preventDefault();
+      listRef.current?.focus();
+      const index = resolvePhotoListEntryIndex({
+        rows,
+        selectedPhotoId,
+        direction: event.key === "ArrowDown" ? 1 : -1,
+        getPhotoId,
+      });
+      if (index >= 0) selectRow(rows[index]);
+    };
+    window.addEventListener("keydown", enterList);
+    return () => window.removeEventListener("keydown", enterList);
+  }, [active, getPhotoId, listRef, rows, selectRow, selectedPhotoId]);
+}
 
 function directoryTreeRowKey(item: DirectoryTreeRow) {
   if (item.kind === "directory") return `d:${item.directory.directory_id}`;
@@ -170,12 +227,15 @@ export function FolderPhotosView({
     selectFirst: false,
     stateKey: "folders.interaction",
   });
+  const listRef = useRef<VirtualListHandle>(null);
   usePublishedPhotoTaxonSummary({
     photoId: interaction.selectedId,
     active,
     onChange: onPhotoTaxonDisplayState,
   });
-  const [displayMode, setDisplayMode] = usePhotoDisplayMode();
+  const [displayMode, setDisplayMode] = usePhotoDisplayMode({
+    onEscapeToThumbnails: () => listRef.current?.focus(),
+  });
   const activation = usePhotoActivation({
     onSelect: selectDirectoryPhoto,
     onOpenImage: () => setDisplayMode("image"),
@@ -219,6 +279,7 @@ export function FolderPhotosView({
   function enter(directory: PhotoDirectory) {
     tree.clear();
     setActiveRowKey(null);
+    interaction.clearSelection();
     setTrail((current) => [...current, directory]);
   }
 
@@ -292,17 +353,30 @@ export function FolderPhotosView({
     if (matchIndex >= 0) selectDirectoryRow(rows[matchIndex]);
   }
 
+  usePhotoTreeListEntry({
+    active: active && displayMode === "thumbnails",
+    rows,
+    selectedPhotoId: interaction.selectedId,
+    listRef,
+    getPhotoId: (item) => item.kind === "photo" ? item.photo.photo_id : null,
+    selectRow: selectDirectoryRow,
+  });
+
   return (
     <div className="folder-workbench">
       <header className="workbench-toolbar">
         <div className="breadcrumbs">
           <button type="button" onClick={() => {
             tree.clear();
+            setActiveRowKey(null);
+            interaction.clearSelection();
             setTrail([]);
           }}>Root</button>
           {trail.map((item, index) => (
             <span key={item.directory_id}><ChevronRight size={12} /><button type="button" onClick={() => {
               tree.clear();
+              setActiveRowKey(null);
+              interaction.clearSelection();
               setTrail(trail.slice(0, index + 1));
             }}>{item.name}</button></span>
           ))}
@@ -319,10 +393,10 @@ export function FolderPhotosView({
         stateKey="folders.columns"
         first={(<aside className="finder-pane" onContextMenu={openCurrentDirectoryContextMenu}>
           <VirtualList
+            ref={listRef}
             stateKey="folders.list"
             items={rows}
             activeIndex={activeRowIndex}
-            focusWhen={displayMode === "thumbnails"}
             rowHeight={28}
             itemKey={directoryTreeRowKey}
             onActivateActive={activateDirectoryRow}
@@ -460,12 +534,15 @@ export function TaxonPhotosView({
     selectFirst: false,
     stateKey: "photo-taxonomy.interaction",
   });
+  const listRef = useRef<VirtualListHandle>(null);
   usePublishedPhotoTaxonSummary({
     photoId: interaction.selectedId,
     active,
     onChange: onPhotoTaxonDisplayState,
   });
-  const [displayMode, setDisplayMode] = usePhotoDisplayMode();
+  const [displayMode, setDisplayMode] = usePhotoDisplayMode({
+    onEscapeToThumbnails: () => listRef.current?.focus(),
+  });
   const activation = usePhotoActivation({
     onSelect: selectTaxonPhoto,
     onOpenImage: () => setDisplayMode("image"),
@@ -481,6 +558,7 @@ export function TaxonPhotosView({
   function enterTaxon(taxon: PhotoTaxonUsage) {
     tree.clear();
     setActiveRowKey(null);
+    interaction.clearSelection();
     setTrail((current) => [...current, taxon]);
   }
 
@@ -564,17 +642,30 @@ export function TaxonPhotosView({
     if (matchIndex >= 0) selectTaxonRow(rows[matchIndex]);
   }
 
+  usePhotoTreeListEntry({
+    active: active && displayMode === "thumbnails",
+    rows,
+    selectedPhotoId: interaction.selectedId,
+    listRef,
+    getPhotoId: (item) => item.kind === "photo" ? item.photo.photo_id : null,
+    selectRow: selectTaxonRow,
+  });
+
   return (
     <div className="folder-workbench">
       <header className="workbench-toolbar">
         <div className="breadcrumbs">
           <button type="button" onClick={() => {
             tree.clear();
+            setActiveRowKey(null);
+            interaction.clearSelection();
             setTrail([]);
           }}>Taxonomy</button>
           {trail.map((item, index) => (
             <span key={item.taxon_id}><ChevronRight size={12} /><button type="button" onClick={() => {
               tree.clear();
+              setActiveRowKey(null);
+              interaction.clearSelection();
               setTrail(trail.slice(0, index + 1));
             }}>{formatTaxonName(item.names, nameParts, `Taxon ${item.taxon_id}`)}</button></span>
           ))}
@@ -591,10 +682,10 @@ export function TaxonPhotosView({
         stateKey="photo-taxonomy.columns"
         first={(<aside className="finder-pane" onContextMenu={openCurrentTaxonContextMenu}>
           <VirtualList
+            ref={listRef}
             stateKey="photo-taxonomy.list"
             items={rows}
             activeIndex={activeRowIndex}
-            focusWhen={displayMode === "thumbnails"}
             rowHeight={28}
             itemKey={taxonTreeRowKey}
             onActivateActive={activateTaxonRow}

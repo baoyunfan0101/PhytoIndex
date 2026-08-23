@@ -101,6 +101,14 @@ notice while relevant background work is active. Existing results stay
 interactive. An initial empty pane has a pane-local Loading state; refresh and
 pagination keep existing rows visible.
 
+Folder and photographed-taxonomy views do not force keyboard focus into either
+pane when opened or after breadcrumb navigation. Pressing Up or Down outside
+the list enters the left browser. If a photo is already selected, navigation
+resumes from that photo. Otherwise Down selects the first photo and Up selects
+the last photo.
+Returning from full-image mode with Escape restores keyboard focus to the left
+browser at the current selection.
+
 ### `EmptyWorkspace(props)`
 
 Parameters: the recent-search list, recent-search mutation callbacks, a search
