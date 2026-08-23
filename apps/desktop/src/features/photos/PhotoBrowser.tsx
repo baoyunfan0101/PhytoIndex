@@ -1,9 +1,10 @@
 import { Image as ImageIcon, Rows3 } from "lucide-react";
-import { useMemo } from "react";
+import { useCallback, useMemo, useRef } from "react";
 import type { Photo } from "../../api/photos";
 import {
   Busy,
   VirtualList,
+  type VirtualListHandle,
 } from "../../shared/ui";
 import { usePhotoInteraction, type PhotoOpenHandlers } from "./PhotoInteraction";
 import { usePhotoMutation } from "./photoMutations";
@@ -35,14 +36,19 @@ export function PhotoBrowser({
   onPhotoTaxonDisplayState: (state: PhotoTaxonDisplayState | null) => void;
 }) {
   const photos = page.items;
+  const listRef = useRef<VirtualListHandle>(null);
+  const openFullscreen = useCallback((photo: Photo) => {
+    handlers.openFullscreen(photo, () => listRef.current?.focus());
+  }, [handlers]);
+  const viewHandlers = useMemo(() => ({ ...handlers, openFullscreen }), [handlers, openFullscreen]);
   const interaction = usePhotoInteraction({
     photos,
-    handlers,
+    handlers: viewHandlers,
     stateKey: "photo-browser.interaction",
   });
   const [mode, setMode] = usePhotoDisplayMode({
     onEnterFullscreen: () => {
-      if (interaction.selected) handlers.openFullscreen(interaction.selected);
+      if (interaction.selected) openFullscreen(interaction.selected);
     },
   });
   usePublishedPhotoTaxonSummary({
@@ -53,7 +59,7 @@ export function PhotoBrowser({
   const activation = usePhotoActivation({
     onSelect: interaction.selectPhoto,
     onOpenImage: () => setMode("image"),
-    onOpenDetails: handlers.openDetails,
+    onOpenFullscreen: openFullscreen,
   });
   usePhotoMutation(() => {
     void page.reload();
@@ -96,6 +102,7 @@ export function PhotoBrowser({
             <Rows3 size={14} />
           </header>
           <VirtualList
+            ref={listRef}
             stateKey="photo-browser.list"
             items={photos}
             activeIndex={activeIndex}

@@ -9,7 +9,7 @@ export type PhotoOpenHandlers = {
   openDetails: (photo: Photo) => void;
   openTaxon: (taxonId: number) => void;
   openMappingEditor: (photo: Photo) => void;
-  openFullscreen: (photo: Photo) => void;
+  openFullscreen: (photo: Photo, onReturnFocus?: () => void) => void;
 };
 
 type PhotoContextState = {

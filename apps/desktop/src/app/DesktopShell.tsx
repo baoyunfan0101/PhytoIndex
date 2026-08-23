@@ -183,6 +183,8 @@ export function DesktopShell({
   const [operationsOpen, setOperationsOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [fullscreenPhoto, setFullscreenPhoto] = useState<Photo | null>(null);
+  const fullscreenReturnFocusRef = useRef<(() => void) | null>(null);
+  const fullscreenRequestRef = useRef(0);
   const [searchOpen, setSearchOpen] = useState(false);
   const [recentSearches, setRecentSearches] = useState(() => (
     loadRecentSearches(undefined, generalSettings.recent_searches_limit)
@@ -471,22 +473,74 @@ export function DesktopShell({
     if (next.activeId === null) setSearchOpen(false);
   }
 
-  const openPhotoFullscreen = useCallback(async (photo: Photo) => {
-    try {
-      await getCurrentWindow().setFullscreen(true);
-      setPhotoFullscreenActive(true);
-      setFullscreenPhoto(photo);
-    } catch (nextError) {
-      reportActiveStatus(errorMessage(nextError));
-    }
+  const openPhotoFullscreen = useCallback((photo: Photo, onReturnFocus?: () => void) => {
+    fullscreenReturnFocusRef.current = onReturnFocus ?? null;
+    const requestId = ++fullscreenRequestRef.current;
+    setFullscreenPhoto(photo);
+    setPhotoFullscreenActive(true);
+    window.requestAnimationFrame(() => {
+      if (requestId !== fullscreenRequestRef.current) return;
+      void getCurrentWindow().setFullscreen(true).catch((nextError) => {
+        if (requestId !== fullscreenRequestRef.current) return;
+        setPhotoFullscreenActive(false);
+        setFullscreenPhoto(null);
+        fullscreenReturnFocusRef.current = null;
+        reportActiveStatus(errorMessage(nextError));
+      });
+    });
   }, [reportActiveStatus]);
 
   const exitPhotoFullscreen = useCallback(async () => {
-    try {
-      await getCurrentWindow().setFullscreen(false);
+    const requestId = fullscreenRequestRef.current;
+    const appWindow = getCurrentWindow();
+    let unlisten: (() => void) | null = null;
+    let completed = false;
+    const cleanup = () => {
+      unlisten?.();
+      unlisten = null;
+    };
+    const restoreAfterExit = () => {
+      if (completed || requestId !== fullscreenRequestRef.current) {
+        cleanup();
+        return;
+      }
+      completed = true;
+      cleanup();
       setPhotoFullscreenActive(false);
       setFullscreenPhoto(null);
+      ++fullscreenRequestRef.current;
+      window.requestAnimationFrame(() => {
+        const restore = fullscreenReturnFocusRef.current;
+        fullscreenReturnFocusRef.current = null;
+        restore?.();
+      });
+    };
+    try {
+      unlisten = await appWindow.onResized(() => {
+        void appWindow.isFullscreen()
+          .then((fullscreen) => {
+            if (fullscreen) return;
+            restoreAfterExit();
+          })
+          .catch((nextError) => {
+            if (completed || requestId !== fullscreenRequestRef.current) {
+              cleanup();
+              return;
+            }
+            completed = true;
+            cleanup();
+            reportActiveStatus(errorMessage(nextError));
+          });
+      });
+      if (completed || requestId !== fullscreenRequestRef.current) {
+        cleanup();
+        return;
+      }
+      await appWindow.setFullscreen(false);
     } catch (nextError) {
+      cleanup();
+      if (requestId !== fullscreenRequestRef.current) return;
+      completed = true;
       reportActiveStatus(errorMessage(nextError));
     }
   }, [reportActiveStatus]);
@@ -495,7 +549,7 @@ export function DesktopShell({
     openDetails: (photo) => openTab({ id: `photo:${photo.photo_id}`, kind: "photo-detail", title: photo.filename, photo }),
     openTaxon: (taxonId) => openTab({ id: `taxon-detail:${crypto.randomUUID()}`, kind: "taxon-detail", title: String(taxonId), taxonId }),
     openMappingEditor: (photo) => openTab({ id: `mapping:${photo.photo_id}`, kind: "mapping-editor", title: photo.filename, photo }),
-    openFullscreen: (photo) => void openPhotoFullscreen(photo),
+    openFullscreen: (photo, onReturnFocus) => openPhotoFullscreen(photo, onReturnFocus),
   }), [openPhotoFullscreen, tabs]);
 
   async function submitSearch(query: string) {
@@ -792,7 +846,6 @@ export function DesktopShell({
         <PhotoLibraryIdentityProvider libraryUuid={activeLibrary?.library_uuid ?? null}>
           <PhotoFullscreenPresentation
             photo={fullscreenPhoto}
-            handlers={handlers}
             onExit={exitPhotoFullscreen}
           />
         </PhotoLibraryIdentityProvider>

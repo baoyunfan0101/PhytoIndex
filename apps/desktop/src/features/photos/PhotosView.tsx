@@ -51,6 +51,7 @@ import { useCursorTree, type CursorTreeNode } from "../../shared/useCursorTree";
 import { useViewState } from "../../shared/viewState";
 import { ResizablePanels } from "../../shared/ResizablePanels";
 import { usePublishedPhotoTaxonSummary, type PhotoTaxonDisplayState } from "./photoTaxonSummary";
+import { isPhotoFullscreenActive } from "./photoFullscreenState";
 
 type DirectoryTreeRow =
   | { kind: "directory"; directory: PhotoDirectory; depth: number }
@@ -91,6 +92,7 @@ function usePhotoTreeListEntry<T>({
     if (!active) return;
     const enterList = (event: globalThis.KeyboardEvent) => {
       if (event.defaultPrevented || (event.key !== "ArrowUp" && event.key !== "ArrowDown")) return;
+      if (isPhotoFullscreenActive()) return;
       if (hasBlockingTreeEntryOverlay()) return;
       if (isProtectedTreeEntryTarget(event.target)) return;
       event.preventDefault();
@@ -227,13 +229,17 @@ export function FolderPhotosView({
     () => rows.flatMap((row) => row.kind === "photo" ? [row.photo] : []),
     [rows],
   );
+  const listRef = useRef<VirtualListHandle>(null);
+  const openFullscreen = useCallback((photo: Photo) => {
+    handlers.openFullscreen(photo, () => listRef.current?.focus());
+  }, [handlers]);
+  const viewHandlers = useMemo(() => ({ ...handlers, openFullscreen }), [handlers, openFullscreen]);
   const interaction = usePhotoInteraction({
     photos,
-    handlers,
+    handlers: viewHandlers,
     selectFirst: false,
     stateKey: "folders.interaction",
   });
-  const listRef = useRef<VirtualListHandle>(null);
   usePublishedPhotoTaxonSummary({
     photoId: interaction.selectedId,
     active,
@@ -242,13 +248,13 @@ export function FolderPhotosView({
   const [displayMode, setDisplayMode] = usePhotoDisplayMode({
     onEscapeToThumbnails: () => listRef.current?.focus(),
     onEnterFullscreen: () => {
-      if (interaction.selected) handlers.openFullscreen(interaction.selected);
+      if (interaction.selected) openFullscreen(interaction.selected);
     },
   });
   const activation = usePhotoActivation({
     onSelect: selectDirectoryPhoto,
     onOpenImage: () => setDisplayMode("image"),
-    onOpenDetails: handlers.openDetails,
+    onOpenFullscreen: openFullscreen,
   });
   const resolvedActiveRowKey = activeRowKey ?? (interaction.selectedId === null ? null : `p:${interaction.selectedId}`);
   const activeRowIndex = rows.findIndex((row) => directoryTreeRowKey(row) === resolvedActiveRowKey);
@@ -539,13 +545,17 @@ export function TaxonPhotosView({
     () => rows.flatMap((row) => row.kind === "photo" ? [row.photo] : []),
     [rows],
   );
+  const listRef = useRef<VirtualListHandle>(null);
+  const openFullscreen = useCallback((photo: Photo) => {
+    handlers.openFullscreen(photo, () => listRef.current?.focus());
+  }, [handlers]);
+  const viewHandlers = useMemo(() => ({ ...handlers, openFullscreen }), [handlers, openFullscreen]);
   const interaction = usePhotoInteraction({
     photos,
-    handlers,
+    handlers: viewHandlers,
     selectFirst: false,
     stateKey: "photo-taxonomy.interaction",
   });
-  const listRef = useRef<VirtualListHandle>(null);
   usePublishedPhotoTaxonSummary({
     photoId: interaction.selectedId,
     active,
@@ -554,13 +564,13 @@ export function TaxonPhotosView({
   const [displayMode, setDisplayMode] = usePhotoDisplayMode({
     onEscapeToThumbnails: () => listRef.current?.focus(),
     onEnterFullscreen: () => {
-      if (interaction.selected) handlers.openFullscreen(interaction.selected);
+      if (interaction.selected) openFullscreen(interaction.selected);
     },
   });
   const activation = usePhotoActivation({
     onSelect: selectTaxonPhoto,
     onOpenImage: () => setDisplayMode("image"),
-    onOpenDetails: handlers.openDetails,
+    onOpenFullscreen: openFullscreen,
   });
   const resolvedActiveRowKey = activeRowKey ?? (interaction.selectedId === null ? null : `p:${interaction.selectedId}`);
   const activeRowIndex = rows.findIndex((row) => taxonTreeRowKey(row) === resolvedActiveRowKey);

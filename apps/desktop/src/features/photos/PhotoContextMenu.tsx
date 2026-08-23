@@ -99,11 +99,11 @@ export function PhotoContextMenu({
         style={{ left: Math.min(x, window.innerWidth - 268), top: Math.min(y, window.innerHeight - 330) }}
         role="menu"
       >
-        <MenuButton icon={Info} label="View photo details" onClick={onOpenDetails} />
         <MenuButton icon={Maximize} label="View fullscreen" onClick={() => {
           onOpenFullscreen();
           onClose();
         }} />
+        <MenuButton icon={Info} label="View photo details" onClick={onOpenDetails} />
         <MenuSeparator />
         <MenuButton
           icon={Database}

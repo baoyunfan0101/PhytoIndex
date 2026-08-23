@@ -1,22 +1,19 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import type { Photo } from "../../api/photos";
 import { PhotoStage } from "./PhotoMedia";
-import { usePhotoInteraction, type PhotoOpenHandlers } from "./PhotoInteraction";
 
 export function PhotoFullscreenPresentation({
   photo,
-  handlers,
   onExit,
 }: {
   photo: Photo;
-  handlers: PhotoOpenHandlers;
   onExit: () => void;
 }) {
-  const interaction = usePhotoInteraction({
-    photos: [photo],
-    handlers,
-    stateKey: "photo-fullscreen.interaction",
-  });
+  const presentationRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    presentationRef.current?.focus({ preventScroll: true });
+  }, []);
 
   useEffect(() => {
     const exitOnEscape = (event: KeyboardEvent) => {
@@ -29,9 +26,8 @@ export function PhotoFullscreenPresentation({
   }, [onExit]);
 
   return (
-    <div className="photo-fullscreen-presentation">
-      <PhotoStage photo={photo} onContextMenu={interaction.openContextMenu} />
-      {interaction.contextMenu}
+    <div ref={presentationRef} className="photo-fullscreen-presentation" tabIndex={-1}>
+      <PhotoStage photo={photo} />
     </div>
   );
 }

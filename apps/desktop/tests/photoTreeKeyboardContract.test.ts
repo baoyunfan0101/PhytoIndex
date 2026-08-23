@@ -27,6 +27,9 @@ test("folder and taxon lists use explicit keyboard entry without thumbnail autof
   const taxonSection = source.slice(source.indexOf("export function TaxonPhotosView"));
   for (const section of [folderSection, taxonSection]) {
     assert.match(section, /const listRef = useRef<VirtualListHandle>\(null\);/);
+    assert.match(section, /const openFullscreen = useCallback\(\(photo: Photo\) => \{\s*handlers\.openFullscreen\(photo, \(\) => listRef\.current\?\.focus\(\)\);/);
+    assert.match(section, /handlers: viewHandlers,/);
+    assert.match(section, /onOpenFullscreen: openFullscreen/);
     assert.match(section, /usePhotoTreeListEntry\(\{/);
     assert.match(section, /<VirtualList\s+ref=\{listRef\}/);
     assert.doesNotMatch(section, /focusWhen=/);
@@ -42,5 +45,6 @@ test("tree keyboard entry yields to open overlays while retaining breadcrumb ent
   assert.match(source, /function hasBlockingTreeEntryOverlay\(\): boolean/);
   assert.match(source, /document\.querySelector\("\.context-menu, \[role='dialog'\], \.modal-card"\)/);
   assert.match(source, /if \(hasBlockingTreeEntryOverlay\(\)\) return;/);
+  assert.match(source, /if \(isPhotoFullscreenActive\(\)\) return;/);
   assert.match(source, /!target\.closest\("\.breadcrumbs"\)/);
 });

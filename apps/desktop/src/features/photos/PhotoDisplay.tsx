@@ -11,11 +11,11 @@ const photoDoubleClickDelayMs = 250;
 export function usePhotoActivation({
   onSelect,
   onOpenImage,
-  onOpenDetails,
+  onOpenFullscreen,
 }: {
   onSelect: (photo: Photo) => void;
   onOpenImage: (photo: Photo) => void;
-  onOpenDetails: (photo: Photo) => void;
+  onOpenFullscreen: (photo: Photo) => void;
 }) {
   const singleClickTimer = useRef<number | null>(null);
 
@@ -38,8 +38,8 @@ export function usePhotoActivation({
       singleClickTimer.current = null;
     }
     onSelect(photo);
-    onOpenDetails(photo);
-  }, [onOpenDetails, onSelect]);
+    onOpenFullscreen(photo);
+  }, [onOpenFullscreen, onSelect]);
 
   return { clickPhoto, doubleClickPhoto };
 }

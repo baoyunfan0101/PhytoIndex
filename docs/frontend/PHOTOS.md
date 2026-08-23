@@ -15,7 +15,7 @@ a lightweight preview without a photo context menu.
 ### `PhotoBrowser(props)`
 
 Parameters include a cursor page controller, optional title, and
-`PhotoOpenHandlers` for opening details, taxonomy, or mapping. Returns a
+`PhotoOpenHandlers` for opening details, fullscreen, taxonomy, or mapping. Returns a
 virtual list or grid with a shared photo stage. The active photo publishes a
 current-photo display state. Stable matched photos show their lightweight
 taxonomy display path in the status bar. Unmatched, ambiguous, and processing
@@ -97,9 +97,18 @@ UUID, and file identity. This prevents cached media from crossing library
 boundaries.
 
 Full-image zoom and pan use the normal two-dimensional transform path. Pressing
-Enter in image mode enters native fullscreen. Escape exits fullscreen back to
-image mode, and another Escape returns to thumbnails. Photo context menus place
-`View fullscreen` directly below `View photo details`.
+Enter in image mode enters native fullscreen. Fullscreen returns to its invoking
+page and display mode. List-backed photo views restore keyboard focus to their
+owning photo list after native fullscreen exits. The fullscreen presentation
+owns keyboard focus while active, so background photo navigation does not run;
+the selected photo and invoking display mode are preserved. It remains mounted
+until the window reports a resize outside fullscreen, when list focus is
+restored. Double-clicking a photo item opens fullscreen; double-clicking an
+already displayed full image continues to toggle zoom. Photo context menus place
+`View fullscreen` before `View photo details`.
+Fullscreen presentation is a pure photo-viewing mode: photo context menus are
+disabled while it is active, while wheel zoom, double-click zoom, pan, and
+Escape-to-exit remain available.
 
 Folder, photographed-taxonomy, and Map pages render a non-blocking indexing
 notice while relevant background work is active. Existing results stay
@@ -165,9 +174,11 @@ manage the bounded, most-recent-first search list in browser-local storage.
 
 ## Interaction contract
 
-`PhotoOpenHandlers` contains callbacks for opening details, taxonomy, and the
-mapping editor. `usePhotoInteraction` loads lightweight mapping state when a
-context menu opens and routes context actions through those handlers.
+`PhotoOpenHandlers` contains callbacks for opening details, fullscreen,
+taxonomy, and the mapping editor. `usePhotoInteraction` loads lightweight
+mapping state when a context menu opens and routes context actions through
+those handlers. Its Photo Context Menu actions are `View fullscreen`, `View
+photo details`, taxonomy actions, and mapping actions in that order.
 
 `emitPhotoMutation(mutation)` broadcasts a committed photo or mapping change.
 `usePhotoMutation(listener)` receives it immediately.

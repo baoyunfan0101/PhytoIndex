@@ -47,8 +47,8 @@ test("photo context menu uses the current mapping status in its taxon action", (
   assert.match(menu, /label="View taxon details"[\s\S]*disabled=\{!matched\}/);
 
   const labels = [
-    "View photo details",
     "View fullscreen",
+    "View photo details",
     "View taxon details",
     "Edit mapping",
     "Remap from filename",
@@ -60,11 +60,11 @@ test("photo context menu uses the current mapping status in its taxon action", (
   assert.ok(positions.every((position) => position >= 0));
   assert.deepEqual([...positions].sort((left, right) => left - right), positions);
 
-  const [details, fullscreen, taxon, edit, remap, rename, renameFromTaxonomy, reveal] = positions;
-  const firstSeparator = menu.indexOf("<MenuSeparator />", details);
+  const [fullscreen, details, taxon, edit, remap, rename, renameFromTaxonomy, reveal] = positions;
+  const firstSeparator = menu.indexOf("<MenuSeparator />", fullscreen);
   const secondSeparator = menu.indexOf("<MenuSeparator />", remap);
   const thirdSeparator = menu.indexOf("<MenuSeparator />", renameFromTaxonomy);
-  assert.ok(details < fullscreen && fullscreen < firstSeparator && firstSeparator < taxon);
+  assert.ok(fullscreen < details && details < firstSeparator && firstSeparator < taxon);
   assert.ok(remap < secondSeparator && secondSeparator < rename);
   assert.ok(renameFromTaxonomy < thirdSeparator && thirdSeparator < reveal);
 });
@@ -72,4 +72,15 @@ test("photo context menu uses the current mapping status in its taxon action", (
 test("photo context fullscreen uses the context-menu target photo", () => {
   const interaction = source("../src/features/photos/PhotoInteraction.tsx");
   assert.match(interaction, /onOpenFullscreen=\{\(\) => handlers\.openFullscreen\(context\.photo\)\}/);
+});
+
+test("list-backed context menus retain their owning list focus callback", () => {
+  for (const path of [
+    "../src/features/photos/PhotoBrowser.tsx",
+    "../src/features/photos/PhotosView.tsx",
+  ]) {
+    const view = source(path);
+    assert.match(view, /handlers\.openFullscreen\(photo, \(\) => listRef\.current\?\.focus\(\)\)/);
+    assert.match(view, /handlers: viewHandlers/);
+  }
 });
