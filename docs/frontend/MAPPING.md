@@ -25,6 +25,7 @@ Parameters:
 - `onPhotoTaxonDisplayState`: receives the current photo taxonomy display state.
 - `handlers`: shared `PhotoOpenHandlers`; the editor uses its taxon-opening
   handler for Current mapping, ambiguous candidates, and taxonomy search results.
+- `onStatus`: reports current-photo action feedback through the owning tab.
 - `refreshKey`: optional external invalidation value.
 
 Returns: current mapping details, persisted Ambiguous candidates, taxonomy

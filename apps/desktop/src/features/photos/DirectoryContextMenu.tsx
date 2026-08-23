@@ -8,6 +8,8 @@ import {
 } from "../../api/photos";
 import { errorMessage } from "../../api/common";
 import { Button, Modal } from "../../shared/ui";
+import { waitForOperation } from "../../api/tasks";
+import { formatPhotoRenameSummary, photoRenameSummaryFromOperation } from "./photoOperation";
 
 export function DirectoryContextMenu({
   directory,
@@ -70,7 +72,10 @@ export function DirectoryContextMenu({
   async function renameDirectoryPhotos(includeDescendants: boolean) {
     onStatus(includeDescendants ? "Renaming directory photos recursively" : "Renaming directory photos", true);
     const started = await renamePhotosInDirectoryFromTaxa(directory.directory_id, includeDescendants);
-    onStatus(started.operation.task_id ? "Rename started in Background" : "Rename complete");
+    const completed = started.operation.task_id
+      ? await waitForOperation(started.operation.task_id)
+      : started.operation;
+    onStatus(formatPhotoRenameSummary(photoRenameSummaryFromOperation(completed)));
   }
 
   async function renameDirectoryOnly() {

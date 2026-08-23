@@ -30,15 +30,18 @@ const ignorePhotoTaxonDisplayState = (_state: PhotoTaxonDisplayState | null) => 
 function StandaloneMappingPhotoPane({
   photo,
   handlers,
+  onStatus,
 }: {
   photo: Photo;
   handlers: PhotoOpenHandlers;
+  onStatus: (message: string) => void;
 }) {
   const interaction = usePhotoInteraction({
     photos: [photo],
     handlers,
     selectFirst: false,
     stateKey: "mapping-editor.interaction",
+    onStatus,
   });
 
   return (
@@ -60,6 +63,7 @@ export function MappingEditor({
   active = false,
   onPhotoTaxonDisplayState = ignorePhotoTaxonDisplayState,
   handlers,
+  onStatus,
   refreshKey = 0,
 }: {
   photo: Photo;
@@ -67,6 +71,7 @@ export function MappingEditor({
   active?: boolean;
   onPhotoTaxonDisplayState?: (state: PhotoTaxonDisplayState | null) => void;
   handlers: PhotoOpenHandlers;
+  onStatus: (message: string) => void;
   refreshKey?: number;
 }) {
   const [match, setMatch] = useViewState<PhotoMappingDetail | null>("mapping-editor.match", null);
@@ -130,7 +135,7 @@ export function MappingEditor({
     }
   }
 
-  const photoPane = <StandaloneMappingPhotoPane photo={photo} handlers={handlers} />;
+  const photoPane = <StandaloneMappingPhotoPane photo={photo} handlers={handlers} onStatus={onStatus} />;
   const currentTaxon = mappedTaxon ? {
     taxon_id: mappedTaxon.taxon_id,
     rank: mappedTaxon.rank,

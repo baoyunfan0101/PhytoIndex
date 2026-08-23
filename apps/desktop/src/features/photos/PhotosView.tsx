@@ -239,6 +239,7 @@ export function FolderPhotosView({
     handlers: viewHandlers,
     selectFirst: false,
     stateKey: "folders.interaction",
+    onStatus,
   });
   usePublishedPhotoTaxonSummary({
     photoId: interaction.selectedId,
@@ -555,6 +556,7 @@ export function TaxonPhotosView({
     handlers: viewHandlers,
     selectFirst: false,
     stateKey: "photo-taxonomy.interaction",
+    onStatus,
   });
   usePublishedPhotoTaxonSummary({
     photoId: interaction.selectedId,
@@ -847,6 +849,7 @@ export function PhotoMapView({
     handlers,
     selectFirst: false,
     stateKey: "map.interaction",
+    onStatus,
   });
   usePublishedPhotoTaxonSummary({
     photoId: interaction.selectedId,

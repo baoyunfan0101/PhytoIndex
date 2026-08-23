@@ -19,6 +19,7 @@ import { errorMessage } from "../../api/common";
 import { remapPhoto, type PhotoMappingSummary } from "../../api/mapping";
 import { Button, Modal } from "../../shared/ui";
 import { MappingBadge } from "../mapping/MappingBadge";
+import { renameFromTaxonomyStatus } from "./photoRenameStatus";
 
 export function PhotoContextMenu({
   photo,
@@ -33,6 +34,7 @@ export function PhotoContextMenu({
   onOpenFullscreen,
   onOpenTaxon,
   onOpenMappingEditor,
+  onStatus,
 }: {
   photo: Photo;
   mapping: PhotoMappingSummary | null;
@@ -46,6 +48,7 @@ export function PhotoContextMenu({
   onOpenFullscreen: () => void;
   onOpenTaxon: (taxonId: number) => void;
   onOpenMappingEditor: () => void;
+  onStatus: (message: string) => void;
 }) {
   const [renaming, setRenaming] = useState(false);
   const [newFilename, setNewFilename] = useState(photo.filename);
@@ -128,7 +131,11 @@ export function PhotoContextMenu({
           icon={FileInput}
           label="Rename from taxonomy"
           disabled={!matched || Boolean(busy)}
-          onClick={() => void run("Renaming", async () => onChanged(await renamePhotoFromTaxon(photo.photo_id)))}
+          onClick={() => void run("Renaming", async () => {
+            const renamed = await renamePhotoFromTaxon(photo.photo_id);
+            onChanged(renamed);
+            onStatus(renameFromTaxonomyStatus(photo.filename, renamed.filename));
+          })}
         />
         <MenuSeparator />
         <MenuButton

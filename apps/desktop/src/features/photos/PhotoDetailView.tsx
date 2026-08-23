@@ -19,11 +19,13 @@ export function PhotoDetailView({
   handlers,
   active,
   onPhotoTaxonDisplayState,
+  onStatus,
 }: {
   photo: Photo;
   handlers: PhotoOpenHandlers;
   active: boolean;
   onPhotoTaxonDisplayState: (state: PhotoTaxonDisplayState | null) => void;
+  onStatus: (message: string) => void;
 }) {
   const [metadata, setMetadata] = useViewState<PhotoMetadata | null>("photo-detail.metadata", null);
   const [detailScrollTop, setDetailScrollTop] = useViewState("photo-detail.scroll-top", 0);
@@ -34,6 +36,7 @@ export function PhotoDetailView({
     photos: [photo],
     handlers,
     stateKey: "photo-detail.interaction",
+    onStatus,
   });
   usePublishedPhotoTaxonSummary({
     photoId: photo.photo_id,

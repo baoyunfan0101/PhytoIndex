@@ -39,3 +39,7 @@ export function photoRenameSummaryFromOperation(
     failed: result.failed,
   };
 }
+
+export function formatPhotoRenameSummary(summary: PhotoRenameOperationSummary): string {
+  return `Renamed ${summary.applied} photos, ${summary.no_change} unchanged, ${summary.failed} failed`;
+}

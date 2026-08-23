@@ -108,6 +108,10 @@ Vividarium uses separate SQLite roles:
   extracted metadata, thumbnail references, durable initial-index state,
   mapping state, and rename operations.
 
+Vividarium 3.0.0 databases use schema 2. The next application version upgrades
+metadata, taxonomy, and Photo Library databases directly from schema 2 to
+schema 3. Fresh databases use schema 3.
+
 One taxonomy can therefore serve several independently registered Photo
 Libraries. A taxonomy identity change schedules remapping for every registered
 library without requiring all libraries to be online at the same time.

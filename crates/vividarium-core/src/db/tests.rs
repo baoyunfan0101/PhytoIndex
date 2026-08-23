@@ -17,6 +17,12 @@ fn initializes_metadata_and_taxonomy_without_a_fake_photo_library() {
         schema_version(&database.connect_taxonomy().unwrap()),
         SCHEMA_VERSION
     );
+    let photo_path = directory.path().join("fresh-photo.db");
+    initialize_file(&photo_path, PHOTO_SCHEMA).unwrap();
+    assert_eq!(
+        schema_version(&open_existing_connection(&photo_path).unwrap()),
+        SCHEMA_VERSION
+    );
     assert_ne!(locations.metadata_database, locations.taxonomy_database);
     assert_eq!(database.active_photo_library().unwrap(), None);
     assert!(database.list_photo_libraries().unwrap().is_empty());
@@ -562,11 +568,11 @@ fn rejects_any_other_schema_version() {
         .unwrap();
     drop(connection);
     let error = Database::open(path).unwrap_err();
-    assert!(error.to_string().contains("expected 4"));
+    assert!(error.to_string().contains("expected 3"));
 }
 
 #[test]
-fn migrates_v3_photo_libraries_with_empty_mapping_provenance() {
+fn migrates_v2_photo_libraries_with_mapping_provenance() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("photos.db");
     initialize_file(&path, PHOTO_SCHEMA).unwrap();
@@ -582,7 +588,7 @@ fn migrates_v3_photo_libraries_with_empty_mapping_provenance() {
             ) VALUES (1, 'mapped.jpg', 1, 1);
             INSERT INTO photo_taxon_mapping (photo_id, taxon_id, status)
             VALUES (1, 99, 'matched');
-            PRAGMA user_version = 3;
+            PRAGMA user_version = 2;
             "#,
         )
         .unwrap();
@@ -592,6 +598,26 @@ fn migrates_v3_photo_libraries_with_empty_mapping_provenance() {
 
     let connection = open_existing_connection(&path).unwrap();
     assert_eq!(schema_version(&connection), SCHEMA_VERSION);
+    for object in [
+        "photo_taxon_mapping_names",
+        "photo_taxon_candidate_names",
+        "photo_taxon_mapping_au_names",
+        "photo_taxon_candidates_bi",
+        "photo_taxon_mapping_au_candidates",
+        "idx_photo_taxon_candidates_taxon",
+    ] {
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_schema WHERE name = ?",
+                    [object],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            1,
+            "missing migrated schema object {object}"
+        );
+    }
     assert_eq!(
         connection
             .query_row(
@@ -612,6 +638,69 @@ fn migrates_v3_photo_libraries_with_empty_mapping_provenance() {
             .unwrap(),
         99
     );
+}
+
+#[test]
+fn migrates_v2_metadata_database_to_v3() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("metadata.db");
+    initialize_file(&path, METADATA_SCHEMA).unwrap();
+    let connection = open_existing_connection(&path).unwrap();
+    connection.pragma_update(None, "user_version", 2).unwrap();
+    drop(connection);
+
+    initialize_existing_file(&path, METADATA_SCHEMA).unwrap();
+
+    assert_eq!(
+        schema_version(&open_existing_connection(&path).unwrap()),
+        SCHEMA_VERSION
+    );
+}
+
+#[test]
+fn migrated_v2_photo_library_supports_rename_from_taxonomy() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("photos");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("original.JPG"), b"photo").unwrap();
+    let database = Database::open(directory.path().join("metadata.db")).unwrap();
+    let taxonomy = database.connect_taxonomy().unwrap();
+    taxonomy
+        .execute("INSERT INTO taxa (taxon_id, rank) VALUES (1, 5)", [])
+        .unwrap();
+    taxonomy
+        .execute(
+            "INSERT INTO taxon_names (name_id, taxon_id, name_type, name) VALUES (1, 1, 1, 'Canis lupus')",
+            [],
+        )
+        .unwrap();
+    drop(taxonomy);
+    let photo_path = directory.path().join("released-v2-photo.db");
+    initialize_file(&photo_path, PHOTO_SCHEMA).unwrap();
+    let photo_connection = open_existing_connection(&photo_path).unwrap();
+    photo_connection
+        .execute_batch(
+            r#"
+            DROP TRIGGER photo_taxon_mapping_au_names;
+            DROP TABLE photo_taxon_mapping_names;
+            PRAGMA user_version = 2;
+            "#,
+        )
+        .unwrap();
+    drop(photo_connection);
+
+    database
+        .register_photo_library(&root, &photo_path, Some("Migrated"))
+        .unwrap();
+    let library = crate::photos::get_library(&database).unwrap().unwrap();
+    crate::photos::refresh_directory(&database, library.root_directory_id).unwrap();
+    let photo = crate::photos::list_photos(&database).unwrap().remove(0);
+    crate::mapping::set_photo_mapping(&database, photo.photo_id, 1).unwrap();
+
+    let renamed = crate::photos::rename_photo_from_taxon(&database, photo.photo_id).unwrap();
+
+    assert_eq!(renamed.filename, "Canis lupus.JPG");
+    assert!(root.join("Canis lupus.JPG").is_file());
 }
 
 #[test]

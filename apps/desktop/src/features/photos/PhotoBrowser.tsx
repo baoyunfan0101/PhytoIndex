@@ -26,6 +26,7 @@ export function PhotoBrowser({
   handlers,
   active,
   onPhotoTaxonDisplayState,
+  onStatus,
 }: {
   title: string;
   detail?: string;
@@ -34,6 +35,7 @@ export function PhotoBrowser({
   handlers: PhotoOpenHandlers;
   active: boolean;
   onPhotoTaxonDisplayState: (state: PhotoTaxonDisplayState | null) => void;
+  onStatus: (message: string) => void;
 }) {
   const photos = page.items;
   const listRef = useRef<VirtualListHandle>(null);
@@ -45,6 +47,7 @@ export function PhotoBrowser({
     photos,
     handlers: viewHandlers,
     stateKey: "photo-browser.interaction",
+    onStatus,
   });
   const [mode, setMode] = usePhotoDisplayMode({
     onEnterFullscreen: () => {

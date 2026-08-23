@@ -111,6 +111,10 @@ taxa and `photo_count` for photos directly mapped to the requested taxon.
 | `get_photo_name_match_settings` | none | `PhotoNameMatchSettings` |
 | `set_photo_name_match_settings` | `settings: &PhotoNameMatchSettings` | `()` |
 
+Saving a new priority changes only the setting. Existing photo mappings remain
+unchanged; the new order is read when the user explicitly maps or remaps a
+photo.
+
 Within one field, the accepted name type is matched first by case-sensitive
 stored `name`. The alias or synonym type is matched only when the accepted type
 has no candidate. Any accepted candidates, including an ambiguous set, stop

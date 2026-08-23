@@ -2,6 +2,14 @@
 
 All notable changes to Vividarium are documented in this file.
 
+## [Unreleased]
+
+### Changed
+
+- Upgraded released schema-2 databases directly to schema 3 and included complete photo mapping provenance storage.
+- Made ordinary Settings autosave without triggering implicit photo remapping or renaming; passing Hook tests save their tested snapshot.
+- Routed transient Settings and taxonomy-based rename feedback through the owning tab status bar.
+
 ## [3.0.0] - 2026-08-14
 
 ### Added

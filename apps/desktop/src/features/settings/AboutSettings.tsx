@@ -67,7 +67,7 @@ export function AboutSettings() {
       <div className="about-settings">
         <strong>Vividarium</strong>
         <AboutValue label="Version" value={version} />
-        <AboutValue label="Database schema" value="2" />
+        <AboutValue label="Database schema" value="3" />
         <AboutValue label="Author" value="Yunfan Bao" />
         <div className="setting-row">
           <span>Email</span>

@@ -13,7 +13,6 @@ import {
   Library,
   Map,
   Plug,
-  Save,
   SlidersHorizontal,
   Trash2,
   type LucideIcon,
@@ -34,7 +33,6 @@ import {
   type DatabaseLocations,
 } from "../../api/storage";
 import { getMapSettings, setMapSettings, type MapSettings } from "../../api/map";
-import { startPhotoMapping } from "../../api/mapping";
 import type { OperationState } from "../../api/tasks";
 import { getTaxonomyImportMetadata, type TaxonomyImportMetadata } from "../../api/taxonomyImport";
 import {
@@ -102,6 +100,7 @@ export function SettingsView({
   onGeneralSettingsChange,
   section,
   taskOwnerId,
+  onStatus,
 }: {
   generalSettings: GeneralSettingsValue;
   generalSettingsLoadError?: string;
@@ -115,6 +114,7 @@ export function SettingsView({
   photoLibraryOperationError: string;
   section: SettingsSection;
   taskOwnerId: string;
+  onStatus: (message: string) => void;
 }) {
   const hookSection = section === "Filename Parser" || section === "Synonym Splitter";
   const taxonomyDatabaseSection = section === "Taxonomy Databases"
@@ -202,9 +202,10 @@ export function SettingsView({
             settings={generalSettings}
             loadError={generalSettingsLoadError}
             onChange={onGeneralSettingsChange}
+            onStatus={onStatus}
           />
         )}
-        {section === "Storage" && <StorageSettings />}
+        {section === "Storage" && <StorageSettings onStatus={onStatus} />}
         {section === "Photo Libraries" && (
           <PhotoLibrariesSettings
             onChanged={onWorkspaceChanged}
@@ -216,9 +217,9 @@ export function SettingsView({
         )}
         {shouldMountSqlImport && <SqlImportSettings active={sqlImportSection} onApplied={onTaxonomyImported} taskOwnerId={taskOwnerId} />}
         {shouldMountDirectImport && <DirectImportSettings active={directImportSection} onApplied={onTaxonomyImported} taskOwnerId={taskOwnerId} />}
-        {section === "Naming" && <NamingSettings />}
-        {section === "Map" && <MapSettingsPanel />}
-        {hookSection && <HooksSettings kind={section === "Filename Parser" ? "photo_filename" : "synonym_authority"} />}
+        {section === "Naming" && <NamingSettings onStatus={onStatus} />}
+        {section === "Map" && <MapSettingsPanel onStatus={onStatus} />}
+        {hookSection && <HooksSettings kind={section === "Filename Parser" ? "photo_filename" : "synonym_authority"} onStatus={onStatus} />}
         {section === "About" && <AboutSettings />}
       </main>)}
     />
@@ -229,25 +230,30 @@ function GeneralSettings({
   settings,
   loadError = "",
   onChange,
+  onStatus,
 }: {
   settings: GeneralSettingsValue;
   loadError?: string;
   onChange: (settings: GeneralSettingsValue) => void;
+  onStatus: (message: string) => void;
 }) {
-  const [message, setMessage] = useState(loadError);
+  const [saveError, setSaveError] = useState("");
+  const [recentDraft, setRecentDraft] = useState(String(settings.recent_searches_limit));
+  const [recentError, setRecentError] = useState("");
   const [saving, setSaving] = useState(false);
   const saveSequence = useRef(0);
 
   useEffect(() => {
-    if (loadError) setMessage(loadError);
-  }, [loadError]);
+    setRecentDraft(String(settings.recent_searches_limit));
+  }, [settings.recent_searches_limit]);
 
   async function change(next: GeneralSettingsValue) {
     const previous = settings;
     const sequence = ++saveSequence.current;
     onChange(next);
     setSaving(true);
-    setMessage("");
+    setSaveError("");
+    onStatus("Saving settings...");
     try {
       const saved = await updateGeneralSettings(next);
       if (sequence === saveSequence.current) {
@@ -255,15 +261,28 @@ function GeneralSettings({
         if (previous.csv_delimiter !== saved.csv_delimiter) {
           emitMetadataChange({ key: "csv_delimiter", value: saved.csv_delimiter });
         }
-        setMessage("");
+        onStatus("Settings saved.");
       }
     } catch (nextError) {
       if (sequence === saveSequence.current) {
         onChange(previous);
-        setMessage(errorMessage(nextError));
+        setSaveError(errorMessage(nextError));
       }
     } finally {
       if (sequence === saveSequence.current) setSaving(false);
+    }
+  }
+
+  function saveRecentSearchLimit() {
+    if (saving) return;
+    const value = Number(recentDraft);
+    if (!/^\d+$/.test(recentDraft) || !Number.isInteger(value) || value < 1 || value > 50) {
+      setRecentError("Recent searches limit must be an integer from 1 to 50.");
+      return;
+    }
+    setRecentError("");
+    if (value !== settings.recent_searches_limit) {
+      void change({ ...settings, recent_searches_limit: value });
     }
   }
 
@@ -325,15 +344,16 @@ function GeneralSettings({
             type="number"
             min={1}
             max={50}
-            value={settings.recent_searches_limit}
-            onChange={(event) => {
-              const value = Number(event.target.value);
-              if (Number.isInteger(value) && value >= 1 && value <= 50) {
-                void change({ ...settings, recent_searches_limit: value });
-              }
+            value={recentDraft}
+            aria-invalid={Boolean(recentError)}
+            onChange={(event) => setRecentDraft(event.target.value)}
+            onBlur={saveRecentSearchLimit}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") saveRecentSearchLimit();
             }}
           />
         </label>
+        {recentError && <div className="inline-error" role="alert">{recentError}</div>}
       </section>
       <section className="settings-group" aria-labelledby="general-csv-heading">
         <h3 id="general-csv-heading">CSV</h3>
@@ -389,26 +409,22 @@ function GeneralSettings({
           );
         })}
       </section>
-      {(saving || message) && (
-        <div className={saving ? "editor-message" : "inline-error"} role={saving ? "status" : "alert"}>
-          {saving ? "Saving..." : message}
-        </div>
-      )}
+      {(loadError || saveError) && <div className="inline-error" role="alert">{loadError || saveError}</div>}
     </div>
   );
 }
 
-function StorageSettings() {
+function StorageSettings({ onStatus }: { onStatus: (message: string) => void }) {
   const [locations, setLocations] = useState<DatabaseLocations | null>(null);
   const [importMetadata, setImportMetadata] = useState<TaxonomyImportMetadata | null>(null);
-  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
   useEffect(() => {
     void Promise.all([getDatabaseLocations(), getTaxonomyImportMetadata()])
       .then(([nextLocations, nextMetadata]) => {
         setLocations(nextLocations);
         setImportMetadata(nextMetadata);
       })
-      .catch((nextError) => setMessage(errorMessage(nextError)));
+      .catch((nextError) => setError(errorMessage(nextError)));
   }, []);
 
   async function changeDefaultPhotoLibraryDirectory() {
@@ -416,9 +432,10 @@ function StorageSettings() {
     if (!directory) return;
     try {
       setLocations(await setDefaultPhotoLibraryDatabaseDirectory(directory));
-      setMessage("Default storage directory updated.");
+      setError("");
+      onStatus("Default storage directory updated.");
     } catch (nextError) {
-      setMessage(errorMessage(nextError));
+      setError(errorMessage(nextError));
     }
   }
 
@@ -427,9 +444,10 @@ function StorageSettings() {
     if (!destination) return;
     try {
       setLocations(await relocateTaxonomyDatabase(destination));
-      setMessage("Taxonomy Database relocated.");
+      setError("");
+      onStatus("Taxonomy Database relocated.");
     } catch (nextError) {
-      setMessage(errorMessage(nextError));
+      setError(errorMessage(nextError));
     }
   }
 
@@ -438,18 +456,19 @@ function StorageSettings() {
     if (!directory) return;
     try {
       setLocations(await setDefaultTaxonomyDatabaseDirectory(directory));
-      setMessage("Default Taxonomy Database directory updated.");
+      setError("");
+      onStatus("Default Taxonomy Database directory updated.");
     } catch (nextError) {
-      setMessage(errorMessage(nextError));
+      setError(errorMessage(nextError));
     }
   }
 
   async function openStoragePath(path: string) {
-    setMessage("");
+    setError("");
     try {
       await openPathInFileManager(path);
     } catch (nextError) {
-      setMessage(errorMessage(nextError));
+      setError(errorMessage(nextError));
     }
   }
 
@@ -484,7 +503,7 @@ function StorageSettings() {
       <Setting label="Taxa" value={importMetadata ? String(importMetadata.taxa_count) : "-"} />
       <Setting label="Names" value={importMetadata ? String(importMetadata.taxon_names_count) : "-"} />
       <Setting label="Imported" value={importMetadata?.imported_at ?? "-"} />
-      <div className="editor-message">{message}</div>
+      {error && <div className="inline-error" role="alert">{error}</div>}
     </div>
   );
 }
@@ -503,13 +522,15 @@ function StoragePath({
   return <div className="storage-path"><span>{label}</span><code>{value}</code>{onOpen || action ? <div className="storage-actions">{onOpen ? <Button onClick={onOpen}><FolderOpen size={13} />Open</Button> : null}{action}</div> : null}</div>;
 }
 
-function NamingSettings() {
+function NamingSettings({ onStatus }: { onStatus: (message: string) => void }) {
   const [priority, setPriority] = useState<PhotoNameField[]>([...photoNamePriorityFields]);
   const [format, setFormat] = useState<PhotoFilenameFormatSettings>(defaultPhotoFilenameFormatSettings);
   const [separator, setSeparator] = useState(";");
   const [loadError, setLoadError] = useState("");
-  const [message, setMessage] = useState("");
+  const [saveError, setSaveError] = useState("");
+  const [separatorError, setSeparatorError] = useState("");
   const [saving, setSaving] = useState(false);
+  const saveSequence = useRef(0);
   const savedPriority = useRef<PhotoNameField[]>([...photoNamePriorityFields]);
   const savedFormat = useRef<PhotoFilenameFormatSettings>(defaultPhotoFilenameFormatSettings());
   const savedSeparator = useRef(";");
@@ -546,53 +567,93 @@ function NamingSettings() {
 
   function move(index: number, direction: -1 | 1) {
     const target = index + direction;
-    if (target < 0 || target >= priority.length) return;
+    if (saving || target < 0 || target >= priority.length) return;
     const next = [...priority];
     [next[index], next[target]] = [next[target], next[index]];
     setPriority(next);
+    void savePriority(next);
   }
 
-  async function save() {
-    const priorityChanged = photoNamePriorityChanged(savedPriority.current, priority);
-    const formatChanged = photoFilenameFormatChanged(savedFormat.current, format);
-    const separatorChanged = savedSeparator.current !== separator;
-    if (!priorityChanged && !formatChanged && !separatorChanged) {
-      setMessage("No naming changes to save.");
-      return;
-    }
+  async function savePriority(next: PhotoNameField[]) {
+    if (!photoNamePriorityChanged(savedPriority.current, next)) return;
+    const previous = [...savedPriority.current];
+    const sequence = ++saveSequence.current;
     setSaving(true);
+    setSaveError("");
+    onStatus("Saving naming settings...");
     try {
-      const updates: Promise<void>[] = [];
-      if (priorityChanged) updates.push(setPhotoNameMatchSettings({ priority }));
-      if (formatChanged) updates.push(setPhotoFilenameFormatSettings(format));
-      if (separatorChanged) updates.push(setTaxonomyNameSeparator(separator));
-      await Promise.all(updates);
-
-      if (formatChanged) savedFormat.current = { ...format };
-      if (separatorChanged) {
-        savedSeparator.current = separator;
-        emitMetadataChange({ key: "taxonomy_name_separator", value: separator });
-      }
-
-      if (priorityChanged) {
-        const started = await startPhotoMapping();
-        savedPriority.current = [...priority];
-        setMessage(started.operation.task_id
-          ? "Naming settings saved. Photo mapping started in Background."
-          : "Naming settings saved.");
-      } else {
-        setMessage("Naming settings saved.");
+      await setPhotoNameMatchSettings({ priority: next });
+      if (sequence === saveSequence.current) {
+        savedPriority.current = [...next];
+        onStatus("Naming settings saved.");
       }
     } catch (nextError) {
-      setMessage(errorMessage(nextError));
+      if (sequence === saveSequence.current) {
+        setPriority(previous);
+        setSaveError(errorMessage(nextError));
+      }
     } finally {
-      setSaving(false);
+      if (sequence === saveSequence.current) setSaving(false);
+    }
+  }
+
+  async function saveFormat(next: PhotoFilenameFormatSettings) {
+    if (!photoFilenameFormatChanged(savedFormat.current, next)) return;
+    const previous = { ...savedFormat.current };
+    const sequence = ++saveSequence.current;
+    setFormat(next);
+    setSaving(true);
+    setSaveError("");
+    onStatus("Saving naming settings...");
+    try {
+      await setPhotoFilenameFormatSettings(next);
+      if (sequence === saveSequence.current) {
+        savedFormat.current = { ...next };
+        onStatus("Naming settings saved.");
+      }
+    } catch (nextError) {
+      if (sequence === saveSequence.current) {
+        setFormat(previous);
+        setSaveError(errorMessage(nextError));
+      }
+    } finally {
+      if (sequence === saveSequence.current) setSaving(false);
+    }
+  }
+
+  async function saveSeparator() {
+    if (saving) return;
+    if (separator.length !== 1) {
+      setSeparatorError("Multiple-name separator must be one character.");
+      return;
+    }
+    setSeparatorError("");
+    if (separator === savedSeparator.current) return;
+    const previous = savedSeparator.current;
+    const sequence = ++saveSequence.current;
+    setSaving(true);
+    setSaveError("");
+    onStatus("Saving naming settings...");
+    try {
+      await setTaxonomyNameSeparator(separator);
+      if (sequence === saveSequence.current) {
+        savedSeparator.current = separator;
+        emitMetadataChange({ key: "taxonomy_name_separator", value: separator });
+        onStatus("Naming settings saved.");
+      }
+    } catch (nextError) {
+      if (sequence === saveSequence.current) {
+        setSeparator(previous);
+        setSaveError(errorMessage(nextError));
+      }
+    } finally {
+      if (sequence === saveSequence.current) setSaving(false);
     }
   }
 
   return (
     <div className="settings-section">
-      <SectionHeader title="Naming" detail="Configure taxonomy matching and mapped-photo filename generation." actions={<Button variant="primary" disabled={saving} onClick={() => void save()}><Save size={13} />Save</Button>} />
+      <SectionHeader title="Naming" detail="Configure taxonomy matching and mapped-photo filename generation." />
       <div className="field-stack">
         <span><strong>Mapping name priority</strong></span>
         <small>Within each field, accepted names are matched first. Aliases or synonyms are used only when no accepted-name match exists.</small>
@@ -602,12 +663,12 @@ function NamingSettings() {
               <b>{index + 1}</b><span>{photoNamePriorityLabels[field]}</span>
               <IconButton
                 aria-label={`Move ${photoNamePriorityLabels[field]} up`}
-                disabled={index === 0}
+                disabled={saving || index === 0}
                 onClick={() => move(index, -1)}
               ><ArrowUp size={13} /></IconButton>
               <IconButton
                 aria-label={`Move ${photoNamePriorityLabels[field]} down`}
-                disabled={index === priority.length - 1}
+                disabled={saving || index === priority.length - 1}
                 onClick={() => move(index, 1)}
               ><ArrowDown size={13} /></IconButton>
             </div>
@@ -617,45 +678,78 @@ function NamingSettings() {
       <div className="field-stack">
         <span><strong>Photo filename format</strong></span>
         <div className="checkbox-grid">{photoFilenameFormatFields.map(({ field, label }) => (
-          <label key={field}><input type="checkbox" checked={format[field]} onChange={(event) => setFormat({ ...format, [field]: event.target.checked })} />{label}</label>
+          <label key={field}><input type="checkbox" disabled={saving || (format[field] && Object.values(format).filter(Boolean).length === 1)} checked={format[field]} onChange={(event) => void saveFormat({ ...format, [field]: event.target.checked })} />{label}</label>
         ))}</div>
       </div>
-      <label className="field-stack"><span><strong>Multiple-name separator</strong></span><input value={separator} maxLength={1} onChange={(event) => setSeparator(event.target.value)} /></label>
-      {loadError && <div className="editor-message error-message" role="alert">{loadError}</div>}
-      <div className="editor-message">{message}</div>
+      <label className="field-stack"><span><strong>Multiple-name separator</strong></span><input value={separator} maxLength={1} disabled={saving} aria-invalid={Boolean(separatorError)} onChange={(event) => setSeparator(event.target.value)} onBlur={() => void saveSeparator()} onKeyDown={(event) => { if (event.key === "Enter") void saveSeparator(); }} /></label>
+      {separatorError && <div className="inline-error" role="alert">{separatorError}</div>}
+      {(loadError || saveError) && <div className="inline-error" role="alert">{loadError || saveError}</div>}
     </div>
   );
 }
 
-function MapSettingsPanel() {
+function MapSettingsPanel({ onStatus }: { onStatus: (message: string) => void }) {
   const [settings, setSettings] = useState<MapSettings>({ provider: "osm", tianditu_token: null });
-  const [message, setMessage] = useState("");
-  useEffect(() => { void getMapSettings().then(setSettings); }, []);
-  async function save() {
+  const [tokenDraft, setTokenDraft] = useState("");
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const saveSequence = useRef(0);
+  useEffect(() => {
+    void getMapSettings().then((loaded) => {
+      setSettings(loaded);
+      setTokenDraft(loaded.tianditu_token ?? "");
+    }).catch((nextError) => setError(errorMessage(nextError)));
+  }, []);
+
+  async function save(next: MapSettings) {
+    const previous = settings;
+    const sequence = ++saveSequence.current;
+    setSettings(next);
+    setSaving(true);
+    setError("");
+    onStatus("Saving map settings...");
     try {
-      setSettings(await setMapSettings(settings));
-      setMessage("Map metadata saved.");
+      const saved = await setMapSettings(next);
+      if (sequence === saveSequence.current) {
+        setSettings(saved);
+        setTokenDraft(saved.tianditu_token ?? "");
+        onStatus("Map settings saved.");
+      }
     } catch (nextError) {
-      setMessage(errorMessage(nextError));
+      if (sequence === saveSequence.current) {
+        setSettings(previous);
+        setTokenDraft(previous.tianditu_token ?? "");
+        setError(errorMessage(nextError));
+      }
+    } finally {
+      if (sequence === saveSequence.current) setSaving(false);
     }
   }
+
+  function saveToken() {
+    if (saving) return;
+    const token = tokenDraft || null;
+    if (token !== settings.tianditu_token) void save({ ...settings, tianditu_token: token });
+  }
+
   return (
     <div className="settings-section">
-      <SectionHeader title="Map" detail="Configure the map tile provider and provider credentials." actions={<Button variant="primary" onClick={() => void save()}><Save size={13} />Save</Button>} />
-      <label className="field-stack"><span><strong>Tile provider</strong></span><select value={settings.provider} onChange={(event) => setSettings({ ...settings, provider: event.target.value as MapSettings["provider"] })}><option value="osm">OpenStreetMap</option><option value="tianditu">Tianditu</option></select></label>
-      <label className="field-stack"><span><strong>Token</strong></span><input disabled={settings.provider !== "tianditu"} value={settings.tianditu_token ?? ""} onChange={(event) => setSettings({ ...settings, tianditu_token: event.target.value || null })} /></label>
-      <div className="editor-message">{message}</div>
+      <SectionHeader title="Map" detail="Configure the map tile provider and provider credentials." />
+      <label className="field-stack"><span><strong>Tile provider</strong></span><select disabled={saving} value={settings.provider} onChange={(event) => void save({ ...settings, provider: event.target.value as MapSettings["provider"] })}><option value="osm">OpenStreetMap</option><option value="tianditu">Tianditu</option></select></label>
+      <label className="field-stack"><span><strong>Token</strong></span><input disabled={saving || settings.provider !== "tianditu"} value={tokenDraft} onChange={(event) => setTokenDraft(event.target.value)} onBlur={saveToken} onKeyDown={(event) => { if (event.key === "Enter") saveToken(); }} /></label>
+      {error && <div className="inline-error" role="alert">{error}</div>}
     </div>
   );
 }
 
-function HooksSettings({ kind }: { kind: NamingHookKind }) {
+function HooksSettings({ kind, onStatus }: { kind: NamingHookKind; onStatus: (message: string) => void }) {
   const [scripts, setScripts] = useState<Record<NamingHookKind, string>>({ photo_filename: "", synonym_authority: "" });
   const [cases, setCases] = useState<Record<NamingHookKind, NamingHookTestCase[]>>({ photo_filename: [], synonym_authority: [] });
   const [report, setReport] = useState<NamingHookTestReport | null>(null);
-  const [testedSnapshot, setTestedSnapshot] = useState<Record<NamingHookKind, string | null>>({ photo_filename: null, synonym_authority: null });
   const [busy, setBusy] = useState("");
   const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+  const draftSequence = useRef<Record<NamingHookKind, number>>({ photo_filename: 0, synonym_authority: 0 });
 
   useEffect(() => {
     let active = true;
@@ -670,12 +764,12 @@ function HooksSettings({ kind }: { kind: NamingHookKind }) {
         });
       });
     }).catch((nextError) => {
-      if (active) setMessage(errorMessage(nextError));
+      if (active) setError(errorMessage(nextError));
     });
     getNamingHookTestCases().then((nextCases) => {
       if (active) setCases(nextCases);
     }).catch((nextError) => {
-      if (active) setMessage(errorMessage(nextError));
+      if (active) setError(errorMessage(nextError));
     });
     return () => {
       active = false;
@@ -685,45 +779,43 @@ function HooksSettings({ kind }: { kind: NamingHookKind }) {
   useEffect(() => {
     setReport(null);
     setMessage("");
+    setError("");
   }, [kind]);
-
-  const currentSnapshot = JSON.stringify({ script: scripts[kind], cases: cases[kind] });
 
   function invalidate(nextScripts = scripts, nextCases = cases) {
     setScripts(nextScripts);
     setCases(nextCases);
     setReport(null);
-    setTestedSnapshot((current) => ({ ...current, [kind]: null }));
+    draftSequence.current[kind] += 1;
   }
 
   async function run() {
+    const testedKind = kind;
+    const testedRevision = draftSequence.current[testedKind];
+    const snapshot = {
+      script: scripts[testedKind],
+      cases: cases[testedKind],
+    };
     setBusy("Testing Hook");
+    setError("");
+    setMessage("");
+    onStatus("Testing Hook and project tests...");
     try {
-      const snapshot = currentSnapshot;
-      const next = await runNamingHookTests(kind, scripts[kind], cases[kind]);
-      setReport(next);
+      const next = await runNamingHookTests(testedKind, snapshot.script, snapshot.cases);
+      const currentDraft = draftSequence.current[testedKind] === testedRevision;
+      if (currentDraft) setReport(next);
       if (next.failed === 0) {
-        setTestedSnapshot((current) => ({ ...current, [kind]: snapshot }));
-        setMessage("All tests passed. The current Hook can be saved.");
+        setBusy("Saving Hook");
+        onStatus("Saving Hook and project tests...");
+        await saveNamingHook(testedKind, snapshot.script, snapshot.cases);
+        if (currentDraft) setMessage("All tests passed.");
+        onStatus("Hook and project tests saved.");
       } else {
-        setTestedSnapshot((current) => ({ ...current, [kind]: null }));
-        setMessage("Tests failed. Review the actual output before saving.");
+        if (currentDraft) setMessage("Tests failed. Review the actual output.");
+        onStatus("Hook tests failed.");
       }
     } catch (nextError) {
-      setTestedSnapshot((current) => ({ ...current, [kind]: null }));
-      setMessage(errorMessage(nextError));
-    } finally {
-      setBusy("");
-    }
-  }
-
-  async function save() {
-    setBusy("Saving Hook");
-    try {
-      await saveNamingHook(kind, scripts[kind], cases[kind]);
-      setMessage("Hook and project tests saved.");
-    } catch (nextError) {
-      setMessage(errorMessage(nextError));
+      setError(errorMessage(nextError));
     } finally {
       setBusy("");
     }
@@ -737,10 +829,7 @@ function HooksSettings({ kind }: { kind: NamingHookKind }) {
   return (
     <div className="hooks-settings">
       <SectionHeader title={title} detail={detail} actions={(
-        <>
-          <Button disabled={Boolean(busy) || !scripts[kind].trim()} onClick={() => void run()}><BugPlay size={13} />Test</Button>
-          <Button variant="primary" disabled={Boolean(busy) || testedSnapshot[kind] !== currentSnapshot} onClick={() => void save()}><Save size={13} />Save</Button>
-        </>
+        <Button disabled={Boolean(busy) || !scripts[kind].trim()} onClick={() => void run()}><BugPlay size={13} />{busy === "Testing Hook" ? "Testing..." : busy === "Saving Hook" ? "Saving..." : "Test"}</Button>
       )} />
       <ResizablePanels
         className="hook-columns"
@@ -796,7 +885,8 @@ function HooksSettings({ kind }: { kind: NamingHookKind }) {
           </div>
         </div>)}
       />
-      <div className="editor-message">{busy || (report ? `${report.passed} passed, ${report.failed} failed. ${message}` : message)}</div>
+      {report && <div className="editor-message">{report.passed} passed, {report.failed} failed. {message}</div>}
+      {error && <div className="inline-error" role="alert">{error}</div>}
     </div>
   );
 }

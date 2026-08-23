@@ -70,8 +70,9 @@ remain available during backend operations.
 
 ## Data Compatibility
 
-The current SQLite schema version is `2`; opening any other schema version returns
-an incompatibility error.
+Vividarium 3.0.0 uses SQLite schema version `2`. The next application version
+upgrades schema-2 databases directly to schema `3`; fresh databases use schema
+`3`. Other schema versions return an incompatibility error.
 
 ## Release Requirements
 

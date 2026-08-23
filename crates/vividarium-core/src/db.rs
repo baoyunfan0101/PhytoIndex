@@ -10,7 +10,7 @@ use crate::CancellationToken;
 use crate::error::{CoreError, CoreResult};
 use crate::models::{DatabaseLocations, Photo, PhotoLibraryLocation, PhotoLibraryRegistration};
 
-pub const SCHEMA_VERSION: i64 = 4;
+pub const SCHEMA_VERSION: i64 = 3;
 pub(crate) const LOCAL_TAXON_ID_FLOOR: i64 = 8_000_000_000_000_000;
 
 const DEFAULT_TAXONOMY_FILENAME: &str = "taxonomy.db";
@@ -911,11 +911,7 @@ fn initialize_connection(connection: &Connection, schema: &str) -> CoreResult<()
     let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
     match version {
         0 => connection.execute_batch(schema)?,
-        2 => {
-            migrate_v2_to_v3(connection, schema)?;
-            migrate_v3_to_v4(connection, schema)?;
-        }
-        3 => migrate_v3_to_v4(connection, schema)?,
+        2 => migrate_v2_to_v3(connection, schema)?,
         SCHEMA_VERSION => {}
         _ => {
             return Err(CoreError::InvalidArgument(format!(
@@ -969,11 +965,7 @@ fn validate_existing_file(path: &Path, schema: &str) -> CoreResult<()> {
     let connection = open_existing_connection(path)?;
     let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
     match version {
-        2 => {
-            migrate_v2_to_v3(&connection, schema)?;
-            migrate_v3_to_v4(&connection, schema)
-        }
-        3 => migrate_v3_to_v4(&connection, schema),
+        2 => migrate_v2_to_v3(&connection, schema),
         SCHEMA_VERSION => Ok(()),
         _ => Err(CoreError::InvalidArgument(format!(
             "unsupported database schema version: {version}; expected {SCHEMA_VERSION}"
@@ -984,36 +976,36 @@ fn validate_existing_file(path: &Path, schema: &str) -> CoreResult<()> {
 fn migrate_v2_to_v3(connection: &Connection, schema: &str) -> CoreResult<()> {
     if schema == TAXONOMY_SCHEMA {
         migrate_taxonomy_v2_to_v3(connection)
+    } else if schema == PHOTO_SCHEMA {
+        migrate_photo_v2_to_v3(connection)
     } else {
-        connection.pragma_update(None, "user_version", 3)?;
+        connection.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         Ok(())
     }
 }
 
-fn migrate_v3_to_v4(connection: &Connection, schema: &str) -> CoreResult<()> {
+fn migrate_photo_v2_to_v3(connection: &Connection) -> CoreResult<()> {
     let transaction = connection.unchecked_transaction()?;
-    if schema == PHOTO_SCHEMA {
-        transaction.execute_batch(
-            r#"
-            CREATE TABLE photo_taxon_mapping_names (
-                photo_id INTEGER NOT NULL,
-                name_id INTEGER NOT NULL,
-                name_type INTEGER NOT NULL,
-                name TEXT NOT NULL,
-                PRIMARY KEY (photo_id, name_id),
-                CHECK (name_type BETWEEN 1 AND 6),
-                CHECK (length(trim(name)) > 0),
-                FOREIGN KEY (photo_id)
-                    REFERENCES photo_taxon_mapping(photo_id) ON DELETE CASCADE
-            ) WITHOUT ROWID;
+    transaction.execute_batch(
+        r#"
+        CREATE TABLE photo_taxon_mapping_names (
+            photo_id INTEGER NOT NULL,
+            name_id INTEGER NOT NULL,
+            name_type INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            PRIMARY KEY (photo_id, name_id),
+            CHECK (name_type BETWEEN 1 AND 6),
+            CHECK (length(trim(name)) > 0),
+            FOREIGN KEY (photo_id)
+                REFERENCES photo_taxon_mapping(photo_id) ON DELETE CASCADE
+        ) WITHOUT ROWID;
 
-            CREATE TRIGGER photo_taxon_mapping_au_names
-            AFTER UPDATE OF taxon_id, status ON photo_taxon_mapping BEGIN
-                DELETE FROM photo_taxon_mapping_names WHERE photo_id = new.photo_id;
-            END;
-            "#,
-        )?;
-    }
+        CREATE TRIGGER photo_taxon_mapping_au_names
+        AFTER UPDATE OF taxon_id, status ON photo_taxon_mapping BEGIN
+            DELETE FROM photo_taxon_mapping_names WHERE photo_id = new.photo_id;
+        END;
+        "#,
+    )?;
     transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     transaction.commit()?;
     Ok(())
@@ -1573,7 +1565,7 @@ CREATE TABLE sql_inputs (
     CHECK (length(stored_path) > 0)
 ) WITHOUT ROWID;
 
-PRAGMA user_version = 4;
+PRAGMA user_version = 3;
 "#;
 
 const TAXONOMY_SCHEMA: &str = r#"
@@ -1735,7 +1727,7 @@ CREATE INDEX idx_operation_audit_entity
 CREATE INDEX idx_taxonomy_sync_events_created
     ON taxonomy_sync_events(sync_id);
 
-PRAGMA user_version = 4;
+PRAGMA user_version = 3;
 "#;
 
 const PHOTO_SCHEMA: &str = r#"
@@ -1944,7 +1936,7 @@ CREATE INDEX idx_operation_audit_entity
 CREATE INDEX idx_operations_applied
     ON operations(applied_at DESC, operation_id DESC);
 
-PRAGMA user_version = 4;
+PRAGMA user_version = 3;
 "#;
 
 pub fn photo_library_location(

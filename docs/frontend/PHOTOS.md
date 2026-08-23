@@ -203,6 +203,11 @@ remains visible when the action is disabled. Its actions are `View photo
 details`, `View taxon details`, `Edit mapping`, `Remap from filename`, `Rename`,
 `Rename from taxonomy`, and `Reveal in Finder / Explorer`.
 
+Rename from taxonomy is an explicit action that reads the latest saved filename
+format. It reports the new filename after a change and reports when the current
+filename already matches. Saving filename-format settings never renames
+existing photos.
+
 Non-cancellable photo and directory context-menu mutations lock manual menu
 and rename-modal dismissal while running. Tab-owned background tasks remain
 cancellable by closing their owning tab.

@@ -144,6 +144,20 @@ fn six_dimension_priority_controls_photo_mapping() {
         },
     )
     .unwrap();
+    assert_eq!(
+        database
+            .connect()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM photo_mapping_queue", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap(),
+        0
+    );
+    let unchanged_mapping = get_photo_mapping(&database, photo.photo_id).unwrap();
+    assert_eq!(unchanged_mapping.taxon_id, species_mapping.taxon_id);
+
+    remap_photo(&database, photo.photo_id).unwrap();
     process_pending_photo_matches(&database, &mut progress).unwrap();
     let family_mapping = get_photo_mapping(&database, photo.photo_id).unwrap();
     assert_eq!(family_mapping.status, PhotoTaxonStatus::Matched);

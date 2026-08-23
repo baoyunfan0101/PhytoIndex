@@ -12,6 +12,7 @@ export function PhotoSet({
   handlers,
   active,
   onPhotoTaxonDisplayState,
+  onStatus,
 }: {
   query?: string;
   taxonId?: number;
@@ -19,6 +20,7 @@ export function PhotoSet({
   handlers: PhotoOpenHandlers;
   active: boolean;
   onPhotoTaxonDisplayState: (state: PhotoTaxonDisplayState | null) => void;
+  onStatus: (message: string) => void;
 }) {
   const params = query !== undefined
     ? { kind: "search" as const, query }
@@ -41,6 +43,7 @@ export function PhotoSet({
       handlers={handlers}
       active={active}
       onPhotoTaxonDisplayState={onPhotoTaxonDisplayState}
+      onStatus={onStatus}
     />
   );
 }
