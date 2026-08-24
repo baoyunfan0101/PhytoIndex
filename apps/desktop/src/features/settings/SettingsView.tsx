@@ -72,6 +72,7 @@ import {
   photoNamePriorityFields,
   photoNamePriorityLabels,
 } from "./namingSettings";
+import { canPresentHookResult } from "./hookAsyncState";
 
 export type SettingsSection = WorkspaceSettingsSection;
 
@@ -267,6 +268,7 @@ function GeneralSettings({
       if (sequence === saveSequence.current) {
         onChange(previous);
         setSaveError(errorMessage(nextError));
+        onStatus("Settings save failed.");
       }
     } finally {
       if (sequence === saveSequence.current) setSaving(false);
@@ -591,6 +593,7 @@ function NamingSettings({ onStatus }: { onStatus: (message: string) => void }) {
       if (sequence === saveSequence.current) {
         setPriority(previous);
         setSaveError(errorMessage(nextError));
+        onStatus("Naming settings save failed.");
       }
     } finally {
       if (sequence === saveSequence.current) setSaving(false);
@@ -615,6 +618,7 @@ function NamingSettings({ onStatus }: { onStatus: (message: string) => void }) {
       if (sequence === saveSequence.current) {
         setFormat(previous);
         setSaveError(errorMessage(nextError));
+        onStatus("Naming settings save failed.");
       }
     } finally {
       if (sequence === saveSequence.current) setSaving(false);
@@ -645,6 +649,7 @@ function NamingSettings({ onStatus }: { onStatus: (message: string) => void }) {
       if (sequence === saveSequence.current) {
         setSeparator(previous);
         setSaveError(errorMessage(nextError));
+        onStatus("Naming settings save failed.");
       }
     } finally {
       if (sequence === saveSequence.current) setSaving(false);
@@ -720,6 +725,7 @@ function MapSettingsPanel({ onStatus }: { onStatus: (message: string) => void })
         setSettings(previous);
         setTokenDraft(previous.tianditu_token ?? "");
         setError(errorMessage(nextError));
+        onStatus("Map settings save failed.");
       }
     } finally {
       if (sequence === saveSequence.current) setSaving(false);
@@ -750,6 +756,7 @@ function HooksSettings({ kind, onStatus }: { kind: NamingHookKind; onStatus: (me
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const draftSequence = useRef<Record<NamingHookKind, number>>({ photo_filename: 0, synonym_authority: 0 });
+  const activeKindRef = useRef(kind);
 
   useEffect(() => {
     let active = true;
@@ -777,6 +784,7 @@ function HooksSettings({ kind, onStatus }: { kind: NamingHookKind; onStatus: (me
   }, []);
 
   useEffect(() => {
+    activeKindRef.current = kind;
     setReport(null);
     setMessage("");
     setError("");
@@ -802,20 +810,31 @@ function HooksSettings({ kind, onStatus }: { kind: NamingHookKind; onStatus: (me
     onStatus("Testing Hook and project tests...");
     try {
       const next = await runNamingHookTests(testedKind, snapshot.script, snapshot.cases);
-      const currentDraft = draftSequence.current[testedKind] === testedRevision;
-      if (currentDraft) setReport(next);
+      const canPresent = canPresentHookResult(
+        testedKind,
+        activeKindRef.current,
+        testedRevision,
+        draftSequence.current[testedKind],
+      );
+      if (canPresent) setReport(next);
       if (next.failed === 0) {
         setBusy("Saving Hook");
         onStatus("Saving Hook and project tests...");
         await saveNamingHook(testedKind, snapshot.script, snapshot.cases);
-        if (currentDraft) setMessage("All tests passed.");
+        if (canPresentHookResult(
+          testedKind,
+          activeKindRef.current,
+          testedRevision,
+          draftSequence.current[testedKind],
+        )) setMessage("All tests passed.");
         onStatus("Hook and project tests saved.");
       } else {
-        if (currentDraft) setMessage("Tests failed. Review the actual output.");
+        if (canPresent) setMessage("Tests failed. Review the actual output.");
         onStatus("Hook tests failed.");
       }
     } catch (nextError) {
-      setError(errorMessage(nextError));
+      if (activeKindRef.current === testedKind) setError(errorMessage(nextError));
+      onStatus("Hook operation failed.");
     } finally {
       setBusy("");
     }

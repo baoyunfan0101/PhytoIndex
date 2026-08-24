@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { renameFromTaxonomyStatus } from "../src/features/photos/photoRenameStatus.ts";
 import { formatPhotoRenameSummary } from "../src/features/photos/photoOperation.ts";
+import { canPresentHookResult } from "../src/features/settings/hookAsyncState.ts";
 
 function source(path: string) {
   return readFileSync(new URL(path, import.meta.url), "utf8");
@@ -18,8 +19,24 @@ test("ordinary Settings sections autosave through the tab status bar", () => {
   assert.match(settings, /onStatus\("Settings saved\."\)/);
   assert.match(settings, /onStatus\("Naming settings saved\."\)/);
   assert.match(settings, /onStatus\("Map settings saved\."\)/);
+  assert.match(settings, /if \(sequence === saveSequence\.current\) \{\s*onChange\(previous\);\s*setSaveError\(errorMessage\(nextError\)\);\s*onStatus\("Settings save failed\."\);/);
+  assert.match(settings, /if \(sequence === saveSequence\.current\) \{\s*setPriority\(previous\);\s*setSaveError\(errorMessage\(nextError\)\);\s*onStatus\("Naming settings save failed\."\);/);
+  assert.equal((settings.match(/onStatus\("Naming settings save failed\."\)/g) ?? []).length, 3);
+  assert.match(settings, /if \(sequence === saveSequence\.current\) \{\s*setSettings\(previous\);\s*setTokenDraft\(previous\.tianditu_token \?\? ""\);\s*setError\(errorMessage\(nextError\)\);\s*onStatus\("Map settings save failed\."\);/);
+  assert.match(settings, /onStatus\("Hook operation failed\."\)/);
   assert.doesNotMatch(settings, /Naming settings saved\.<\/div>/);
   assert.doesNotMatch(settings, /Map metadata saved/);
+});
+
+test("Hook results present only for the active unchanged Hook draft", () => {
+  assert.equal(canPresentHookResult("photo_filename", "photo_filename", 1, 1), true);
+  assert.equal(canPresentHookResult("photo_filename", "photo_filename", 1, 2), false);
+  assert.equal(canPresentHookResult("photo_filename", "synonym_authority", 1, 1), false);
+  assert.equal(canPresentHookResult("photo_filename", "photo_filename", 1, 1), true);
+  const settings = source("../src/features/settings/SettingsView.tsx");
+  assert.match(settings, /const activeKindRef = useRef\(kind\);/);
+  assert.match(settings, /activeKindRef\.current = kind;/);
+  assert.match(settings, /if \(activeKindRef\.current === testedKind\) setError\(errorMessage\(nextError\)\);/);
 });
 
 test("text and numeric preferences save only when editing completes", () => {
