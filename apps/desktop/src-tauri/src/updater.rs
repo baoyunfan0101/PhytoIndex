@@ -124,7 +124,7 @@ mod tests {
     fn serializes_update_info_for_ipc() {
         let info = AppUpdateInfo {
             current_version: "3.1.0".to_string(),
-            version: "3.0.1".to_string(),
+            version: "3.1.1".to_string(),
             notes: Some("Release notes".to_string()),
             published_at: Some("2026-07-26T00:00:00Z".to_string()),
         };
@@ -133,7 +133,7 @@ mod tests {
             serde_json::to_value(info).unwrap(),
             json!({
                 "current_version": "3.1.0",
-                "version": "3.0.1",
+                "version": "3.1.1",
                 "notes": "Release notes",
                 "published_at": "2026-07-26T00:00:00Z"
             })

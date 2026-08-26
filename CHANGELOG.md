@@ -2,13 +2,28 @@
 
 All notable changes to Vividarium are documented in this file.
 
-## [Unreleased]
+## [3.1.0] - 2026-08-26
+
+### Added
+
+- Added taxonomy-aware photo display paths and mapping match provenance across photo and mapping views.
+- Added clearer Custom SQL result navigation, export, and execution feedback.
+- Added safer background-task ownership and cancellation behavior.
 
 ### Changed
 
-- Upgraded released schema-2 databases directly to schema 3 and included complete photo mapping provenance storage.
-- Made ordinary Settings autosave without triggering implicit photo remapping or renaming; passing Hook tests save their tested snapshot.
-- Routed transient Settings and taxonomy-based rename feedback through the owning tab status bar.
+- Made ordinary Settings autosave while keeping remapping and taxonomy-based renaming explicitly user-triggered.
+- Improved taxonomy matching, name-family handling, hierarchy display, and mapping review UX.
+- Improved photo headers, status bars, context menus, fullscreen behavior, keyboard navigation, and taxonomy display.
+- Upgraded Vividarium 3.0.0 schema-2 databases automatically to schema 3.
+- Hardened the desktop release and updater pipeline with version, signature, manifest, and artifact validation.
+
+### Fixed
+
+- Fixed non-cancellable operations being dismissible while mutations were still running.
+- Fixed taxonomy-based rename failures caused by missing mapping provenance storage after upgrade.
+- Fixed stale Settings save/test status and cross-Hook async result presentation.
+- Fixed several Custom SQL result-layout and multi-statement execution issues.
 
 ## [3.0.0] - 2026-08-14
 

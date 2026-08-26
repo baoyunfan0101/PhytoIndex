@@ -87,14 +87,16 @@ The macOS configuration uses `signingIdentity: "-"`. This creates an ad-hoc sign
 From the repository root:
 
 ```bash
+VERSION=$(node -p "require('./apps/desktop/package.json').version")
+
 codesign --verify --deep --strict --verbose=2 \
   target/aarch64-apple-darwin/release/bundle/macos/Vividarium.app
 
 hdiutil verify \
-  target/aarch64-apple-darwin/release/bundle/dmg/Vividarium_<version>_aarch64.dmg
+  "target/aarch64-apple-darwin/release/bundle/dmg/Vividarium_${VERSION}_aarch64.dmg"
 
 shasum -a 256 \
-  target/aarch64-apple-darwin/release/bundle/dmg/Vividarium_<version>_aarch64.dmg
+  "target/aarch64-apple-darwin/release/bundle/dmg/Vividarium_${VERSION}_aarch64.dmg"
 ```
 
 Gatekeeper assessment is expected to reject this private build because it is not notarized.
@@ -143,7 +145,8 @@ The installer uses the WebView2 download bootstrapper. If WebView2 is absent, in
 ### Verify
 
 ```powershell
-$Installer = "target\x86_64-pc-windows-msvc\release\bundle\nsis\Vividarium_<version>_x64-setup.exe"
+$Version = (Get-Content apps\desktop\package.json | ConvertFrom-Json).version
+$Installer = "target\x86_64-pc-windows-msvc\release\bundle\nsis\Vividarium_${Version}_x64-setup.exe"
 
 Get-FileHash $Installer -Algorithm SHA256
 Get-AuthenticodeSignature $Installer

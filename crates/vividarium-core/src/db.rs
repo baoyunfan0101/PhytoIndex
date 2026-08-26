@@ -865,9 +865,8 @@ impl Database {
         let Some(library) = self.active_photo_library()? else {
             return Ok(());
         };
-        let root_path = Path::new(&library.root_path);
         let database_path = Path::new(&library.db_path);
-        if !root_path.is_dir() || !database_path.exists() {
+        if !database_path.exists() {
             return Ok(());
         }
         initialize_existing_file(database_path, PHOTO_SCHEMA)?;

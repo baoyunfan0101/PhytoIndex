@@ -301,6 +301,61 @@ fn opening_retains_an_offline_active_photo_library_registration() {
 }
 
 #[test]
+fn opening_migrates_an_active_photo_library_with_a_missing_root() {
+    let directory = tempfile::tempdir().unwrap();
+    let missing_root = directory.path().join("missing-photos");
+    fs::create_dir_all(&missing_root).unwrap();
+    let metadata_path = directory.path().join("metadata.db");
+    let database = Database::open(&metadata_path).unwrap();
+    let database_path = directory.path().join("library.db");
+    let library = database
+        .register_photo_library(&missing_root, &database_path, Some("Offline root"))
+        .unwrap();
+    let connection = open_existing_connection(&database_path).unwrap();
+    connection
+        .execute_batch(
+            r#"
+            DROP TRIGGER photo_taxon_mapping_au_names;
+            DROP TABLE photo_taxon_mapping_names;
+            PRAGMA user_version = 2;
+            "#,
+        )
+        .unwrap();
+    fs::remove_dir(&missing_root).unwrap();
+    drop(database);
+
+    let database = Database::open(&metadata_path).unwrap();
+    assert!(!missing_root.exists());
+    assert_eq!(
+        database
+            .active_photo_library()
+            .unwrap()
+            .unwrap()
+            .library_uuid,
+        library.library_uuid
+    );
+    let connection = open_existing_connection(&database_path).unwrap();
+    assert_eq!(schema_version(&connection), SCHEMA_VERSION);
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_schema WHERE name = 'photo_taxon_mapping_names'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        1
+    );
+
+    let rebound_root = directory.path().join("rebound-photos");
+    fs::create_dir_all(&rebound_root).unwrap();
+    database
+        .rebind_photo_library_root(&library.library_uuid, &rebound_root)
+        .unwrap();
+    assert!(crate::photos::is_initial_index_complete(&database, &library.library_uuid).is_ok());
+}
+
+#[test]
 fn rebinds_a_missing_active_library_database_and_restores_sync() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("photos");
