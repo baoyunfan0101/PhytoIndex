@@ -224,6 +224,83 @@ fn ordinary_connections_do_not_recreate_a_missing_active_library() {
 }
 
 #[test]
+fn opening_migrates_only_the_online_active_photo_library() {
+    let directory = tempfile::tempdir().unwrap();
+    let active_root = directory.path().join("active-photos");
+    let inactive_root = directory.path().join("inactive-photos");
+    fs::create_dir_all(&active_root).unwrap();
+    fs::create_dir_all(&inactive_root).unwrap();
+    let metadata_path = directory.path().join("metadata.db");
+    let database = Database::open(&metadata_path).unwrap();
+    let active_path = directory.path().join("active.db");
+    let active = database
+        .register_photo_library(&active_root, &active_path, Some("Active"))
+        .unwrap();
+    let inactive_path = directory.path().join("inactive.db");
+    let inactive = database
+        .register_photo_library(&inactive_root, &inactive_path, Some("Inactive"))
+        .unwrap();
+    database.switch_photo_library(&active.library_uuid).unwrap();
+    for path in [&active_path, &inactive_path] {
+        let connection = open_existing_connection(path).unwrap();
+        connection
+            .execute_batch(
+                r#"
+                DROP TRIGGER photo_taxon_mapping_au_names;
+                DROP TABLE photo_taxon_mapping_names;
+                PRAGMA user_version = 2;
+                "#,
+            )
+            .unwrap();
+    }
+    drop(database);
+
+    let database = Database::open(&metadata_path).unwrap();
+    assert_eq!(
+        schema_version(&open_existing_connection(&active_path).unwrap()),
+        SCHEMA_VERSION
+    );
+    assert_eq!(
+        schema_version(&open_existing_connection(&inactive_path).unwrap()),
+        2
+    );
+
+    database
+        .switch_photo_library(&inactive.library_uuid)
+        .unwrap();
+    assert_eq!(
+        schema_version(&open_existing_connection(&inactive_path).unwrap()),
+        SCHEMA_VERSION
+    );
+}
+
+#[test]
+fn opening_retains_an_offline_active_photo_library_registration() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("photos");
+    fs::create_dir_all(&root).unwrap();
+    let metadata_path = directory.path().join("metadata.db");
+    let database = Database::open(&metadata_path).unwrap();
+    let database_path = directory.path().join("library.db");
+    let library = database
+        .register_photo_library(&root, &database_path, Some("Offline"))
+        .unwrap();
+    fs::remove_file(&database_path).unwrap();
+    drop(database);
+
+    let database = Database::open(&metadata_path).unwrap();
+    assert_eq!(
+        database
+            .active_photo_library()
+            .unwrap()
+            .unwrap()
+            .library_uuid,
+        library.library_uuid
+    );
+    assert!(!database_path.exists());
+}
+
+#[test]
 fn rebinds_a_missing_active_library_database_and_restores_sync() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("photos");

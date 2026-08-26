@@ -856,8 +856,22 @@ impl Database {
         initialize_file(&self.taxonomy_path()?, TAXONOMY_SCHEMA)?;
         self.ensure_taxonomy_identity()?;
         self.seed_metadata()?;
+        self.initialize_active_photo_library_if_online()?;
         crate::taxonomy::sync::dispatch_pending_events(self)?;
         Ok(())
+    }
+
+    fn initialize_active_photo_library_if_online(&self) -> CoreResult<()> {
+        let Some(library) = self.active_photo_library()? else {
+            return Ok(());
+        };
+        let root_path = Path::new(&library.root_path);
+        let database_path = Path::new(&library.db_path);
+        if !root_path.is_dir() || !database_path.exists() {
+            return Ok(());
+        }
+        initialize_existing_file(database_path, PHOTO_SCHEMA)?;
+        ensure_photo_library_index_state(&open_existing_connection(database_path)?)
     }
 
     fn ensure_taxonomy_identity(&self) -> CoreResult<()> {
