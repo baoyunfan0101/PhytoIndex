@@ -15,7 +15,7 @@ import {
 import { Button, SectionHeader } from "../../shared/ui";
 
 export function AboutSettings() {
-  const [version, setVersion] = useState("3.0.0");
+  const [version, setVersion] = useState("Loading...");
   const [availableUpdate, setAvailableUpdate] = useState<AppUpdateInfo | null>(null);
   const [updateBusy, setUpdateBusy] = useState(false);
   const [updateMessage, setUpdateMessage] = useState("Updates are delivered from GitHub Releases.");
