@@ -718,6 +718,31 @@ fn migrates_v2_photo_libraries_with_mapping_provenance() {
 }
 
 #[test]
+fn failed_v2_photo_migration_keeps_the_original_schema_version() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("photos.db");
+    initialize_file(&path, PHOTO_SCHEMA).unwrap();
+    let connection = open_existing_connection(&path).unwrap();
+    connection.pragma_update(None, "user_version", 2).unwrap();
+    drop(connection);
+
+    assert!(initialize_existing_file(&path, PHOTO_SCHEMA).is_err());
+
+    let connection = open_existing_connection(&path).unwrap();
+    assert_eq!(schema_version(&connection), 2);
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_schema WHERE name = 'photo_taxon_mapping_names'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        1
+    );
+}
+
+#[test]
 fn migrates_v2_metadata_database_to_v3() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("metadata.db");
@@ -731,6 +756,159 @@ fn migrates_v2_metadata_database_to_v3() {
     assert_eq!(
         schema_version(&open_existing_connection(&path).unwrap()),
         SCHEMA_VERSION
+    );
+}
+
+#[test]
+fn released_v3_0_fixture_upgrades_the_active_library_without_data_loss() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("photos");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("original.JPG"), b"photo").unwrap();
+    let metadata_path = directory.path().join("metadata.db");
+    let taxonomy_path = directory.path().join("taxonomy.db");
+    let photo_path = directory.path().join("photos.db");
+    let library_uuid = "released-v3-0-library";
+
+    let metadata = Connection::open(&metadata_path).unwrap();
+    metadata
+        .execute_batch(include_str!("../../tests/fixtures/schema-v2/metadata.sql"))
+        .unwrap();
+    metadata
+        .execute(
+            r#"
+            INSERT INTO storage_settings (
+                settings_id, taxonomy_db_path,
+                default_taxonomy_directory, default_photo_library_directory
+            ) VALUES (1, ?, ?, ?)
+            "#,
+            params![
+                path_string(&taxonomy_path),
+                path_string(directory.path()),
+                path_string(directory.path())
+            ],
+        )
+        .unwrap();
+    metadata
+        .execute(
+            "INSERT INTO photo_libraries (library_uuid, display_name, root_path, db_path) VALUES (?, 'Released', ?, ?)",
+            params![library_uuid, path_string(&root), path_string(&photo_path)],
+        )
+        .unwrap();
+    metadata
+        .execute(
+            "INSERT INTO active_photo_library (active_id, library_uuid) VALUES (1, ?)",
+            [library_uuid],
+        )
+        .unwrap();
+    drop(metadata);
+
+    let taxonomy = Connection::open(&taxonomy_path).unwrap();
+    taxonomy
+        .execute_batch(include_str!("../../tests/fixtures/schema-v2/taxonomy.sql"))
+        .unwrap();
+    taxonomy
+        .execute(
+            "INSERT INTO taxonomy_identity (identity_id, taxonomy_identity) VALUES (1, 'released-v3-0-taxonomy')",
+            [],
+        )
+        .unwrap();
+    taxonomy
+        .execute("INSERT INTO taxa (taxon_id, rank) VALUES (1, 5)", [])
+        .unwrap();
+    taxonomy
+        .execute(
+            "INSERT INTO taxon_names (name_id, taxon_id, name_type, name) VALUES (1, 1, 1, 'Canis lupus')",
+            [],
+        )
+        .unwrap();
+    drop(taxonomy);
+
+    let photo = Connection::open(&photo_path).unwrap();
+    photo
+        .execute_batch(include_str!("../../tests/fixtures/schema-v2/photo.sql"))
+        .unwrap();
+    photo
+        .execute(
+            r#"
+            INSERT INTO photo_library (
+                library_id, library_uuid, root_path,
+                bound_taxonomy_identity, last_taxonomy_sync_id
+            ) VALUES (1, ?, ?, 'released-v3-0-taxonomy', 0)
+            "#,
+            params![library_uuid, path_string(&root)],
+        )
+        .unwrap();
+    photo
+        .execute(
+            "INSERT INTO photo_directories (directory_id, name, relative_path) VALUES (1, 'photos', '')",
+            [],
+        )
+        .unwrap();
+    photo
+        .execute(
+            "INSERT INTO photos (photo_id, directory_id, filename, file_size, modified_at_ns) VALUES (1, 1, 'original.JPG', 5, 1)",
+            [],
+        )
+        .unwrap();
+    photo
+        .execute(
+            "INSERT INTO photo_taxon_mapping (photo_id, taxon_id, status) VALUES (1, 1, 'matched')",
+            [],
+        )
+        .unwrap();
+    drop(photo);
+
+    let database = Database::open(&metadata_path).unwrap();
+    for path in [&metadata_path, &taxonomy_path, &photo_path] {
+        let connection = open_existing_connection(path).unwrap();
+        assert_eq!(schema_version(&connection), SCHEMA_VERSION);
+        assert_eq!(
+            connection
+                .query_row("PRAGMA foreign_key_check", [], |row| row
+                    .get::<_, String>(0))
+                .optional()
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            connection
+                .query_row("PRAGMA quick_check", [], |row| row.get::<_, String>(0))
+                .unwrap(),
+            "ok"
+        );
+    }
+    assert_eq!(
+        crate::photos::get_photo(&database, 1)
+            .unwrap()
+            .unwrap()
+            .filename,
+        "original.JPG"
+    );
+    assert_eq!(
+        crate::mapping::get_photo_mapping(&database, 1)
+            .unwrap()
+            .taxon_id,
+        Some(1)
+    );
+    assert!(crate::mapping::get_photo_mapping_detail(&database, 1).is_ok());
+    assert_eq!(
+        crate::photos::rename_photo_from_taxon(&database, 1)
+            .unwrap()
+            .filename,
+        "Canis lupus.JPG"
+    );
+    assert!(root.join("Canis lupus.JPG").is_file());
+    assert_eq!(
+        open_existing_connection(&photo_path)
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_schema WHERE name = 'photo_taxon_mapping_names'",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        1
     );
 }
 
