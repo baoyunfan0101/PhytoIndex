@@ -7,10 +7,11 @@ registration. The application uses three database roles:
 - one independently located taxonomy database;
 - one or more independently located photo library databases.
 
-Vividarium 3.0.0 databases use schema `2`. The next application version opens
-schema-2 metadata, taxonomy, and Photo Library databases by upgrading them
-directly to schema `3`. Fresh databases use schema `3`; other versions are
-rejected.
+Vividarium 3.0.0 databases use schema `2`. Vividarium 3.1.0 upgrades supported
+schema-2 metadata, taxonomy, and Photo Library databases directly to schema
+`3`. Fresh databases use schema `3`; other versions are rejected. The upgrade
+is forward-only, so databases opened by 3.1.0 are not supported by Vividarium
+3.0.0.
 
 ## Types
 
@@ -36,7 +37,7 @@ rejected.
 
 | Interface | Parameters | Return | Description |
 | --- | --- | --- | --- |
-| `Database::open` | `metadata_path` | `CoreResult<Database>` | Open or initialize metadata and taxonomy storage. No photo library is created automatically, and an unavailable registered photo library does not block startup. |
+| `Database::open` | `metadata_path` | `CoreResult<Database>` | Open or initialize metadata and taxonomy storage, then upgrade an online active Photo Library before application work resumes. No photo library is created automatically, and an unavailable registered photo library does not block startup. |
 | `Database::metadata_path` | none | `PathBuf` | Return the metadata database path. |
 | `Database::taxonomy_path` | none | `CoreResult<PathBuf>` | Return the configured taxonomy database path. |
 | `Database::locations` | none | `CoreResult<DatabaseLocations>` | Return all current and default locations. |

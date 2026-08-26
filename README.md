@@ -132,7 +132,10 @@ OpenStreetMap is available without configuration. Tianditu can be selected under
 - Vividarium has no account system and no application cloud sync.
 - Network access is used only for selected map tiles, update checks, and links that the user explicitly opens.
 
-Database schema version `2` is required. Databases with another schema version are rejected; no migration interface is provided.
+Vividarium 3.0.0 databases use schema `2`. Vividarium 3.1.0 automatically
+upgrades supported schema-2 metadata, taxonomy, and Photo Library databases to
+schema `3`. The upgrade is forward-only: databases opened by 3.1.0 are not
+supported by Vividarium 3.0.0.
 
 <details>
 <summary><strong>Architecture</strong></summary>
