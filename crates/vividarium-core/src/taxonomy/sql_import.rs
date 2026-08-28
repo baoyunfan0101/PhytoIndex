@@ -4,6 +4,7 @@ use std::fs::File;
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, TryLockError};
+use std::time::Duration;
 
 use base64::Engine;
 use rusqlite::ffi;
@@ -235,6 +236,24 @@ fn execute_sql_import_sql_in_workspace(
     progress: &mut (dyn FnMut(OperationProgress) + Send),
     cancellation: &CancellationToken,
 ) -> CoreResult<SqlImportExecutionResult> {
+    execute_sql_import_sql_in_workspace_with_timeout(
+        database,
+        request,
+        workspace,
+        progress,
+        cancellation,
+        SQL_IMPORT_STATEMENT_TIMEOUT,
+    )
+}
+
+fn execute_sql_import_sql_in_workspace_with_timeout(
+    database: &Database,
+    request: &ValidateSqlImportRequest,
+    workspace: &Path,
+    progress: &mut (dyn FnMut(OperationProgress) + Send),
+    cancellation: &CancellationToken,
+    statement_timeout: Duration,
+) -> CoreResult<SqlImportExecutionResult> {
     cancellation.check()?;
     let sql = request.sql.trim();
     if sql.is_empty() {
@@ -267,9 +286,17 @@ fn execute_sql_import_sql_in_workspace(
             return Err(error);
         }
         attached.push("taxonomy".into());
-        let execution =
-            execute_sql_import_script(&connection, &sql, &staging_path, progress, cancellation);
-        report_progress(progress, FINALIZING_STAGING_DATABASE, None, None, None);
+        let execution = execute_sql_import_script_guarded(
+            &connection,
+            &sql,
+            &staging_path,
+            progress,
+            cancellation,
+            statement_timeout,
+        );
+        if execution.is_ok() {
+            report_progress(progress, FINALIZING_STAGING_DATABASE, None, None, None);
+        }
         let attachments = validate_sql_import_attachments(&connection, &attached);
         let autocommit = unsafe { ffi::sqlite3_get_autocommit(connection.handle()) != 0 };
         if !autocommit {
@@ -903,12 +930,13 @@ fn candidate_metadata(path: &Path) -> CoreResult<TaxonomyImportMetadata> {
     .map_err(Into::into)
 }
 
-fn execute_sql_import_script(
+fn execute_sql_import_script_guarded(
     connection: &Connection,
     sql: &str,
     staging_path: &str,
     progress: &mut (dyn FnMut(OperationProgress) + Send),
     cancellation: &CancellationToken,
+    statement_timeout: Duration,
 ) -> CoreResult<Vec<SqlStatementMessage>> {
     let mut offset = 0;
     let mut messages = Vec::new();
@@ -931,7 +959,7 @@ fn execute_sql_import_script(
                 &SqlStatementExecutionContext {
                     cancellation,
                     limits: SqlStatementExecutionLimits {
-                        timeout: SQL_IMPORT_STATEMENT_TIMEOUT,
+                        timeout: statement_timeout,
                     },
                     statement_index,
                     statement_total,
@@ -957,6 +985,24 @@ fn execute_sql_import_script(
         }
     }
     Ok(messages)
+}
+
+#[cfg(test)]
+fn execute_sql_import_script(
+    connection: &Connection,
+    sql: &str,
+    staging_path: &str,
+    progress: &mut (dyn FnMut(OperationProgress) + Send),
+    cancellation: &CancellationToken,
+) -> CoreResult<Vec<SqlStatementMessage>> {
+    execute_sql_import_script_guarded(
+        connection,
+        sql,
+        staging_path,
+        progress,
+        cancellation,
+        SQL_IMPORT_STATEMENT_TIMEOUT,
+    )
 }
 
 fn validate_sql_import_attachments(

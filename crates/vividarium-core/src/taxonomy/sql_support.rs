@@ -71,6 +71,38 @@ unsafe fn execute_one_statement_guarded(
     stop_read_only_after_preview: bool,
     context: &SqlStatementExecutionContext<'_>,
 ) -> CoreResult<RawScriptStep> {
+    let started_at = Instant::now();
+    let result = with_sql_statement_guard(connection, context, || unsafe {
+        execute_one_statement_raw(
+            connection,
+            sql_tail,
+            maximum_result_rows,
+            stop_read_only_after_preview,
+        )
+    });
+    let elapsed = started_at.elapsed();
+    if let Ok(step) = &result {
+        if let Some(statement) = &step.statement {
+            eprintln!(
+                "{} statement {}/{} completed in {} ms (read_only={}, returned_rows={}, affected_rows={})",
+                context.workflow,
+                context.statement_index,
+                context.statement_total,
+                elapsed.as_millis(),
+                statement.read_only,
+                statement.returned_rows,
+                statement.affected_rows
+            );
+        }
+    }
+    result
+}
+
+pub(super) fn with_sql_statement_guard<T>(
+    connection: &Connection,
+    context: &SqlStatementExecutionContext<'_>,
+    execute: impl FnOnce() -> CoreResult<T>,
+) -> CoreResult<T> {
     context.cancellation.check()?;
     let started_at = Instant::now();
     let deadline = started_at + context.limits.timeout;
@@ -90,15 +122,10 @@ unsafe fn execute_one_statement_guarded(
             false
         }),
     );
-    let result = unsafe {
-        execute_one_statement_raw(
-            connection,
-            sql_tail,
-            maximum_result_rows,
-            stop_read_only_after_preview,
-        )
-    };
-    connection.progress_handler(0, None::<fn() -> bool>);
+    let result = execute();
+    context
+        .cancellation
+        .install_sqlite_progress_handler(connection);
     let elapsed = started_at.elapsed();
     if timed_out.load(Ordering::Acquire) {
         eprintln!(
@@ -125,20 +152,6 @@ unsafe fn execute_one_statement_guarded(
             elapsed.as_millis()
         );
         return Err(CoreError::Cancelled);
-    }
-    if let Ok(step) = &result {
-        if let Some(statement) = &step.statement {
-            eprintln!(
-                "{} statement {}/{} completed in {} ms (read_only={}, returned_rows={}, affected_rows={})",
-                context.workflow,
-                context.statement_index,
-                context.statement_total,
-                elapsed.as_millis(),
-                statement.read_only,
-                statement.returned_rows,
-                statement.affected_rows
-            );
-        }
     }
     result
 }

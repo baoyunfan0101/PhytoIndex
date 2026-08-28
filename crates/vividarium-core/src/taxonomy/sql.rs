@@ -12,7 +12,8 @@ use serde::{Deserialize, Serialize};
 
 use super::formatted::{
     affected_taxon_ids_from_changeset, start_taxonomy_session,
-    validate_taxonomy_changes_with_cancellation, validate_taxonomy_with_progress_and_cancellation,
+    taxonomy_validation_scope_with_cancellation, validate_taxonomy_changes_with_cancellation,
+    validate_taxonomy_with_progress_and_cancellation,
 };
 #[cfg(test)]
 use super::sql_inputs::SqlInputKind;
@@ -23,7 +24,7 @@ use super::sql_inputs::{
 use super::sql_support::{
     CUSTOM_SQL_STATEMENT_TIMEOUT, SqlStatementExecutionContext, SqlStatementExecutionLimits,
     count_sql_statements, execute_preview_statement_guarded, prepare_statement_raw, sqlite_error,
-    statement_columns, statement_row,
+    statement_columns, statement_row, with_sql_statement_guard,
 };
 use crate::metadata::{self, MetadataKey};
 use crate::operations::{self, NewAuditRow, NewOperation};
@@ -194,12 +195,8 @@ pub fn execute_custom_taxonomy_sql_with_progress_and_cancellation(
             cancellation,
             CUSTOM_SQL_STATEMENT_TIMEOUT,
         )?;
-        cancellation.install_sqlite_progress_handler(&transaction);
-        let mut changeset_blob = Vec::new();
-        session.changeset_strm(&mut changeset_blob)?;
-        drop(session);
-        result.changeset_size = changeset_blob.len();
-        if changeset_blob.is_empty() {
+        if session.is_empty() {
+            drop(session);
             cancellation.check()?;
             report_custom_sql_progress(progress, "committing_custom_sql", None, None, None);
             transaction.commit()?;
@@ -213,12 +210,21 @@ pub fn execute_custom_taxonomy_sql_with_progress_and_cancellation(
             None,
             None,
         );
+        let mut changeset_blob = Vec::new();
+        session.changeset_strm(&mut changeset_blob)?;
+        drop(session);
+        result.changeset_size = changeset_blob.len();
         let affected_taxon_ids = affected_taxon_ids_from_changeset(&transaction, &changeset_blob)?;
+        let validation_scope = taxonomy_validation_scope_with_cancellation(
+            &transaction,
+            &affected_taxon_ids,
+            cancellation,
+        )?;
         report_custom_sql_progress(progress, "validating_custom_sql_changes", None, None, None);
-        if affected_taxon_ids.len() <= INCREMENTAL_VALIDATION_TAXON_LIMIT {
+        if should_incrementally_validate(&validation_scope) {
             validate_taxonomy_changes_with_cancellation(
                 &transaction,
-                &affected_taxon_ids,
+                &validation_scope,
                 cancellation,
             )?;
         } else {
@@ -264,6 +270,10 @@ pub fn execute_custom_taxonomy_sql_with_progress_and_cancellation(
     Ok(result)
 }
 
+fn should_incrementally_validate(validation_scope: &BTreeSet<i64>) -> bool {
+    validation_scope.len() <= INCREMENTAL_VALIDATION_TAXON_LIMIT
+}
+
 pub fn export_custom_taxonomy_query(
     database: &Database,
     request: &CustomTaxonomySqlExportRequest,
@@ -297,6 +307,8 @@ pub fn export_custom_taxonomy_query_with_cancellation(
         request.statement_index,
         &request.destination_path,
         delimiter,
+        cancellation,
+        CUSTOM_SQL_STATEMENT_TIMEOUT,
     );
     let detach = detach_sources(&connection, &attached);
     let result = cancellation.normalize(match (export, detach) {
@@ -519,7 +531,10 @@ fn export_query_statement(
     statement_index: usize,
     destination_path: &Path,
     delimiter: u8,
+    cancellation: &CancellationToken,
+    statement_timeout: Duration,
 ) -> CoreResult<SqlExportResult> {
+    let statement_total = count_sql_statements(sql)?;
     connection.authorizer(Some(custom_sql_authorizer()));
     let result = unsafe {
         export_query_statement_raw(
@@ -528,6 +543,9 @@ fn export_query_statement(
             statement_index,
             destination_path,
             delimiter,
+            cancellation,
+            statement_timeout,
+            statement_total,
         )
     };
     connection.authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
@@ -540,6 +558,9 @@ unsafe fn export_query_statement_raw(
     target_statement_index: usize,
     destination_path: &Path,
     delimiter: u8,
+    cancellation: &CancellationToken,
+    statement_timeout: Duration,
+    statement_total: u64,
 ) -> CoreResult<SqlExportResult> {
     if target_statement_index == 0 {
         return Err(CoreError::InvalidArgument(
@@ -583,19 +604,43 @@ unsafe fn export_query_statement_raw(
     let columns = unsafe { statement_columns(statement.0, column_count) };
     writer.write_record(columns.iter().map(|column| column.name.as_str()))?;
     let mut row_count = 0_u64;
-    loop {
-        let step = unsafe { ffi::sqlite3_step(statement.0) };
-        match step {
-            ffi::SQLITE_ROW => {
-                let row = unsafe { statement_row(statement.0, column_count) };
-                writer.write_record(row.iter().map(SqlValue::csv_value))?;
-                row_count += 1;
+    let execution = with_sql_statement_guard(
+        connection,
+        &SqlStatementExecutionContext {
+            cancellation,
+            limits: SqlStatementExecutionLimits {
+                timeout: statement_timeout,
+            },
+            statement_index: target_statement_index as u64,
+            statement_total,
+            workflow: "Custom SQL Export",
+        },
+        || {
+            loop {
+                let step = unsafe { ffi::sqlite3_step(statement.0) };
+                match step {
+                    ffi::SQLITE_ROW => {
+                        let row = unsafe { statement_row(statement.0, column_count) };
+                        writer.write_record(row.iter().map(SqlValue::csv_value))?;
+                        row_count += 1;
+                    }
+                    ffi::SQLITE_DONE => break,
+                    code => return Err(sqlite_error(database, code)),
+                }
             }
-            ffi::SQLITE_DONE => break,
-            code => return Err(sqlite_error(database, code)),
-        }
+            Ok(())
+        },
+    );
+    if let Err(error) = execution {
+        drop(writer);
+        let _ = std::fs::remove_file(destination_path);
+        return Err(error);
     }
-    writer.flush()?;
+    if let Err(error) = writer.flush() {
+        drop(writer);
+        let _ = std::fs::remove_file(destination_path);
+        return Err(error.into());
+    }
     Ok(SqlExportResult {
         path: destination_path.to_string_lossy().into_owned(),
         row_count,

@@ -2234,6 +2234,9 @@ fn cycle_taxon_ids_with_progress_and_cancellation(
     mut progress: impl FnMut(u64, u64),
     cancellation: Option<&CancellationToken>,
 ) -> CoreResult<HashSet<i64>> {
+    if let Some(cancellation) = cancellation {
+        cancellation.check()?;
+    }
     let mut states = HashMap::<i64, VisitState>::new();
     let mut cycle_taxa = HashSet::new();
     let total = by_id.len() as u64;
@@ -2245,7 +2248,14 @@ fn cycle_taxon_ids_with_progress_and_cancellation(
         let mut path = Vec::new();
         let mut path_positions = HashMap::new();
         let mut current_taxon_id = Some(origin_taxon_id);
+        let mut traversed = 0_usize;
         while let Some(taxon_id) = current_taxon_id {
+            traversed += 1;
+            if traversed.is_multiple_of(1_000) {
+                if let Some(cancellation) = cancellation {
+                    cancellation.check()?;
+                }
+            }
             if let Some(&position) = path_positions.get(&taxon_id) {
                 cycle_taxa.extend(path[position..].iter().copied());
                 break;
@@ -2293,7 +2303,7 @@ pub(super) fn validate_taxonomy(connection: &Connection) -> CoreResult<()> {
 
 pub(super) fn validate_taxonomy_changes_with_cancellation(
     connection: &Connection,
-    affected_taxon_ids: &BTreeSet<i64>,
+    validation_scope: &BTreeSet<i64>,
     cancellation: &CancellationToken,
 ) -> CoreResult<()> {
     cancellation.check()?;
@@ -2303,7 +2313,7 @@ pub(super) fn validate_taxonomy_changes_with_cancellation(
     {
         let mut insert = connection
             .prepare("INSERT OR IGNORE INTO vividarium_validation_taxa(taxon_id) VALUES (?)")?;
-        for (index, taxon_id) in affected_taxon_ids.iter().enumerate() {
+        for (index, taxon_id) in validation_scope.iter().enumerate() {
             if index.is_multiple_of(1_000) {
                 cancellation.check()?;
             }
@@ -2314,20 +2324,9 @@ pub(super) fn validate_taxonomy_changes_with_cancellation(
     let taxa = connection
         .prepare(
             r#"
-            WITH RECURSIVE relevant(taxon_id) AS (
-                SELECT taxon_id FROM vividarium_validation_taxa
-                UNION
-                SELECT taxa.taxon_id
-                FROM taxa
-                JOIN vividarium_validation_taxa AS changed
-                  ON changed.taxon_id = taxa.parent_taxon_id
-                UNION
-                SELECT taxa.parent_taxon_id
-                FROM taxa JOIN relevant ON taxa.taxon_id = relevant.taxon_id
-                WHERE taxa.parent_taxon_id IS NOT NULL
-            )
             SELECT taxa.taxon_id, taxa.parent_taxon_id, taxa.rank
-            FROM taxa JOIN relevant USING (taxon_id)
+            FROM taxa
+            JOIN vividarium_validation_taxa USING (taxon_id)
             "#,
         )?
         .query_map([], |row| {
@@ -2448,6 +2447,56 @@ pub(super) fn validate_taxonomy_changes_with_cancellation(
     }
     connection.execute_batch("DELETE FROM vividarium_validation_taxa")?;
     Ok(())
+}
+
+pub(super) fn taxonomy_validation_scope_with_cancellation(
+    connection: &Connection,
+    affected_taxon_ids: &BTreeSet<i64>,
+    cancellation: &CancellationToken,
+) -> CoreResult<BTreeSet<i64>> {
+    cancellation.check()?;
+    connection.execute_batch(
+        "CREATE TEMP TABLE IF NOT EXISTS vividarium_validation_taxa(taxon_id INTEGER PRIMARY KEY); DELETE FROM vividarium_validation_taxa;",
+    )?;
+    {
+        let mut insert = connection
+            .prepare("INSERT OR IGNORE INTO vividarium_validation_taxa(taxon_id) VALUES (?)")?;
+        for (index, taxon_id) in affected_taxon_ids.iter().enumerate() {
+            if index.is_multiple_of(1_000) {
+                cancellation.check()?;
+            }
+            insert.execute([taxon_id])?;
+        }
+    }
+    let mut statement = connection.prepare(
+        r#"
+        WITH RECURSIVE relevant(taxon_id) AS (
+            SELECT taxon_id FROM vividarium_validation_taxa
+            UNION
+            SELECT taxa.taxon_id
+            FROM taxa
+            JOIN vividarium_validation_taxa AS changed
+              ON changed.taxon_id = taxa.parent_taxon_id
+            UNION
+            SELECT taxa.parent_taxon_id
+            FROM taxa JOIN relevant ON taxa.taxon_id = relevant.taxon_id
+            WHERE taxa.parent_taxon_id IS NOT NULL
+        )
+        SELECT taxon_id FROM relevant
+        "#,
+    )?;
+    let mut scope = BTreeSet::new();
+    for (index, taxon_id) in statement
+        .query_map([], |row| row.get::<_, i64>(0))?
+        .enumerate()
+    {
+        if index.is_multiple_of(1_000) {
+            cancellation.check()?;
+        }
+        scope.insert(taxon_id?);
+    }
+    connection.execute_batch("DELETE FROM vividarium_validation_taxa")?;
+    Ok(scope)
 }
 
 pub(super) fn validate_taxonomy_with_progress_and_cancellation(

@@ -510,11 +510,13 @@ fn validate_stops_after_sql_execution_failure() {
     let directory = tempfile::tempdir().unwrap();
     let database = Database::open(directory.path().join("metadata.db")).unwrap();
 
-    let error = validate_sql_import(
+    let mut progress = Vec::new();
+    let error = validate_sql_import_with_progress(
         &database,
         &ValidateSqlImportRequest {
             sql: "SELECT * FROM missing_source;".into(),
         },
+        &mut |event| progress.push(event),
     )
     .unwrap_err();
 
@@ -522,6 +524,11 @@ fn validate_stops_after_sql_execution_failure() {
     let workspace = workspace(&database).unwrap();
     assert!(!workspace.join(CANDIDATE_DATABASE).exists());
     assert!(!workspace.join(VALIDATION_STATE).exists());
+    assert!(
+        progress
+            .iter()
+            .all(|event| event.stage != FINALIZING_STAGING_DATABASE)
+    );
 }
 
 #[test]
@@ -792,6 +799,54 @@ fn failed_execution_restores_existing_staging_and_validation() {
     )
     .unwrap_err();
 
+    assert!(validate_sql_import_candidate(&database).unwrap().can_apply);
+    assert_eq!(get_sql_import_sql(&database).unwrap(), SIMPLE_IMPORT_SQL);
+}
+
+#[test]
+fn sql_import_timeout_restores_all_previous_artifacts() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = Database::open(directory.path().join("metadata.db")).unwrap();
+    add_simple_input(&directory, &database);
+    execute_simple(&database);
+    assert!(validate_sql_import_candidate(&database).unwrap().can_apply);
+    let workspace = workspace(&database).unwrap();
+    let artifacts = [STAGING_DATABASE, CANDIDATE_DATABASE, VALIDATION_STATE]
+        .map(|filename| (filename, fs::read(workspace.join(filename)).unwrap()));
+    let mut progress = Vec::new();
+    let request = ValidateSqlImportRequest {
+        sql: r#"
+            ATTACH DATABASE 'vividarium_sql_import.db' AS sql_import;
+            WITH RECURSIVE loop(value) AS (
+                SELECT 1
+                UNION ALL
+                SELECT value + 1 FROM loop
+            )
+            SELECT COUNT(*) FROM loop;
+        "#
+        .into(),
+    };
+
+    let error = execute_sql_import_sql_in_workspace_with_timeout(
+        &database,
+        &request,
+        &workspace,
+        &mut |event| progress.push(event),
+        &CancellationToken::new(),
+        Duration::from_millis(10),
+    )
+    .unwrap_err();
+
+    assert!(error.to_string().contains("SQL Import statement 2 of 2"));
+    assert!(error.to_string().contains("10 ms execution limit"));
+    assert!(
+        progress
+            .iter()
+            .all(|event| event.stage != FINALIZING_STAGING_DATABASE)
+    );
+    for (filename, expected) in artifacts {
+        assert_eq!(fs::read(workspace.join(filename)).unwrap(), expected);
+    }
     assert!(validate_sql_import_candidate(&database).unwrap().can_apply);
     assert_eq!(get_sql_import_sql(&database).unwrap(), SIMPLE_IMPORT_SQL);
 }

@@ -202,7 +202,7 @@ fn custom_sql_reports_statement_and_mutation_phases() {
         .iter()
         .map(|event| event.stage.as_str())
         .collect::<Vec<_>>();
-    for expected in [
+    let expected = [
         "preparing_sql_sources",
         "executing_custom_sql",
         "generating_custom_sql_changeset",
@@ -210,11 +210,15 @@ fn custom_sql_reports_statement_and_mutation_phases() {
         "recording_custom_sql_operation",
         "committing_custom_sql",
         "finalizing_custom_sql",
-    ] {
-        assert!(
-            stages.contains(&expected),
-            "missing progress stage {expected}"
-        );
+    ];
+    let mut previous = 0;
+    for expected in expected {
+        let index = stages[previous..]
+            .iter()
+            .position(|stage| *stage == expected)
+            .map(|index| index + previous)
+            .unwrap_or_else(|| panic!("missing progress stage {expected}: {stages:?}"));
+        previous = index;
     }
     let statements = progress
         .iter()
@@ -222,6 +226,53 @@ fn custom_sql_reports_statement_and_mutation_phases() {
         .map(|event| (event.current, event.total))
         .collect::<Vec<_>>();
     assert_eq!(statements, vec![(Some(1), Some(2)), (Some(2), Some(2))]);
+}
+
+#[test]
+fn read_only_custom_sql_skips_changeset_and_validation_progress() {
+    let (_directory, database) = database();
+    let mut progress = Vec::new();
+    execute_custom_taxonomy_sql_with_progress_and_cancellation(
+        &database,
+        &request("SELECT taxon_id FROM taxa"),
+        &mut |event| progress.push(event),
+        &CancellationToken::new(),
+    )
+    .unwrap();
+
+    let stages = progress
+        .iter()
+        .map(|event| event.stage.as_str())
+        .collect::<Vec<_>>();
+    assert!(!stages.contains(&"generating_custom_sql_changeset"));
+    assert!(!stages.contains(&"validating_custom_sql_changes"));
+}
+
+#[test]
+fn expanded_validation_scope_controls_incremental_fallback() {
+    let (_directory, database) = database();
+    let mut connection = database.connect_taxonomy().unwrap();
+    let transaction = connection.transaction().unwrap();
+    let root_id = transaction
+        .query_row("SELECT taxon_id FROM taxa", [], |row| row.get::<_, i64>(0))
+        .unwrap();
+    {
+        let mut insert = transaction
+            .prepare("INSERT INTO taxa(parent_taxon_id, rank) VALUES (?, 2)")
+            .unwrap();
+        for _ in 0..=INCREMENTAL_VALIDATION_TAXON_LIMIT {
+            insert.execute([root_id]).unwrap();
+        }
+    }
+    let scope = taxonomy_validation_scope_with_cancellation(
+        &transaction,
+        &BTreeSet::from([root_id]),
+        &CancellationToken::new(),
+    )
+    .unwrap();
+
+    assert_eq!(scope.len(), INCREMENTAL_VALIDATION_TAXON_LIMIT + 2);
+    assert!(!should_incrementally_validate(&scope));
 }
 
 #[test]
@@ -662,6 +713,40 @@ fn exports_a_complete_result_beyond_the_preview_limit() {
 }
 
 #[test]
+fn export_query_uses_the_custom_sql_statement_deadline() {
+    let directory = tempfile::tempdir().unwrap();
+    let destination = directory.path().join("timed-out.csv");
+    let connection = Connection::open_in_memory().unwrap();
+    let started_at = std::time::Instant::now();
+    let error = export_query_statement(
+        &connection,
+        r#"
+        WITH RECURSIVE loop(value) AS (
+            SELECT 1
+            UNION ALL
+            SELECT value + 1 FROM loop
+        )
+        SELECT COUNT(*) FROM loop
+        "#,
+        1,
+        &destination,
+        b',',
+        &CancellationToken::new(),
+        Duration::from_millis(10),
+    )
+    .unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("Custom SQL Export statement 1 of 1")
+    );
+    assert!(error.to_string().contains("10 ms execution limit"));
+    assert!(started_at.elapsed() < Duration::from_secs(1));
+    assert!(!destination.exists());
+}
+
+#[test]
 fn exports_only_the_selected_read_only_statement() {
     let (directory, database) = database();
     let destination = directory.path().join("second-statement.csv");
@@ -717,16 +802,21 @@ fn empty_query_export_contains_only_the_header() {
 fn export_rejects_mutations_and_invalid_statement_indexes() {
     let (directory, database) = database();
     let mutation_destination = directory.path().join("mutation.csv");
+    std::fs::write(&mutation_destination, "existing\n").unwrap();
     let mutation_error = export_custom_taxonomy_query(
         &database,
         &CustomTaxonomySqlExportRequest {
             sql: "UPDATE taxa SET geological_range = 'Changed' RETURNING taxon_id".into(),
             statement_index: 1,
-            destination_path: mutation_destination,
+            destination_path: mutation_destination.clone(),
         },
     )
     .unwrap_err();
     assert!(mutation_error.to_string().contains("read-only query"));
+    assert_eq!(
+        std::fs::read_to_string(mutation_destination).unwrap(),
+        "existing\n"
+    );
 
     let missing_destination = directory.path().join("missing.csv");
     let missing_error = export_custom_taxonomy_query(

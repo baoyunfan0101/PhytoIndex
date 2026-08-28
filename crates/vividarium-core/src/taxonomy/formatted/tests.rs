@@ -123,6 +123,20 @@ fn cycle_detection_handles_a_deep_valid_lineage_once() {
 }
 
 #[test]
+fn deep_cycle_detection_checks_cancellation_before_traversal() {
+    let by_id = (1..=100_000)
+        .map(|taxon_id| (taxon_id, ((taxon_id > 1).then_some(taxon_id - 1), 1)))
+        .collect::<HashMap<_, _>>();
+    let cancellation = CancellationToken::new();
+    cancellation.cancel();
+
+    let result =
+        cycle_taxon_ids_with_progress_and_cancellation(&by_id, |_, _| {}, Some(&cancellation));
+
+    assert!(matches!(result, Err(CoreError::Cancelled)));
+}
+
+#[test]
 fn parentage_validation_rejects_a_parentless_non_kingdom() {
     let error = validate_parentage(&[(1, None, 1), (2, None, 3)]).unwrap_err();
     assert!(
