@@ -249,30 +249,82 @@ fn read_only_custom_sql_skips_changeset_and_validation_progress() {
 }
 
 #[test]
-fn expanded_validation_scope_controls_incremental_fallback() {
+fn small_validation_scope_returns_expected_dependencies() {
     let (_directory, database) = database();
     let mut connection = database.connect_taxonomy().unwrap();
     let transaction = connection.transaction().unwrap();
     let root_id = transaction
         .query_row("SELECT taxon_id FROM taxa", [], |row| row.get::<_, i64>(0))
         .unwrap();
-    {
-        let mut insert = transaction
-            .prepare("INSERT INTO taxa(parent_taxon_id, rank) VALUES (?, 2)")
-            .unwrap();
-        for _ in 0..=INCREMENTAL_VALIDATION_TAXON_LIMIT {
-            insert.execute([root_id]).unwrap();
-        }
-    }
+    transaction
+        .execute(
+            "INSERT INTO taxa(parent_taxon_id, rank) VALUES (?, 2)",
+            [root_id],
+        )
+        .unwrap();
+    let child_id = transaction.last_insert_rowid();
+    transaction
+        .execute(
+            "INSERT INTO taxa(parent_taxon_id, rank) VALUES (?, 3)",
+            [child_id],
+        )
+        .unwrap();
+    let grandchild_id = transaction.last_insert_rowid();
     let scope = taxonomy_validation_scope_with_cancellation(
         &transaction,
-        &BTreeSet::from([root_id]),
+        &BTreeSet::from([child_id]),
+        10,
         &CancellationToken::new(),
     )
     .unwrap();
 
-    assert_eq!(scope.len(), INCREMENTAL_VALIDATION_TAXON_LIMIT + 2);
-    assert!(!should_incrementally_validate(&scope));
+    assert_eq!(
+        scope,
+        TaxonomyValidationScope::Incremental(BTreeSet::from([root_id, child_id, grandchild_id,]))
+    );
+}
+
+#[test]
+fn oversized_direct_validation_set_returns_full_before_querying_dependencies() {
+    let connection = Connection::open_in_memory().unwrap();
+
+    let scope = taxonomy_validation_scope_with_cancellation(
+        &connection,
+        &BTreeSet::from([1, 2, 3]),
+        2,
+        &CancellationToken::new(),
+    )
+    .unwrap();
+
+    assert_eq!(scope, TaxonomyValidationScope::Full);
+}
+
+#[test]
+fn oversized_dependency_closure_returns_full_without_carrying_the_closure() {
+    let (_directory, database) = database();
+    let mut connection = database.connect_taxonomy().unwrap();
+    let transaction = connection.transaction().unwrap();
+    let root_id = transaction
+        .query_row("SELECT taxon_id FROM taxa", [], |row| row.get::<_, i64>(0))
+        .unwrap();
+    for _ in 0..4 {
+        transaction
+            .execute(
+                "INSERT INTO taxa(parent_taxon_id, rank) VALUES (?, 2)",
+                [root_id],
+            )
+            .unwrap();
+    }
+
+    let scope = taxonomy_validation_scope_with_cancellation(
+        &transaction,
+        &BTreeSet::from([root_id]),
+        3,
+        &CancellationToken::new(),
+    )
+    .unwrap();
+
+    assert_eq!(scope, TaxonomyValidationScope::Full);
 }
 
 #[test]
@@ -718,6 +770,7 @@ fn export_query_uses_the_custom_sql_statement_deadline() {
     let destination = directory.path().join("timed-out.csv");
     let connection = Connection::open_in_memory().unwrap();
     let started_at = std::time::Instant::now();
+    let mut output_guard = PartialExportGuard::new(&destination);
     let error = export_query_statement(
         &connection,
         r#"
@@ -733,6 +786,7 @@ fn export_query_uses_the_custom_sql_statement_deadline() {
         b',',
         &CancellationToken::new(),
         Duration::from_millis(10),
+        &mut output_guard,
     )
     .unwrap_err();
 
@@ -743,6 +797,46 @@ fn export_query_uses_the_custom_sql_statement_deadline() {
     );
     assert!(error.to_string().contains("10 ms execution limit"));
     assert!(started_at.elapsed() < Duration::from_secs(1));
+    drop(output_guard);
+    assert!(!destination.exists());
+}
+
+#[test]
+fn export_cancellation_remains_distinct_and_removes_partial_output() {
+    let directory = tempfile::tempdir().unwrap();
+    let destination = directory.path().join("cancelled.csv");
+    let connection = Connection::open_in_memory().unwrap();
+    let cancellation = CancellationToken::new();
+    cancellation.cancel();
+    let mut output_guard = PartialExportGuard::new(&destination);
+
+    let result = export_query_statement(
+        &connection,
+        "SELECT 1 AS value",
+        1,
+        &destination,
+        b',',
+        &cancellation,
+        Duration::from_secs(1),
+        &mut output_guard,
+    );
+
+    assert!(matches!(result, Err(CoreError::Cancelled)));
+    assert!(destination.exists());
+    drop(output_guard);
+    assert!(!destination.exists());
+}
+
+#[test]
+fn partial_export_guard_removes_output_after_post_creation_failure() {
+    let directory = tempfile::tempdir().unwrap();
+    let destination = directory.path().join("partial.csv");
+    let mut output_guard = PartialExportGuard::new(&destination);
+    std::fs::write(&destination, "partial").unwrap();
+    output_guard.arm();
+
+    drop(output_guard);
+
     assert!(!destination.exists());
 }
 

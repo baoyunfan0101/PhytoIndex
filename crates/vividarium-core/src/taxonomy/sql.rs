@@ -11,7 +11,7 @@ use rusqlite::{Connection, OpenFlags, Transaction, TransactionBehavior, params, 
 use serde::{Deserialize, Serialize};
 
 use super::formatted::{
-    affected_taxon_ids_from_changeset, start_taxonomy_session,
+    TaxonomyValidationScope, affected_taxon_ids_from_changeset, start_taxonomy_session,
     taxonomy_validation_scope_with_cancellation, validate_taxonomy_changes_with_cancellation,
     validate_taxonomy_with_progress_and_cancellation,
 };
@@ -218,17 +218,21 @@ pub fn execute_custom_taxonomy_sql_with_progress_and_cancellation(
         let validation_scope = taxonomy_validation_scope_with_cancellation(
             &transaction,
             &affected_taxon_ids,
+            INCREMENTAL_VALIDATION_TAXON_LIMIT,
             cancellation,
         )?;
         report_custom_sql_progress(progress, "validating_custom_sql_changes", None, None, None);
-        if should_incrementally_validate(&validation_scope) {
-            validate_taxonomy_changes_with_cancellation(
-                &transaction,
-                &validation_scope,
-                cancellation,
-            )?;
-        } else {
-            validate_taxonomy_with_progress_and_cancellation(&transaction, |_| {}, cancellation)?;
+        match validation_scope {
+            TaxonomyValidationScope::Incremental(scope) => {
+                validate_taxonomy_changes_with_cancellation(&transaction, &scope, cancellation)?;
+            }
+            TaxonomyValidationScope::Full => {
+                validate_taxonomy_with_progress_and_cancellation(
+                    &transaction,
+                    |_| {},
+                    cancellation,
+                )?;
+            }
         }
         let full_remap_required = affected_taxon_ids.len() > 5000;
         report_custom_sql_progress(progress, "recording_custom_sql_operation", None, None, None);
@@ -270,10 +274,6 @@ pub fn execute_custom_taxonomy_sql_with_progress_and_cancellation(
     Ok(result)
 }
 
-fn should_incrementally_validate(validation_scope: &BTreeSet<i64>) -> bool {
-    validation_scope.len() <= INCREMENTAL_VALIDATION_TAXON_LIMIT
-}
-
 pub fn export_custom_taxonomy_query(
     database: &Database,
     request: &CustomTaxonomySqlExportRequest,
@@ -301,6 +301,7 @@ pub fn export_custom_taxonomy_query_with_cancellation(
     let sources = sql_inputs::stored_sources(database, SqlInputScope::CustomSql)?;
     let delimiter = crate::general::get_csv_delimiter_byte(database)?;
     let attached = prepare_sources(&mut connection, &sources, delimiter)?;
+    let mut output_guard = PartialExportGuard::new(&request.destination_path);
     let export = export_query_statement(
         &connection,
         sql,
@@ -309,6 +310,7 @@ pub fn export_custom_taxonomy_query_with_cancellation(
         delimiter,
         cancellation,
         CUSTOM_SQL_STATEMENT_TIMEOUT,
+        &mut output_guard,
     );
     let detach = detach_sources(&connection, &attached);
     let result = cancellation.normalize(match (export, detach) {
@@ -316,8 +318,8 @@ pub fn export_custom_taxonomy_query_with_cancellation(
         (Err(error), _) => Err(error),
         (Ok(_), Err(error)) => Err(error),
     });
-    if cancellation.is_cancelled() {
-        let _ = std::fs::remove_file(&request.destination_path);
+    if result.is_ok() {
+        output_guard.disarm();
     }
     result
 }
@@ -533,6 +535,7 @@ fn export_query_statement(
     delimiter: u8,
     cancellation: &CancellationToken,
     statement_timeout: Duration,
+    output_guard: &mut PartialExportGuard,
 ) -> CoreResult<SqlExportResult> {
     let statement_total = count_sql_statements(sql)?;
     connection.authorizer(Some(custom_sql_authorizer()));
@@ -546,6 +549,7 @@ fn export_query_statement(
             cancellation,
             statement_timeout,
             statement_total,
+            output_guard,
         )
     };
     connection.authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
@@ -561,6 +565,7 @@ unsafe fn export_query_statement_raw(
     cancellation: &CancellationToken,
     statement_timeout: Duration,
     statement_total: u64,
+    output_guard: &mut PartialExportGuard,
 ) -> CoreResult<SqlExportResult> {
     if target_statement_index == 0 {
         return Err(CoreError::InvalidArgument(
@@ -598,6 +603,7 @@ unsafe fn export_query_statement_raw(
         ));
     }
     let file = File::create(destination_path)?;
+    output_guard.arm();
     let mut writer = csv::WriterBuilder::new()
         .delimiter(delimiter)
         .from_writer(BufWriter::new(file));
@@ -631,20 +637,42 @@ unsafe fn export_query_statement_raw(
             Ok(())
         },
     );
-    if let Err(error) = execution {
-        drop(writer);
-        let _ = std::fs::remove_file(destination_path);
-        return Err(error);
-    }
-    if let Err(error) = writer.flush() {
-        drop(writer);
-        let _ = std::fs::remove_file(destination_path);
-        return Err(error.into());
-    }
+    execution?;
+    writer.flush()?;
     Ok(SqlExportResult {
         path: destination_path.to_string_lossy().into_owned(),
         row_count,
     })
+}
+
+struct PartialExportGuard {
+    path: PathBuf,
+    armed: bool,
+}
+
+impl PartialExportGuard {
+    fn new(path: &Path) -> Self {
+        Self {
+            path: path.to_path_buf(),
+            armed: false,
+        }
+    }
+
+    fn arm(&mut self) {
+        self.armed = true;
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for PartialExportGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
 }
 
 pub(super) fn prepare_sources(

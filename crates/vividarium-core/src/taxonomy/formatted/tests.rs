@@ -123,17 +123,31 @@ fn cycle_detection_handles_a_deep_valid_lineage_once() {
 }
 
 #[test]
-fn deep_cycle_detection_checks_cancellation_before_traversal() {
+fn deep_cycle_detection_observes_cancellation_during_traversal() {
     let by_id = (1..=100_000)
-        .map(|taxon_id| (taxon_id, ((taxon_id > 1).then_some(taxon_id - 1), 1)))
+        .map(|taxon_id| {
+            let parent_taxon_id = if taxon_id == 100_000 { 1 } else { taxon_id + 1 };
+            (taxon_id, (Some(parent_taxon_id), 1))
+        })
         .collect::<HashMap<_, _>>();
     let cancellation = CancellationToken::new();
-    cancellation.cancel();
+    let mut maximum_traversed = 0;
+    assert!(!cancellation.is_cancelled());
 
-    let result =
-        cycle_taxon_ids_with_progress_and_cancellation(&by_id, |_, _| {}, Some(&cancellation));
+    let result = cycle_taxon_ids_with_progress_cancellation_and_traversal_hook(
+        &by_id,
+        |_, _| {},
+        Some(&cancellation),
+        |traversed| {
+            maximum_traversed = maximum_traversed.max(traversed);
+            if traversed == 999 {
+                cancellation.cancel();
+            }
+        },
+    );
 
     assert!(matches!(result, Err(CoreError::Cancelled)));
+    assert_eq!(maximum_traversed, 1_000);
 }
 
 #[test]

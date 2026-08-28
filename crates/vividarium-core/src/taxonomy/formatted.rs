@@ -2231,8 +2231,22 @@ fn cycle_taxon_ids_with_progress(
 
 fn cycle_taxon_ids_with_progress_and_cancellation(
     by_id: &HashMap<i64, (Option<i64>, i64)>,
+    progress: impl FnMut(u64, u64),
+    cancellation: Option<&CancellationToken>,
+) -> CoreResult<HashSet<i64>> {
+    cycle_taxon_ids_with_progress_cancellation_and_traversal_hook(
+        by_id,
+        progress,
+        cancellation,
+        |_| {},
+    )
+}
+
+fn cycle_taxon_ids_with_progress_cancellation_and_traversal_hook(
+    by_id: &HashMap<i64, (Option<i64>, i64)>,
     mut progress: impl FnMut(u64, u64),
     cancellation: Option<&CancellationToken>,
+    mut traversal_hook: impl FnMut(usize),
 ) -> CoreResult<HashSet<i64>> {
     if let Some(cancellation) = cancellation {
         cancellation.check()?;
@@ -2251,6 +2265,7 @@ fn cycle_taxon_ids_with_progress_and_cancellation(
         let mut traversed = 0_usize;
         while let Some(taxon_id) = current_taxon_id {
             traversed += 1;
+            traversal_hook(traversed);
             if traversed.is_multiple_of(1_000) {
                 if let Some(cancellation) = cancellation {
                     cancellation.check()?;
@@ -2452,9 +2467,19 @@ pub(super) fn validate_taxonomy_changes_with_cancellation(
 pub(super) fn taxonomy_validation_scope_with_cancellation(
     connection: &Connection,
     affected_taxon_ids: &BTreeSet<i64>,
+    limit: usize,
     cancellation: &CancellationToken,
-) -> CoreResult<BTreeSet<i64>> {
+) -> CoreResult<TaxonomyValidationScope> {
     cancellation.check()?;
+    if affected_taxon_ids.len() > limit {
+        return Ok(TaxonomyValidationScope::Full);
+    }
+    let query_limit = limit.checked_add(1).ok_or_else(|| {
+        CoreError::InvalidArgument("incremental validation limit is too large".into())
+    })?;
+    let query_limit = i64::try_from(query_limit).map_err(|_| {
+        CoreError::InvalidArgument("incremental validation limit is too large".into())
+    })?;
     connection.execute_batch(
         "CREATE TEMP TABLE IF NOT EXISTS vividarium_validation_taxa(taxon_id INTEGER PRIMARY KEY); DELETE FROM vividarium_validation_taxa;",
     )?;
@@ -2483,20 +2508,37 @@ pub(super) fn taxonomy_validation_scope_with_cancellation(
             WHERE taxa.parent_taxon_id IS NOT NULL
         )
         SELECT taxon_id FROM relevant
+        LIMIT ?
         "#,
     )?;
     let mut scope = BTreeSet::new();
+    let mut exceeded_limit = false;
     for (index, taxon_id) in statement
-        .query_map([], |row| row.get::<_, i64>(0))?
+        .query_map([query_limit], |row| row.get::<_, i64>(0))?
         .enumerate()
     {
         if index.is_multiple_of(1_000) {
             cancellation.check()?;
         }
         scope.insert(taxon_id?);
+        if scope.len() > limit {
+            exceeded_limit = true;
+            break;
+        }
     }
+    drop(statement);
     connection.execute_batch("DELETE FROM vividarium_validation_taxa")?;
-    Ok(scope)
+    if exceeded_limit {
+        Ok(TaxonomyValidationScope::Full)
+    } else {
+        Ok(TaxonomyValidationScope::Incremental(scope))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum TaxonomyValidationScope {
+    Incremental(BTreeSet<i64>),
+    Full,
 }
 
 pub(super) fn validate_taxonomy_with_progress_and_cancellation(
