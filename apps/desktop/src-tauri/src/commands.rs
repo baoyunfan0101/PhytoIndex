@@ -1154,17 +1154,12 @@ where
     let database = state.database.clone();
     start(Box::new(move |progress| {
         let _active_task = active_task;
-        progress(OperationProgress {
-            stage: "executing_custom_sql".into(),
-            current: None,
-            total: None,
-            unit: None,
-        });
         #[cfg(test)]
         cancellation_test_support::pause("custom_sql", &owner_id);
-        let result = taxonomy::execute_custom_taxonomy_sql_with_cancellation(
+        let result = taxonomy::execute_custom_taxonomy_sql_with_progress_and_cancellation(
             &database,
             &request,
+            progress,
             &cancellation,
         )
         .map_err(error)?;

@@ -1,11 +1,30 @@
 use std::ffi::{CStr, CString};
 use std::ptr;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use base64::Engine;
 use rusqlite::{Connection, ffi};
 
 use super::sql::{SqlColumn, SqlValue};
-use crate::{CoreError, CoreResult};
+use crate::{CancellationToken, CoreError, CoreResult};
+
+pub(super) const CUSTOM_SQL_STATEMENT_TIMEOUT: Duration = Duration::from_secs(30);
+pub(super) const SQL_IMPORT_STATEMENT_TIMEOUT: Duration = Duration::from_secs(90);
+
+#[derive(Debug, Clone, Copy)]
+pub(super) struct SqlStatementExecutionLimits {
+    pub(super) timeout: Duration,
+}
+
+pub(super) struct SqlStatementExecutionContext<'a> {
+    pub(super) cancellation: &'a CancellationToken,
+    pub(super) limits: SqlStatementExecutionLimits,
+    pub(super) statement_index: u64,
+    pub(super) statement_total: u64,
+    pub(super) workflow: &'static str,
+}
 
 pub(super) struct RawScriptStep {
     pub(super) tail_offset: usize,
@@ -26,19 +45,131 @@ pub(super) struct RawStatementExecution {
     pub(super) affected_rows: u64,
 }
 
-pub(super) unsafe fn execute_preview_statement_raw(
+pub(super) unsafe fn execute_preview_statement_guarded(
     connection: &Connection,
     sql_tail: &str,
     maximum_result_rows: usize,
+    context: &SqlStatementExecutionContext<'_>,
 ) -> CoreResult<RawScriptStep> {
-    unsafe { execute_one_statement_raw(connection, sql_tail, maximum_result_rows, true) }
+    unsafe {
+        execute_one_statement_guarded(connection, sql_tail, maximum_result_rows, true, context)
+    }
 }
 
-pub(super) unsafe fn execute_statement_to_completion_raw(
+pub(super) unsafe fn execute_statement_to_completion_guarded(
     connection: &Connection,
     sql_tail: &str,
+    context: &SqlStatementExecutionContext<'_>,
 ) -> CoreResult<RawScriptStep> {
-    unsafe { execute_one_statement_raw(connection, sql_tail, 0, false) }
+    unsafe { execute_one_statement_guarded(connection, sql_tail, 0, false, context) }
+}
+
+unsafe fn execute_one_statement_guarded(
+    connection: &Connection,
+    sql_tail: &str,
+    maximum_result_rows: usize,
+    stop_read_only_after_preview: bool,
+    context: &SqlStatementExecutionContext<'_>,
+) -> CoreResult<RawScriptStep> {
+    context.cancellation.check()?;
+    let started_at = Instant::now();
+    let deadline = started_at + context.limits.timeout;
+    let timed_out = Arc::new(AtomicBool::new(false));
+    let handler_timed_out = timed_out.clone();
+    let cancellation = context.cancellation.clone();
+    connection.progress_handler(
+        1_000,
+        Some(move || {
+            if cancellation.is_cancelled() {
+                return true;
+            }
+            if Instant::now() >= deadline {
+                handler_timed_out.store(true, Ordering::Release);
+                return true;
+            }
+            false
+        }),
+    );
+    let result = unsafe {
+        execute_one_statement_raw(
+            connection,
+            sql_tail,
+            maximum_result_rows,
+            stop_read_only_after_preview,
+        )
+    };
+    connection.progress_handler(0, None::<fn() -> bool>);
+    let elapsed = started_at.elapsed();
+    if timed_out.load(Ordering::Acquire) {
+        eprintln!(
+            "{} statement {}/{} timed out after {} ms",
+            context.workflow,
+            context.statement_index,
+            context.statement_total,
+            elapsed.as_millis()
+        );
+        return Err(CoreError::InvalidArgument(format!(
+            "{} statement {} of {} exceeded the {} execution limit.",
+            context.workflow,
+            context.statement_index,
+            context.statement_total,
+            format_duration(context.limits.timeout)
+        )));
+    }
+    if context.cancellation.is_cancelled() {
+        eprintln!(
+            "{} statement {}/{} cancelled after {} ms",
+            context.workflow,
+            context.statement_index,
+            context.statement_total,
+            elapsed.as_millis()
+        );
+        return Err(CoreError::Cancelled);
+    }
+    if let Ok(step) = &result {
+        if let Some(statement) = &step.statement {
+            eprintln!(
+                "{} statement {}/{} completed in {} ms (read_only={}, returned_rows={}, affected_rows={})",
+                context.workflow,
+                context.statement_index,
+                context.statement_total,
+                elapsed.as_millis(),
+                statement.read_only,
+                statement.returned_rows,
+                statement.affected_rows
+            );
+        }
+    }
+    result
+}
+
+fn format_duration(duration: Duration) -> String {
+    if duration.as_secs() > 0 && duration.subsec_nanos() == 0 {
+        format!("{} second", duration.as_secs())
+    } else {
+        format!("{} ms", duration.as_millis())
+    }
+}
+
+pub(super) fn count_sql_statements(sql: &str) -> CoreResult<u64> {
+    let mut statement_start = 0;
+    let mut statement_count = 0_u64;
+    for (index, character) in sql.char_indices() {
+        if character != ';' {
+            continue;
+        }
+        let statement_end = index + character.len_utf8();
+        let candidate = CString::new(&sql[statement_start..statement_end])
+            .map_err(|error| CoreError::InvalidArgument(format!("invalid sql: {error}")))?;
+        if unsafe { ffi::sqlite3_complete(candidate.as_ptr()) } != 0 {
+            statement_count += 1;
+            statement_start = statement_end;
+        }
+    }
+    if !sql[statement_start..].trim().is_empty() {
+        statement_count += 1;
+    }
+    Ok(statement_count)
 }
 
 unsafe fn execute_one_statement_raw(
@@ -221,4 +352,100 @@ pub(super) fn sqlite_error(database: *mut ffi::sqlite3, code: i32) -> CoreError 
         ffi::Error::new(code),
         Some(message),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn statement_deadline_interrupts_sqlite_execution_with_context() {
+        let connection = Connection::open_in_memory().unwrap();
+        let cancellation = CancellationToken::new();
+        let result = unsafe {
+            execute_statement_to_completion_guarded(
+                &connection,
+                "WITH RECURSIVE loop(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM loop) SELECT * FROM loop;",
+                &SqlStatementExecutionContext {
+                    cancellation: &cancellation,
+                    limits: SqlStatementExecutionLimits {
+                        timeout: Duration::from_millis(10),
+                    },
+                    statement_index: 2,
+                    statement_total: 3,
+                    workflow: "SQL Import",
+                },
+            )
+        };
+        let message = match result {
+            Err(error) => error.to_string(),
+            Ok(_) => panic!("statement should time out"),
+        };
+        assert!(message.contains("SQL Import statement 2 of 3"));
+        assert!(message.contains("10 ms execution limit"));
+    }
+
+    #[test]
+    fn cancellation_is_not_reported_as_timeout() {
+        let connection = Connection::open_in_memory().unwrap();
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        let result = unsafe {
+            execute_statement_to_completion_guarded(
+                &connection,
+                "SELECT 1",
+                &SqlStatementExecutionContext {
+                    cancellation: &cancellation,
+                    limits: SqlStatementExecutionLimits {
+                        timeout: Duration::from_secs(1),
+                    },
+                    statement_index: 1,
+                    statement_total: 1,
+                    workflow: "Custom SQL",
+                },
+            )
+        };
+
+        assert!(matches!(result, Err(CoreError::Cancelled)));
+    }
+
+    #[test]
+    fn timed_out_statement_rolls_back_earlier_transaction_mutations() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE values_table(value INTEGER); INSERT INTO values_table VALUES (1);",
+            )
+            .unwrap();
+        let cancellation = CancellationToken::new();
+        {
+            let transaction = connection.transaction().unwrap();
+            transaction
+                .execute("UPDATE values_table SET value = 2", [])
+                .unwrap();
+            let result = unsafe {
+                execute_statement_to_completion_guarded(
+                    &transaction,
+                    "WITH RECURSIVE loop(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM loop) SELECT * FROM loop;",
+                    &SqlStatementExecutionContext {
+                        cancellation: &cancellation,
+                        limits: SqlStatementExecutionLimits {
+                            timeout: Duration::from_millis(10),
+                        },
+                        statement_index: 2,
+                        statement_total: 2,
+                        workflow: "Custom SQL",
+                    },
+                )
+            };
+            assert!(result.is_err());
+        }
+        assert_eq!(
+            connection
+                .query_row("SELECT value FROM values_table", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+    }
 }

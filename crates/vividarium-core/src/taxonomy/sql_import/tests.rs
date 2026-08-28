@@ -378,7 +378,7 @@ fn validate_reports_real_stages_and_sql_statement_progress() {
         .filter(|event| event.stage == EXECUTING_SQL)
         .collect::<Vec<_>>();
     assert!(!sql_events.is_empty());
-    assert_eq!(sql_events[0].current, Some(0));
+    assert_eq!(sql_events[0].current, Some(1));
     assert_eq!(
         sql_events[0].total,
         Some(result.execution.statements_executed as u64)
@@ -478,11 +478,8 @@ fn sql_statement_count_uses_sqlite_statement_boundaries() {
 }
 
 #[test]
-fn sql_statement_progress_counts_only_completed_statements() {
-    for (sql, expected) in [
-        ("SELECT 1;", vec![0, 1]),
-        ("SELECT 1; SELECT 2;", vec![0, 1, 2]),
-    ] {
+fn sql_statement_progress_reports_each_statement_before_execution() {
+    for (sql, expected) in [("SELECT 1;", vec![1]), ("SELECT 1; SELECT 2;", vec![1, 2])] {
         let connection = Connection::open_in_memory().unwrap();
         let mut progress = Vec::new();
         let messages = execute_sql_import_script(
@@ -493,7 +490,7 @@ fn sql_statement_progress_counts_only_completed_statements() {
             &CancellationToken::new(),
         )
         .unwrap();
-        assert_eq!(messages.len(), expected.len() - 1);
+        assert_eq!(messages.len(), expected.len());
         assert_eq!(
             progress
                 .iter()

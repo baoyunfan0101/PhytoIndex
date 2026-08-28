@@ -187,6 +187,142 @@ fn a_later_statement_failure_rolls_back_the_entire_script() {
 }
 
 #[test]
+fn custom_sql_reports_statement_and_mutation_phases() {
+    let (_directory, database) = database();
+    let mut progress = Vec::new();
+    execute_custom_taxonomy_sql_with_progress_and_cancellation(
+        &database,
+        &request("UPDATE taxa SET geological_range = 'Recent'; SELECT taxon_id FROM taxa"),
+        &mut |event| progress.push(event),
+        &CancellationToken::new(),
+    )
+    .unwrap();
+
+    let stages = progress
+        .iter()
+        .map(|event| event.stage.as_str())
+        .collect::<Vec<_>>();
+    for expected in [
+        "preparing_sql_sources",
+        "executing_custom_sql",
+        "generating_custom_sql_changeset",
+        "validating_custom_sql_changes",
+        "recording_custom_sql_operation",
+        "committing_custom_sql",
+        "finalizing_custom_sql",
+    ] {
+        assert!(
+            stages.contains(&expected),
+            "missing progress stage {expected}"
+        );
+    }
+    let statements = progress
+        .iter()
+        .filter(|event| event.stage == "executing_custom_sql")
+        .map(|event| (event.current, event.total))
+        .collect::<Vec<_>>();
+    assert_eq!(statements, vec![(Some(1), Some(2)), (Some(2), Some(2))]);
+}
+
+#[test]
+fn incremental_validation_rejects_missing_scientific_name_and_rolls_back() {
+    let (_directory, database) = database();
+    let error = execute_custom_taxonomy_sql(
+        &database,
+        &request("DELETE FROM taxon_names WHERE name_type = 1"),
+    )
+    .unwrap_err();
+
+    assert!(error.to_string().contains("exactly one scientific name"));
+    assert_eq!(
+        database
+            .connect_taxonomy()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM taxon_names WHERE name_type = 1",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        1
+    );
+}
+
+#[test]
+fn incremental_validation_rejects_parent_cycle_and_rolls_back() {
+    let (_directory, database) = database();
+    let error = execute_custom_taxonomy_sql(
+        &database,
+        &request(
+            r#"
+            INSERT INTO taxa(parent_taxon_id, rank) SELECT taxon_id, 2 FROM taxa WHERE rank = 1;
+            INSERT INTO taxon_names(taxon_id, name_type, name) VALUES(last_insert_rowid(), 1, 'Testales');
+            UPDATE taxa SET parent_taxon_id = (SELECT taxon_id FROM taxa WHERE rank = 2) WHERE rank = 1;
+            "#,
+        ),
+    )
+    .unwrap_err();
+
+    assert!(error.to_string().contains("cyclic parent relationship"));
+    assert_eq!(
+        database
+            .connect_taxonomy()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM taxa", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+}
+
+#[test]
+fn custom_sql_workspace_lock_fails_fast() {
+    let (_directory, database) = database();
+    let mutex = custom_sql_mutex(&database).unwrap();
+    let _guard = mutex.lock().unwrap();
+
+    let error = execute_custom_taxonomy_sql(&database, &request("SELECT 1")).unwrap_err();
+    assert!(error.to_string().contains("already running"));
+}
+
+#[test]
+fn csv_source_loading_can_be_cancelled_without_a_partial_table() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("large.csv");
+    let mut contents = String::from("name,value\n");
+    for index in 0..3_000 {
+        contents.push_str(&format!("row-{index},{index}\n"));
+    }
+    std::fs::write(&path, contents).unwrap();
+    let mut connection = Connection::open_in_memory().unwrap();
+    let cancellation = CancellationToken::new();
+    let cancel_from_progress = cancellation.clone();
+    let result = load_csv_table_with_progress(
+        &mut connection,
+        "source",
+        &path,
+        b',',
+        &cancellation,
+        &mut |progress| {
+            if progress.current.is_some_and(|current| current >= 1_000) {
+                cancel_from_progress.cancel();
+            }
+        },
+    );
+
+    assert!(matches!(result, Err(CoreError::Cancelled)));
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_temp_master WHERE type = 'table' AND name = 'source'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
 fn comment_only_scripts_are_not_executable() {
     let (_directory, database) = database();
 

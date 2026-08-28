@@ -15,7 +15,7 @@ import {
 import type { TaxonomyImportResult } from "../../api/taxonomyImport";
 import type { PersistentSqlInput, SqlSourceSchema } from "../../api/customSql";
 import { errorMessage } from "../../api/common";
-import { waitForOperation } from "../../api/tasks";
+import { waitForOperation, type OperationState } from "../../api/tasks";
 import { CodeEditor } from "../../shared/CodeEditor";
 import { ResizablePanels } from "../../shared/ResizablePanels";
 import { Button, Modal, SectionHeader, VirtualList } from "../../shared/ui";
@@ -28,6 +28,7 @@ import {
   sqlImportValidationIssueRow,
 } from "./sqlImportValidation";
 import { resolveSqlWorkbenchLoads } from "./sqlWorkbenchLoading";
+import { sqlOperationProgress } from "./sqlOperationProgress";
 
 export function SqlImportSettings({
   active = true,
@@ -49,6 +50,7 @@ export function SqlImportSettings({
   const [error, setError] = useState("");
   const [loadingWorkbench, setLoadingWorkbench] = useState(true);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [operation, setOperation] = useState<OperationState | null>(null);
 
   useEffect(() => {
     void Promise.allSettled([
@@ -92,10 +94,12 @@ export function SqlImportSettings({
     setMessage("");
     setError("");
     setValidation(null);
+    setOperation(null);
     try {
       const started = await startSqlImportValidation(sql, taskOwnerId);
+      setOperation(started);
       const completed = started.task_id
-        ? await waitForOperation(started.task_id)
+        ? await waitForOperation(started.task_id, setOperation)
         : started;
       if (completed.error) throw new Error(completed.error);
       const result = completed.result as ValidateSqlImportResult | null;
@@ -119,6 +123,7 @@ export function SqlImportSettings({
       setError(errorMessage(nextError));
     } finally {
       setBusy("");
+      setOperation(null);
     }
   }
 
@@ -190,6 +195,11 @@ export function SqlImportSettings({
       />
       {error ? (
         <div className="inline-error sql-import-status" role="alert">{error}</div>
+      ) : operation && sqlOperationProgress(operation) ? (
+        <div className="sql-import-progress" role="status" aria-live="polite">
+          <LoaderCircle className="spin" size={15} />
+          <strong>{sqlOperationProgress(operation)}</strong>
+        </div>
       ) : loadingWorkbench ? (
         <div className="sql-import-progress" role="status" aria-live="polite">
           <LoaderCircle className="spin" size={15} />

@@ -1,5 +1,4 @@
 use std::collections::{HashMap, HashSet};
-use std::ffi::CString;
 use std::fs;
 use std::fs::File;
 use std::io::{BufReader, Read};
@@ -16,17 +15,21 @@ use sha2::{Digest, Sha256};
 use super::direct_import::{TaxonomyImportMetadata, TaxonomyImportResult};
 use super::formatted::{
     TaxonomyNameType, TaxonomyValidationIssue, TaxonomyValidationOptions,
-    validate_taxonomy_with_progress, visit_taxonomy_validation_issues_with_progress,
+    validate_taxonomy_with_progress_and_cancellation,
+    visit_taxonomy_validation_issues_with_progress_and_cancellation,
 };
 use super::sql::{
-    SqlSourceSchema, SqlStatementMessage, attach_read_only_sqlite, detach_sources, prepare_sources,
-    quote_identifier,
+    SqlSourceSchema, SqlStatementMessage, attach_read_only_sqlite, detach_sources,
+    prepare_sources_with_progress, quote_identifier,
 };
 use super::sql_inputs::{
     self, AddSqlInputRequest, AddSqlInputResult, PersistentSqlInput, RemoveSqlInputRequest,
     RemoveSqlInputResult, SqlInputScope,
 };
-use super::sql_support::execute_statement_to_completion_raw;
+use super::sql_support::{
+    SQL_IMPORT_STATEMENT_TIMEOUT, SqlStatementExecutionContext, SqlStatementExecutionLimits,
+    count_sql_statements, execute_statement_to_completion_guarded,
+};
 use crate::db::{
     LOCAL_TAXON_ID_FLOOR, TaxonomyReplacementGuard, initialize_taxonomy_database_file,
 };
@@ -250,7 +253,13 @@ fn execute_sql_import_sql_in_workspace(
         connection.execute_batch("PRAGMA foreign_keys = ON")?;
         let sources = sql_inputs::stored_sources(database, SqlInputScope::SqlImport)?;
         let delimiter = crate::general::get_csv_delimiter_byte(database)?;
-        let mut attached = prepare_sources(&mut connection, &sources, delimiter)?;
+        let mut attached = prepare_sources_with_progress(
+            &mut connection,
+            &sources,
+            delimiter,
+            cancellation,
+            progress,
+        )?;
         if let Err(error) =
             attach_read_only_sqlite(&connection, "taxonomy", &database.taxonomy_path()?)
         {
@@ -444,10 +453,11 @@ fn validate_sql_import_candidate_in_workspace(
             Some(OperationProgressUnit::Names),
         );
         report_progress(progress, VALIDATING_STAGING_TAXONOMY, None, None, None);
-        visit_taxonomy_validation_issues_with_progress(
+        visit_taxonomy_validation_issues_with_progress_and_cancellation(
             &connection,
             TaxonomyValidationOptions::sql_import_staging(),
             &mut |value| progress(value),
+            cancellation,
             |issue| {
                 record_taxonomy_error(&mut validation, issue);
                 true
@@ -627,9 +637,7 @@ fn workspace_mutex(database: &Database) -> CoreResult<Arc<Mutex<()>>> {
 }
 
 fn lock_workspace(mutex: &Mutex<()>) -> CoreResult<std::sync::MutexGuard<'_, ()>> {
-    mutex
-        .lock()
-        .map_err(|_| CoreError::Consistency("SQL import workspace lock is poisoned".into()))
+    try_lock_workspace(mutex)
 }
 
 fn try_lock_workspace(mutex: &Mutex<()>) -> CoreResult<std::sync::MutexGuard<'_, ()>> {
@@ -855,7 +863,7 @@ fn validate_candidate_database_with_cancellation(
             "candidate foreign key check failed".into(),
         ));
     }
-    validate_taxonomy_with_progress(&connection, progress)?;
+    validate_taxonomy_with_progress_and_cancellation(&connection, progress, cancellation)?;
     let identity = connection
         .query_row(
             "SELECT taxonomy_identity FROM taxonomy_identity WHERE identity_id = 1",
@@ -905,17 +913,32 @@ fn execute_sql_import_script(
     let mut offset = 0;
     let mut messages = Vec::new();
     let statement_total = count_sql_statements(sql)?;
-    report_progress(
-        progress,
-        EXECUTING_SQL,
-        Some(0),
-        Some(statement_total),
-        Some(OperationProgressUnit::Statements),
-    );
     while offset < sql.len() {
         cancellation.check()?;
+        let statement_index = messages.len() as u64 + 1;
+        report_progress(
+            progress,
+            EXECUTING_SQL,
+            Some(statement_index),
+            Some(statement_total),
+            Some(OperationProgressUnit::Statements),
+        );
         connection.authorizer(Some(sql_import_authorizer(staging_path.to_string())));
-        let execution = unsafe { execute_statement_to_completion_raw(connection, &sql[offset..]) };
+        let execution = unsafe {
+            execute_statement_to_completion_guarded(
+                connection,
+                &sql[offset..],
+                &SqlStatementExecutionContext {
+                    cancellation,
+                    limits: SqlStatementExecutionLimits {
+                        timeout: SQL_IMPORT_STATEMENT_TIMEOUT,
+                    },
+                    statement_index,
+                    statement_total,
+                    workflow: "SQL Import",
+                },
+            )
+        };
         connection.authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
         let execution = execution?;
         offset += execution.tail_offset;
@@ -931,37 +954,9 @@ fn execute_sql_import_script(
                 affected_rows,
                 message,
             });
-            report_progress(
-                progress,
-                EXECUTING_SQL,
-                Some(messages.len() as u64),
-                Some(statement_total),
-                Some(OperationProgressUnit::Statements),
-            );
         }
     }
     Ok(messages)
-}
-
-fn count_sql_statements(sql: &str) -> CoreResult<u64> {
-    let mut statement_start = 0;
-    let mut statement_count = 0_u64;
-    for (index, character) in sql.char_indices() {
-        if character != ';' {
-            continue;
-        }
-        let statement_end = index + character.len_utf8();
-        let candidate = CString::new(&sql[statement_start..statement_end])
-            .map_err(|error| CoreError::InvalidArgument(format!("invalid sql: {error}")))?;
-        if unsafe { ffi::sqlite3_complete(candidate.as_ptr()) } != 0 {
-            statement_count += 1;
-            statement_start = statement_end;
-        }
-    }
-    if !sql[statement_start..].trim().is_empty() {
-        statement_count += 1;
-    }
-    Ok(statement_count)
 }
 
 fn validate_sql_import_attachments(

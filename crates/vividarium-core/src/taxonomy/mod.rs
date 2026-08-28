@@ -53,7 +53,8 @@ pub use sql::{
     CustomSqlExecutionResult, CustomTaxonomySqlExportRequest, CustomTaxonomySqlRequest, SqlColumn,
     SqlExportResult, SqlObjectType, SqlResultSet, SqlSourceObject, SqlSourceSchema,
     SqlStatementMessage, SqlValue, add_custom_sql_input, execute_custom_taxonomy_sql,
-    execute_custom_taxonomy_sql_with_cancellation, export_custom_taxonomy_query,
+    execute_custom_taxonomy_sql_with_cancellation,
+    execute_custom_taxonomy_sql_with_progress_and_cancellation, export_custom_taxonomy_query,
     export_custom_taxonomy_query_with_cancellation, get_custom_taxonomy_sql,
     list_custom_sql_database_schemas, list_custom_sql_inputs, remove_custom_sql_input,
 };

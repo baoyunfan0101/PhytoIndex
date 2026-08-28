@@ -16,7 +16,7 @@ import {
   type SqlValue,
 } from "../../api/customSql";
 import { errorMessage } from "../../api/common";
-import { waitForOperation } from "../../api/tasks";
+import { waitForOperation, type OperationState } from "../../api/tasks";
 import { operationResult } from "../../app/backgroundTaskResult";
 import { selectCsvDestination } from "../../api/dialogs";
 import { CodeEditor } from "../../shared/CodeEditor";
@@ -35,6 +35,7 @@ import {
 } from "./sqlResults";
 import { resolveSqlWorkbenchLoads } from "./sqlWorkbenchLoading";
 import { emitTaxonomyMutation } from "./taxonomyMutations";
+import { sqlOperationProgress } from "./sqlOperationProgress";
 
 export function CustomSqlView({
   onStatus,
@@ -53,6 +54,7 @@ export function CustomSqlView({
   const [error, setError] = useState("");
   const [loadingWorkbench, setLoadingWorkbench] = useState(true);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [operation, setOperation] = useState<OperationState | null>(null);
 
   useEffect(() => {
     void Promise.allSettled([
@@ -103,10 +105,12 @@ export function CustomSqlView({
     const executedSql = sql;
     setBusy("Executing SQL");
     setError("");
+    setOperation(null);
     try {
       const started = await executeCustomSql(executedSql, taskOwnerId);
+      setOperation(started);
       const completed = started.task_id && ["queued", "running"].includes(started.state)
-        ? await waitForOperation(started.task_id)
+        ? await waitForOperation(started.task_id, setOperation)
         : started;
       const next = operationResult<CustomSqlExecutionResult>(completed, started.task_id);
       setExecution({ sql: executedSql, result: next });
@@ -116,6 +120,7 @@ export function CustomSqlView({
       setError(errorMessage(nextError));
     } finally {
       setBusy("");
+      setOperation(null);
     }
   }
 
@@ -165,6 +170,10 @@ export function CustomSqlView({
       {workbench}
       {error ? (
         <div className="inline-error" role="alert">{error}</div>
+      ) : operation && sqlOperationProgress(operation) ? (
+        <div className="editor-message" role="status" aria-live="polite">
+          <Busy label={sqlOperationProgress(operation)} />
+        </div>
       ) : loadingWorkbench ? (
         <div className="editor-message" role="status" aria-live="polite">
           <Busy label="Loading custom SQL workspace..." />

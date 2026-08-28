@@ -1670,6 +1670,7 @@ pub(super) fn affected_taxon_ids_from_changeset(
         match operation.table_name() {
             "taxa" => {
                 collect_changeset_integers(item, operation.code(), 0, &mut taxon_ids)?;
+                collect_changeset_integers(item, operation.code(), 1, &mut taxon_ids)?;
             }
             "taxon_names" => {
                 if !collect_changeset_integers(item, operation.code(), 1, &mut taxon_ids)? {
@@ -1736,6 +1737,7 @@ fn collect_changeset_integer(
             values.insert(value);
             Ok(true)
         }
+        Ok(ValueRef::Null) => Ok(false),
         Err(rusqlite::Error::InvalidColumnIndex(_)) => Ok(false),
         Err(error) => Err(error.into()),
         Ok(_) => Err(CoreError::Consistency(
@@ -1811,9 +1813,40 @@ pub(super) fn visit_taxonomy_validation_issues_with_options(
 pub(super) fn visit_taxonomy_validation_issues_with_progress(
     connection: &Connection,
     options: TaxonomyValidationOptions,
+    progress: impl FnMut(OperationProgress),
+    visit: impl FnMut(TaxonomyValidationIssue) -> bool,
+) -> CoreResult<()> {
+    visit_taxonomy_validation_issues_with_progress_internal(
+        connection, options, progress, None, visit,
+    )
+}
+
+pub(super) fn visit_taxonomy_validation_issues_with_progress_and_cancellation(
+    connection: &Connection,
+    options: TaxonomyValidationOptions,
+    progress: impl FnMut(OperationProgress),
+    cancellation: &CancellationToken,
+    visit: impl FnMut(TaxonomyValidationIssue) -> bool,
+) -> CoreResult<()> {
+    visit_taxonomy_validation_issues_with_progress_internal(
+        connection,
+        options,
+        progress,
+        Some(cancellation),
+        visit,
+    )
+}
+
+fn visit_taxonomy_validation_issues_with_progress_internal(
+    connection: &Connection,
+    options: TaxonomyValidationOptions,
     mut progress: impl FnMut(OperationProgress),
+    cancellation: Option<&CancellationToken>,
     mut visit: impl FnMut(TaxonomyValidationIssue) -> bool,
 ) -> CoreResult<()> {
+    if let Some(cancellation) = cancellation {
+        cancellation.check()?;
+    }
     progress(validation_progress(
         "loading_taxonomy_structure",
         None,
@@ -1848,14 +1881,18 @@ pub(super) fn visit_taxonomy_validation_issues_with_progress(
             Some(total_taxa),
             Some(OperationProgressUnit::Taxa),
         ));
-        let cycle_taxa = cycle_taxon_ids_with_progress(&by_id, |current, total| {
-            progress(validation_progress(
-                "checking_parent_cycles",
-                Some(current),
-                Some(total),
-                Some(OperationProgressUnit::Taxa),
-            ));
-        });
+        let cycle_taxa = cycle_taxon_ids_with_progress_and_cancellation(
+            &by_id,
+            |current, total| {
+                progress(validation_progress(
+                    "checking_parent_cycles",
+                    Some(current),
+                    Some(total),
+                    Some(OperationProgressUnit::Taxa),
+                ));
+            },
+            cancellation,
+        )?;
         progress(validation_progress(
             "checking_parent_relationships",
             Some(0),
@@ -1864,6 +1901,9 @@ pub(super) fn visit_taxonomy_validation_issues_with_progress(
         ));
         for (index, (taxon_id, parent_taxon_id, rank)) in taxa.iter().enumerate() {
             if (index + 1).is_multiple_of(10_000) {
+                if let Some(cancellation) = cancellation {
+                    cancellation.check()?;
+                }
                 progress(validation_progress(
                     "checking_parent_relationships",
                     Some((index + 1) as u64),
@@ -2180,10 +2220,20 @@ fn cycle_taxon_ids(by_id: &HashMap<i64, (Option<i64>, i64)>) -> HashSet<i64> {
     cycle_taxon_ids_with_progress(by_id, |_, _| {})
 }
 
+#[cfg(test)]
 fn cycle_taxon_ids_with_progress(
     by_id: &HashMap<i64, (Option<i64>, i64)>,
-    mut progress: impl FnMut(u64, u64),
+    progress: impl FnMut(u64, u64),
 ) -> HashSet<i64> {
+    cycle_taxon_ids_with_progress_and_cancellation(by_id, progress, None)
+        .expect("cycle detection without cancellation cannot fail")
+}
+
+fn cycle_taxon_ids_with_progress_and_cancellation(
+    by_id: &HashMap<i64, (Option<i64>, i64)>,
+    mut progress: impl FnMut(u64, u64),
+    cancellation: Option<&CancellationToken>,
+) -> CoreResult<HashSet<i64>> {
     let mut states = HashMap::<i64, VisitState>::new();
     let mut cycle_taxa = HashSet::new();
     let total = by_id.len() as u64;
@@ -2212,12 +2262,15 @@ fn cycle_taxon_ids_with_progress(
             states.insert(taxon_id, VisitState::Done);
             completed += 1;
             if completed.is_multiple_of(10_000) {
+                if let Some(cancellation) = cancellation {
+                    cancellation.check()?;
+                }
                 progress(completed, total);
             }
         }
     }
     progress(total, total);
-    cycle_taxa
+    Ok(cycle_taxa)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2238,15 +2291,184 @@ pub(super) fn validate_taxonomy(connection: &Connection) -> CoreResult<()> {
     Ok(())
 }
 
-pub(super) fn validate_taxonomy_with_progress(
+pub(super) fn validate_taxonomy_changes_with_cancellation(
+    connection: &Connection,
+    affected_taxon_ids: &BTreeSet<i64>,
+    cancellation: &CancellationToken,
+) -> CoreResult<()> {
+    cancellation.check()?;
+    connection.execute_batch(
+        "CREATE TEMP TABLE IF NOT EXISTS vividarium_validation_taxa(taxon_id INTEGER PRIMARY KEY); DELETE FROM vividarium_validation_taxa;",
+    )?;
+    {
+        let mut insert = connection
+            .prepare("INSERT OR IGNORE INTO vividarium_validation_taxa(taxon_id) VALUES (?)")?;
+        for (index, taxon_id) in affected_taxon_ids.iter().enumerate() {
+            if index.is_multiple_of(1_000) {
+                cancellation.check()?;
+            }
+            insert.execute([taxon_id])?;
+        }
+    }
+
+    let taxa = connection
+        .prepare(
+            r#"
+            WITH RECURSIVE relevant(taxon_id) AS (
+                SELECT taxon_id FROM vividarium_validation_taxa
+                UNION
+                SELECT taxa.taxon_id
+                FROM taxa
+                JOIN vividarium_validation_taxa AS changed
+                  ON changed.taxon_id = taxa.parent_taxon_id
+                UNION
+                SELECT taxa.parent_taxon_id
+                FROM taxa JOIN relevant ON taxa.taxon_id = relevant.taxon_id
+                WHERE taxa.parent_taxon_id IS NOT NULL
+            )
+            SELECT taxa.taxon_id, taxa.parent_taxon_id, taxa.rank
+            FROM taxa JOIN relevant USING (taxon_id)
+            "#,
+        )?
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, Option<i64>>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    let by_id = taxa
+        .iter()
+        .map(|(taxon_id, parent_taxon_id, rank)| (*taxon_id, (*parent_taxon_id, *rank)))
+        .collect::<HashMap<_, _>>();
+    let cycles =
+        cycle_taxon_ids_with_progress_and_cancellation(&by_id, |_, _| {}, Some(cancellation))?;
+    if let Some(taxon_id) = cycles.iter().next() {
+        return Err(CoreError::InvalidArgument(format!(
+            "Taxon {taxon_id} belongs to a cyclic parent relationship."
+        )));
+    }
+    for (index, (taxon_id, parent_taxon_id, rank)) in taxa.iter().enumerate() {
+        if index.is_multiple_of(1_000) {
+            cancellation.check()?;
+        }
+        if *rank == TaxonRank::Kingdom.code() {
+            if parent_taxon_id.is_some() {
+                return Err(CoreError::InvalidArgument(format!(
+                    "Kingdom taxon {taxon_id} must be a root taxon."
+                )));
+            }
+            continue;
+        }
+        let Some(parent_taxon_id) = parent_taxon_id else {
+            return Err(CoreError::InvalidArgument(format!(
+                "Taxon {taxon_id} must have a parent taxon."
+            )));
+        };
+        let Some((_, parent_rank)) = by_id.get(parent_taxon_id) else {
+            return Err(CoreError::InvalidArgument(format!(
+                "Taxon {taxon_id} references missing parent taxon {parent_taxon_id}."
+            )));
+        };
+        if *parent_rank >= *rank {
+            return Err(CoreError::InvalidArgument(format!(
+                "Taxon {taxon_id} must have a parent with a higher rank."
+            )));
+        }
+    }
+
+    let invalid_name = connection
+        .query_row(
+            r#"
+            SELECT issue FROM (
+                SELECT 'Taxon ' || taxa.taxon_id || ' must have exactly one scientific name.' AS issue
+                FROM taxa
+                JOIN vividarium_validation_taxa AS changed USING (taxon_id)
+                LEFT JOIN taxon_names ON taxon_names.taxon_id = taxa.taxon_id AND taxon_names.name_type = 1
+                GROUP BY taxa.taxon_id HAVING COUNT(taxon_names.name_id) != 1
+                UNION ALL
+                SELECT 'Taxon ' || names.taxon_id || ' must have at most one localized accepted name.'
+                FROM taxon_names AS names
+                JOIN vividarium_validation_taxa AS changed USING (taxon_id)
+                WHERE names.name_type IN (3, 5)
+                GROUP BY names.taxon_id, names.name_type HAVING COUNT(names.name_id) > 1
+                UNION ALL
+                SELECT 'Taxon ' || alias.taxon_id || ' has aliases but no accepted localized name.'
+                FROM taxon_names AS alias
+                JOIN vividarium_validation_taxa AS changed USING (taxon_id)
+                WHERE (alias.name_type = 4 AND NOT EXISTS (
+                    SELECT 1 FROM taxon_names accepted WHERE accepted.taxon_id = alias.taxon_id AND accepted.name_type = 3
+                )) OR (alias.name_type = 6 AND NOT EXISTS (
+                    SELECT 1 FROM taxon_names accepted WHERE accepted.taxon_id = alias.taxon_id AND accepted.name_type = 5
+                ))
+                UNION ALL
+                SELECT 'Taxon ' || names.taxon_id || ' contains duplicate names in one name family.'
+                FROM taxon_names AS names
+                JOIN vividarium_validation_taxa AS changed USING (taxon_id)
+                GROUP BY names.taxon_id, (names.name_type + 1) / 2, names.name
+                HAVING COUNT(names.name_id) > 1
+                UNION ALL
+                SELECT 'Taxon names reference missing taxon ' || names.taxon_id || '.'
+                FROM taxon_names AS names
+                JOIN vividarium_validation_taxa AS changed USING (taxon_id)
+                LEFT JOIN taxa USING (taxon_id)
+                WHERE taxa.taxon_id IS NULL
+            ) LIMIT 1
+            "#,
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    if let Some(message) = invalid_name {
+        return Err(CoreError::InvalidArgument(message));
+    }
+    let mut names = connection.prepare(
+        r#"
+        SELECT names.name_id, names.name
+        FROM taxon_names AS names
+        JOIN vividarium_validation_taxa AS changed USING (taxon_id)
+        "#,
+    )?;
+    for (index, row) in names
+        .query_map([], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?
+        .enumerate()
+    {
+        if index.is_multiple_of(1_000) {
+            cancellation.check()?;
+        }
+        let (name_id, name) = row?;
+        if normalize_name(Some(&name)).as_deref() != Some(name.as_str()) {
+            return Err(CoreError::InvalidArgument(format!(
+                "Taxon name {name_id} is not normalized."
+            )));
+        }
+    }
+    connection.execute_batch("DELETE FROM vividarium_validation_taxa")?;
+    Ok(())
+}
+
+pub(super) fn validate_taxonomy_with_progress_and_cancellation(
     connection: &Connection,
     progress: impl FnMut(OperationProgress),
+    cancellation: &CancellationToken,
+) -> CoreResult<()> {
+    validate_taxonomy_with_progress_internal(connection, progress, Some(cancellation))
+}
+
+fn validate_taxonomy_with_progress_internal(
+    connection: &Connection,
+    progress: impl FnMut(OperationProgress),
+    cancellation: Option<&CancellationToken>,
 ) -> CoreResult<()> {
     let mut first_issue = None;
-    visit_taxonomy_validation_issues_with_progress(
+    visit_taxonomy_validation_issues_with_progress_internal(
         connection,
         TaxonomyValidationOptions::full(),
         progress,
+        cancellation,
         |issue| {
             first_issue = Some(issue);
             false

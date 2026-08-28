@@ -2,7 +2,8 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs::File;
 use std::io::BufWriter;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, TryLockError};
+use std::time::Duration;
 
 use rusqlite::ffi;
 use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
@@ -10,7 +11,8 @@ use rusqlite::{Connection, OpenFlags, Transaction, TransactionBehavior, params, 
 use serde::{Deserialize, Serialize};
 
 use super::formatted::{
-    affected_taxon_ids_from_changeset, start_taxonomy_session, validate_taxonomy,
+    affected_taxon_ids_from_changeset, start_taxonomy_session,
+    validate_taxonomy_changes_with_cancellation, validate_taxonomy_with_progress_and_cancellation,
 };
 #[cfg(test)]
 use super::sql_inputs::SqlInputKind;
@@ -19,14 +21,18 @@ use super::sql_inputs::{
     RemoveSqlInputResult, SqlInputScope,
 };
 use super::sql_support::{
-    execute_preview_statement_raw, prepare_statement_raw, sqlite_error, statement_columns,
-    statement_row,
+    CUSTOM_SQL_STATEMENT_TIMEOUT, SqlStatementExecutionContext, SqlStatementExecutionLimits,
+    count_sql_statements, execute_preview_statement_guarded, prepare_statement_raw, sqlite_error,
+    statement_columns, statement_row,
 };
 use crate::metadata::{self, MetadataKey};
 use crate::operations::{self, NewAuditRow, NewOperation};
-use crate::{CancellationToken, CoreError, CoreResult, Database};
+use crate::{
+    CancellationToken, CoreError, CoreResult, Database, OperationProgress, OperationProgressUnit,
+};
 
 pub const DEFAULT_SQL_RESULT_ROW_LIMIT: usize = 1000;
+const INCREMENTAL_VALIDATION_TAXON_LIMIT: usize = 5_000;
 static CUSTOM_SQL_LOCKS: OnceLock<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> = OnceLock::new();
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -140,6 +146,20 @@ pub fn execute_custom_taxonomy_sql_with_cancellation(
     request: &CustomTaxonomySqlRequest,
     cancellation: &CancellationToken,
 ) -> CoreResult<CustomSqlExecutionResult> {
+    execute_custom_taxonomy_sql_with_progress_and_cancellation(
+        database,
+        request,
+        &mut |_| {},
+        cancellation,
+    )
+}
+
+pub fn execute_custom_taxonomy_sql_with_progress_and_cancellation(
+    database: &Database,
+    request: &CustomTaxonomySqlRequest,
+    progress: &mut (dyn FnMut(OperationProgress) + Send),
+    cancellation: &CancellationToken,
+) -> CoreResult<CustomSqlExecutionResult> {
     cancellation.check()?;
     let sql_mutex = custom_sql_mutex(database)?;
     let _sql_guard = lock_custom_sql(&sql_mutex)?;
@@ -152,30 +172,60 @@ pub fn execute_custom_taxonomy_sql_with_cancellation(
         .min(DEFAULT_SQL_RESULT_ROW_LIMIT);
     let mut connection = database.connect_taxonomy()?;
     cancellation.install_sqlite_progress_handler(&connection);
+    report_custom_sql_progress(progress, "preparing_sql_sources", None, None, None);
     let sources = sql_inputs::stored_sources(database, SqlInputScope::CustomSql)?;
     let delimiter = crate::general::get_csv_delimiter_byte(database)?;
-    let attached = prepare_sources(&mut connection, &sources, delimiter)?;
+    let attached = prepare_sources_with_progress(
+        &mut connection,
+        &sources,
+        delimiter,
+        cancellation,
+        progress,
+    )?;
     let execution: CoreResult<CustomSqlExecutionResult> = (|| {
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let mut session = start_taxonomy_session(&transaction)?;
-        let mut result = execute_custom_script(
+        let mut result = execute_custom_script_guarded(
             &transaction,
             sql,
             maximum_result_rows,
             custom_sql_authorizer,
+            progress,
+            cancellation,
+            CUSTOM_SQL_STATEMENT_TIMEOUT,
         )?;
+        cancellation.install_sqlite_progress_handler(&transaction);
         let mut changeset_blob = Vec::new();
         session.changeset_strm(&mut changeset_blob)?;
         drop(session);
         result.changeset_size = changeset_blob.len();
         if changeset_blob.is_empty() {
             cancellation.check()?;
+            report_custom_sql_progress(progress, "committing_custom_sql", None, None, None);
             transaction.commit()?;
+            report_custom_sql_progress(progress, "finalizing_custom_sql", None, None, None);
             return Ok(result);
         }
-        validate_taxonomy(&transaction)?;
+        report_custom_sql_progress(
+            progress,
+            "generating_custom_sql_changeset",
+            None,
+            None,
+            None,
+        );
         let affected_taxon_ids = affected_taxon_ids_from_changeset(&transaction, &changeset_blob)?;
+        report_custom_sql_progress(progress, "validating_custom_sql_changes", None, None, None);
+        if affected_taxon_ids.len() <= INCREMENTAL_VALIDATION_TAXON_LIMIT {
+            validate_taxonomy_changes_with_cancellation(
+                &transaction,
+                &affected_taxon_ids,
+                cancellation,
+            )?;
+        } else {
+            validate_taxonomy_with_progress_and_cancellation(&transaction, |_| {}, cancellation)?;
+        }
         let full_remap_required = affected_taxon_ids.len() > 5000;
+        report_custom_sql_progress(progress, "recording_custom_sql_operation", None, None, None);
         let operation_id =
             insert_custom_sql_operation(&transaction, &changeset_blob, &affected_taxon_ids)?;
         super::sync::record_event(
@@ -185,7 +235,9 @@ pub fn execute_custom_taxonomy_sql_with_cancellation(
             full_remap_required,
         )?;
         cancellation.check()?;
+        report_custom_sql_progress(progress, "committing_custom_sql", None, None, None);
         transaction.commit()?;
+        report_custom_sql_progress(progress, "finalizing_custom_sql", None, None, None);
         result.operation_id = Some(operation_id);
         Ok(result)
     })();
@@ -320,29 +372,61 @@ fn custom_sql_mutex(database: &Database) -> CoreResult<Arc<Mutex<()>>> {
 }
 
 fn lock_custom_sql(mutex: &Mutex<()>) -> CoreResult<std::sync::MutexGuard<'_, ()>> {
-    mutex
-        .lock()
-        .map_err(|_| CoreError::Consistency("Custom SQL workspace lock is poisoned".into()))
+    match mutex.try_lock() {
+        Ok(guard) => Ok(guard),
+        Err(TryLockError::WouldBlock) => Err(CoreError::InvalidArgument(
+            "Another Custom SQL operation is already running.".into(),
+        )),
+        Err(TryLockError::Poisoned(_)) => Err(CoreError::Consistency(
+            "Custom SQL workspace lock is poisoned".into(),
+        )),
+    }
 }
 
-fn execute_custom_script<F, A>(
+fn execute_custom_script_guarded<F, A>(
     connection: &Connection,
     sql: &str,
     maximum_result_rows: usize,
     mut authorizer_factory: F,
+    progress: &mut (dyn FnMut(OperationProgress) + Send),
+    cancellation: &CancellationToken,
+    statement_timeout: Duration,
 ) -> CoreResult<CustomSqlExecutionResult>
 where
     F: FnMut() -> A,
     A: for<'a> FnMut(AuthContext<'a>) -> Authorization + Send + 'static,
 {
     let mut offset = 0;
-    let mut statement_index = 0;
+    let mut statement_index = 0_usize;
+    let statement_total = count_sql_statements(sql)?;
     let mut result_sets = Vec::new();
     let mut messages = Vec::new();
     while offset < sql.len() {
+        cancellation.check()?;
+        let active_statement = statement_index as u64 + 1;
+        report_custom_sql_progress(
+            progress,
+            "executing_custom_sql",
+            Some(active_statement),
+            Some(statement_total),
+            Some(OperationProgressUnit::Statements),
+        );
         connection.authorizer(Some(authorizer_factory()));
         let execution = unsafe {
-            execute_preview_statement_raw(connection, &sql[offset..], maximum_result_rows)
+            execute_preview_statement_guarded(
+                connection,
+                &sql[offset..],
+                maximum_result_rows,
+                &SqlStatementExecutionContext {
+                    cancellation,
+                    limits: SqlStatementExecutionLimits {
+                        timeout: statement_timeout,
+                    },
+                    statement_index: active_statement,
+                    statement_total,
+                    workflow: "Custom SQL",
+                },
+            )
         };
         connection.authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
         let execution = execution?;
@@ -390,6 +474,43 @@ where
         script_saved: false,
         warnings: Vec::new(),
     })
+}
+
+#[cfg(test)]
+fn execute_custom_script<F, A>(
+    connection: &Connection,
+    sql: &str,
+    maximum_result_rows: usize,
+    authorizer_factory: F,
+) -> CoreResult<CustomSqlExecutionResult>
+where
+    F: FnMut() -> A,
+    A: for<'a> FnMut(AuthContext<'a>) -> Authorization + Send + 'static,
+{
+    execute_custom_script_guarded(
+        connection,
+        sql,
+        maximum_result_rows,
+        authorizer_factory,
+        &mut |_| {},
+        &CancellationToken::new(),
+        CUSTOM_SQL_STATEMENT_TIMEOUT,
+    )
+}
+
+fn report_custom_sql_progress(
+    progress: &mut (dyn FnMut(OperationProgress) + Send),
+    stage: &str,
+    current: Option<u64>,
+    total: Option<u64>,
+    unit: Option<OperationProgressUnit>,
+) {
+    progress(OperationProgress {
+        stage: stage.into(),
+        current,
+        total,
+        unit,
+    });
 }
 
 fn export_query_statement(
@@ -486,12 +607,36 @@ pub(super) fn prepare_sources(
     sources: &[SqlDataSource],
     delimiter: u8,
 ) -> CoreResult<Vec<String>> {
+    prepare_sources_with_progress(
+        connection,
+        sources,
+        delimiter,
+        &CancellationToken::new(),
+        &mut |_| {},
+    )
+}
+
+pub(super) fn prepare_sources_with_progress(
+    connection: &mut Connection,
+    sources: &[SqlDataSource],
+    delimiter: u8,
+    cancellation: &CancellationToken,
+    progress: &mut (dyn FnMut(OperationProgress) + Send),
+) -> CoreResult<Vec<String>> {
     validate_sources(sources)?;
     let mut attached = Vec::new();
     for source in sources {
+        cancellation.check()?;
         match source {
             SqlDataSource::Csv { alias, path } => {
-                load_csv_table(connection, alias, path, delimiter)?;
+                load_csv_table_with_progress(
+                    connection,
+                    alias,
+                    path,
+                    delimiter,
+                    cancellation,
+                    progress,
+                )?;
             }
             SqlDataSource::Sqlite { alias, path } => {
                 attach_read_only_sqlite(connection, alias, path)?;
@@ -523,11 +668,30 @@ pub(super) fn detach_sources(connection: &Connection, aliases: &[String]) -> Cor
     Ok(())
 }
 
+#[cfg(test)]
 fn load_csv_table(
     connection: &mut Connection,
     alias: &str,
     path: &Path,
     delimiter: u8,
+) -> CoreResult<()> {
+    load_csv_table_with_progress(
+        connection,
+        alias,
+        path,
+        delimiter,
+        &CancellationToken::new(),
+        &mut |_| {},
+    )
+}
+
+fn load_csv_table_with_progress(
+    connection: &mut Connection,
+    alias: &str,
+    path: &Path,
+    delimiter: u8,
+    cancellation: &CancellationToken,
+    progress: &mut (dyn FnMut(OperationProgress) + Send),
 ) -> CoreResult<()> {
     let mut reader = csv::ReaderBuilder::new()
         .delimiter(delimiter)
@@ -559,6 +723,16 @@ fn load_csv_table(
     );
     let mut insert = transaction.prepare(&sql)?;
     for (index, record) in reader.records().enumerate() {
+        if index.is_multiple_of(1_000) {
+            cancellation.check()?;
+            report_custom_sql_progress(
+                progress,
+                "preparing_input_sources",
+                Some(index as u64),
+                None,
+                Some(OperationProgressUnit::Items),
+            );
+        }
         let row_number = index + 2;
         let record = record.map_err(|error| {
             CoreError::InvalidArgument(format!("CSV row {row_number} could not be read: {error}"))
@@ -571,6 +745,14 @@ fn load_csv_table(
                 ))
             })?;
     }
+    let loaded_rows = reader.position().record().saturating_sub(1);
+    report_custom_sql_progress(
+        progress,
+        "preparing_input_sources",
+        Some(loaded_rows),
+        None,
+        Some(OperationProgressUnit::Items),
+    );
     drop(insert);
     transaction.commit()?;
     Ok(())
