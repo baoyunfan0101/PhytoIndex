@@ -5,9 +5,11 @@ use std::path::{Path, PathBuf};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, Transaction, params};
 use serde::{Deserialize, Serialize};
 
-use super::formatted::{TaxonomyNameType, validate_taxonomy};
-use super::sql::{SqlDataSource, SqlSourceSchema, inspect_sql_data_source};
+use super::sql_sources::{SqlDataSource, inspect_sql_data_source};
+use super::sql_types::SqlSourceSchema;
 use super::sync;
+use super::types::TaxonomyNameType;
+use super::validation::validate_taxonomy;
 use crate::db::LOCAL_TAXON_ID_FLOOR;
 use crate::naming::normalize_taxonomy_name;
 use crate::{CancellationToken, CoreError, CoreResult, Database, OperationProgress};

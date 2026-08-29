@@ -3,7 +3,8 @@ use std::collections::HashSet;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 
-use super::formatted::{start_taxonomy_session, validate_taxonomy};
+use super::changeset::start_taxonomy_session;
+use super::validation::validate_taxonomy;
 use super::{TaxonRank, TaxonomyNameType};
 use crate::naming::normalize_taxonomy_name;
 use crate::operations::{self, NewAuditRow, NewOperation};

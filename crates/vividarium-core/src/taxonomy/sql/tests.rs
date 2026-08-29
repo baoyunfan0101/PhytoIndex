@@ -4,6 +4,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use rusqlite::Connection;
 use rusqlite::functions::FunctionFlags;
 
+use super::super::sql_sources::{
+    SqlDataSource, inspect_sql_data_source, load_csv_table, load_csv_table_with_progress,
+};
 use super::*;
 use crate::taxonomy::{TaxonInputRow, apply_rows, list_operations};
 

@@ -14,22 +14,24 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::direct_import::{TaxonomyImportMetadata, TaxonomyImportResult};
-use super::formatted::{
-    TaxonomyNameType, TaxonomyValidationIssue, TaxonomyValidationOptions,
-    validate_taxonomy_with_progress_and_cancellation,
-    visit_taxonomy_validation_issues_with_progress_and_cancellation,
-};
-use super::sql::{
-    SqlSourceSchema, SqlStatementMessage, attach_read_only_sqlite, detach_sources,
-    prepare_sources_with_progress, quote_identifier,
-};
 use super::sql_inputs::{
     self, AddSqlInputRequest, AddSqlInputResult, PersistentSqlInput, RemoveSqlInputRequest,
     RemoveSqlInputResult, SqlInputScope,
 };
+use super::sql_sources::{
+    attach_read_only_sqlite, detach_sources, inspect_sqlite_source, prepare_sources_with_progress,
+    quote_identifier,
+};
 use super::sql_support::{
     SQL_IMPORT_STATEMENT_TIMEOUT, SqlStatementExecutionContext, SqlStatementExecutionLimits,
     count_sql_statements, execute_statement_to_completion_guarded,
+};
+use super::sql_types::{SqlSourceSchema, SqlStatementMessage};
+use super::types::TaxonomyNameType;
+use super::validation::{
+    TaxonomyValidationIssue, TaxonomyValidationOptions,
+    validate_taxonomy_with_progress_and_cancellation,
+    visit_taxonomy_validation_issues_with_progress_and_cancellation,
 };
 use crate::db::{
     LOCAL_TAXON_ID_FLOOR, TaxonomyReplacementGuard, initialize_taxonomy_database_file,
@@ -125,7 +127,7 @@ pub fn list_sql_import_inputs(database: &Database) -> CoreResult<Vec<PersistentS
 }
 
 pub fn list_sql_import_database_schemas(database: &Database) -> CoreResult<Vec<SqlSourceSchema>> {
-    Ok(vec![super::sql::inspect_sqlite_source(
+    Ok(vec![inspect_sqlite_source(
         "taxonomy",
         &database.taxonomy_path()?,
     )?])
@@ -136,10 +138,7 @@ pub fn list_sql_import_staging_schemas(database: &Database) -> CoreResult<Vec<Sq
     if !staging.is_file() {
         return Ok(Vec::new());
     }
-    Ok(vec![super::sql::inspect_sqlite_source(
-        "sql_import",
-        &staging,
-    )?])
+    Ok(vec![inspect_sqlite_source("sql_import", &staging)?])
 }
 
 pub fn add_sql_import_input(

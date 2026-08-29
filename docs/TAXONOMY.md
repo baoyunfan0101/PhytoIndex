@@ -291,10 +291,10 @@ script, a 1-based executable `statement_index`, and an absolute
 
 `SqlValue` is tagged by `type` and has the variants `null`, `integer`, `real`,
 `text`, and `blob`. Blob values use Base64 in both IPC results and CSV export.
-The normal execution limit defaults to and is capped at 1000 rows per result
-set. A read-only statement stops after reading the limit plus one row.
-Statements that may mutate data always run to completion, including
-`UPDATE ... RETURNING`, while retaining only the limited preview rows.
+`maximum_result_rows` defaults to 1000 and is capped at 1000. Read-only result
+previews retain at most that many rows; this preview limit is independent of
+the execution limit. Statements that may mutate data always run to completion,
+including `UPDATE ... RETURNING`, while retaining only the limited preview rows.
 
 `SqlSourceSchema` contains `alias` and `objects`. Each `SqlSourceObject`
 contains `name`, `object_type`, and ordered `columns`. `SqlObjectType` values
@@ -317,23 +317,34 @@ writes, unsafe pragmas, and extension loading are denied while each statement
 executes.
 
 Custom SQL accepts one or more executable statements and runs them sequentially
-in one transaction. Whitespace and comments do not increment the 1-based
-statement indexes retained by result sets and messages. The script succeeds or
-fails as one unit and the resulting taxonomy must remain valid. A pure query
-creates no operation. A successful mutation script creates one rollbackable
-operation without formatted input and records photo-library synchronization.
-SQL is saved only after prepare, execution, and transaction commit succeed. A
-script-save failure returns the committed execution with `script_saved = false`
-and a warning; an execution failure does not replace the last successful SQL.
+in one transaction. Each executable statement has a 30-second execution limit
+and may fail through cancellation, timeout, SQLite execution, or validation.
+Whitespace and comments do not increment the 1-based statement indexes retained
+by result sets and messages. The script succeeds or fails as one unit and the
+resulting taxonomy must remain valid. A pure query creates no operation. A
+successful mutation script creates one rollbackable operation without formatted
+input and records photo-library synchronization. Mutations are validated before
+commit. Small affected dependency scopes use incremental validation, while
+larger scopes use full taxonomy validation. A validation failure prevents the
+transaction from committing. SQL is saved only after prepare, execution, and
+transaction commit succeed. A script-save failure returns the committed
+execution with `script_saved = false` and a warning; an execution failure does
+not replace the last successful SQL.
+
 Export locates one result-producing read-only statement by its executable index,
 executes only that statement, and streams its complete rows to the destination
-CSV using the application-wide delimiter. Export re-executes the query against
-the current taxonomy and input sources rather than materializing a database
-snapshot.
+CSV using the application-wide delimiter. Each export query has a 30-second
+execution limit and supports cancellation. Successful exports retain the full
+CSV. If output creation has started, an unsuccessful export removes its partial
+output; validation errors raised before output creation leave an existing
+destination unchanged. Export re-executes the query against the current
+taxonomy and input sources rather than materializing a database snapshot.
+
 Desktop SQL execution and query export return operation handles and run file
-and database work on blocking workers. They keep owner-scoped cancellation,
-publish indeterminate execution or export stages, and expose their exact result
-through `OperationManager`.
+and database work on blocking workers. They keep owner-scoped cancellation and
+report input preparation, statement execution, changeset generation, taxonomy
+validation, operation recording, and commit or finalization phases through
+`OperationManager`.
 `list_custom_sql_database_schemas` returns the complete non-SQLite-internal
 table and view catalog exposed through the `main` alias. Managed input schemas
 remain available from `list_custom_sql_inputs`; clients combine both sources
@@ -395,11 +406,14 @@ registered alias. The script can attach only the backend-selected
 `vividarium_sql_import.db` path with the `sql_import` alias. It may create and
 mutate staging objects only in `sql_import`; the execution result never creates
 a taxonomy operation or returns Custom SQL result sets. It reports only
-per-statement messages or a syntax/runtime error. After a fully successful
-script commits, script persistence is attempted separately. Save failure is
+per-statement messages or a syntax/runtime error. Each SQL Import statement has
+a 90-second execution limit and supports cancellation. Statement failure or
+timeout ends execution. Staging finalization and validation run only when SQL
+execution succeeds; failures produce no applicable candidate. Existing
+workspace artifacts retain their established restoration semantics. Script
+persistence is attempted separately after a successful commit. Save failure is
 reported through `script_saved = false` and `warnings` without changing the
-execution result. A failed execution restores the prior staging and validation
-artifacts and stops before candidate validation.
+execution result.
 
 After SQL succeeds, validation checks staging data, builds the candidate, and
 performs one authoritative candidate validation covering file integrity,

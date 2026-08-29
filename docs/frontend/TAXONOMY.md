@@ -72,6 +72,10 @@ groups: Input sources is expanded by default, and All accessible tables shows
 only the complete readable internal `main` taxonomy schema. Uploaded sources
 remain exclusively in Input sources. The expanded group body scrolls
 independently. CSV sources and exports use the application-wide CSV delimiter.
+Running operations show the current phase, the active statement index during
+SQL execution, and elapsed time. Long-running statements have an execution
+limit, and a timeout appears as an operation failure. A successful execution
+snapshot remains the source for result display and export.
 The leading Help action opens the integer mappings for `taxa.rank` and
 `taxon_names.name_type`.
 
@@ -86,7 +90,9 @@ shows only the current internal taxonomy schema, which SQL Import can read
 through the `taxonomy` alias. Uploaded sources and the `sql_import` staging
 schema appear only in Input sources, so neither is duplicated in All
 accessible tables. Its leading Help action shows the same taxonomy integer
-code mappings as Custom SQL.
+code mappings as Custom SQL. SQL Import operations show the current phase, the
+active statement index, and elapsed time. Staging and validation phases appear
+only after SQL execution succeeds.
 
 ### `DirectImportSettings({ onApplied })`
 

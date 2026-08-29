@@ -5,6 +5,7 @@
 //! details.
 
 mod actions;
+mod changeset;
 mod cleanup;
 mod direct_import;
 mod exact_match;
@@ -15,8 +16,12 @@ mod query;
 mod sql;
 mod sql_import;
 mod sql_inputs;
+mod sql_sources;
 mod sql_support;
+mod sql_types;
 pub(crate) mod sync;
+mod types;
+mod validation;
 mod view;
 
 pub use crate::naming::{ScientificNameParts, split_scientific_name_authority};
@@ -32,12 +37,12 @@ pub use direct_import::{
 };
 pub(crate) use exact_match::match_exact_taxonomy_name;
 pub use formatted::{
-    PreparedTaxonomyUpdate, TaxonChange, TaxonChangeKind, TaxonInputRow, TaxonRank,
-    TaxonRowOutcome, TaxonRowStatus, TaxonomyNameType, TaxonomyOperationResult,
-    TaxonomyPreviewResult, apply_prepared_rows, apply_prepared_rows_with_cancellation, apply_rows,
-    get_taxonomy_name_separator, list_operation_audit, list_operations, parse_taxonomy_input_csv,
-    prepare_rows, prepare_rows_with_cancellation, preview_rows, rollback_operation,
-    set_taxonomy_name_separator, taxonomy_formatted_update_template, taxonomy_log_csv,
+    PreparedTaxonomyUpdate, TaxonChange, TaxonChangeKind, TaxonInputRow, TaxonRowOutcome,
+    TaxonRowStatus, TaxonomyOperationResult, TaxonomyPreviewResult, apply_prepared_rows,
+    apply_prepared_rows_with_cancellation, apply_rows, get_taxonomy_name_separator,
+    list_operation_audit, list_operations, parse_taxonomy_input_csv, prepare_rows,
+    prepare_rows_with_cancellation, preview_rows, rollback_operation, set_taxonomy_name_separator,
+    taxonomy_formatted_update_template, taxonomy_log_csv,
 };
 pub use operation_export::{
     export_all_replayable_inputs, export_operation_input, export_operations_input,
@@ -50,9 +55,8 @@ pub(crate) use query::{
     suggest_taxa_with_photos_connection, taxon_search_relation,
 };
 pub use sql::{
-    CustomSqlExecutionResult, CustomTaxonomySqlExportRequest, CustomTaxonomySqlRequest, SqlColumn,
-    SqlExportResult, SqlObjectType, SqlResultSet, SqlSourceObject, SqlSourceSchema,
-    SqlStatementMessage, SqlValue, add_custom_sql_input, execute_custom_taxonomy_sql,
+    CustomSqlExecutionResult, CustomTaxonomySqlExportRequest, CustomTaxonomySqlRequest,
+    SqlExportResult, SqlResultSet, add_custom_sql_input, execute_custom_taxonomy_sql,
     execute_custom_taxonomy_sql_with_cancellation,
     execute_custom_taxonomy_sql_with_progress_and_cancellation, export_custom_taxonomy_query,
     export_custom_taxonomy_query_with_cancellation, get_custom_taxonomy_sql,
@@ -70,10 +74,14 @@ pub use sql_inputs::{
     AddSqlInputRequest, AddSqlInputResult, PersistentSqlInput, RemoveSqlInputRequest,
     RemoveSqlInputResult, SqlInputKind,
 };
+pub use sql_types::{
+    SqlColumn, SqlObjectType, SqlSourceObject, SqlSourceSchema, SqlStatementMessage, SqlValue,
+};
 pub use sync::{
     TaxonomySyncResult, TaxonomySyncRun, has_pending_photo_library_sync,
     synchronize_pending_photo_libraries,
 };
+pub use types::{TaxonRank, TaxonomyNameType};
 pub(crate) use view::load_taxon_display_summary;
 pub(crate) use view::load_taxon_summaries;
 pub use view::{

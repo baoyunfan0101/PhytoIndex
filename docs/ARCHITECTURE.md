@@ -56,9 +56,10 @@ reported through a shared task lifecycle and structured progress. Each
 `OperationState` has an explicit queued, running, completed, or failed state.
 `OperationProgress` contains a stable stage identifier, optional current and
 total values, and an optional items, files, photos, names, taxa, bytes, or
-statements unit. Determinate `current / total` means completed work divided by
-total work. A stage without a reliable total reports both values as absent and
-is indeterminate. Taxonomy validation reports structure loading, parent-cycle,
+statements unit. For statements, `current` identifies the active one-based
+statement. For ordinary countable work, `current / total` represents accumulated
+progress. A stage without a reliable total reports both values as absent and is
+indeterminate. Taxonomy validation reports structure loading, parent-cycle,
 parent-relationship, accepted-name, duplicate-name, orphan-name, and normalized-name
 stages; its in-memory taxon passes report determinate taxa progress. `OperationManager`
 owns every user-visible long-running task lifecycle, progress, exact result, and error.

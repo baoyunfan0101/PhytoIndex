@@ -57,8 +57,10 @@ and an optional progress unit. Statement execution uses `statements`, staging
 fingerprinting uses `bytes`, name processing uses `names`, and candidate taxon
 construction uses `taxa`. Integrity, schema, and taxonomy checks are
 indeterminate stages when no reliable total is available.
-Statement progress starts at zero and increases only after each statement
-finishes. Apply reports candidate validation, staging fingerprint bytes, and
+For statement execution, `current` is the active one-based statement index and
+`total` is the number of executable statements. For example, `current = 2`,
+`total = 5`, and `unit = statements` identifies statement 2 of 5. Apply reports
+candidate validation, staging fingerprint bytes, and
 the applying stage at the corresponding core operation boundaries.
 The completed result distinguishes a valid candidate from structured taxonomy
 validation issues; execution failures remain operation errors.

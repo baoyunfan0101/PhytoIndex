@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use base64::Engine;
 use rusqlite::{Connection, ffi};
 
-use super::sql::{SqlColumn, SqlValue};
+use super::sql_types::{SqlColumn, SqlValue};
 use crate::{CancellationToken, CoreError, CoreResult};
 
 pub(super) const CUSTOM_SQL_STATEMENT_TIMEOUT: Duration = Duration::from_secs(30);
