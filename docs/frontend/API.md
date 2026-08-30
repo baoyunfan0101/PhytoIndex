@@ -90,6 +90,7 @@ loaded from Rename History.
 `OperationState.state` is the task lifecycle source. Running task progress is
 read exclusively from `OperationState.progress`; completed and failed tasks use
 their timestamps, result, and optional error. Determinate progress has both
-`current` and `total`, where current is completed work. Work without a reliable
-total has both values absent and is indeterminate. The unit is one of items,
-files, photos, names, taxa, bytes, or statements.
+`current` and `total`. For statement execution, `current` identifies the active
+one-based statement; for other countable work, it represents accumulated
+progress. Work without a reliable total is indeterminate. The unit is one of
+items, files, photos, names, taxa, bytes, or statements.

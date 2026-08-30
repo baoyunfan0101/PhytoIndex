@@ -409,11 +409,11 @@ a taxonomy operation or returns Custom SQL result sets. It reports only
 per-statement messages or a syntax/runtime error. Each SQL Import statement has
 a 90-second execution limit and supports cancellation. Statement failure or
 timeout ends execution. Staging finalization and validation run only when SQL
-execution succeeds; failures produce no applicable candidate. Existing
-workspace artifacts retain their established restoration semantics. Script
-persistence is attempted separately after a successful commit. Save failure is
-reported through `script_saved = false` and `warnings` without changing the
-execution result.
+execution succeeds; failures produce no applicable candidate. If SQL execution
+fails, times out, or is cancelled, the SQL Import workspace is restored to its
+pre-run staging, candidate, and validation state. Script persistence is
+attempted separately after a successful commit. Save failure is reported through
+`script_saved = false` and `warnings` without changing the execution result.
 
 After SQL succeeds, validation checks staging data, builds the candidate, and
 performs one authoritative candidate validation covering file integrity,
@@ -431,11 +431,12 @@ The progress callback reports stable stages for input preparation, SQL
 execution, staging finalization, staging fingerprinting, staging integrity and
 schema checks, name normalization, staging taxonomy validation, candidate taxa
 and name construction, candidate database validation, and the terminal
-validation result. SQL execution starts at zero and increments its statement
-count only after each statement completes. Fingerprinting uses
-the staging file size and bytes read. Name work uses name counts, and candidate
-taxa report their final taxon count after the bulk insert. Missing counts mean
-that only the active stage is known; they do not represent a percentage.
+validation result. During SQL execution, `current` is the active one-based
+statement index and `total` is the number of executable statements.
+Fingerprinting uses the staging file size and bytes read. Name work uses name
+counts, and candidate taxa report their final taxon count after the bulk insert.
+Missing counts mean that only the active stage is known; they do not represent a
+percentage.
 
 `apply_sql_import` accepts only the latest successfully validated candidate.
 Its progress callback reports candidate validation, staging fingerprint bytes,
