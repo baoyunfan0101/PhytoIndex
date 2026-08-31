@@ -13,6 +13,7 @@ import {
   Library,
   Map,
   Plug,
+  Save,
   SlidersHorizontal,
   Trash2,
   type LucideIcon,
@@ -72,7 +73,11 @@ import {
   photoNamePriorityFields,
   photoNamePriorityLabels,
 } from "./namingSettings";
-import { canPresentHookResult } from "./hookAsyncState";
+import {
+  canPresentHookResult,
+  hookDraftMatchesSnapshot,
+  type NamingHookSnapshot,
+} from "./hookAsyncState";
 
 export type SettingsSection = WorkspaceSettingsSection;
 
@@ -752,6 +757,10 @@ function HooksSettings({ kind, onStatus }: { kind: NamingHookKind; onStatus: (me
   const [scripts, setScripts] = useState<Record<NamingHookKind, string>>({ photo_filename: "", synonym_authority: "" });
   const [cases, setCases] = useState<Record<NamingHookKind, NamingHookTestCase[]>>({ photo_filename: [], synonym_authority: [] });
   const [report, setReport] = useState<NamingHookTestReport | null>(null);
+  const [testedSnapshots, setTestedSnapshots] = useState<Record<NamingHookKind, NamingHookSnapshot | null>>({
+    photo_filename: null,
+    synonym_authority: null,
+  });
   const [busy, setBusy] = useState("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -793,6 +802,7 @@ function HooksSettings({ kind, onStatus }: { kind: NamingHookKind; onStatus: (me
   function invalidate(nextScripts = scripts, nextCases = cases) {
     setScripts(nextScripts);
     setCases(nextCases);
+    setTestedSnapshots((current) => ({ ...current, [kind]: null }));
     setReport(null);
     draftSequence.current[kind] += 1;
   }
@@ -818,16 +828,11 @@ function HooksSettings({ kind, onStatus }: { kind: NamingHookKind; onStatus: (me
       );
       if (canPresent) setReport(next);
       if (next.failed === 0) {
-        setBusy("Saving Hook");
-        onStatus("Saving Hook and project tests...");
-        await saveNamingHook(testedKind, snapshot.script, snapshot.cases);
-        if (canPresentHookResult(
-          testedKind,
-          activeKindRef.current,
-          testedRevision,
-          draftSequence.current[testedKind],
-        )) setMessage("All tests passed.");
-        onStatus("Hook and project tests saved.");
+        if (canPresent) {
+          setTestedSnapshots((current) => ({ ...current, [testedKind]: snapshot }));
+          setMessage("All tests passed.");
+          onStatus("All tests passed.");
+        }
       } else {
         if (canPresent) setMessage("Tests failed. Review the actual output.");
         onStatus("Hook tests failed.");
@@ -840,6 +845,28 @@ function HooksSettings({ kind, onStatus }: { kind: NamingHookKind; onStatus: (me
     }
   }
 
+  async function save() {
+    const testedKind = kind;
+    const snapshot = testedSnapshots[testedKind];
+    if (!snapshot || busy || !hookDraftMatchesSnapshot(scripts[testedKind], cases[testedKind], snapshot)) return;
+    setBusy("Saving Hook");
+    setError("");
+    onStatus("Saving Hook and project tests...");
+    try {
+      await saveNamingHook(testedKind, snapshot.script, snapshot.cases);
+      if (activeKindRef.current === testedKind) {
+        onStatus("Hook and project tests saved.");
+      }
+    } catch (nextError) {
+      if (activeKindRef.current === testedKind) setError(errorMessage(nextError));
+      onStatus("Hook operation failed.");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  const saveAvailable = hookDraftMatchesSnapshot(scripts[kind], cases[kind], testedSnapshots[kind]);
+
   const title = kind === "photo_filename" ? "Filename Parser" : "Synonym Splitter";
   const detail = kind === "photo_filename"
     ? "Edit and test the hook that extracts taxonomy information from filenames."
@@ -848,7 +875,10 @@ function HooksSettings({ kind, onStatus }: { kind: NamingHookKind; onStatus: (me
   return (
     <div className="hooks-settings">
       <SectionHeader title={title} detail={detail} actions={(
-        <Button disabled={Boolean(busy) || !scripts[kind].trim()} onClick={() => void run()}><BugPlay size={13} />{busy === "Testing Hook" ? "Testing..." : busy === "Saving Hook" ? "Saving..." : "Test"}</Button>
+        <>
+          <Button disabled={Boolean(busy) || !scripts[kind].trim()} onClick={() => void run()}><BugPlay size={13} />{busy === "Testing Hook" ? "Testing..." : "Test"}</Button>
+          <Button disabled={Boolean(busy) || !saveAvailable} onClick={() => void save()}><Save size={13} />{busy === "Saving Hook" ? "Saving..." : "Save"}</Button>
+        </>
       )} />
       <ResizablePanels
         className="hook-columns"

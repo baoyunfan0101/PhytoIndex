@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { renameFromTaxonomyStatus } from "../src/features/photos/photoRenameStatus.ts";
 import { formatPhotoRenameSummary } from "../src/features/photos/photoOperation.ts";
-import { canPresentHookResult } from "../src/features/settings/hookAsyncState.ts";
+import { canPresentHookResult, hookDraftMatchesSnapshot } from "../src/features/settings/hookAsyncState.ts";
 
 function source(path: string) {
   return readFileSync(new URL(path, import.meta.url), "utf8");
@@ -14,7 +14,6 @@ test("ordinary Settings sections autosave through the tab status bar", () => {
   const shell = source("../src/app/DesktopShell.tsx");
   assert.match(settings, /onStatus: \(message: string\) => void;/);
   assert.match(shell, /<SettingsView[^;]+onStatus=\{onStatus\}/);
-  assert.doesNotMatch(settings, /<Save size=\{13\} \/>Save/);
   assert.doesNotMatch(settings, /startPhotoMapping/);
   assert.match(settings, /onStatus\("Settings saved\."\)/);
   assert.match(settings, /onStatus\("Naming settings saved\."\)/);
@@ -46,13 +45,43 @@ test("text and numeric preferences save only when editing completes", () => {
   assert.match(settings, /value=\{tokenDraft\}[\s\S]*onBlur=\{saveToken\}/);
 });
 
-test("passing Hook tests save the captured snapshot without a second action", () => {
+test("Hook tests authorize an explicit save for the exact tested snapshot", () => {
   const settings = source("../src/features/settings/SettingsView.tsx");
+  const runStart = settings.indexOf("async function run()");
+  const saveStart = settings.indexOf("async function save()");
+  assert.ok(runStart >= 0);
+  assert.ok(saveStart > runStart);
+  const run = settings.slice(runStart, saveStart);
   assert.match(settings, /const snapshot = \{\s*script: scripts\[testedKind\],\s*cases: cases\[testedKind\],\s*\};/);
   assert.match(settings, /runNamingHookTests\(testedKind, snapshot\.script, snapshot\.cases\)/);
-  assert.match(settings, /if \(next\.failed === 0\) \{[\s\S]*saveNamingHook\(testedKind, snapshot\.script, snapshot\.cases\)/);
-  assert.doesNotMatch(settings, /testedSnapshot/);
-  assert.doesNotMatch(settings, /onClick=\{\(\) => void save\(\)\}/);
+  assert.doesNotMatch(run, /saveNamingHook/);
+  assert.match(settings, /const \[testedSnapshots, setTestedSnapshots\]/);
+  assert.match(settings, /if \(next\.failed === 0\) \{[\s\S]*\[testedKind\]: snapshot/);
+  assert.match(settings, /setTestedSnapshots\(\(current\) => \(\{ \.\.\.current, \[kind\]: null \}\)\)/);
+  assert.match(settings, /const saveAvailable = hookDraftMatchesSnapshot/);
+  assert.match(settings, /async function save\(\)[\s\S]*saveNamingHook\(testedKind, snapshot\.script, snapshot\.cases\)/);
+  assert.match(settings, /<Save size=\{13\} \/>\{busy === "Saving Hook" \? "Saving\.\.\." : "Save"\}/);
+});
+
+test("Hook Save eligibility requires the exact tested draft", () => {
+  const snapshot = {
+    script: "fn hook(value) { value }",
+    cases: [{ input: "input", expected: { kind: "photo_filename" as const, output: {} } }],
+  };
+  assert.equal(hookDraftMatchesSnapshot(snapshot.script, snapshot.cases, snapshot), true);
+  assert.equal(hookDraftMatchesSnapshot("fn hook(value) { value + 1 }", snapshot.cases, snapshot), false);
+  assert.equal(
+    hookDraftMatchesSnapshot(snapshot.script, [{ ...snapshot.cases[0], input: "changed" }], snapshot),
+    false,
+  );
+  assert.equal(
+    hookDraftMatchesSnapshot(
+      snapshot.script,
+      [{ ...snapshot.cases[0], expected: { kind: "photo_filename", output: { sci_name: "Changed" } } }],
+      snapshot,
+    ),
+    false,
+  );
 });
 
 test("Rename from taxonomy reports changed and unchanged outcomes", () => {
