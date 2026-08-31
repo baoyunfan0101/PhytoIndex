@@ -77,6 +77,7 @@ import {
   canPresentHookResult,
   hookDraftMatchesSnapshot,
   type NamingHookSnapshot,
+  replaceTestedHookSnapshot,
 } from "./hookAsyncState";
 
 export type SettingsSection = WorkspaceSettingsSection;
@@ -802,7 +803,7 @@ function HooksSettings({ kind, onStatus }: { kind: NamingHookKind; onStatus: (me
   function invalidate(nextScripts = scripts, nextCases = cases) {
     setScripts(nextScripts);
     setCases(nextCases);
-    setTestedSnapshots((current) => ({ ...current, [kind]: null }));
+    setTestedSnapshots((current) => replaceTestedHookSnapshot(current, kind, null));
     setReport(null);
     draftSequence.current[kind] += 1;
   }
@@ -814,6 +815,7 @@ function HooksSettings({ kind, onStatus }: { kind: NamingHookKind; onStatus: (me
       script: scripts[testedKind],
       cases: cases[testedKind],
     };
+    setTestedSnapshots((current) => replaceTestedHookSnapshot(current, testedKind, null));
     setBusy("Testing Hook");
     setError("");
     setMessage("");
@@ -829,7 +831,7 @@ function HooksSettings({ kind, onStatus }: { kind: NamingHookKind; onStatus: (me
       if (canPresent) setReport(next);
       if (next.failed === 0) {
         if (canPresent) {
-          setTestedSnapshots((current) => ({ ...current, [testedKind]: snapshot }));
+          setTestedSnapshots((current) => replaceTestedHookSnapshot(current, testedKind, snapshot));
           setMessage("All tests passed.");
           onStatus("All tests passed.");
         }
@@ -877,7 +879,7 @@ function HooksSettings({ kind, onStatus }: { kind: NamingHookKind; onStatus: (me
       <SectionHeader title={title} detail={detail} actions={(
         <>
           <Button disabled={Boolean(busy) || !scripts[kind].trim()} onClick={() => void run()}><BugPlay size={13} />{busy === "Testing Hook" ? "Testing..." : "Test"}</Button>
-          <Button disabled={Boolean(busy) || !saveAvailable} onClick={() => void save()}><Save size={13} />{busy === "Saving Hook" ? "Saving..." : "Save"}</Button>
+          <Button variant="primary" disabled={Boolean(busy) || !saveAvailable} onClick={() => void save()}><Save size={13} />{busy === "Saving Hook" ? "Saving..." : "Save"}</Button>
         </>
       )} />
       <ResizablePanels

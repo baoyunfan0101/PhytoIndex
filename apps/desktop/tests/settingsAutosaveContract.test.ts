@@ -3,7 +3,11 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { renameFromTaxonomyStatus } from "../src/features/photos/photoRenameStatus.ts";
 import { formatPhotoRenameSummary } from "../src/features/photos/photoOperation.ts";
-import { canPresentHookResult, hookDraftMatchesSnapshot } from "../src/features/settings/hookAsyncState.ts";
+import {
+  canPresentHookResult,
+  hookDraftMatchesSnapshot,
+  replaceTestedHookSnapshot,
+} from "../src/features/settings/hookAsyncState.ts";
 
 function source(path: string) {
   return readFileSync(new URL(path, import.meta.url), "utf8");
@@ -56,11 +60,12 @@ test("Hook tests authorize an explicit save for the exact tested snapshot", () =
   assert.match(settings, /runNamingHookTests\(testedKind, snapshot\.script, snapshot\.cases\)/);
   assert.doesNotMatch(run, /saveNamingHook/);
   assert.match(settings, /const \[testedSnapshots, setTestedSnapshots\]/);
-  assert.match(settings, /if \(next\.failed === 0\) \{[\s\S]*\[testedKind\]: snapshot/);
-  assert.match(settings, /setTestedSnapshots\(\(current\) => \(\{ \.\.\.current, \[kind\]: null \}\)\)/);
+  assert.match(settings, /setTestedSnapshots\(\(current\) => replaceTestedHookSnapshot\(current, testedKind, null\)\);\s*setBusy\("Testing Hook"\)/);
+  assert.match(settings, /if \(next\.failed === 0\) \{[\s\S]*replaceTestedHookSnapshot\(current, testedKind, snapshot\)/);
+  assert.match(settings, /setTestedSnapshots\(\(current\) => replaceTestedHookSnapshot\(current, kind, null\)\)/);
   assert.match(settings, /const saveAvailable = hookDraftMatchesSnapshot/);
   assert.match(settings, /async function save\(\)[\s\S]*saveNamingHook\(testedKind, snapshot\.script, snapshot\.cases\)/);
-  assert.match(settings, /<Save size=\{13\} \/>\{busy === "Saving Hook" \? "Saving\.\.\." : "Save"\}/);
+  assert.match(settings, /<Button variant="primary" disabled=\{Boolean\(busy\) \|\| !saveAvailable\} onClick=\{\(\) => void save\(\)\}><Save size=\{13\} \/>\{busy === "Saving Hook" \? "Saving\.\.\." : "Save"\}<\/Button>/);
 });
 
 test("Hook Save eligibility requires the exact tested draft", () => {
@@ -82,6 +87,29 @@ test("Hook Save eligibility requires the exact tested draft", () => {
     ),
     false,
   );
+});
+
+test("re-testing revokes the previous Hook Save authorization", () => {
+  const snapshot = {
+    script: "fn hook(value) { value }",
+    cases: [{ input: "input", expected: { kind: "photo_filename" as const, output: {} } }],
+  };
+  const empty = { photo_filename: null, synonym_authority: null };
+  const firstPass = replaceTestedHookSnapshot(empty, "photo_filename", snapshot);
+  assert.equal(hookDraftMatchesSnapshot(snapshot.script, snapshot.cases, firstPass.photo_filename), true);
+
+  const retest = replaceTestedHookSnapshot(firstPass, "photo_filename", null);
+  assert.equal(hookDraftMatchesSnapshot(snapshot.script, snapshot.cases, retest.photo_filename), false);
+  assert.equal(retest.synonym_authority, null);
+
+  const failedRetest = retest;
+  assert.equal(hookDraftMatchesSnapshot(snapshot.script, snapshot.cases, failedRetest.photo_filename), false);
+
+  const erroredRetest = retest;
+  assert.equal(hookDraftMatchesSnapshot(snapshot.script, snapshot.cases, erroredRetest.photo_filename), false);
+
+  const successfulRetest = replaceTestedHookSnapshot(retest, "photo_filename", snapshot);
+  assert.equal(hookDraftMatchesSnapshot(snapshot.script, snapshot.cases, successfulRetest.photo_filename), true);
 });
 
 test("Rename from taxonomy reports changed and unchanged outcomes", () => {
