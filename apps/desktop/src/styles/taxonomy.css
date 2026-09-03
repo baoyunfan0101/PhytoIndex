@@ -192,7 +192,7 @@
 .sql-output-split { min-height: 0; }
 .sql-results { width: 100%; height: 100%; min-height: 0; overflow: auto; }
 .sql-message { margin: 0; padding: 5px 9px; color: var(--muted); border-bottom: 1px solid var(--line); }
-.sql-result-set { height: min(320px, 42vh); border-bottom: 1px solid var(--line); }
+.sql-result-set { border-bottom: 1px solid var(--line); }
 .sql-result-set-header { display: flex; height: 34px; align-items: center; gap: 9px; padding: 0 9px; }
 .sql-result-set-header button { margin-left: auto; }
 .sql-result-scroll { width: 100%; height: calc(100% - 34px); overflow-x: auto; overflow-y: hidden; }

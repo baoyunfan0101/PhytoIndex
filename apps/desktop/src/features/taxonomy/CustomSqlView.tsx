@@ -29,6 +29,7 @@ import {
   formatRowCount,
   formatSqlExecutionStatus,
   maxSqlResultColumnCount,
+  sqlResultSetHeight,
   sqlResultTableMinWidth,
   sqlStatementOutputs,
   type CustomSqlExecutionSnapshot,
@@ -260,8 +261,9 @@ function SqlResultTable({
     [result.columns.length],
   );
   const exportOperation = `Exporting statement ${result.statement_index}`;
+  const resultHeight = sqlResultSetHeight(result.rows.length);
   return (
-    <section className="sql-result-set">
+    <section className="sql-result-set" style={{ height: `min(${resultHeight}px, 320px, 42vh)` }}>
       <header className="sql-result-set-header">
         <strong>Statement {result.statement_index}</strong>
         <span>

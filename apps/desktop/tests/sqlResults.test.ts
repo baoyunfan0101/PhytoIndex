@@ -7,6 +7,7 @@ import {
   formatRowCount,
   formatSqlExecutionStatus,
   maxSqlResultColumnCount,
+  sqlResultSetHeight,
   sqlResultTableMinWidth,
   sqlStatementOutputs,
 } from "../src/features/taxonomy/sqlResults.ts";
@@ -32,6 +33,20 @@ test("uses the largest result-set column count for execution width", () => {
   assert.equal(maxSqlResultColumnCount(resultSets), 5);
   assert.equal(sqlResultTableMinWidth(maxSqlResultColumnCount(resultSets)), 650);
   assert.equal(maxSqlResultColumnCount([]), 1);
+});
+
+test("sizes SQL result sets to their own preview row count up to the CSS cap", () => {
+  assert.equal(sqlResultSetHeight(0), 68);
+  assert.equal(sqlResultSetHeight(1), 100);
+  assert.equal(sqlResultSetHeight(3), 164);
+  assert.equal(sqlResultSetHeight(7), 292);
+  assert.equal(sqlResultSetHeight(100), 3268);
+
+  const view = source("../src/features/taxonomy/CustomSqlView.tsx");
+  const styles = source("../src/styles/taxonomy.css");
+  assert.match(view, /const resultHeight = sqlResultSetHeight\(result\.rows\.length\);/);
+  assert.match(view, /style=\{\{ height: `min\(\$\{resultHeight\}px, 320px, 42vh\)` \}\}/);
+  assert.doesNotMatch(styles, /\.sql-result-set \{[^}]*height:/);
 });
 
 test("associates result sets and mutation messages by statement index", () => {

@@ -1,6 +1,8 @@
 import type { CustomSqlExecutionResult, SqlResultSet } from "../../api/customSql";
 
 export const SQL_RESULT_COLUMN_MIN_WIDTH = 130;
+export const SQL_RESULT_SET_CHROME_HEIGHT = 68;
+export const SQL_RESULT_ROW_HEIGHT = 32;
 
 export type CustomSqlExecutionSnapshot = {
   sql: string;
@@ -20,6 +22,10 @@ export function maxSqlResultColumnCount(resultSets: SqlResultSet[]): number {
 
 export function sqlResultTableMinWidth(executionColumnCount: number): number {
   return Math.max(1, executionColumnCount) * SQL_RESULT_COLUMN_MIN_WIDTH;
+}
+
+export function sqlResultSetHeight(rowCount: number): number {
+  return SQL_RESULT_SET_CHROME_HEIGHT + rowCount * SQL_RESULT_ROW_HEIGHT;
 }
 
 export function formatSqlExecutionStatus(result: CustomSqlExecutionResult): string {
