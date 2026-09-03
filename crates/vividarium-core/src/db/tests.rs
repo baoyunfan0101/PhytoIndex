@@ -30,6 +30,30 @@ fn initializes_metadata_and_taxonomy_without_a_fake_photo_library() {
 }
 
 #[test]
+fn current_taxonomy_schema_adds_operation_input_storage_when_missing() {
+    let directory = tempfile::tempdir().unwrap();
+    let taxonomy_path = directory.path().join("taxonomy.db");
+    initialize_file(&taxonomy_path, TAXONOMY_SCHEMA).unwrap();
+    open_existing_connection(&taxonomy_path)
+        .unwrap()
+        .execute("DROP TABLE operation_inputs", [])
+        .unwrap();
+
+    initialize_existing_file(&taxonomy_path, TAXONOMY_SCHEMA).unwrap();
+
+    assert!(
+        open_existing_connection(&taxonomy_path)
+            .unwrap()
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'operation_inputs')",
+                [],
+                |row| row.get::<_, bool>(0),
+            )
+            .unwrap()
+    );
+}
+
+#[test]
 fn opens_an_existing_taxonomy_database_and_marks_libraries_for_remap() {
     let directory = tempfile::tempdir().unwrap();
     let database = Database::open_test(directory.path().join("metadata.db")).unwrap();

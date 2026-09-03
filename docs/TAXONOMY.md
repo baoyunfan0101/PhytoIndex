@@ -322,12 +322,14 @@ and may fail through cancellation, timeout, SQLite execution, or validation.
 Whitespace and comments do not increment the 1-based statement indexes retained
 by result sets and messages. The script succeeds or fails as one unit and the
 resulting taxonomy must remain valid. A pure query creates no operation. A
-successful mutation script creates one rollbackable operation without formatted
-input and records photo-library synchronization. Mutations are validated before
-commit. Small affected dependency scopes use incremental validation, while
-larger scopes use full taxonomy validation. A validation failure prevents the
-transaction from committing. SQL is saved only after prepare, execution, and
-transaction commit succeed. A script-save failure returns the committed
+successful mutation script creates one rollbackable operation, retains the
+exact executed SQL as operation input, and records photo-library
+synchronization. Mutations are validated before commit. Small affected
+dependency scopes use incremental validation, while larger scopes use full
+taxonomy validation. A validation failure prevents the transaction from
+committing. SQL is saved to the current workspace only after prepare,
+execution, and transaction commit succeed. Historical operation input remains
+independent of that workspace save. A script-save failure returns the committed
 execution with `script_saved = false` and a warning; an execution failure does
 not replace the last successful SQL.
 
@@ -515,6 +517,7 @@ The taxonomy module exports the common interfaces below:
 | --- | --- | --- |
 | `list_operations` | `cursor: Option<&str>`, `limit: usize` | `OperationPage<OperationSummary>` |
 | `list_operation_audit` | `operation_id: i64`, `cursor: Option<&str>`, `limit: usize` | `OperationPage<OperationAuditRow>` |
+| `get_operation_input` | `operation_id: i64` | `Option<OperationInput>` |
 | `write_operation_audit` | `operation_id: i64`, `writer: &mut W` where `W: Write` | `()` |
 | `write_operations_audit` | `operation_ids: &[i64]`, `writer: &mut W` where `W: Write` | `()` |
 | `write_all_operation_audit` | `writer: &mut W` where `W: Write` | `()` |
@@ -530,8 +533,11 @@ Taxonomy adds formatted input export:
 
 Selected input export fails if any requested operation has no formatted input;
 it never silently skips unsupported operations. Successful rollback applies
-the reverse changeset, records pending photo-library synchronization, and
-deletes the original operation. Desktop history pagination, rollback, audit
+the reverse changeset atomically, verifies foreign-key integrity and taxonomy
+validity, records pending photo-library synchronization, and deletes the
+original operation with its audit, changeset, and input records. A conflict
+leaves both taxonomy and operation records unchanged. Desktop history
+pagination, rollback, audit
 export, and formatted-input export execute database and file work on blocking
 workers and resolve asynchronously. Desktop audit and formatted-input export
 commands accept an absolute destination path and write the CSV after the caller

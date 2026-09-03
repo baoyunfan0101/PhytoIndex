@@ -932,6 +932,22 @@ fn initialize_connection(connection: &Connection, schema: &str) -> CoreResult<()
             )));
         }
     }
+    if schema == TAXONOMY_SCHEMA {
+        ensure_taxonomy_operation_inputs(connection)?;
+    }
+    Ok(())
+}
+
+fn ensure_taxonomy_operation_inputs(connection: &Connection) -> CoreResult<()> {
+    connection.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS operation_inputs (
+            operation_id INTEGER PRIMARY KEY,
+            input_json TEXT NOT NULL,
+            FOREIGN KEY (operation_id) REFERENCES operations(operation_id) ON DELETE CASCADE
+        );
+        "#,
+    )?;
     Ok(())
 }
 
@@ -979,7 +995,12 @@ fn validate_existing_file(path: &Path, schema: &str) -> CoreResult<()> {
     let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
     match version {
         2 => migrate_v2_to_v3(&connection, schema),
-        SCHEMA_VERSION => Ok(()),
+        SCHEMA_VERSION => {
+            if schema == TAXONOMY_SCHEMA {
+                ensure_taxonomy_operation_inputs(&connection)?;
+            }
+            Ok(())
+        }
         _ => Err(CoreError::InvalidArgument(format!(
             "unsupported database schema version: {version}; expected {SCHEMA_VERSION}"
         ))),
@@ -1684,6 +1705,12 @@ CREATE TABLE operation_formatted_inputs (
     input_json TEXT NOT NULL,
     PRIMARY KEY (operation_id, sequence),
     CHECK (sequence > 0),
+    FOREIGN KEY (operation_id) REFERENCES operations(operation_id) ON DELETE CASCADE
+);
+
+CREATE TABLE operation_inputs (
+    operation_id INTEGER PRIMARY KEY,
+    input_json TEXT NOT NULL,
     FOREIGN KEY (operation_id) REFERENCES operations(operation_id) ON DELETE CASCADE
 );
 

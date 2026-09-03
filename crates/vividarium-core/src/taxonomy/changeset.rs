@@ -1,15 +1,34 @@
 use std::collections::BTreeSet;
+use std::ffi::{CStr, c_int, c_void};
 use std::io::Cursor;
+use std::ptr;
 
 use rusqlite::fallible_streaming_iterator::FallibleStreamingIterator;
 use rusqlite::hooks::Action;
 use rusqlite::session::{ChangesetItem, ChangesetIter, Session};
 use rusqlite::types::ValueRef;
-use rusqlite::{Connection, params_from_iter};
+use rusqlite::{Connection, OptionalExtension, params_from_iter};
 
 use crate::{CoreError, CoreResult};
 
 const TAXONOMY_SESSION_TABLES: [&str; 2] = ["taxa", "taxon_names"];
+
+#[derive(Debug)]
+enum RollbackConflict {
+    Row {
+        table: String,
+        action: String,
+        conflict_type: String,
+    },
+    ForeignKey {
+        conflict_count: Option<c_int>,
+    },
+}
+
+#[derive(Default)]
+struct RollbackApplyContext {
+    first_conflict: Option<RollbackConflict>,
+}
 
 pub(super) fn is_taxonomy_session_table(table_name: &str) -> bool {
     TAXONOMY_SESSION_TABLES.contains(&table_name)
@@ -65,6 +84,149 @@ pub(super) fn affected_taxon_ids_from_changeset(
         }
     }
     Ok(taxon_ids)
+}
+
+pub(super) fn apply_inverse_taxonomy_changeset(
+    connection: &Connection,
+    operation_id: i64,
+    changeset_blob: &[u8],
+) -> CoreResult<()> {
+    if changeset_blob.is_empty() {
+        return Ok(());
+    }
+    let changeset_size = c_int::try_from(changeset_blob.len())
+        .map_err(|_| CoreError::Consistency("taxonomy rollback changeset is too large".into()))?;
+    let mut context = RollbackApplyContext::default();
+    let flags = rusqlite::ffi::SQLITE_CHANGESETAPPLY_INVERT
+        | rusqlite::ffi::SQLITE_CHANGESETAPPLY_FKNOACTION;
+    let result = unsafe {
+        rusqlite::ffi::sqlite3changeset_apply_v2(
+            connection.handle(),
+            changeset_size,
+            changeset_blob.as_ptr() as *mut c_void,
+            None,
+            Some(capture_rollback_conflict),
+            &mut context as *mut RollbackApplyContext as *mut c_void,
+            ptr::null_mut(),
+            ptr::null_mut(),
+            flags,
+        )
+    };
+    if result == rusqlite::ffi::SQLITE_OK {
+        return Ok(());
+    }
+    if let Some(conflict) = context.first_conflict {
+        return Err(CoreError::Consistency(match conflict {
+            RollbackConflict::Row {
+                table,
+                action,
+                conflict_type,
+            } => format!(
+                "Rollback conflict in {table} while restoring operation {operation_id}: {conflict_type} conflict during {action}; the current data no longer matches the state created by this operation."
+            ),
+            RollbackConflict::ForeignKey { conflict_count } => {
+                let count = conflict_count.map_or_else(
+                    || "an unknown number of unresolved relationships".into(),
+                    |count| {
+                        format!(
+                            "{count} unresolved foreign-key relationship{}",
+                            if count == 1 { "" } else { "s" }
+                        )
+                    },
+                );
+                format!(
+                    "Rollback conflict while restoring operation {operation_id}: foreign-key conflict with {count}; the current taxonomy no longer matches the state created by this operation."
+                )
+            }
+        }));
+    }
+    Err(CoreError::Consistency(format!(
+        "Rollback failed while restoring operation {operation_id}: SQLite changeset apply returned code {result}."
+    )))
+}
+
+pub(super) fn validate_foreign_key_integrity(connection: &Connection) -> CoreResult<()> {
+    let violation = connection
+        .query_row("PRAGMA foreign_key_check", [], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<i64>>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .optional()?;
+    if let Some((table, row_id, parent)) = violation {
+        return Err(CoreError::Consistency(format!(
+            "taxonomy rollback left a foreign-key violation in {table} row {} referencing {parent}",
+            row_id.map_or_else(|| "unknown".into(), |value| value.to_string())
+        )));
+    }
+    Ok(())
+}
+
+unsafe extern "C" fn capture_rollback_conflict(
+    context: *mut c_void,
+    conflict_type: c_int,
+    item: *mut rusqlite::ffi::sqlite3_changeset_iter,
+) -> c_int {
+    let context = unsafe { &mut *(context as *mut RollbackApplyContext) };
+    if context.first_conflict.is_none() {
+        if conflict_type == rusqlite::ffi::SQLITE_CHANGESET_FOREIGN_KEY {
+            let mut conflict_count = 0;
+            let result =
+                unsafe { rusqlite::ffi::sqlite3changeset_fk_conflicts(item, &mut conflict_count) };
+            context.first_conflict = Some(RollbackConflict::ForeignKey {
+                conflict_count: (result == rusqlite::ffi::SQLITE_OK).then_some(conflict_count),
+            });
+            return rusqlite::ffi::SQLITE_CHANGESET_ABORT;
+        }
+        let mut table = ptr::null();
+        let mut column_count = 0;
+        let mut action = 0;
+        let mut indirect = 0;
+        let result = unsafe {
+            rusqlite::ffi::sqlite3changeset_op(
+                item,
+                &mut table,
+                &mut column_count,
+                &mut action,
+                &mut indirect,
+            )
+        };
+        let table = if result == rusqlite::ffi::SQLITE_OK && !table.is_null() {
+            unsafe { CStr::from_ptr(table) }
+                .to_string_lossy()
+                .into_owned()
+        } else {
+            "taxonomy".into()
+        };
+        context.first_conflict = Some(RollbackConflict::Row {
+            table,
+            action: changeset_action_label(action).into(),
+            conflict_type: changeset_conflict_label(conflict_type).into(),
+        });
+    }
+    rusqlite::ffi::SQLITE_CHANGESET_ABORT
+}
+
+fn changeset_action_label(action: c_int) -> &'static str {
+    match action {
+        rusqlite::ffi::SQLITE_INSERT => "insert",
+        rusqlite::ffi::SQLITE_UPDATE => "update",
+        rusqlite::ffi::SQLITE_DELETE => "delete",
+        _ => "unknown action",
+    }
+}
+
+fn changeset_conflict_label(conflict_type: c_int) -> &'static str {
+    match conflict_type {
+        rusqlite::ffi::SQLITE_CHANGESET_DATA => "data",
+        rusqlite::ffi::SQLITE_CHANGESET_NOTFOUND => "not-found",
+        rusqlite::ffi::SQLITE_CHANGESET_CONFLICT => "row",
+        rusqlite::ffi::SQLITE_CHANGESET_CONSTRAINT => "constraint",
+        rusqlite::ffi::SQLITE_CHANGESET_FOREIGN_KEY => "foreign-key",
+        _ => "unknown",
+    }
 }
 
 fn collect_changeset_integers(

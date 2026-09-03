@@ -110,6 +110,7 @@ pub fn run() {
             commands::set_taxonomy_name_separator,
             commands::list_taxonomy_operations,
             commands::list_taxonomy_operation_audit,
+            commands::get_taxonomy_operation_input,
             commands::rollback_taxonomy_operation,
             commands::export_taxonomy_operation_audit,
             commands::export_taxonomy_operations_audit,

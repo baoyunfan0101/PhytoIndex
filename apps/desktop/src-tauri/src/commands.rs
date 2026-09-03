@@ -20,7 +20,9 @@ use vividarium_core::naming::{
     NamingHookTestCases, NamingHookTestReport, NamingHookTestResult, ParsedPhotoFilename,
     TaxonomicNameInfo,
 };
-use vividarium_core::operations::{OperationAuditRow, OperationPage, OperationSummary};
+use vividarium_core::operations::{
+    OperationAuditRow, OperationInput, OperationPage, OperationSummary,
+};
 use vividarium_core::photos::{
     PhotoFilenameFormatSettings, PhotoRenameOperationResult, PhotoRenameRowStatus,
 };
@@ -1429,6 +1431,19 @@ pub async fn list_taxonomy_operation_audit(
             limit.unwrap_or(50),
         )
         .map_err(error)
+    })
+    .await
+    .map_err(error)?
+}
+
+#[tauri::command]
+pub async fn get_taxonomy_operation_input(
+    state: State<'_, AppState>,
+    operation_id: i64,
+) -> CommandResult<Option<OperationInput>> {
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        taxonomy::get_operation_input(&database, operation_id).map_err(error)
     })
     .await
     .map_err(error)?

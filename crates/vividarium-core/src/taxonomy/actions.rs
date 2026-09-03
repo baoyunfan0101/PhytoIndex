@@ -7,7 +7,7 @@ use super::changeset::start_taxonomy_session;
 use super::validation::validate_taxonomy;
 use super::{TaxonRank, TaxonomyNameType};
 use crate::naming::normalize_taxonomy_name;
-use crate::operations::{self, NewAuditRow, NewOperation};
+use crate::operations::{self, NewAuditRow, NewOperation, OperationInput};
 use crate::{CoreError, CoreResult, Database};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -45,6 +45,7 @@ pub struct SaveTaxonNameGroupInput {
 }
 
 pub fn promote_taxon_name(database: &Database, input: PromoteTaxonNameInput) -> CoreResult<()> {
+    let action_input = taxonomy_action_input("promote_name", &input)?;
     let _guard = database.try_taxonomy_mutation()?;
     let mut connection = database.connect_taxonomy_metadata_context()?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -111,6 +112,7 @@ pub fn promote_taxon_name(database: &Database, input: PromoteTaxonNameInput) -> 
             has_formatted_input: false,
         },
     )?;
+    operations::insert_operation_input(&transaction, operation_id, &action_input)?;
     transaction.execute(
         r#"
         INSERT INTO operation_changesets (operation_id, changeset_blob)
@@ -157,6 +159,7 @@ pub fn save_taxon_name_group(
     database: &Database,
     input: SaveTaxonNameGroupInput,
 ) -> CoreResult<()> {
+    let action_input = taxonomy_action_input("edit_name_group", &input)?;
     let _guard = database.try_taxonomy_mutation()?;
     let mut connection = database.connect_taxonomy_metadata_context()?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -306,6 +309,7 @@ pub fn save_taxon_name_group(
             has_formatted_input: false,
         },
     )?;
+    operations::insert_operation_input(&transaction, operation_id, &action_input)?;
     transaction.execute(
         r#"
         INSERT INTO operation_changesets (operation_id, changeset_blob)
@@ -485,6 +489,7 @@ fn validate_taxon_name_deletion(
 }
 
 pub fn delete_taxon_name(database: &Database, input: DeleteTaxonNameInput) -> CoreResult<()> {
+    let action_input = taxonomy_action_input("delete_taxonomy_name", &input)?;
     let _guard = database.try_taxonomy_mutation()?;
     let mut connection = database.connect_taxonomy_metadata_context()?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -533,6 +538,7 @@ pub fn delete_taxon_name(database: &Database, input: DeleteTaxonNameInput) -> Co
             has_formatted_input: false,
         },
     )?;
+    operations::insert_operation_input(&transaction, operation_id, &action_input)?;
     transaction.execute(
         r#"
         INSERT INTO operation_changesets (operation_id, changeset_blob)
@@ -565,6 +571,12 @@ pub fn delete_taxon_name(database: &Database, input: DeleteTaxonNameInput) -> Co
 }
 
 pub fn delete_taxon(database: &Database, taxon_id: i64) -> CoreResult<()> {
+    let action_input = taxonomy_action_input(
+        "delete_taxon",
+        &serde_json::json!({
+            "taxon_id": taxon_id,
+        }),
+    )?;
     let _guard = database.try_taxonomy_mutation()?;
     let mut connection = database.connect_taxonomy_metadata_context()?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -613,6 +625,7 @@ pub fn delete_taxon(database: &Database, taxon_id: i64) -> CoreResult<()> {
             has_formatted_input: false,
         },
     )?;
+    operations::insert_operation_input(&transaction, operation_id, &action_input)?;
     transaction.execute(
         r#"
         INSERT INTO operation_changesets (operation_id, changeset_blob)
@@ -642,6 +655,15 @@ pub fn delete_taxon(database: &Database, taxon_id: i64) -> CoreResult<()> {
     super::sync::record_event(&transaction, Some(operation_id), [taxon_id], false)?;
     transaction.commit()?;
     Ok(())
+}
+
+fn taxonomy_action_input<T: Serialize>(action: &str, input: &T) -> CoreResult<OperationInput> {
+    Ok(OperationInput::TaxonomyAction {
+        action: action.into(),
+        input: serde_json::to_value(input).map_err(|error| {
+            CoreError::InvalidArgument(format!("invalid taxonomy action input: {error}"))
+        })?,
+    })
 }
 
 #[cfg(test)]
@@ -763,6 +785,14 @@ mod tests {
             .remove(0);
         assert_eq!(operation.kind, "taxonomy_name_group_save");
         assert!(operation.rollbackable);
+        match crate::taxonomy::get_operation_input(&database, operation.operation_id).unwrap() {
+            Some(OperationInput::TaxonomyAction { action, input }) => {
+                assert_eq!(action, "edit_name_group");
+                assert_eq!(input["taxon_id"], taxon_id);
+                assert_eq!(input["name_type"], "synonym");
+            }
+            input => panic!("unexpected taxonomy action input: {input:?}"),
+        }
         crate::taxonomy::rollback_operation(&database, operation.operation_id).unwrap();
         let connection = database.connect_taxonomy_metadata_context().unwrap();
         assert_eq!(

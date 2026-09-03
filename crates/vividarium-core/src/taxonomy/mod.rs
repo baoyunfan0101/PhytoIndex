@@ -25,6 +25,7 @@ mod validation;
 mod view;
 
 pub use crate::naming::{ScientificNameParts, split_scientific_name_authority};
+pub use crate::operations::OperationInput;
 pub use actions::{
     DeleteTaxonNameInput, NewTaxonNameInput, PromoteTaxonNameInput, SaveTaxonNameGroupInput,
     TaxonNameMetadataInput, delete_taxon, delete_taxon_name, promote_taxon_name,
@@ -39,10 +40,10 @@ pub(crate) use exact_match::match_exact_taxonomy_name;
 pub use formatted::{
     PreparedTaxonomyUpdate, TaxonChange, TaxonChangeKind, TaxonInputRow, TaxonRowOutcome,
     TaxonRowStatus, TaxonomyOperationResult, TaxonomyPreviewResult, apply_prepared_rows,
-    apply_prepared_rows_with_cancellation, apply_rows, get_taxonomy_name_separator,
-    list_operation_audit, list_operations, parse_taxonomy_input_csv, prepare_rows,
-    prepare_rows_with_cancellation, preview_rows, rollback_operation, set_taxonomy_name_separator,
-    taxonomy_formatted_update_template, taxonomy_log_csv,
+    apply_prepared_rows_with_cancellation, apply_rows, get_operation_input,
+    get_taxonomy_name_separator, list_operation_audit, list_operations, parse_taxonomy_input_csv,
+    prepare_rows, prepare_rows_with_cancellation, preview_rows, rollback_operation,
+    set_taxonomy_name_separator, taxonomy_formatted_update_template, taxonomy_log_csv,
 };
 pub use operation_export::{
     export_all_replayable_inputs, export_operation_input, export_operations_input,

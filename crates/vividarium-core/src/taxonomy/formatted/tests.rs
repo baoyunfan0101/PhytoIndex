@@ -164,6 +164,29 @@ fn preview_rolls_back_and_apply_is_revertible() {
 }
 
 #[test]
+fn formatted_operation_input_preserves_submitted_row_order() {
+    let (_directory, database) = database();
+    let rows = vec![
+        TaxonInputRow {
+            kingdom: Some("Animalia".into()),
+            source: Some("first".into()),
+            ..TaxonInputRow::default()
+        },
+        TaxonInputRow {
+            kingdom: Some("Plantae".into()),
+            source: Some("second".into()),
+            ..TaxonInputRow::default()
+        },
+    ];
+    let result = apply_rows(&database, &rows).unwrap();
+
+    assert_eq!(
+        get_operation_input(&database, result.operation_id).unwrap(),
+        Some(OperationInput::FormattedUpdate { rows })
+    );
+}
+
+#[test]
 fn prepared_preview_applies_the_cached_changeset() {
     let (_directory, database) = database();
     let input = TaxonInputRow {

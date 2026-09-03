@@ -31,7 +31,7 @@ use super::validation::{
     validate_taxonomy_changes_with_cancellation, validate_taxonomy_with_progress_and_cancellation,
 };
 use crate::metadata::{self, MetadataKey};
-use crate::operations::{self, NewAuditRow, NewOperation};
+use crate::operations::{self, NewAuditRow, NewOperation, OperationInput};
 use crate::{
     CancellationToken, CoreError, CoreResult, Database, OperationProgress, OperationProgressUnit,
 };
@@ -178,8 +178,12 @@ pub fn execute_custom_taxonomy_sql_with_progress_and_cancellation(
         }
         let full_remap_required = affected_taxon_ids.len() > 5000;
         report_custom_sql_progress(progress, "recording_custom_sql_operation", None, None, None);
-        let operation_id =
-            insert_custom_sql_operation(&transaction, &changeset_blob, &affected_taxon_ids)?;
+        let operation_id = insert_custom_sql_operation(
+            &transaction,
+            &request.sql,
+            &changeset_blob,
+            &affected_taxon_ids,
+        )?;
         super::sync::record_event(
             &transaction,
             Some(operation_id),
@@ -680,6 +684,7 @@ fn custom_sql_authorizer() -> impl for<'a> FnMut(AuthContext<'a>) -> Authorizati
 
 fn insert_custom_sql_operation(
     transaction: &Transaction<'_>,
+    sql: &str,
     changeset_blob: &[u8],
     affected_taxon_ids: &BTreeSet<i64>,
 ) -> CoreResult<i64> {
@@ -695,6 +700,11 @@ fn insert_custom_sql_operation(
             rollbackable: true,
             has_formatted_input: false,
         },
+    )?;
+    operations::insert_operation_input(
+        transaction,
+        operation_id,
+        &OperationInput::CustomSql { sql: sql.into() },
     )?;
     transaction.execute(
         r#"
@@ -732,7 +742,7 @@ fn insert_custom_sql_operation(
                     action: "custom_sql",
                     before_json: None,
                     after_json: Some(serde_json::json!({
-                        "changeset_size": changeset_blob.len(),
+                        "taxon_id": taxon_id,
                     })),
                     succeeded: true,
                     message: "custom SQL changed taxonomy data",

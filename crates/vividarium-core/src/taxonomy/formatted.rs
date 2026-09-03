@@ -4,13 +4,13 @@ use std::collections::HashSet;
 use std::io::Cursor;
 
 use csv::{ReaderBuilder, WriterBuilder};
-use rusqlite::hooks::Action;
-use rusqlite::session::{ConflictAction, ConflictType, invert_strm};
+use rusqlite::session::ConflictAction;
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 
 use super::changeset::{
-    affected_taxon_ids_from_changeset, is_taxonomy_session_table, start_taxonomy_session,
+    affected_taxon_ids_from_changeset, apply_inverse_taxonomy_changeset, is_taxonomy_session_table,
+    start_taxonomy_session, validate_foreign_key_integrity,
 };
 use super::match_exact_taxonomy_name;
 use super::types::{TaxonRank, TaxonomyNameType};
@@ -18,7 +18,8 @@ use super::validation::{normalize_name, validate_taxonomy};
 use super::view::{TaxonSummary, load_taxon_summaries, load_taxon_summary};
 use crate::naming::SynonymAuthorityParser;
 use crate::operations::{
-    self, NewAuditRow, NewOperation, OperationAuditRow, OperationPage, OperationSummary,
+    self, NewAuditRow, NewOperation, OperationAuditRow, OperationInput, OperationPage,
+    OperationSummary,
 };
 use crate::{CancellationToken, CoreError, CoreResult, Database};
 
@@ -1443,6 +1444,13 @@ pub fn list_operation_audit(
     )
 }
 
+pub fn get_operation_input(
+    database: &Database,
+    operation_id: i64,
+) -> CoreResult<Option<OperationInput>> {
+    operations::get_operation_input(&database.connect_taxonomy_metadata_context()?, operation_id)
+}
+
 pub fn rollback_operation(database: &Database, operation_id: i64) -> CoreResult<()> {
     let _guard = database.try_taxonomy_mutation()?;
     let mut connection = database.connect_taxonomy_metadata_context()?;
@@ -1467,23 +1475,8 @@ pub fn rollback_operation(database: &Database, operation_id: i64) -> CoreResult<
             ))
         })?;
     let affected_taxon_ids = affected_taxon_ids_from_changeset(&transaction, &changeset_blob)?;
-    if !changeset_blob.is_empty() {
-        let mut inverted = Vec::new();
-        invert_strm(&mut Cursor::new(&changeset_blob), &mut inverted)?;
-        transaction.apply_strm(
-            &mut Cursor::new(inverted),
-            Some(is_taxonomy_session_table),
-            |conflict_type, item| match item.op() {
-                Ok(operation)
-                    if conflict_type == ConflictType::SQLITE_CHANGESET_NOTFOUND
-                        && operation.code() == Action::SQLITE_DELETE =>
-                {
-                    ConflictAction::SQLITE_CHANGESET_OMIT
-                }
-                _ => ConflictAction::SQLITE_CHANGESET_ABORT,
-            },
-        )?;
-    }
+    apply_inverse_taxonomy_changeset(&transaction, operation_id, &changeset_blob)?;
+    validate_foreign_key_integrity(&transaction)?;
     validate_taxonomy(&transaction)?;
     super::sync::record_event(&transaction, None, affected_taxon_ids, false)?;
     operations::delete_operation(&transaction, operation_id)?;

@@ -8,7 +8,10 @@ use super::super::sql_sources::{
     SqlDataSource, inspect_sql_data_source, load_csv_table, load_csv_table_with_progress,
 };
 use super::*;
-use crate::taxonomy::{TaxonInputRow, apply_rows, list_operations};
+use crate::operations::OperationInput;
+use crate::taxonomy::{
+    TaxonInputRow, apply_rows, get_operation_input, list_operations, rollback_operation,
+};
 
 fn database() -> (tempfile::TempDir, Database) {
     let directory = tempfile::tempdir().unwrap();
@@ -29,6 +32,54 @@ fn request(sql: &str) -> CustomTaxonomySqlRequest {
         sql: sql.into(),
         maximum_result_rows: None,
     }
+}
+
+fn seed_mesotriton_fixture(database: &Database) {
+    database
+        .connect_taxonomy()
+        .unwrap()
+        .execute_batch(
+            r#"
+            INSERT INTO taxa (taxon_id, parent_taxon_id, rank) VALUES
+                (101, NULL, 1),
+                (102, 101, 2),
+                (103, 102, 3),
+                (104, 103, 4),
+                (105, 104, 5);
+            INSERT INTO taxon_names (name_id, taxon_id, name_type, name) VALUES
+                (201, 101, 1, 'Animalia'),
+                (202, 102, 1, 'Caudata'),
+                (203, 103, 1, 'Salamandridae'),
+                (204, 104, 1, 'Ichthyosaura'),
+                (205, 104, 2, 'Mesotriton'),
+                (206, 105, 1, 'Ichthyosaura alpestris'),
+                (207, 105, 2, 'Mesotriton alpestris');
+            "#,
+        )
+        .unwrap();
+}
+
+fn taxonomy_state(
+    database: &Database,
+) -> (Vec<(i64, Option<i64>, i64)>, Vec<(i64, i64, i64, String)>) {
+    let connection = database.connect_taxonomy_metadata_context().unwrap();
+    let taxa = connection
+        .prepare("SELECT taxon_id, parent_taxon_id, rank FROM taxa ORDER BY taxon_id")
+        .unwrap()
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    let names = connection
+        .prepare("SELECT name_id, taxon_id, name_type, name FROM taxon_names ORDER BY name_id")
+        .unwrap()
+        .query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    (taxa, names)
 }
 
 #[test]
@@ -97,6 +148,283 @@ fn saves_only_successful_scripts() {
         "SELECT taxon_id FROM taxa"
     );
     assert_ne!(get_custom_taxonomy_sql(&database).unwrap(), initial);
+}
+
+#[test]
+fn custom_sql_history_preserves_the_exact_executed_script() {
+    let (_directory, database) = database();
+    let sql = "\n-- preserve this comment\nUPDATE taxa\nSET geological_range = 'Recent';\n";
+    let result = execute_custom_taxonomy_sql(&database, &request(sql)).unwrap();
+    let operation_id = result.operation_id.unwrap();
+
+    execute_custom_taxonomy_sql(&database, &request("SELECT 2 AS later_workspace_sql")).unwrap();
+
+    assert_eq!(
+        get_operation_input(&database, operation_id).unwrap(),
+        Some(OperationInput::CustomSql { sql: sql.into() })
+    );
+    database
+        .connect_taxonomy_metadata_context()
+        .unwrap()
+        .execute(
+            "DELETE FROM operation_inputs WHERE operation_id = ?",
+            [operation_id],
+        )
+        .unwrap();
+    assert_eq!(get_operation_input(&database, operation_id).unwrap(), None);
+}
+
+#[test]
+fn complex_custom_sql_taxonomy_migration_rolls_back_exactly() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = Database::open(directory.path().join("metadata.db")).unwrap();
+    seed_mesotriton_fixture(&database);
+    let sql = r#"
+-- Move Mesotriton out of Ichthyosaura and exchange the species name.
+INSERT INTO taxa (parent_taxon_id, rank)
+SELECT taxon_id, 4 FROM taxon_names WHERE name = 'Salamandridae';
+
+UPDATE taxon_names
+SET taxon_id = (
+        SELECT taxa.taxon_id
+        FROM taxa
+        LEFT JOIN taxon_names AS accepted
+          ON accepted.taxon_id = taxa.taxon_id AND accepted.name_type = 1
+        WHERE taxa.rank = 4 AND accepted.name_id IS NULL
+    ),
+    name_type = 1
+WHERE name_id = 205;
+
+UPDATE taxa
+SET parent_taxon_id = (SELECT taxon_id FROM taxon_names WHERE name = 'Mesotriton')
+WHERE taxon_id = 105;
+
+UPDATE taxon_names SET name_type = 2 WHERE name_id = 206;
+UPDATE taxon_names SET name_type = 1 WHERE name_id = 207;
+"#;
+    let result = execute_custom_taxonomy_sql(&database, &request(sql)).unwrap();
+    let operation_id = result.operation_id.unwrap();
+    assert!(
+        list_operations(&database, None, 20)
+            .unwrap()
+            .items
+            .iter()
+            .find(|operation| operation.operation_id == operation_id)
+            .unwrap()
+            .rollbackable
+    );
+
+    rollback_operation(&database, operation_id).unwrap();
+
+    let connection = database.connect_taxonomy_metadata_context().unwrap();
+    assert_eq!(
+        connection
+            .query_row("SELECT COUNT(*) FROM taxa WHERE rank = 4", [], |row| row
+                .get::<_, i64>(0),)
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT parent_taxon_id FROM taxa WHERE taxon_id = 105",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        104
+    );
+    let names = connection
+        .prepare(
+            "SELECT name_id, taxon_id, name_type FROM taxon_names WHERE name_id IN (205, 206, 207) ORDER BY name_id",
+        )
+        .unwrap()
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(names, vec![(205, 104, 2), (206, 105, 1), (207, 105, 2)]);
+    assert!(
+        connection
+            .prepare("PRAGMA foreign_key_check")
+            .unwrap()
+            .query([])
+            .unwrap()
+            .next()
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        operations::get_operation(&connection, operation_id)
+            .unwrap()
+            .is_none()
+    );
+    for table in [
+        "operation_audit_rows",
+        "operation_changesets",
+        "operation_inputs",
+    ] {
+        assert_eq!(
+            connection
+                .query_row(
+                    &format!("SELECT COUNT(*) FROM {table} WHERE operation_id = ?"),
+                    [operation_id],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            0
+        );
+    }
+}
+
+#[test]
+fn rollback_conflict_is_diagnostic_and_atomic() {
+    let (_directory, database) = database();
+    let first = execute_custom_taxonomy_sql(
+        &database,
+        &request("UPDATE taxa SET geological_range = 'First'"),
+    )
+    .unwrap()
+    .operation_id
+    .unwrap();
+    let second = execute_custom_taxonomy_sql(
+        &database,
+        &request("UPDATE taxa SET geological_range = 'Second'"),
+    )
+    .unwrap()
+    .operation_id
+    .unwrap();
+
+    let error = rollback_operation(&database, first).unwrap_err();
+    assert!(error.to_string().contains("Rollback conflict in taxa"));
+    assert!(
+        !error
+            .to_string()
+            .contains("Callback routine requested an abort")
+    );
+
+    let connection = database.connect_taxonomy_metadata_context().unwrap();
+    assert_eq!(
+        connection
+            .query_row("SELECT geological_range FROM taxa", [], |row| {
+                row.get::<_, String>(0)
+            })
+            .unwrap(),
+        "Second"
+    );
+    assert!(
+        operations::get_operation(&connection, first)
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        operations::get_operation(&connection, second)
+            .unwrap()
+            .is_some()
+    );
+    for table in [
+        "operation_audit_rows",
+        "operation_changesets",
+        "operation_inputs",
+    ] {
+        assert!(
+            connection
+                .query_row(
+                    &format!("SELECT COUNT(*) FROM {table} WHERE operation_id = ?"),
+                    [first],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap()
+                > 0
+        );
+    }
+}
+
+#[test]
+fn rollback_foreign_key_conflict_is_diagnostic_and_atomic() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = Database::open(directory.path().join("metadata.db")).unwrap();
+    seed_mesotriton_fixture(&database);
+    let first = execute_custom_taxonomy_sql(
+        &database,
+        &request(
+            r#"
+INSERT INTO taxa (taxon_id, parent_taxon_id, rank) VALUES (106, 103, 4);
+INSERT INTO taxon_names (name_id, taxon_id, name_type, name)
+VALUES (208, 106, 1, 'Triturus');
+"#,
+        ),
+    )
+    .unwrap()
+    .operation_id
+    .unwrap();
+    let second = execute_custom_taxonomy_sql(
+        &database,
+        &request(
+            r#"
+INSERT INTO taxa (taxon_id, parent_taxon_id, rank) VALUES (107, 106, 5);
+INSERT INTO taxon_names (name_id, taxon_id, name_type, name)
+VALUES (209, 107, 1, 'Triturus cristatus');
+"#,
+        ),
+    )
+    .unwrap()
+    .operation_id
+    .unwrap();
+    let state_before_rollback = taxonomy_state(&database);
+
+    let error = rollback_operation(&database, first).unwrap_err();
+    let message = error.to_string();
+    assert!(message.contains("Rollback conflict"));
+    assert!(message.contains("foreign-key"));
+    assert!(message.contains(&first.to_string()));
+    assert!(message.contains("1 unresolved foreign-key relationship"));
+    assert!(!message.contains("Callback routine requested an abort"));
+
+    assert_eq!(taxonomy_state(&database), state_before_rollback);
+    let connection = database.connect_taxonomy_metadata_context().unwrap();
+    assert!(
+        operations::get_operation(&connection, first)
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        operations::get_operation(&connection, second)
+            .unwrap()
+            .is_some()
+    );
+    for table in [
+        "operation_audit_rows",
+        "operation_changesets",
+        "operation_inputs",
+    ] {
+        assert!(
+            connection
+                .query_row(
+                    &format!("SELECT COUNT(*) FROM {table} WHERE operation_id = ?"),
+                    [first],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap()
+                > 0
+        );
+    }
+    assert!(
+        connection
+            .prepare("PRAGMA foreign_key_check")
+            .unwrap()
+            .query([])
+            .unwrap()
+            .next()
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]
@@ -458,7 +786,7 @@ fn committed_sql_reports_script_save_failure_as_warning() {
     )
     .unwrap();
 
-    assert!(result.operation_id.is_some());
+    let operation_id = result.operation_id.unwrap();
     assert!(!result.script_saved);
     assert_eq!(result.warnings.len(), 1);
     assert!(result.warnings[0].contains("script could not be saved"));
@@ -471,6 +799,12 @@ fn committed_sql_reports_script_save_failure_as_warning() {
             },)
             .unwrap(),
         "Recent"
+    );
+    assert_eq!(
+        get_operation_input(&database, operation_id).unwrap(),
+        Some(OperationInput::CustomSql {
+            sql: "UPDATE taxa SET geological_range = 'Recent'".into(),
+        })
     );
 }
 
