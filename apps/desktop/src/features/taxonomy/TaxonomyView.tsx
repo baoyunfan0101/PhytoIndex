@@ -38,7 +38,7 @@ import {
   currentTaxonForRoot,
   reconcileSelectedRoot,
   recordHierarchyPosition,
-  taxonSearchMatchExplanation,
+  taxonSearchMatchExplanations,
   type HierarchyPositions,
 } from "./hierarchyNavigation";
 import type { TaxonNameParts } from "../../api/general";
@@ -149,13 +149,13 @@ export function TaxonomySearchView({
         stateKey="taxonomy-search.results-list"
         resetKey={`${submittedQuery}:${refreshKey}`}
         items={taxonomySearch.results}
-        rowHeight={60}
+        rowHeight={90}
         itemKey={(item) => item.taxon_id}
         renderItem={(item) => (
           <TaxonCard
             taxon={item}
             active={selectedRootTaxonId === item.taxon_id}
-            description={taxonSearchMatchExplanation(item)}
+            matchExplanations={taxonSearchMatchExplanations(item)}
             onClick={() => setSelectedRootTaxonId(item.taxon_id)}
           />
         )}
